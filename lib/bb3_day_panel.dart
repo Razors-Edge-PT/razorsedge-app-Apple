@@ -39,23 +39,26 @@ typedef BB3DropCallback = void Function(
 typedef BB3MoveAllCallback = void Function(int sourceDayIndex);
 
 class BB3DayPanel extends StatefulWidget {
-  final int dayIndex;            // 0 = Monday … 6 = Sunday
+  final int dayIndex; // 0 = Monday … 6 = Sunday
   final DateTime date;
   final List<BB3Exercise> plannedExercises;
-  final List<Map<String, dynamic>> completedExercises; // from users/{uid}/workouts/{date}
+  final List<Map<String, dynamic>>
+      completedExercises; // from users/{uid}/workouts/{date}
   final BB3BlockSettings? blockSettings;
   final int weekIndex;
-  final int sessionIndex;        // fallback: 0 when sessionIndexByExerciseId is absent
-  final Map<String, int>? sessionIndexByExerciseId; // per-exercise session index
+  final int sessionIndex; // fallback: 0 when sessionIndexByExerciseId is absent
+  final Map<String, int>?
+      sessionIndexByExerciseId; // per-exercise session index
   final String uid;
   final List<Map<String, dynamic>> allExercises; // for the add-exercise picker
-  final List<Template> templates;               // for the template picker
+  final List<Template> templates; // for the template picker
   final BB3SaveCallback onSave;
-  final BB3DropCallback onDrop;   // cross-day drag
+  final BB3DropCallback onDrop; // cross-day drag
   final BB3MoveAllCallback onMoveAllToNextDay;
-  final bool isInsideBlock;       // whether this day is inside the active block range
-  final String? blockId;          // needed for direct savePlannedDay on dispose
-  final void Function()? onBlockSettingsChanged; // fired after settings dialog saves
+  final bool isInsideBlock; // whether this day is inside the active block range
+  final String? blockId; // needed for direct savePlannedDay on dispose
+  final void Function()?
+      onBlockSettingsChanged; // fired after settings dialog saves
   final List<List<BB3Exercise>> allWeekPlannedByDay;
   final List<List<Map<String, dynamic>>> allWeekCompletedByDay;
   // DUP Signature pre-computed rep targets keyed "YYYY-MM-DD_<exerciseId>".
@@ -149,10 +152,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final bid = widget.blockId;
     if (_orderedExIds.isNotEmpty && bid != null && bid.isNotEmpty) {
       final exercises = _buildCurrentExercises();
-      debugPrint('[BB3 dispose flush] day=${widget.dayIndex} count=${exercises.length}');
+      debugPrint(
+          '[BB3 dispose flush] day=${widget.dayIndex} count=${exercises.length}');
       final blockDayIndex = widget.blockSettings?.startDate != null
           ? BB3PlannedExerciseService.dateToWeekDay(
-              widget.blockSettings!.startDate!, widget.date).dayIndex
+                  widget.blockSettings!.startDate!, widget.date)
+              .dayIndex
           : widget.dayIndex;
       // ignore: discarded_futures
       BB3PlannedExerciseService.savePlannedDay(
@@ -334,10 +339,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     }
     _saveInProgress = true;
     _pendingSave = false;
-    debugPrint('[BB3 save] start day=${widget.dayIndex} count=${_orderedExIds.length}');
+    debugPrint(
+        '[BB3 save] start day=${widget.dayIndex} count=${_orderedExIds.length}');
     _doSave().whenComplete(() {
       _saveInProgress = false;
-      debugPrint('[BB3 save] complete day=${widget.dayIndex} count=${_orderedExIds.length}');
+      debugPrint(
+          '[BB3 save] complete day=${widget.dayIndex} count=${_orderedExIds.length}');
       // Re-enter with a fresh _buildCurrentExercises() snapshot if a save was
       // requested while this one was in flight.
       if (_pendingSave && mounted) {
@@ -380,7 +387,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         final r = int.tryParse(rList[si].text.trim());
         final rir = double.tryParse(rirList[si].text.trim());
         final notes = nList.length > si ? nList[si].text.trim() : null;
-        final vel = vList.length > si ? double.tryParse(vList[si].text.trim()) : null;
+        final vel =
+            vList.length > si ? double.tryParse(vList[si].text.trim()) : null;
         return BB3Set(
           weight: w,
           reps: r,
@@ -441,7 +449,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       builder: (context, candidateData, rejectedData) {
         final isDragOver = candidateData.isNotEmpty;
         final bool anyExpanded =
-        _orderedExIds.any((id) => _expandedByExId[id] == true);
+            _orderedExIds.any((id) => _expandedByExId[id] == true);
         return Container(
           margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           decoration: BoxDecoration(
@@ -456,13 +464,14 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                 ? theme.colorScheme.primary.withValues(alpha: 0.04)
                 : theme.colorScheme.surface,
           ),
-
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _buildDayHeader(theme, dateLabel),
-              if (!anyExpanded) _buildColumnHeaderRow(theme, expandedMode: false),
-              if (widget.completedExercises.isNotEmpty) _buildCompletedSection(theme),
+              if (!anyExpanded)
+                _buildColumnHeaderRow(theme, expandedMode: false),
+              if (widget.completedExercises.isNotEmpty)
+                _buildCompletedSection(theme),
               _buildPlannedSection(theme),
               _buildActionRow(theme),
             ],
@@ -483,7 +492,6 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           value: userContext,
           child: Wes2Screen(
             initialDate: widget.date,
-
           ),
         ),
       ),
@@ -541,11 +549,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               }
             },
             itemBuilder: (_) {
-              final hasUnlocked = _orderedExIds.any((id) =>
-              !BB3HintService.isExerciseLocked(
-                exerciseId: id,
-                completedExercisesForDay: widget.completedExercises,
-              ));
+              final hasUnlocked =
+                  _orderedExIds.any((id) => !BB3HintService.isExerciseLocked(
+                        exerciseId: id,
+                        completedExercisesForDay: widget.completedExercises,
+                      ));
               return [
                 PopupMenuItem(
                   value: _BB3DayMenuAction.deleteAllExercises,
@@ -624,7 +632,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           Expanded(child: Text('Exercise', style: labelStyle)),
           const SizedBox(width: 7),
           fl('Weight', 32),
-          const SizedBox(width:8),
+          const SizedBox(width: 8),
           fl('Reps', 28),
           const SizedBox(width: 1),
           fl('RIR', 32),
@@ -769,8 +777,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         children: [
           // Row header
           InkWell(
-            onTap: () => setState(
-                () => _expandedByExId[exerciseId] = !isExpanded),
+            onTap: () =>
+                setState(() => _expandedByExId[exerciseId] = !isExpanded),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               child: Row(
@@ -862,8 +870,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Text(
           'No exercises planned',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: Colors.grey.shade500),
+          style:
+              theme.textTheme.bodySmall?.copyWith(color: Colors.grey.shade500),
         ),
       );
     }
@@ -892,13 +900,15 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           onAcceptWithDetails: (details) {
             final payload = details.data;
             if (payload.sourceDayIndex == widget.dayIndex) {
-              final fromIdx = _orderedExIds.indexOf(payload.exercise.exerciseId);
+              final fromIdx =
+                  _orderedExIds.indexOf(payload.exercise.exerciseId);
               final toIdx = _orderedExIds.indexOf(exId);
               if (fromIdx >= 0 && toIdx >= 0 && fromIdx != toIdx) {
                 _onReorder(fromIdx, toIdx);
               }
             } else {
-              widget.onDrop(payload.sourceDayIndex, widget.dayIndex, payload.exercise);
+              widget.onDrop(
+                  payload.sourceDayIndex, widget.dayIndex, payload.exercise);
             }
           },
           builder: (ctx, candidateData, rejectedData) =>
@@ -955,8 +965,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final blockId = widget.blockId;
     if (blockId == null || blockId.isEmpty) return;
 
-    final exSettings =
-        widget.blockSettings?.exerciseSettings[ex.exerciseId] as Map<String, dynamic>?;
+    final exSettings = widget.blockSettings?.exerciseSettings[ex.exerciseId]
+        as Map<String, dynamic>?;
     final model = (exSettings?['periodizationModel'] as String?) ?? '';
 
     int totalBlockWeeks = 12;
@@ -1054,6 +1064,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         completedInstanceCount: completedCount,
         resolvedActiveInstanceOverride: resolvedInstance,
         weeklyInstanceOverride: weeklyCount,
+        // dayIndex is the block-relative day-of-week (days % 7), the same source
+        // the hint engine passes as sessionIndex to getRirFromPlan.
+        activeRirSessionIndex: widget.dayIndex + 1,
       ),
     );
 
@@ -1119,12 +1132,14 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
     final blockId = widget.blockId;
     if (blockId == null || blockId.isEmpty) {
-      return [set0, ...List.generate(ex.sets.length - 1, (_) => const BB3SetHint())];
+      return [
+        set0,
+        ...List.generate(ex.sets.length - 1, (_) => const BB3SetHint())
+      ];
     }
 
     // Build Wes2ExerciseRow with Set 0 locked as bb3Hint
-    final rawW0 =
-        double.tryParse(set0.weightDisplay.split('–').first.trim());
+    final rawW0 = double.tryParse(set0.weightDisplay.split('–').first.trim());
     final rawR0 = int.tryParse(set0.repsDisplay);
     final rawRir0 = double.tryParse(set0.rirDisplay);
 
@@ -1212,9 +1227,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final cardColor =
         locked ? _completedSurface(theme) : theme.colorScheme.surface;
 
-    final visibleSetIndex = locked
-        ? _topCompletedSetIndex(ex.exerciseId, ex.sets.length - 1)
-        : 0;
+    final visibleSetIndex =
+        locked ? _topCompletedSetIndex(ex.exerciseId, ex.sets.length - 1) : 0;
 
     // Pre-compute all set hints once (Task D cascade). Locked rows don't show hints.
     final hints = locked ? <BB3SetHint>[] : _computeRowHintsViaCascade(ex);
@@ -1229,8 +1243,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           if (!isExpanded)
             // ── Collapsed: horizontally scrollable row ──────────────────
             InkWell(
-              onTap: () =>
-                  setState(() => _expandedByExId[exId] = true),
+              onTap: () => setState(() => _expandedByExId[exId] = true),
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 physics: const ClampingScrollPhysics(),
@@ -1261,10 +1274,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                         ),
                       ),
                       const SizedBox(width: 1),
-                      ..._setFieldWidgets(
-                          theme, ex, visibleSetIndex, locked,
-                          expandedMode: false,
-                          hint: hintFor(visibleSetIndex)),
+                      ..._setFieldWidgets(theme, ex, visibleSetIndex, locked,
+                          expandedMode: false, hint: hintFor(visibleSetIndex)),
                       if (!locked) ...[
                         const SizedBox(width: 6),
                         GestureDetector(
@@ -1278,8 +1289,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                         ),
                         PopupMenuButton<_BB3ExMenuAction>(
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                              minWidth: 28, minHeight: 22),
+                          constraints:
+                              const BoxConstraints(minWidth: 28, minHeight: 22),
                           child: SizedBox(
                             width: 24,
                             height: 22,
@@ -1304,11 +1315,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           else ...[
             // ── Expanded header row ─────────────────────────────────────
             InkWell(
-              onTap: () =>
-                  setState(() => _expandedByExId[exId] = false),
+              onTap: () => setState(() => _expandedByExId[exId] = false),
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
                 child: Row(
                   children: [
                     Icon(Icons.expand_less,
@@ -1383,8 +1392,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       const SizedBox(width: 2),
                       PopupMenuButton<_BB3ExMenuAction>(
                         padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                            minWidth: 30, minHeight: 22),
+                        constraints:
+                            const BoxConstraints(minWidth: 30, minHeight: 22),
                         child: SizedBox(
                           width: 24,
                           height: 22,
@@ -1472,9 +1481,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             for (int si = 0; si < ex.sets.length; si++)
               Padding(
                 padding: EdgeInsets.only(
-                    left: 6,
-                    right: 6,
-                    bottom: si < ex.sets.length - 1 ? 2 : 4),
+                    left: 6, right: 6, bottom: si < ex.sets.length - 1 ? 2 : 4),
                 child: Row(
                   children: [
                     SizedBox(
@@ -1493,8 +1500,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             // Per-exercise note text (below sets)
             if (hasNote)
               Padding(
-                padding:
-                    const EdgeInsets.only(left: 6, right: 6, bottom: 4),
+                padding: const EdgeInsets.only(left: 6, right: 6, bottom: 4),
                 child: Text(
                   'Note: ${ex.perExerciseNote}',
                   style: theme.textTheme.bodySmall?.copyWith(
@@ -1512,15 +1518,13 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     // Long-press required for cross-day drag
     if (!locked) {
       card = LongPressDraggable<_BB3DragPayload>(
-        data: _BB3DragPayload(
-            sourceDayIndex: widget.dayIndex, exercise: ex),
+        data: _BB3DragPayload(sourceDayIndex: widget.dayIndex, exercise: ex),
         feedback: Material(
           elevation: 4,
           borderRadius: BorderRadius.circular(6),
           child: Container(
             width: 160,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
               color: theme.colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(6),
@@ -1585,7 +1589,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     if (!controllersPresent) {
       if (locked && completedSet != null) {
         return _buildLockedCompletedSetWidgets(
-            theme, ex, setIndex, completedSet, expandedMode: expandedMode);
+            theme, ex, setIndex, completedSet,
+            expandedMode: expandedMode);
       }
       return [const SizedBox.shrink()];
     }
@@ -1599,8 +1604,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
     final double? userWeight =
         locked ? null : double.tryParse(wCtrl.text.trim());
-    final int? userReps =
-        locked ? null : int.tryParse(rCtrl.text.trim());
+    final int? userReps = locked ? null : int.tryParse(rCtrl.text.trim());
     final double? userRir =
         locked ? null : double.tryParse(rirCtrl.text.trim());
 
@@ -1632,9 +1636,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final velCtrl = (velCtrls != null && setIndex < velCtrls.length)
         ? velCtrls[setIndex]
         : null;
-    final velFn = (velFns != null && setIndex < velFns.length)
-        ? velFns[setIndex]
-        : null;
+    final velFn =
+        (velFns != null && setIndex < velFns.length) ? velFns[setIndex] : null;
     final velHasValue = velCtrl != null && velCtrl.text.isNotEmpty;
 
     final wWidth = expandedMode ? 60.0 : 55.0;
@@ -1658,8 +1661,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           hasUserValue: completedSet != null
               ? (completedSet['weight'] != null)
               : wCtrl.text.isNotEmpty,
-          isCompleted:
-              completedSet != null && completedSet['weight'] != null,
+          isCompleted: completedSet != null && completedSet['weight'] != null,
         ),
       ),
       const SizedBox(width: 3),
@@ -1677,8 +1679,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           hasUserValue: completedSet != null
               ? (completedSet['reps'] != null)
               : rCtrl.text.isNotEmpty,
-          isCompleted:
-              completedSet != null && completedSet['reps'] != null,
+          isCompleted: completedSet != null && completedSet['reps'] != null,
         ),
       ),
       const SizedBox(width: 3),
@@ -1696,8 +1697,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           hasUserValue: completedSet != null
               ? (completedSet['rir'] != null)
               : rirCtrl.text.isNotEmpty,
-          isCompleted:
-              completedSet != null && completedSet['rir'] != null,
+          isCompleted: completedSet != null && completedSet['rir'] != null,
         ),
       ),
       const SizedBox(width: 1),
@@ -1725,8 +1725,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             focusNode: velFn,
             readOnly: locked,
             enabled: !locked,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             textAlign: TextAlign.center,
             onChanged: locked ? null : (_) => setState(() {}),
             style: theme.textTheme.bodySmall?.copyWith(
@@ -1737,25 +1736,22 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             ),
             decoration: InputDecoration(
               hintText: 'm/s',
-              hintStyle: TextStyle(
-                  color: Colors.grey.shade100, fontSize: 10),
+              hintStyle: TextStyle(color: Colors.grey.shade100, fontSize: 10),
               isDense: true,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(4),
-                borderSide:
-                    BorderSide(color: Colors.grey.shade300, width: 0.5),
+                borderSide: BorderSide(color: Colors.grey.shade300, width: 0.5),
               ),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(4),
-                borderSide:
-                    BorderSide(color: Colors.grey.shade300, width: 0.5),
+                borderSide: BorderSide(color: Colors.grey.shade300, width: 0.5),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(4),
-                borderSide: BorderSide(
-                    color: theme.colorScheme.primary, width: 1),
+                borderSide:
+                    BorderSide(color: theme.colorScheme.primary, width: 1),
               ),
             ),
           ),
@@ -1767,11 +1763,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         child: Icon(
           Icons.edit_note,
           size: 24,
-          color: (_notesCtrl[exId]?.elementAtOrNull(setIndex)?.text
-                      .isNotEmpty ==
-                  true)
-              ? theme.colorScheme.secondary
-              : Colors.grey.shade100,
+          color:
+              (_notesCtrl[exId]?.elementAtOrNull(setIndex)?.text.isNotEmpty ==
+                      true)
+                  ? theme.colorScheme.secondary
+                  : Colors.grey.shade100,
         ),
       ),
     ];
@@ -1898,13 +1894,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(4),
-            borderSide:
-                BorderSide(color: Colors.grey.shade300, width: 0.5),
+            borderSide: BorderSide(color: Colors.grey.shade300, width: 0.5),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(4),
-            borderSide:
-                BorderSide(color: Colors.grey.shade300, width: 0.5),
+            borderSide: BorderSide(color: Colors.grey.shade300, width: 0.5),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(4),
@@ -2005,26 +1999,28 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
             icon: const Icon(Icons.add, size: 16),
             label: const Text('Add', style: TextStyle(fontSize: 12)),
             style: TextButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               visualDensity: VisualDensity.compact,
             ),
-            onPressed: () { _showAddExerciseDialog(theme); },
+            onPressed: () {
+              _showAddExerciseDialog(theme);
+            },
           ),
           const SizedBox(width: 4),
           TextButton.icon(
             icon: const Icon(Icons.view_list_outlined, size: 16),
             label: const Text('Template', style: TextStyle(fontSize: 12)),
             style: TextButton.styleFrom(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               visualDensity: VisualDensity.compact,
             ),
             onPressed: widget.templates.isEmpty
                 ? null
-                : () { _showTemplateDialog(theme); },
+                : () {
+                    _showTemplateDialog(theme);
+                  },
           ),
         ],
       ),
@@ -2085,8 +2081,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         setCount = BB3PlannedExerciseService.resolveSetCount(
           exSettings: exSettings,
           weekIndex: widget.weekIndex,
-          sessionIndex:
-              widget.sessionIndexByExerciseId?[exerciseId] ?? widget.sessionIndex,
+          sessionIndex: widget.sessionIndexByExerciseId?[exerciseId] ??
+              widget.sessionIndex,
         );
       }
     }
@@ -2171,7 +2167,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
     // Heal defaults for the new exercise
     if (widget.blockId != null && widget.blockId!.isNotEmpty) {
-      final newId = (result.first['id'] ?? result.first['exerciseId'] ?? '').toString().trim();
+      final newId = (result.first['id'] ?? result.first['exerciseId'] ?? '')
+          .toString()
+          .trim();
       if (newId.isNotEmpty) {
         await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
           uid: widget.uid,
@@ -2183,7 +2181,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     }
   }
 
-  void _replaceExercise(BB3Exercise oldEx, Map<String, dynamic> replacementMap) {
+  void _replaceExercise(
+      BB3Exercise oldEx, Map<String, dynamic> replacementMap) {
     final replacement = _buildExerciseFromLibraryMap(
       replacementMap,
       orderIndex: oldEx.orderIndex,
@@ -2273,7 +2272,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           setCount = BB3PlannedExerciseService.resolveSetCount(
             exSettings: exSettings,
             weekIndex: widget.weekIndex,
-            sessionIndex: widget.sessionIndexByExerciseId?[exId] ?? widget.sessionIndex,
+            sessionIndex:
+                widget.sessionIndexByExerciseId?[exId] ?? widget.sessionIndex,
           );
         }
       }
@@ -2345,8 +2345,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               Navigator.pop(ctx);
               _deleteExercise(ex);
             },
-            style: TextButton.styleFrom(
-                foregroundColor: Colors.red.shade600),
+            style: TextButton.styleFrom(foregroundColor: Colors.red.shade600),
             child: const Text('Remove'),
           ),
         ],
@@ -2491,6 +2490,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 // ── Day menu action ───────────────────────────────────────────────────────────
 
 enum _BB3DayMenuAction { deleteAllExercises, moveAllToNextDay }
+
 enum _BB3ExMenuAction { deleteExercise, replaceExercise }
 
 // ── Drag payload ──────────────────────────────────────────────────────────────
@@ -2526,13 +2526,19 @@ class _BB3AddExercisePicker extends StatefulWidget {
 
 class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
   static const List<String> _categoryOrder = [
-    'Horizontal Press', 'Horizontal Pull',
-    'Vertical Press', 'Vertical Pull',
+    'Horizontal Press',
+    'Horizontal Pull',
+    'Vertical Press',
+    'Vertical Pull',
     'Lateral Raise',
-    'Arm Extension', 'Arm Curl',
-    'Squat Pattern', 'Hip Hinge',
-    'Leg Extension', 'Leg Curl',
-    'Hip Abduction/adduction', 'Calf Raise',
+    'Arm Extension',
+    'Arm Curl',
+    'Squat Pattern',
+    'Hip Hinge',
+    'Leg Extension',
+    'Leg Curl',
+    'Hip Abduction/adduction',
+    'Calf Raise',
     'Core',
   ];
 
@@ -2800,8 +2806,7 @@ class _BB3AddExercisePickerState extends State<_BB3AddExercisePicker> {
     if (!widget.multiSelect) {
       return ListTile(
         dense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
         title: Text(
           name,
           style: const TextStyle(fontSize: 14),

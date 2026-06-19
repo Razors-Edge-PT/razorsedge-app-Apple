@@ -5,7 +5,8 @@ import 'package:flutter/widgets.dart';
 
 import 'home_bootstrap_service.dart';
 import 'home_v2_calendar_service.dart';
-import 'onboarding_prefs.dart';
+import 'onboarding/onboarding_cue.dart';
+import 'onboarding/onboarding_cue_service.dart';
 import 'user_context.dart';
 import 'warmup_service.dart';
 
@@ -38,7 +39,7 @@ class HomeV2Controller extends ChangeNotifier {
   Map<DateTime, HomeV2CalendarDayKind> calendarDays = {};
 
   /// Onboarding cue flags — default true so no cue flashes before prefs load.
-  bool wpDone  = true;
+  bool wpDone = true;
   bool wesDone = true;
 
   // ── Private ────────────────────────────────────────────────────────────────
@@ -47,8 +48,8 @@ class HomeV2Controller extends ChangeNotifier {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _blockSub;
 
   // Session-level gates — reset when a new controller instance is created.
-  String? _rirHealedBlockId;     // only heal each block once per session
-  bool _startupRun = false;      // only run ensureBlocksExist once per session
+  String? _rirHealedBlockId; // only heal each block once per session
+  bool _startupRun = false; // only run ensureBlocksExist once per session
   String _calendarFetchKey = ''; // dedup guard: '$uid/$year-$month'
 
   // Used by the block-listener onChange callback without a BuildContext.
@@ -76,7 +77,8 @@ class HomeV2Controller extends ChangeNotifier {
       _schedulePostFrameWork(uc: uc, month: initialMonth);
     } else {
       // New user: run first-time setup (shows spinner in widget).
-      await _runFirstTimeSetup(uc: uc, actingUid: actingUid, month: initialMonth);
+      await _runFirstTimeSetup(
+          uc: uc, actingUid: actingUid, month: initialMonth);
     }
 
     // Display name and onboarding prefs are always non-blocking.
@@ -225,7 +227,8 @@ class HomeV2Controller extends ChangeNotifier {
     _blockSub = HomeBootstrapService.setupActiveBlockListener(
       uid: uid,
       onChange: () {
-        unawaited(_refreshCalendar(_currentMonth, uid: _currentActingUid, force: true));
+        unawaited(_refreshCalendar(_currentMonth,
+            uid: _currentActingUid, force: true));
       },
     );
   }
@@ -253,10 +256,8 @@ class HomeV2Controller extends ChangeNotifier {
   Future<void> _loadDisplayName(String uid) async {
     if (uid.isEmpty) return;
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
+      final snap =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
       final data = snap.data();
       if (_disposed || data == null) return;
 
@@ -265,8 +266,7 @@ class HomeV2Controller extends ChangeNotifier {
         return s.isEmpty ? null : s;
       }
 
-      actingDisplayName =
-          pick(data['username']) ??
+      actingDisplayName = pick(data['username']) ??
           pick(data['displayName']) ??
           pick(data['email']);
       _notify();
@@ -274,13 +274,15 @@ class HomeV2Controller extends ChangeNotifier {
   }
 
   Future<void> _loadOnboardingPrefs() async {
+    // Actor UID only — never the impersonated athlete.
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-    final wp  = await OnboardingPrefs.getWpDone(uid);
-    final wes = await OnboardingPrefs.getWesDone(uid);
-    if (_disposed) return;
-    wpDone  = wp;
-    wesDone = wes;
+    final svc = OnboardingCueService.instance;
+    await svc.ensureLoaded(uid);
+    if (_disposed || !svc.isLoaded(uid)) return; // fail-closed: keep defaults
+    // Derived from durable cue state (same mapping as HomeScreen).
+    wpDone = svc.isPermanentlyComplete(OnboardingCueId.wpDemoVideo, uid);
+    wesDone = !svc.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, uid);
     _notify();
   }
 

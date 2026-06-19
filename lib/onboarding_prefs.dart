@@ -1,72 +1,30 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Per-logged-in-user onboarding completion flags.
-/// All keys are keyed on the Firebase Auth actor UID (never the impersonated athlete UID).
+/// Local-only onboarding helpers keyed on the Firebase Auth actor UID.
+///
+/// IMPORTANT: durable cue COMPLETION now lives in Firestore via
+/// `OnboardingCueService` (`lib/onboarding/`). The old SharedPreferences
+/// completion flags (wpDemoComplete, wpPlannerWalkthroughComplete,
+/// wes2TutorialComplete, wesCogCueDone) have been intentionally removed and are
+/// NOT migrated — the first release with the new guard establishes a fresh
+/// baseline.
+///
+/// What remains here is only the settings-cog qualifying-day LOCAL CACHE. The
+/// durable authority for the 3-day unlock is the membership doc
+/// (`users/{actorUid}/profile/membership.qualifiedWorkoutDates` /
+/// `qualifiedWorkoutDaysCount`), so the gate survives reinstall / device change.
 class OnboardingPrefs {
-  static String _kWpDone(String uid)  => 'ob.$uid.wpDemoComplete';
-  static String _kWesDone(String uid) => 'ob.$uid.wes2TutorialComplete';
-
-  static Future<bool> getWpDone(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_kWpDone(uid)) ?? false;
-  }
-
-  static Future<bool> getWesDone(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_kWesDone(uid)) ?? false;
-  }
-
-  /// Marks the Workout Planner demo as complete. Idempotent — safe to call multiple times.
-  static Future<void> setWpDone(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kWpDone(uid), true);
-  }
-
-  /// Marks the WES2 field tutorial as complete. Idempotent — safe to call multiple times.
-  static Future<void> setWesDone(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kWesDone(uid), true);
-  }
-
-  static String _kWpWalkthroughDone(String uid) =>
-      'ob.$uid.wpPlannerWalkthroughComplete';
-
-  static Future<bool> getWpPlannerWalkthroughComplete(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_kWpWalkthroughDone(uid)) ?? false;
-  }
-
-  /// Marks the Workout Planner in-screen walkthrough as complete. Idempotent.
-  static Future<void> setWpPlannerWalkthroughComplete(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kWpWalkthroughDone(uid), true);
-  }
-
-  static String _kWesCogCueDone(String uid) => 'ob.$uid.wesCogCueDone';
-
-  static Future<bool> getWesCogCueDone(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_kWesCogCueDone(uid)) ?? false;
-  }
-
-  /// Marks the WES2 settings cog tutorial cue as seen. Idempotent.
-  static Future<void> setWesCogCueDone(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kWesCogCueDone(uid), true);
-  }
-
   static String _kWesCogCueQualifiedDays(String uid) =>
       'ob.$uid.wesCogCueQualifiedDays';
 
-  /// Returns the set of calendar date keys (yyyy-MM-dd) on which this actor
-  /// has logged a qualifying workout (≥ 2 sets with weight AND reps).
+  /// Returns the cached set of calendar date keys (yyyy-MM-dd) on which this
+  /// actor has logged a qualifying workout. Cache only — not authoritative.
   static Future<Set<String>> getWesCogCueQualifiedDays(String uid) async {
     final prefs = await SharedPreferences.getInstance();
     return (prefs.getStringList(_kWesCogCueQualifiedDays(uid)) ?? []).toSet();
   }
 
-  /// Adds [dateKey] to the qualifying-day set. Idempotent — the same date
-  /// is never counted twice even if called repeatedly.
+  /// Adds [dateKey] to the local qualifying-day cache. Idempotent.
   static Future<void> addWesCogCueQualifiedDay(
       String uid, String dateKey) async {
     final prefs = await SharedPreferences.getInstance();

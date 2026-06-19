@@ -1,4 +1,4 @@
-﻿import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 import '../block_exercise_defaults_repository.dart';
@@ -30,9 +30,16 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
   final int dayIndex; // 0-based, used as estimated session display
   final int totalBlockWeeks; // used to write RIR from current week forward
   final Wes2PlanService planService;
-  final int? resolvedActiveInstanceOverride; // history-aware override for DUP models
-  final int? completedInstanceCount; // completed instances of this exercise in the active block to date
-  final int? weeklyInstanceOverride; // BB3-computed within-week instance number (1-based)
+  final int?
+      resolvedActiveInstanceOverride; // history-aware override for DUP models
+  final int?
+      completedInstanceCount; // completed instances of this exercise in the active block to date
+  final int?
+      weeklyInstanceOverride; // BB3-computed within-week instance number (1-based)
+  /// 1-based RIR session the hint engine uses for the selected workout, derived
+  /// from the block-relative dayIndex (days % 7) + 1 — independent of the
+  /// rep-target instance. Null when the caller cannot supply the correct source.
+  final int? activeRirSessionIndex;
 
   const Wes2ExerciseSettingsDialog({
     super.key,
@@ -47,6 +54,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
     this.resolvedActiveInstanceOverride,
     this.completedInstanceCount,
     this.weeklyInstanceOverride,
+    this.activeRirSessionIndex,
   });
 
   @override
@@ -117,19 +125,20 @@ class _Wes2ExerciseSettingsDialogState
       _periodizationModel == 'DUP, By Exposure';
 
   int get _weeklyInstanceDisplay {
-    if (widget.weeklyInstanceOverride != null) return widget.weeklyInstanceOverride!;
+    if (widget.weeklyInstanceOverride != null)
+      return widget.weeklyInstanceOverride!;
     final count = _sessionCount;
     if (count <= 0) return 1;
     return (widget.dayIndex % count) + 1;
   }
 
   int get _globalInstanceDisplay {
-    if (widget.completedInstanceCount != null) return widget.completedInstanceCount!;
+    if (widget.completedInstanceCount != null)
+      return widget.completedInstanceCount!;
     final count = _sessionCount;
     if (count <= 0) return widget.dayIndex + 1;
     return (widget.weekIndex * count) + _weeklyInstanceDisplay;
   }
-
 
   /// weekData source for rep-target slot count and active instance resolution.
   /// DUP By Week / DUP By Exposure: always week1 (single repeating template;
@@ -142,9 +151,8 @@ class _Wes2ExerciseSettingsDialogState
       return repTargets['week1'] as Map<String, dynamic>?;
     }
     return (repTargets.containsKey(_weekKey)
-            ? repTargets[_weekKey]
-            : repTargets['week1'])
-        as Map<String, dynamic>?;
+        ? repTargets[_weekKey]
+        : repTargets['week1']) as Map<String, dynamic>?;
   }
 
   int get _microcycleSlotCount {
@@ -164,7 +172,8 @@ class _Wes2ExerciseSettingsDialogState
     // Clamp to valid slot range so a stale override cannot point outside the microcycle.
     final slotCount = _microcycleSlotCount;
     if (widget.resolvedActiveInstanceOverride != null && slotCount > 0) {
-      final clamped = ((widget.resolvedActiveInstanceOverride! - 1) % slotCount) + 1;
+      final clamped =
+          ((widget.resolvedActiveInstanceOverride! - 1) % slotCount) + 1;
       return clamped;
     }
     final candidate = widget.dayIndex + 1;
@@ -328,8 +337,8 @@ class _Wes2ExerciseSettingsDialogState
     _originalRirPlanValues.clear();
 
     final rirPlan = settings['rirPlan'] as Map<String, dynamic>?;
-    final weekData = (rirPlan?[_weekKey] ?? rirPlan?['week1'])
-        as Map<String, dynamic>?;
+    final weekData =
+        (rirPlan?[_weekKey] ?? rirPlan?['week1']) as Map<String, dynamic>?;
 
     final count = _sessionCount;
     for (int i = 1; i <= count; i++) {
@@ -418,7 +427,8 @@ class _Wes2ExerciseSettingsDialogState
         if (m != null) {
           final mn = int.tryParse(m.group(1)!);
           final mx = int.tryParse(m.group(2)!);
-          if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+          if (mn != null && mx != null && mn < mx)
+            return {'min': mn, 'max': mx};
         }
       }
     }
@@ -438,7 +448,8 @@ class _Wes2ExerciseSettingsDialogState
     for (final entry in _rirPlanCtrls.entries) {
       final current = entry.value.text.trim();
       final original = _originalRirPlanValues[entry.key] ?? '';
-      if (current == original) continue; // unchanged — do not touch future weeks
+      if (current == original)
+        continue; // unchanged — do not touch future weeks
       final parts = entry.key.split('_'); // ['sessionN', 'setM']
       if (parts.length != 2) continue;
       sessionChanges.putIfAbsent(parts[0], () => {})[parts[1]] =
@@ -450,8 +461,7 @@ class _Wes2ExerciseSettingsDialogState
     // Write changes from the current week onward; leave previous weeks untouched.
     for (int w = widget.weekIndex + 1; w <= widget.totalBlockWeeks; w++) {
       final weekKey = 'week$w';
-      final existingWeek =
-          (result[weekKey] as Map<String, dynamic>?) ?? {};
+      final existingWeek = (result[weekKey] as Map<String, dynamic>?) ?? {};
       final weekData = Map<String, dynamic>.from(existingWeek);
 
       for (final sessionEntry in sessionChanges.entries) {
@@ -788,7 +798,9 @@ class _Wes2ExerciseSettingsDialogState
     final activeKey = 'instance$_resolvedActiveInstanceNumber';
     String slotLabel(String key) {
       final num = key.replaceAll('instance', '');
-      return key == activeKey ? 'Reps Session $num · Active' : 'Reps Session $num';
+      return key == activeKey
+          ? 'Reps Session $num · Active'
+          : 'Reps Session $num';
     }
 
     return Column(
@@ -812,6 +824,21 @@ class _Wes2ExerciseSettingsDialogState
     );
   }
 
+  /// 1-based RIR session number to highlight, or null when no highlight should
+  /// be shown. Mirrors [BB3PlannedExerciseService.getRirFromPlan] session
+  /// selection exactly: resolves against the actual rirPlan map using the
+  /// current-week → week1 fallback, then the requested-session → session1
+  /// fallback. Returns null only when the caller supplied no source index.
+  int? get _activeRirSessionNumber {
+    final n = widget.activeRirSessionIndex;
+    if (n == null) return null;
+    final rirPlan = _existingSettings['rirPlan'];
+    if (rirPlan is! Map) return 1; // matches getRirFromPlan's session1 default
+    final weekData = (rirPlan[_weekKey] ?? rirPlan['week1']);
+    if (weekData is! Map) return 1;
+    return weekData.containsKey('session$n') ? n : 1;
+  }
+
   Widget _buildRirPlanSection() {
     _syncSessionControllersToFrequency();
 
@@ -823,54 +850,86 @@ class _Wes2ExerciseSettingsDialogState
       );
     }
 
+    final activeSession = _activeRirSessionNumber;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (int i = 1; i <= count; i++) ...[
           if (i > 1) const SizedBox(height: 5),
-          Text(
-            'Session $i',
-            style: const TextStyle(fontSize: 11, color: Colors.white54),
-          ),
-          const SizedBox(height: 2),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              const double minFieldWidth = 60;
-              const double gap = 4;
-              final sc = _setCountForSession(i);
-
-              Widget field(int s) => _buildRirTextField(
-                    controller: _rirPlanCtrls['session${i}_set$s']
-                        ?? TextEditingController(),
-                    label: 'S$s',
-                  );
-
-              Widget rowOf(int from, int to) => Row(
-                    children: [
-                      for (int s = from; s <= to; s++) ...[
-                        if (s > from) const SizedBox(width: gap),
-                        Expanded(child: field(s)),
-                      ],
-                    ],
-                  );
-
-              // All sets fit on one row when sc <= 4 and width allows.
-              final allOnOneRow = sc <= 4 &&
-                  constraints.maxWidth >=
-                      minFieldWidth * sc + gap * (sc - 1);
-
-              if (allOnOneRow) return rowOf(1, sc);
-
-              // Chunks of up to 4 per row.
-              final rows = <Widget>[];
-              for (int start = 1; start <= sc; start += 4) {
-                final end = (start + 3).clamp(start, sc);
-                if (rows.isNotEmpty) rows.add(const SizedBox(height: gap));
-                rows.add(rowOf(start, end));
-              }
-              return Column(
+          Builder(
+            builder: (context) {
+              final group = Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: rows,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Session $i',
+                    style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  ),
+                  const SizedBox(height: 2),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      const double minFieldWidth = 60;
+                      const double gap = 4;
+                      final sc = _setCountForSession(i);
+
+                      Widget field(int s) => _buildRirTextField(
+                            controller: _rirPlanCtrls['session${i}_set$s'] ??
+                                TextEditingController(),
+                            label: 'S$s',
+                          );
+
+                      Widget rowOf(int from, int to) => Row(
+                            children: [
+                              for (int s = from; s <= to; s++) ...[
+                                if (s > from) const SizedBox(width: gap),
+                                Expanded(child: field(s)),
+                              ],
+                            ],
+                          );
+
+                      // All sets fit on one row when sc <= 4 and width allows.
+                      final allOnOneRow = sc <= 4 &&
+                          constraints.maxWidth >=
+                              minFieldWidth * sc + gap * (sc - 1);
+
+                      if (allOnOneRow) return rowOf(1, sc);
+
+                      // Chunks of up to 4 per row.
+                      final rows = <Widget>[];
+                      for (int start = 1; start <= sc; start += 4) {
+                        final end = (start + 3).clamp(start, sc);
+                        if (rows.isNotEmpty) {
+                          rows.add(const SizedBox(height: gap));
+                        }
+                        rows.add(rowOf(start, end));
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: rows,
+                      );
+                    },
+                  ),
+                ],
+              );
+
+              // Subtle 1px border around the RIR session the hint engine uses.
+              // Display-only; never changes or saves any RIR value.
+              if (activeSession != i) return group;
+              return Container(
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .secondary
+                        .withValues(alpha: 0.6),
+                    width: 1,
+                  ),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: group,
               );
             },
           ),
@@ -886,9 +945,8 @@ class _Wes2ExerciseSettingsDialogState
       _repTargetCtrls.putIfAbsent('min', () => TextEditingController());
       _repTargetCtrls.putIfAbsent('max', () => TextEditingController());
 
-      final removeKeys = _repTargetCtrls.keys
-          .where((k) => k != 'min' && k != 'max')
-          .toList();
+      final removeKeys =
+          _repTargetCtrls.keys.where((k) => k != 'min' && k != 'max').toList();
       for (final k in removeKeys) {
         _repTargetCtrls.remove(k)?.dispose();
       }
@@ -1007,8 +1065,8 @@ class _Wes2ExerciseSettingsDialogState
           floatingLabelBehavior: FloatingLabelBehavior.always,
           isDense: true,
           filled: true,
-          fillColor:
-              Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+          fillColor: Theme.of(context).cardTheme.color ??
+              Theme.of(context).colorScheme.surface,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
@@ -1049,8 +1107,8 @@ class _Wes2ExerciseSettingsDialogState
           floatingLabelBehavior: FloatingLabelBehavior.always,
           isDense: true,
           filled: true,
-          fillColor:
-              Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+          fillColor: Theme.of(context).cardTheme.color ??
+              Theme.of(context).colorScheme.surface,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
@@ -1113,5 +1171,3 @@ class _Wes2ExerciseSettingsDialogState
     ];
   }
 }
-
-

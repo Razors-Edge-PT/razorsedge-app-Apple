@@ -29,15 +29,12 @@ import 'block_creation_helper.dart';
 import 'templates.dart';
 import 'planned_blocks_screen.dart';
 import 'home_screen_2.dart';
-import 'onboarding_prefs.dart';
-
-
+import 'onboarding/onboarding_cue.dart';
+import 'onboarding/onboarding_cue_service.dart';
 
 enum SelectedFeed { home, points, leaderboard }
+
 const String kUserPrefFeedTab = 'feedTab'; // 'home' | 'points'
-
-
-
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -51,7 +48,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _ucBound = false;
 
   // Onboarding cue state — default true so no cue flashes before prefs load
-  bool _wpDone  = true;
+  bool _wpDone = true;
   bool _wesDone = true;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -82,8 +79,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _avatarPersistInProgress = false;
   String? _avatarLastUrlSaved;
 
-
-
   String? _actingAsEmail;
   String? _lastWarmUid;
 
@@ -101,7 +96,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _pointsHasMore = true;
   Timestamp? _lastPointsCreatedAt;
 
-
 // Points month filter (yyyy-MM), default = current month
   final String _pointsMonthKey = () {
     final now = DateTime.now();
@@ -114,13 +108,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   bool _feedError = false;
   Timestamp? _lastCreatedAt; // simple, stable pagination
   bool _loadMoreScheduled = false;
-
-
-
-
-
-
-
 
   @override
   void initState() {
@@ -153,10 +140,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     // Block setup: fast-path for existing users, first-time setup for new users.
     // bootstrapBlockMeta (called in AppRoot before authenticated phase) hydrates
     // _activeBlockId from SharedPreferences, so non-null here means existing user.
-    final hasBlockMeta = uc.activeBlockId != null && uc.activeBlockId!.isNotEmpty;
+    final hasBlockMeta =
+        uc.activeBlockId != null && uc.activeBlockId!.isNotEmpty;
     if (hasBlockMeta) {
       // Existing user: block meta already cached. Home renders without any server wait.
-      debugPrint('🏠 [HOME] existing user (blockId=${uc.activeBlockId}) — rendering immediately');
+      debugPrint(
+          '🏠 [HOME] existing user (blockId=${uc.activeBlockId}) — rendering immediately');
       _blockSetupComplete = true;
       _fetchTrainingDaysForMonth(_focusedDay);
       _setupActiveBlockListener(actingUid);
@@ -182,8 +171,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     }
 
     if (actingUid.isNotEmpty) {
-      final usersRef    = FirebaseFirestore.instance.collection('users').doc(actingUid);
-      final onboardRef  = FirebaseFirestore.instance
+      final usersRef =
+          FirebaseFirestore.instance.collection('users').doc(actingUid);
+      final onboardRef = FirebaseFirestore.instance
           .collection('users')
           .doc(actingUid)
           .collection('profile')
@@ -199,7 +189,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           // ✅ Run bootstrap now that data is ready (all 3 block docs exist by this point)
           await TemplatesBootstrapper.ensureInitialTemplatesForUser(actingUid);
 
-
           // ✅ Let the user know without blocking UI
           if (mounted && ScaffoldMessenger.maybeOf(context) != null) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -207,7 +196,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             );
           }
 
-          debugPrint('🧰 [HOME] Template bootstrap complete (gated) for $actingUid');
+          debugPrint(
+              '🧰 [HOME] Template bootstrap complete (gated) for $actingUid');
         } catch (e, st) {
           debugPrint('🧰 [HOME] Gated bootstrap threw: $e\n$st');
           fired = false; // allow retry if something transient failed
@@ -217,25 +207,22 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? userSub;
       StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? onboardSub;
 
-
       // Non-blocking listeners; auto-cancel after first success
-      userSub = usersRef
-          .snapshots()
-          .listen(
-            (u) async {
+      userSub = usersRef.snapshots().listen(
+        (u) async {
           if (!u.exists) return;
           final d = u.data();
-          final hasCore =
-              d != null &&
-                  d['sex'] != null &&
-                  d['dob'] != null &&
-                  d['username'] != null;
+          final hasCore = d != null &&
+              d['sex'] != null &&
+              d['dob'] != null &&
+              d['username'] != null;
 
           if (!hasCore) return;
 
           // Check onboarding doc in parallel
           final oSnap = await onboardRef.get();
-          final onboardingReady = oSnap.exists && (oSnap.data()?.isNotEmpty ?? false);
+          final onboardingReady =
+              oSnap.exists && (oSnap.data()?.isNotEmpty ?? false);
 
           if (onboardingReady) {
             await maybeRun();
@@ -246,44 +233,47 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         onError: (Object e, StackTrace st) async {
           debugPrint('🟥 [HOME] usersRef.snapshots denied: $e');
           // Optional: cancel so it doesn't spam logs
-          try { await userSub?.cancel(); } catch (_) {}
+          try {
+            await userSub?.cancel();
+          } catch (_) {}
         },
       );
 
-
       // Also watch onboarding; if onboarding arrives first, verify user core then run
-      onboardSub = onboardRef
-          .snapshots()
-          .listen(
-            (o) async {
+      onboardSub = onboardRef.snapshots().listen(
+        (o) async {
           if (!o.exists || (o.data()?.isNotEmpty != true)) return;
 
           final u = await usersRef.get();
           final d = u.data();
-          final hasCore =
-              u.exists &&
-                  d != null &&
-                  d['sex'] != null &&
-                  d['dob'] != null &&
-                  d['username'] != null;
+          final hasCore = u.exists &&
+              d != null &&
+              d['sex'] != null &&
+              d['dob'] != null &&
+              d['username'] != null;
 
           if (hasCore) {
             await maybeRun();
             await onboardSub?.cancel();
-            try { await userSub?.cancel(); } catch (_) {}
+            try {
+              await userSub?.cancel();
+            } catch (_) {}
           }
         },
         onError: (Object e, StackTrace st) async {
           debugPrint('🟥 [HOME] onboardRef.snapshots denied: $e');
-          try { await onboardSub?.cancel(); } catch (_) {}
+          try {
+            await onboardSub?.cancel();
+          } catch (_) {}
         },
       );
-
 
       // (Keep your templates watcher block below if you want live counts)
     }
   }
-  Future<void> _persistAvatarLocalIfNeeded(BuildContext context, {
+
+  Future<void> _persistAvatarLocalIfNeeded(
+    BuildContext context, {
     required String uid,
     required String photoURL,
   }) async {
@@ -307,11 +297,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       final dir = await getApplicationDocumentsDirectory();
       final dest = File('${dir.path}/avatar_$uid.jpg');
-      try { if (dest.existsSync()) await dest.delete(); } catch (_) {}
+      try {
+        if (dest.existsSync()) await dest.delete();
+      } catch (_) {}
       await file.copy(dest.path);
 
       _avatarLastUrlSaved = photoURL;
-      uc.setLocalPhotoPath(dest.path); // 🔔 notifies listeners → AppBar swaps to FileImage
+      uc.setLocalPhotoPath(
+          dest.path); // 🔔 notifies listeners → AppBar swaps to FileImage
     } catch (_) {
       // ignore; fallback stays as NetworkImage
     } finally {
@@ -324,10 +317,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     try {
       final uid = UserContext.of(context, listen: false).actorUid;
-      final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-      final prefs = (snap.data()?['prefs'] as Map<String, dynamic>?) ?? const {};
+      final snap =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final prefs =
+          (snap.data()?['prefs'] as Map<String, dynamic>?) ?? const {};
       final tab = (prefs[kUserPrefFeedTab] as String?) ?? 'home';
-      _selectedFeed = (tab == 'points') ? SelectedFeed.points : SelectedFeed.home;
+      _selectedFeed =
+          (tab == 'points') ? SelectedFeed.points : SelectedFeed.home;
       setState(() {});
     } catch (_) {
       _selectedFeed = SelectedFeed.home;
@@ -340,11 +336,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     try {
       final uid = UserContext.of(context, listen: false).actorUid;
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
-        'prefs': { kUserPrefFeedTab: _selectedFeed == SelectedFeed.points ? 'points' : 'home' }
+        'prefs': {
+          kUserPrefFeedTab:
+              _selectedFeed == SelectedFeed.points ? 'points' : 'home'
+        }
       }, SetOptions(merge: true));
     } catch (_) {}
   }
-
 
   Future<void> _ensureAtLeastOneBlockExists() async {
     // Always use the selected-athlete UID, not the auth UID, so coach
@@ -383,7 +381,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           (data['username'] != null || data['fullName'] != null);
 
       if (!hasCore) {
-        debugPrint('🛑 [Home] Block gate: /users/$uid incomplete → retry in 800ms');
+        debugPrint(
+            '🛑 [Home] Block gate: /users/$uid incomplete → retry in 800ms');
         // tiny, non-blocking retry; won't slow first paint
         unawaited(Future.delayed(const Duration(milliseconds: 800), () async {
           await _ensureAtLeastOneBlockExists();
@@ -395,7 +394,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       print('🔎 [Home] /users/$uid keys=${data.keys.toList()}');
 
       final usernameFromDoc = (data['username'] as String?)?.trim();
-      final sexRawFromDoc   = (data['sex'] as String?)?.trim();
+      final sexRawFromDoc = (data['sex'] as String?)?.trim();
 
       // Fallbacks so we still name the block if the user doc isn't ready yet:
       final auth = FirebaseAuth.instance.currentUser!;
@@ -408,7 +407,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           : (fallbackUsername.isNotEmpty ? fallbackUsername : null);
 
       final sex = (sexRawFromDoc == null || sexRawFromDoc.isEmpty)
-          ? 'N'  // default → treated as female branch per your rules
+          ? 'N' // default → treated as female branch per your rules
           : sexRawFromDoc.toUpperCase();
 
       print('🧬 [Home] Using uid=$uid username="$username" sex="$sex"');
@@ -424,7 +423,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           ? "${username}'s 2nd Block"
           : "2nd Block";
 
-      print('🆕 [Home] No blocks found — creating "$block1Name" and "$block2Name"...');
+      print(
+          '🆕 [Home] No blocks found — creating "$block1Name" and "$block2Name"...');
 
       // ── Dates: start = Monday of the current week ("Monday just gone") ──────
       final now = DateTime.now();
@@ -433,21 +433,21 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final today = DateTime(now.year, now.month, now.day);
 
       // DateTime.weekday: Mon=1 ... Sun=7
-      final startDate1 = today.subtract(Duration(days: today.weekday - DateTime.monday));
+      final startDate1 =
+          today.subtract(Duration(days: today.weekday - DateTime.monday));
 
       // 26 weeks = 182 days total. If start is day 0, last day is start + 181.
       final endDate1 = startDate1.add(const Duration(days: 181));
 
       // Next blocks start the day after the previous ends
       final startDate2 = endDate1.add(const Duration(days: 1));
-      final endDate2   = startDate2.add(const Duration(days: 181));
+      final endDate2 = startDate2.add(const Duration(days: 181));
 
       final startDate3 = endDate2.add(const Duration(days: 1));
-      final endDate3   = startDate3.add(const Duration(days: 181));
+      final endDate3 = startDate3.add(const Duration(days: 181));
 
-      debugPrint('📅 [Home] Block1 start=${startDate1.toIso8601String()} end=${endDate1.toIso8601String()} (today=${today.toIso8601String()})');
-
-
+      debugPrint(
+          '📅 [Home] Block1 start=${startDate1.toIso8601String()} end=${endDate1.toIso8601String()} (today=${today.toIso8601String()})');
 
       // ── Base exercise IDs (shared by both sexes) ─────────────────────────────
       const baseExercises = <String>[
@@ -489,7 +489,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
         'xWpCQO504iGfU3LKLZlD', // Cable High Row, Unilateral
         'XM9026peNIu0R8qh7UqY', // Chin-Up
-
       ];
 
       // ── Male-specific exercises ─────────────────────────────────────────────
@@ -530,7 +529,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       // Sex-derived candidate pool for templateCandidateExerciseIds
       final candidateIds = computeTemplateCandidateIds(isFemale: isFemale);
-      debugPrint('✅ [HOME] First-login: using candidateIds=${candidateIds.length}, no full exercise scan');
+      debugPrint(
+          '✅ [HOME] First-login: using candidateIds=${candidateIds.length}, no full exercise scan');
 
       // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
 // Base = all exercises from Block 1. Then apply -exclusions +additions.
@@ -555,11 +555,11 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 // Apply Block 2 adjustments dynamically
       final block2ExerciseIds = <String>{
         ...seededExerciseIds.where(
-              (id) => !(isFemale ? femaleExclusionsB2 : maleExclusionsB2).contains(id),
+          (id) =>
+              !(isFemale ? femaleExclusionsB2 : maleExclusionsB2).contains(id),
         ),
         ...(isFemale ? femaleAdditionsB2 : maleAdditionsB2),
       }.toList(growable: false);
-
 
       // ── Block 3 exercise adjustments (sex-specific ± tweaks) ───────────────────────
 // Use these four lists to easily fine-tune Block 3 composition.
@@ -573,7 +573,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       const maleAdditions = <String>[
         'EFbQl9i9NdYi13F3DqHr', // Push Up, Suspended
         'Ah9XLjbWvLJOWxb6e1H0', // Triceps Push Down, Unilateral
-
       ];
 
       const femaleExclusions = <String>[
@@ -587,12 +586,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 // Compute Block 3 exercises dynamically
       final block3ExerciseIds = <String>{
         ...seededExerciseIds.where(
-              (id) => !(isFemale ? femaleExclusions : maleExclusions).contains(id),
+          (id) => !(isFemale ? femaleExclusions : maleExclusions).contains(id),
         ),
         ...(isFemale ? femaleAdditions : maleAdditions),
       }.toList(growable: false);
-
-
 
       // Helper to build a block payload (lightweight sentinel — no full exercise arrays)
       Map<String, dynamic> buildBlock({
@@ -608,7 +605,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           'createdAt': Timestamp.now(),
           'startDate': Timestamp.fromDate(start),
           'endDate': Timestamp.fromDate(end),
-          'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+          'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
           'allExercisesAvailable': true,
           'excludedExerciseIds': <String>[],
           'templateCandidateExerciseIds': candidateExerciseIds,
@@ -616,7 +613,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
             'blockMeta': {
               'blockStartDate': start.toIso8601String(),
               'blockEndDate': end.toIso8601String(),
-              'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+              'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
             }
           },
         };
@@ -635,7 +632,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final block1Ref = await blocksRef.add(block1Payload);
       swCreate1.stop();
       final block1Id = block1Ref.id;
-      print('✅ [Home] Block 1 created id=$block1Id (${swCreate1.elapsed.inMilliseconds} ms)');
+      print(
+          '✅ [Home] Block 1 created id=$block1Id (${swCreate1.elapsed.inMilliseconds} ms)');
 
       if (mounted) {
         Provider.of<UserContext>(context, listen: false).applyBlockMeta(
@@ -652,7 +650,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         exerciseIds: seededExerciseIds,
       );
 
-
       // Pointer write to current_block → Block 1
       final swPtr = Stopwatch()..start();
       await FirebaseFirestore.instance
@@ -668,7 +665,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           'blockMeta': {
             'blockStartDate': startDate1.toIso8601String(),
             'blockEndDate': endDate1.toIso8601String(),
-            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+            'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
           }
         },
         'blockMeta': {
@@ -677,25 +674,43 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         },
       }, SetOptions(merge: true));
       swPtr.stop();
-      print('📌 [Home] Set current_block pointer → $block1Id (${swPtr.elapsed.inMilliseconds} ms)');
+      print(
+          '📌 [Home] Set current_block pointer → $block1Id (${swPtr.elapsed.inMilliseconds} ms)');
 
       // Eagerly write week_0 (1 week doc + 7 day docs) so WES2/BB3 can read
       // the current week immediately without waiting for the full scaffold.
       {
-        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-        const weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        const months = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec'
+        ];
+        const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         final week0Ref = block1Ref.collection('weeks').doc('week_0');
         final eagerBatch = FirebaseFirestore.instance.batch();
         eagerBatch.set(week0Ref, {'exists': true}, SetOptions(merge: true));
         for (int day = 0; day < 7; day++) {
           final date = startDate1.add(Duration(days: day));
-          eagerBatch.set(week0Ref.collection('days').doc('day_$day'), {
-            'date': Timestamp.fromDate(date),
-            'circuitStartIndices': [0],
-            'exercises': [],
-            'workoutName': '${weekdays[day]} ${date.day} ${months[date.month - 1]} - Week 1',
-            'exists': true,
-          }, SetOptions(merge: true));
+          eagerBatch.set(
+              week0Ref.collection('days').doc('day_$day'),
+              {
+                'date': Timestamp.fromDate(date),
+                'circuitStartIndices': [0],
+                'exercises': [],
+                'workoutName':
+                    '${weekdays[day]} ${date.day} ${months[date.month - 1]} - Week 1',
+                'exists': true,
+              },
+              SetOptions(merge: true));
         }
         await eagerBatch.commit();
         debugPrint('🧱 [Home] Block 1 week_0 ready (eager)');
@@ -716,7 +731,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final block2Ref = await blocksRef.add(block2Payload);
       swCreate2.stop();
       final block2Id = block2Ref.id;
-      print('✅ [Home] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
+      print(
+          '✅ [Home] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
 
       // Defer Block 2 seed + full scaffold to background — block doc is already created.
       unawaited(() async {
@@ -732,7 +748,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         }
       }());
 
-      debugPrint('🧪[B3 pre-add] seed=${seededExerciseIds.length} adj=${block3ExerciseIds.length} '
+      debugPrint(
+          '🧪[B3 pre-add] seed=${seededExerciseIds.length} adj=${block3ExerciseIds.length} '
           'hasAdd(EFbQl9i9NdYi13F3DqHr)=${block3ExerciseIds.contains('EFbQl9i9NdYi13F3DqHr')} '
           'hasEx(eyh76KELuuO805rZBpMa)=${block3ExerciseIds.contains('eyh76KELuuO805rZBpMa')}');
 
@@ -753,7 +770,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       final block3Ref = await blocksRef.add(block3Payload);
       swCreate3.stop();
       final block3Id = block3Ref.id;
-      print('✅ [Home] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
+      print(
+          '✅ [Home] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
 
       // Defer Block 3 seed + full scaffold to background — block doc is already created.
       unawaited(() async {
@@ -768,20 +786,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           debugPrint('❌ [Home] Block 3 background init failed: $e\n$st');
         }
       }());
-
     }
 
-
-
     swTotal.stop();
-    print('⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');
+    print(
+        '⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');
   }
-
-
-
-
-
-
 
   void _onUserContextChange() {
     final uc = Provider.of<UserContext>(context, listen: false);
@@ -792,7 +802,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _lastWarmUid = newUid;
       // Keep dedup in sync so didChangeDependencies doesn't double-load email.
       _lastEmailLoadedForUid = newUid;
-      debugPrint('🏠 [HOME] actingAsUid $prevUid → $newUid — refreshing all listeners');
+      debugPrint(
+          '🏠 [HOME] actingAsUid $prevUid → $newUid — refreshing all listeners');
 
       // Re-subscribe active-block listener for the new athlete.
       _setupActiveBlockListener(newUid);
@@ -822,7 +833,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       });
     }
   }
-
 
   @override
   void didChangeDependencies() {
@@ -854,7 +864,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _uc.removeListener(_onUserContextChange);
     }
 
-
     // Unsubscribe from route observer
     routeObserver.unsubscribe(this);
 
@@ -871,7 +880,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     debugPrint('🏠 [HOME] dispose() called');
     super.dispose();
   }
-
 
   // ── Block-setup helpers ───────────────────────────────────────────────────
 
@@ -928,7 +936,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     // applyBlockMeta to fire (sets activeBlockId) before continuing.
     final uc = Provider.of<UserContext>(context, listen: false);
     if (uc.activeBlockId == null) {
-      debugPrint('🏠 [HOME] first-time setup: user doc not ready — waiting for retry...');
+      debugPrint(
+          '🏠 [HOME] first-time setup: user doc not ready — waiting for retry...');
       for (int i = 0; i < 30 && mounted && uc.activeBlockId == null; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
       }
@@ -1026,10 +1035,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           await _loadInitialPointsFeed();
         }
       }
-
     });
   }
-
 
 //Home FEED functions
   Future<void> _loadInitialHomeFeed() async {
@@ -1088,7 +1095,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
         _lastCreatedAt = ts ?? _lastCreatedAt;
       }
 // 🚀 If nothing on this page would render, prefetch the next page immediately
-      if (_renderableThisPage == 0 && docs.isNotEmpty && docs.length >= _kFeedPageSize) {
+      if (_renderableThisPage == 0 &&
+          docs.isNotEmpty &&
+          docs.length >= _kFeedPageSize) {
         _feedLoading = false; // allow re-entry past the guard
         await _loadMoreHomeFeed();
         return;
@@ -1098,8 +1107,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       for (final d in docs) {
         try {
           newPosts.add(Post.fromSnap(d));
-        } catch (e) {
-        }
+        } catch (e) {}
       }
       if (docs.isNotEmpty) {
         final last = docs.last.data();
@@ -1132,8 +1140,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Feed failed to load: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Feed failed to load: $e')));
       }
       setState(() {
         _feedError = true;
@@ -1174,8 +1182,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
       // Update cursor/hasMore from raw page
       if (docs.isNotEmpty) {
-        _lastPointsCreatedAt =
-            (docs.last.data()['createdAt'] as Timestamp?) ?? _lastPointsCreatedAt;
+        _lastPointsCreatedAt = (docs.last.data()['createdAt'] as Timestamp?) ??
+            _lastPointsCreatedAt;
       }
       _pointsHasMore = docs.length >= _kFeedPageSize * 2;
 
@@ -1207,7 +1215,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
         if (monthStart != null && monthEnd != null) {
           final created = p.createdAt.toDate();
-          if (!(created.isAfter(monthStart.subtract(const Duration(milliseconds: 1))) &&
+          if (!(created.isAfter(
+                  monthStart.subtract(const Duration(milliseconds: 1))) &&
               created.isBefore(monthEnd))) {
             continue;
           }
@@ -1233,7 +1242,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   void _onPointsScroll() {
-    if (!_pointsScrollCtrl.hasClients || _pointsLoading || !_pointsHasMore) return;
+    if (!_pointsScrollCtrl.hasClients || _pointsLoading || !_pointsHasMore)
+      return;
     final pos = _pointsScrollCtrl.position;
     if (pos.pixels >= pos.maxScrollExtent - 400) {
       _loadMorePointsFeed();
@@ -1246,12 +1256,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final pos = _homeScrollCtrl.position;
     final shouldPrefetch = pos.maxScrollExtent - pos.pixels < 600;
 
-    if (shouldPrefetch && !_feedLoading && _feedHasMore && !_loadMoreScheduled) {
+    if (shouldPrefetch &&
+        !_feedLoading &&
+        _feedHasMore &&
+        !_loadMoreScheduled) {
       _loadMoreScheduled = true;
       Future.microtask(() async {
         try {
           await _loadMoreHomeFeed();
-
         } finally {
           _loadMoreScheduled = false;
         }
@@ -1264,7 +1276,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (!mounted) return;
 
     final uc = UserContext.of(context, listen: false);
-    final viewerUid = uc.currentUid; // currentUid is non-nullable String in your UserContext
+    final viewerUid =
+        uc.currentUid; // currentUid is non-nullable String in your UserContext
     final owners = <String>{};
 
     if (viewerUid.isNotEmpty) {
@@ -1305,7 +1318,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     });
   }
 
-
 // cleaning function
   Future<void> cleanAndSyncExercisesInFirestore() async {
     final FirebaseFirestore firestore = FirebaseFirestore.instance;
@@ -1329,7 +1341,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     // 🔁 3. Get fresh list of existing names (after cleanup)
     final refreshedSnapshot = await exercisesRef.get();
     final existingNames = refreshedSnapshot.docs
-        .map((doc) => (doc.data() as Map<String, dynamic>?)?['name']?.toLowerCase().trim())
+        .map((doc) => (doc.data() as Map<String, dynamic>?)?['name']
+            ?.toLowerCase()
+            .trim())
         .whereType<String>()
         .toSet();
 
@@ -1342,15 +1356,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
           'category': core['category'] ?? '',
           'bodyPart': core['bodyPart'] ?? '',
         });
-
       }
     }
   }
 
-
   Future<void> _loadAthleteEmail() async {
     final uid = Provider.of<UserContext>(context, listen: false).actingAsUid;
-    final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final snap =
+        await FirebaseFirestore.instance.collection('users').doc(uid).get();
     final data = snap.data();
     if (!mounted || data == null) return;
 
@@ -1359,11 +1372,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       return s.isEmpty ? null : s;
     }
 
-    final chosen =
-        pick(data['username']) ??      // ✅ username first
-            pick(data['displayName']) ??   // fallback to display name
-            pick(data['email']) ??         // fallback to email
-            'Unknown';
+    final chosen = pick(data['username']) ?? // ✅ username first
+        pick(data['displayName']) ?? // fallback to display name
+        pick(data['email']) ?? // fallback to email
+        'Unknown';
 
     setState(() => _actingAsEmail = chosen);
   }
@@ -1419,8 +1431,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       }
 
       setState(() => _trainingDays = trainingDays);
-    } catch (e) {
-    }
+    } catch (e) {}
   }
 
   Future<void> _fetchRecentData() async {
@@ -1432,7 +1443,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     ]);
     // isLoading is no longer driven by this fetch; Home is always rendered.
   }
-
 
   Future<void> _fetchMostRecentWeight(String uid) async {
     try {
@@ -1517,14 +1527,20 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   }
 
   Future<void> _loadOnboardingState() async {
+    // Actor UID only — never the impersonated athlete.
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || !mounted) return;
-    final wp  = await OnboardingPrefs.getWpDone(uid);
-    final wes = await OnboardingPrefs.getWesDone(uid);
-    if (!mounted) return;
+    final svc = OnboardingCueService.instance;
+    await svc.ensureLoaded(uid);
+    if (!mounted || !svc.isLoaded(uid))
+      return; // fail-closed: keep defaults (no glow)
     setState(() {
-      _wpDone  = wp;
-      _wesDone = wes;
+      // Home glows are DERIVED from the durable cue state — no separate record.
+      // WP/video glow suppressed once the video is permanently complete.
+      _wpDone = svc.isPermanentlyComplete(OnboardingCueId.wpDemoVideo, uid);
+      // WES glow eligible whenever the field walkthrough is eligible (so Richard
+      // sees it again each build because that cue is replayable).
+      _wesDone = !svc.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, uid);
     });
   }
 
@@ -1541,7 +1557,8 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       child: GestureDetector(
         onTap: onTap,
         child: Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Stack(
@@ -1550,8 +1567,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   top: 0,
                   left: 0,
                   child: iconWidget ??
-                      Icon(icon, size: 44,
-                          color: iconColor ?? Theme.of(context).colorScheme.secondary),
+                      Icon(icon,
+                          size: 44,
+                          color: iconColor ??
+                              Theme.of(context).colorScheme.secondary),
                 ),
                 Positioned(
                   bottom: 0,
@@ -1561,9 +1580,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     label,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      height: 1.3,
-                      fontWeight: FontWeight.bold,
-                    ),
+                          height: 1.3,
+                          fontWeight: FontWeight.bold,
+                        ),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -1583,399 +1602,404 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     );
   }
 
-
   @override
   Widget build(BuildContext context) {
     final uc = context.watch<UserContext>();
     final dmUid = uc.currentUid;
 
     return Scaffold(
-
       key: _scaffoldKey,
       appBar: AppBar(
         title: null,
         automaticallyImplyLeading: false,
         actions: [
-      Flexible(
-      child: SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(width: 15),
-            // 👤 Logged-in / impersonated user banner
-            Padding(
-              padding: const EdgeInsets.only(right: 1.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
+          Flexible(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-
-                  SizedBox(
-                    width: 95, // max width
-                    child: Text(
-                      _actingAsEmail ?? '...',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      maxLines: 1,
+                  SizedBox(width: 15),
+                  // 👤 Logged-in / impersonated user banner
+                  Padding(
+                    padding: const EdgeInsets.only(right: 1.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        SizedBox(
+                          width: 95, // max width
+                          child: Text(
+                            _actingAsEmail ?? '...',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            maxLines: 1,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
-            ),
 
-              // 👤 Profile picture (Home)
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: () {
-                    final userContext = context.read<UserContext>();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                          value: userContext,
-                          child: const ProfilePage(),
-                        ),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(2.0),
-                    child: Builder(
-                      builder: (context) {
-                        final uc = context.watch<UserContext>();
-                        final actingUid = uc.actingAsUid;
-
-                        // 1) Prefer local file if present (fast path)
-                        ImageProvider? localAvatar;
-                        if (uc.localPhotoPath != null) {
-                          final f = File(uc.localPhotoPath!);
-                          if (f.existsSync()) localAvatar = FileImage(f);
-                        }
-
-                        // 2) If we DO have a local file, render it and skip the stream entirely
-                        if (localAvatar != null) {
-                          return CircleAvatar(
-                            radius: 18,
-                            backgroundColor: Colors.grey.shade300,
-                            backgroundImage: localAvatar,
-                          );
-                        }
-
-                        // 3) Otherwise, live-listen to users_public/{actingUid} for photoURL
-                        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                          stream: FirebaseFirestore.instance
-                              .collection('users_public')
-                              .doc(actingUid)
-                              .snapshots(),
-                          builder: (context, snap) {
+                  // 👤 Profile picture (Home)
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () {
+                        final userContext = context.read<UserContext>();
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                ChangeNotifierProvider<UserContext>.value(
+                              value: userContext,
+                              child: const ProfilePage(),
+                            ),
+                          ),
+                        );
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.all(2.0),
+                        child: Builder(
+                          builder: (context) {
                             final uc = context.watch<UserContext>();
-                            final uid = actingUid;
+                            final actingUid = uc.actingAsUid;
 
-                            // Extract photoURL from users_public
-                            String? photoURL;
-                            if (snap.hasData && snap.data!.data() != null) {
-                              final m = snap.data!.data()!;
-                              final v = m['photoURL'];
-                              if (v is String && v.isNotEmpty) photoURL = v;
-                            }
-
-                            // If we don't already have a good local file, persist one in the background.
-                            if ((uc.localPhotoPath == null || !(File(uc.localPhotoPath!).existsSync())) &&
-                                photoURL != null) {
-                              _persistAvatarLocalIfNeeded(context, uid: uid, photoURL: photoURL);
-                            }
-
-                            // Prefer local file instantly; fallback to network; else placeholder.
-                            ImageProvider? provider;
+                            // 1) Prefer local file if present (fast path)
+                            ImageProvider? localAvatar;
                             if (uc.localPhotoPath != null) {
                               final f = File(uc.localPhotoPath!);
-                              if (f.existsSync()) provider = FileImage(f);
+                              if (f.existsSync()) localAvatar = FileImage(f);
                             }
-                            provider ??= (photoURL != null ? NetworkImage(photoURL) : null);
 
-                            return CircleAvatar(
-                              radius: 18,
-                              backgroundColor: Colors.grey.shade300,
-                              backgroundImage: provider,
-                              child: provider == null
-                                  ? ClipOval(
-                                child: Image.asset(
-                                  'assets/InApp/Placeholder_profilepic.png',
-                                  fit: BoxFit.cover,
-                                  width: 36,
-                                  height: 36,
-                                ),
-                              )
-                                  : null,
-                            );
-                          },
-                        );
-
-                      },
-                    ),
-                  ),
-
-                ),
-              ),
-
-
-            const SizedBox(width: 1),
-
-            // Buddy invite notifications
-            Builder(
-              builder: (context) {
-                final userCtx = context.watch<UserContext>();
-                final String invitesUid = userCtx.actingAsUid;
-
-                return StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(invitesUid)
-                      .collection('buddyInvites')
-                      .where('status', isEqualTo: 'pending')
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    final int buddyCount =
-                    snapshot.hasData ? snapshot.data!.docs.length : 0;
-
-                    return Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.person_add_alt_1,
-                              size: 24, color: Theme.of(context).colorScheme.secondary),
-                          onPressed: () {
-                            if (!snapshot.hasData ||
-                                snapshot.data!.docs.isEmpty) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text("No buddy requests.")),
+                            // 2) If we DO have a local file, render it and skip the stream entirely
+                            if (localAvatar != null) {
+                              return CircleAvatar(
+                                radius: 18,
+                                backgroundColor: Colors.grey.shade300,
+                                backgroundImage: localAvatar,
                               );
-                              return;
                             }
 
-                            showDialog(
-                              context: context,
-                              builder: (ctx) {
-                                return AlertDialog(
-                                  title: const Text("Buddy Requests"),
-                                  content: SizedBox(
-                                    width: 310,
-                                    child: ListView.builder(
-                                      shrinkWrap: true,
-                                      itemCount:
-                                      snapshot.data!.docs.length,
-                                      itemBuilder: (_, i) {
-                                        final doc =
-                                        snapshot.data!.docs[i];
-                                        final data = doc.data()
-                                        as Map<String, dynamic>;
+                            // 3) Otherwise, live-listen to users_public/{actingUid} for photoURL
+                            return StreamBuilder<
+                                DocumentSnapshot<Map<String, dynamic>>>(
+                              stream: FirebaseFirestore.instance
+                                  .collection('users_public')
+                                  .doc(actingUid)
+                                  .snapshots(),
+                              builder: (context, snap) {
+                                final uc = context.watch<UserContext>();
+                                final uid = actingUid;
 
-                                        final fromUid =
-                                            data['fromUid'] ?? '';
-                                        final fromName =
-                                            data['fromDisplayName'] ??
-                                                'Someone';
+                                // Extract photoURL from users_public
+                                String? photoURL;
+                                if (snap.hasData && snap.data!.data() != null) {
+                                  final m = snap.data!.data()!;
+                                  final v = m['photoURL'];
+                                  if (v is String && v.isNotEmpty) photoURL = v;
+                                }
 
-                                        return Column(
-                                          crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              "$fromName added you!",
-                                              style: const TextStyle(
-                                                  fontWeight:
-                                                  FontWeight.bold),
-                                            ),
-                                            const SizedBox(height: 6),
-                                            Row(
-                                              children: [
-                                                TextButton(
-                                                  onPressed: () async {
-                                                    await acceptBuddyInvite(
-                                                      ownerUid: fromUid,
-                                                      buddyUid: invitesUid,
-                                                    );
-                                                    Navigator.pop(ctx);
-                                                  },
-                                                  child:
-                                                  const Text("Accept"),
-                                                ),
-                                                const SizedBox(width: 12),
-                                                TextButton(
-                                                  onPressed: () async {
-                                                    await denyBuddyInvite(
-                                                      ownerUid: fromUid,
-                                                      buddyUid: invitesUid,
-                                                    );
-                                                    Navigator.pop(ctx);
-                                                  },
-                                                  child:
-                                                  const Text("Deny"),
-                                                ),
-                                              ],
-                                            ),
-                                            const Divider(),
-                                          ],
-                                        );
-                                      },
-                                    ),
-                                  ),
+                                // If we don't already have a good local file, persist one in the background.
+                                if ((uc.localPhotoPath == null ||
+                                        !(File(uc.localPhotoPath!)
+                                            .existsSync())) &&
+                                    photoURL != null) {
+                                  _persistAvatarLocalIfNeeded(context,
+                                      uid: uid, photoURL: photoURL);
+                                }
+
+                                // Prefer local file instantly; fallback to network; else placeholder.
+                                ImageProvider? provider;
+                                if (uc.localPhotoPath != null) {
+                                  final f = File(uc.localPhotoPath!);
+                                  if (f.existsSync()) provider = FileImage(f);
+                                }
+                                provider ??= (photoURL != null
+                                    ? NetworkImage(photoURL)
+                                    : null);
+
+                                return CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: Colors.grey.shade300,
+                                  backgroundImage: provider,
+                                  child: provider == null
+                                      ? ClipOval(
+                                          child: Image.asset(
+                                            'assets/InApp/Placeholder_profilepic.png',
+                                            fit: BoxFit.cover,
+                                            width: 36,
+                                            height: 36,
+                                          ),
+                                        )
+                                      : null,
                                 );
                               },
                             );
                           },
                         ),
+                      ),
+                    ),
+                  ),
 
-                        if (buddyCount > 0)
-                          Positioned(
-                            right: 6,
-                            top: 6,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 3, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.redAccent,
-                                borderRadius: BorderRadius.circular(12),
+                  const SizedBox(width: 1),
+
+                  // Buddy invite notifications
+                  Builder(
+                    builder: (context) {
+                      final userCtx = context.watch<UserContext>();
+                      final String invitesUid = userCtx.actingAsUid;
+
+                      return StreamBuilder<QuerySnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('users')
+                            .doc(invitesUid)
+                            .collection('buddyInvites')
+                            .where('status', isEqualTo: 'pending')
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          final int buddyCount =
+                              snapshot.hasData ? snapshot.data!.docs.length : 0;
+
+                          return Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              IconButton(
+                                icon: Icon(Icons.person_add_alt_1,
+                                    size: 24,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .secondary),
+                                onPressed: () {
+                                  if (!snapshot.hasData ||
+                                      snapshot.data!.docs.isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text("No buddy requests.")),
+                                    );
+                                    return;
+                                  }
+
+                                  showDialog(
+                                    context: context,
+                                    builder: (ctx) {
+                                      return AlertDialog(
+                                        title: const Text("Buddy Requests"),
+                                        content: SizedBox(
+                                          width: 310,
+                                          child: ListView.builder(
+                                            shrinkWrap: true,
+                                            itemCount:
+                                                snapshot.data!.docs.length,
+                                            itemBuilder: (_, i) {
+                                              final doc =
+                                                  snapshot.data!.docs[i];
+                                              final data = doc.data()
+                                                  as Map<String, dynamic>;
+
+                                              final fromUid =
+                                                  data['fromUid'] ?? '';
+                                              final fromName =
+                                                  data['fromDisplayName'] ??
+                                                      'Someone';
+
+                                              return Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    "$fromName added you!",
+                                                    style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold),
+                                                  ),
+                                                  const SizedBox(height: 6),
+                                                  Row(
+                                                    children: [
+                                                      TextButton(
+                                                        onPressed: () async {
+                                                          await acceptBuddyInvite(
+                                                            ownerUid: fromUid,
+                                                            buddyUid:
+                                                                invitesUid,
+                                                          );
+                                                          Navigator.pop(ctx);
+                                                        },
+                                                        child: const Text(
+                                                            "Accept"),
+                                                      ),
+                                                      const SizedBox(width: 12),
+                                                      TextButton(
+                                                        onPressed: () async {
+                                                          await denyBuddyInvite(
+                                                            ownerUid: fromUid,
+                                                            buddyUid:
+                                                                invitesUid,
+                                                          );
+                                                          Navigator.pop(ctx);
+                                                        },
+                                                        child:
+                                                            const Text("Deny"),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  const Divider(),
+                                                ],
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  );
+                                },
                               ),
-                              child: Text(
-                                buddyCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold,
+                              if (buddyCount > 0)
+                                Positioned(
+                                  right: 6,
+                                  top: 6,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 3, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.redAccent,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Text(
+                                      buddyCount.toString(),
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      );
+                    },
+                  ),
+
+                  const SizedBox(width: 1),
+
+                  // 📩 Direct Messages icon with unread badge
+                  StreamBuilder<QuerySnapshot>(
+                    stream: dmUid.isEmpty
+                        ? const Stream<QuerySnapshot>.empty()
+                        : FirebaseFirestore.instance
+                            .collection('conversations')
+                            .where('participants.$dmUid', isEqualTo: true)
+                            .snapshots(),
+                    builder: (context, snapshot) {
+                      if (snapshot.hasError) {
+                        return IconButton(
+                          icon: Icon(
+                            Icons.message_outlined,
+                            size: 26,
+                            color: Theme.of(context).colorScheme.secondary,
+                          ),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const DirectMessages(),
+                              ),
+                            );
+                          },
+                        );
+                      }
+
+                      int unreadCount = 0;
+
+                      final me = FirebaseAuth.instance.currentUser?.uid;
+
+                      if (snapshot.hasData && me != null) {
+                        for (var doc in snapshot.data!.docs) {
+                          final data = doc.data() as Map<String, dynamic>;
+
+                          final state = data['participantState']?[me];
+                          final count =
+                              (state is Map && state['unreadCount'] is int)
+                                  ? state['unreadCount'] as int
+                                  : 0;
+
+                          unreadCount += count;
+                        }
+                      }
+
+                      return Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          IconButton(
+                            icon: Icon(Icons.message_outlined,
+                                size: 26,
+                                color: Theme.of(context).colorScheme.secondary),
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const DirectMessages(),
+                                ),
+                              );
+                            },
+                          ),
+                          if (unreadCount > 0)
+                            Positioned(
+                              right: 6,
+                              top: 6,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.redAccent,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  unreadCount.toString(),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                      ],
-                    );
-                  },
-                );
-              },
-            ),
-
-            const SizedBox(width: 1),
-
-              // 📩 Direct Messages icon with unread badge
-              StreamBuilder<QuerySnapshot>(
-                stream: dmUid.isEmpty
-                    ? const Stream<QuerySnapshot>.empty()
-                    : FirebaseFirestore.instance
-                    .collection('conversations')
-                    .where('participants.$dmUid', isEqualTo: true)
-                    .snapshots(),
-
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return IconButton(
-                      icon: Icon(
-                        Icons.message_outlined,
-                        size: 26,
-                        color: Theme.of(context).colorScheme.secondary,
-                      ),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const DirectMessages(),
-                          ),
-                        );
-                      },
-                    );
-                  }
-
-                  int unreadCount = 0;
-
-                  final me = FirebaseAuth.instance.currentUser?.uid;
-
-                  if (snapshot.hasData && me != null) {
-                    for (var doc in snapshot.data!.docs) {
-                      final data = doc.data() as Map<String, dynamic>;
-
-                      final state = data['participantState']?[me];
-                      final count = (state is Map && state['unreadCount'] is int)
-                          ? state['unreadCount'] as int
-                          : 0;
-
-                      unreadCount += count;
-                    }
-                  }
-
-
-                  return Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      IconButton(
-                        icon: Icon(Icons.message_outlined, size: 26, color: Theme.of(context).colorScheme.secondary),
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const DirectMessages(),
-                            ),
-                          );
-                        },
-                      ),
-                      if (unreadCount > 0)
-                        Positioned(
-                          right: 6,
-                          top: 6,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: Colors.redAccent,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              unreadCount.toString(),
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  );
-
-                },
-              ),
-
-              const SizedBox(width: 1),
-
-              // App logo
-              Image.asset(
-                'assets/InApp/transparent_good_lift_logo_inApp.png',
-                height: 36,
-                fit: BoxFit.contain,
-              ),
-              const SizedBox(width: 2),
-
-              // Menu icon
-              GestureDetector(
-                onTap: () => _scaffoldKey.currentState?.openDrawer(),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 3.0),
-                  child: Icon(
-                    Icons.menu,
-                    size: 28,
-                    color: Colors.grey,
+                        ],
+                      );
+                    },
                   ),
-                ),
+
+                  const SizedBox(width: 1),
+
+                  // App logo
+                  Image.asset(
+                    'assets/InApp/transparent_good_lift_logo_inApp.png',
+                    height: 36,
+                    fit: BoxFit.contain,
+                  ),
+                  const SizedBox(width: 2),
+
+                  // Menu icon
+                  GestureDetector(
+                    onTap: () => _scaffoldKey.currentState?.openDrawer(),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 3.0),
+                      child: Icon(
+                        Icons.menu,
+                        size: 28,
+                        color: Colors.grey,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-      ),
-      ),
         ],
       ),
-
 
       //backgroundImage: AssetImage('assets/avatar.png'),
 
@@ -1983,373 +2007,436 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       body: _isFirstTimeSetup
           ? _buildSetupBody()
           : SingleChildScrollView(
-                  controller: _homeScrollCtrl, // 👈 add this
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      //Quick Access — two-row synchronized horizontal scroll
-                      SizedBox(
-                        height: (!_wpDone || !_wesDone) ? 296.0 : 280.0,
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Column 1: Enter Workout / Body Weight Tracker
-                              _buildQAColumn(
-                                _GlowingCueWrapper(
-                                  active: _wpDone && !_wesDone,
-                                  label: 'Tap here next',
-                                  child: _buildQACard(
-                                    icon: Icons.fitness_center,
-                                    label: 'Enter\nWorkout',
+              controller: _homeScrollCtrl, // 👈 add this
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  //Quick Access — two-row synchronized horizontal scroll
+                  SizedBox(
+                    height: (!_wpDone || !_wesDone) ? 296.0 : 280.0,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Column 1: Enter Workout / Body Weight Tracker
+                          _buildQAColumn(
+                            _GlowingCueWrapper(
+                              active: _wpDone && !_wesDone,
+                              label: 'Tap here next',
+                              child: _buildQACard(
+                                icon: Icons.fitness_center,
+                                label: 'Enter\nWorkout',
+                                onTap: () {
+                                  if (!_isBlockReady()) {
+                                    _showBlockNotReadySnack();
+                                    return;
+                                  }
+                                  final uc =
+                                      UserContext.of(context, listen: false);
+                                  Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<
+                                                UserContext>.value(
+                                            value: uc,
+                                            child: const Wes2Screen()),
+                                      ));
+                                },
+                                iconWidget: SizedBox(
+                                  width: 52,
+                                  height: 56,
+                                  child:
+                                      Stack(clipBehavior: Clip.none, children: [
+                                    Icon(Icons.fitness_center,
+                                        size: 44,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .secondary),
+                                    Positioned(
+                                        right: -2,
+                                        bottom: -2,
+                                        child: Icon(Icons.bolt,
+                                            size: 20,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .tertiary)),
+                                  ]),
+                                ),
+                              ),
+                            ),
+                            _buildQACard(
+                              icon: Icons.monitor_weight,
+                              label: 'Body\nWeight\nTracker',
+                              onTap: () =>
+                                  Navigator.pushNamed(context, '/body_weight'),
+                            ),
+                          ),
+                          // Column 2: Workout Planner / Profile
+                          _buildQAColumn(
+                            _GlowingCueWrapper(
+                              active: !_wpDone,
+                              label: 'Tap here first',
+                              child: _buildQACard(
+                                icon: Icons.view_list,
+                                label: 'Workout\nPlanner',
+                                onTap: () {
+                                  if (!_isBlockReady()) {
+                                    _showBlockNotReadySnack();
+                                    return;
+                                  }
+                                  final uc =
+                                      UserContext.of(context, listen: false);
+                                  Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<
+                                                UserContext>.value(
+                                            value: uc,
+                                            child: const TemplatesScreen()),
+                                      ));
+                                },
+                              ),
+                            ),
+                            _buildQACard(
+                              icon: Icons.person_outline,
+                              label: 'Profile',
+                              onTap: () {
+                                final uc =
+                                    UserContext.of(context, listen: false);
+                                Navigator.of(context).push(MaterialPageRoute(
+                                  builder: (_) =>
+                                      ChangeNotifierProvider<UserContext>.value(
+                                          value: uc,
+                                          child: const ProfilePage()),
+                                ));
+                              },
+                            ),
+                          ),
+                          // Column 3: Planned Blocks / Week Planner
+                          _buildQAColumn(
+                            _buildQACard(
+                              icon: Icons.track_changes,
+                              label: 'Planned\nBlocks',
+                              onTap: () {
+                                if (_isFirstTimeSetup) {
+                                  _showBlockNotReadySnack();
+                                  return;
+                                }
+                                final uc =
+                                    UserContext.of(context, listen: false);
+                                Navigator.of(context).push(MaterialPageRoute(
+                                  builder: (_) =>
+                                      ChangeNotifierProvider<UserContext>.value(
+                                          value: uc,
+                                          child: const PlannedBlocksScreen()),
+                                ));
+                              },
+                            ),
+                            _buildQACard(
+                              icon: Icons.calendar_view_week,
+                              label: 'Week\nPlanner',
+                              onTap: () {
+                                if (!_isBlockReady()) {
+                                  _showBlockNotReadySnack();
+                                  return;
+                                }
+                                final uc =
+                                    UserContext.of(context, listen: false);
+                                Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<
+                                              UserContext>.value(
+                                          value: uc,
+                                          child: const BB3WeekPlanner()),
+                                    ));
+                              },
+                            ),
+                          ),
+                          // Column 4: Settings / Coach Dashboard (coach) or Home (non-coach)
+                          _buildQAColumn(
+                            _buildQACard(
+                              icon: Icons.settings_outlined,
+                              label: 'Settings',
+                              onTap: () {
+                                final uc =
+                                    UserContext.of(context, listen: false);
+                                Navigator.of(context).push(MaterialPageRoute(
+                                  builder: (_) =>
+                                      ChangeNotifierProvider<UserContext>.value(
+                                          value: uc,
+                                          child: const UserSettingsScreen()),
+                                ));
+                              },
+                            ),
+                            UserContext.of(context).isCoach
+                                ? _buildQACard(
+                                    icon: Icons.supervisor_account,
+                                    label: 'Coach\nDashboard',
+                                    iconColor: Colors.amberAccent,
                                     onTap: () {
-                                      if (!_isBlockReady()) {
-                                        _showBlockNotReadySnack();
-                                        return;
-                                      }
-                                      final uc = UserContext.of(context, listen: false);
-                                      Navigator.push(context, MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: uc, child: const Wes2Screen()),
+                                      final uc = context.read<UserContext>();
+                                      Navigator.of(context)
+                                          .push(MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<
+                                                UserContext>.value(
+                                            value: uc,
+                                            child: const CoachHomeScreen()),
                                       ));
                                     },
-                                    iconWidget: SizedBox(
-                                    width: 52, height: 56,
-                                    child: Stack(clipBehavior: Clip.none, children: [
-                                      Icon(Icons.fitness_center, size: 44,
-                                          color: Theme.of(context).colorScheme.secondary),
-                                      Positioned(right: -2, bottom: -2,
-                                          child: Icon(Icons.bolt, size: 20,
-                                              color: Theme.of(context).colorScheme.tertiary)),
-                                    ]),
-                                  ),
-                                ),
-                              ),
-                                _buildQACard(
-                                  icon: Icons.monitor_weight,
-                                  label: 'Body\nWeight\nTracker',
-                                  onTap: () => Navigator.pushNamed(context, '/body_weight'),
-                                ),
-                              ),
-                              // Column 2: Workout Planner / Profile
-                              _buildQAColumn(
-                                _GlowingCueWrapper(
-                                  active: !_wpDone,
-                                  label: 'Tap here first',
-                                  child: _buildQACard(
-                                    icon: Icons.view_list,
-                                    label: 'Workout\nPlanner',
-                                    onTap: () {
-                                      if (!_isBlockReady()) {
-                                        _showBlockNotReadySnack();
-                                        return;
-                                      }
-                                      final uc = UserContext.of(context, listen: false);
-                                      Navigator.push(context, MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: uc, child: const TemplatesScreen()),
-                                      ));
-                                    },
-                                  ),
-                                ),
-                                _buildQACard(
-                                  icon: Icons.person_outline,
-                                  label: 'Profile',
-                                  onTap: () {
-                                    final uc = UserContext.of(context, listen: false);
-                                    Navigator.of(context).push(MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                        value: uc, child: const ProfilePage()),
-                                    ));
-                                  },
-                                ),
-                              ),
-                              // Column 3: Planned Blocks / Week Planner
-                              _buildQAColumn(
-                                _buildQACard(
-                                  icon: Icons.track_changes,
-                                  label: 'Planned\nBlocks',
-                                  onTap: () {
-                                    if (_isFirstTimeSetup) {
-                                      _showBlockNotReadySnack();
-                                      return;
-                                    }
-                                    final uc = UserContext.of(context, listen: false);
-                                    Navigator.of(context).push(MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                        value: uc, child: const PlannedBlocksScreen()),
-                                    ));
-                                  },
-                                ),
-                                _buildQACard(
-                                  icon: Icons.calendar_view_week,
-                                  label: 'Week\nPlanner',
-                                  onTap: () {
-                                    if (!_isBlockReady()) {
-                                      _showBlockNotReadySnack();
-                                      return;
-                                    }
-                                    final uc = UserContext.of(context, listen: false);
-                                    Navigator.push(context, MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                        value: uc, child: const BB3WeekPlanner()),
-                                    ));
-                                  },
-                                ),
-                              ),
-                              // Column 4: Settings / Coach Dashboard (coach) or Home (non-coach)
-                              _buildQAColumn(
-                                _buildQACard(
-                                  icon: Icons.settings_outlined,
-                                  label: 'Settings',
-                                  onTap: () {
-                                    final uc = UserContext.of(context, listen: false);
-                                    Navigator.of(context).push(MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                        value: uc, child: const UserSettingsScreen()),
-                                    ));
-                                  },
-                                ),
-                                UserContext.of(context).isCoach
-                                  ? _buildQACard(
-                                      icon: Icons.supervisor_account,
-                                      label: 'Coach\nDashboard',
-                                      iconColor: Colors.amberAccent,
-                                      onTap: () {
-                                        final uc = context.read<UserContext>();
-                                        Navigator.of(context).push(MaterialPageRoute(
-                                          builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                            value: uc, child: const CoachHomeScreen()),
-                                        ));
-                                      },
-                                    )
-                                  : _buildQACard(
-                                      icon: Icons.home_outlined,
-                                      label: 'Home',
-                                      onTap: () {
-                                        final uc = UserContext.of(context, listen: false);
-                                        Navigator.of(context).push(MaterialPageRoute(
-                                          builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                            value: uc, child: const HomeScreen2()),
-                                        ));
-                                      },
-                                    ),
-                              ),
-                              // Column 5 (coaches only): Home v2 entry
-                              if (UserContext.of(context).isCoach) ...[
-                                _buildQAColumn(
-                                  _buildQACard(
+                                  )
+                                : _buildQACard(
                                     icon: Icons.home_outlined,
                                     label: 'Home',
                                     onTap: () {
-                                      final uc = UserContext.of(context, listen: false);
-                                      Navigator.of(context).push(MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                          value: uc, child: const HomeScreen2()),
+                                      final uc = UserContext.of(context,
+                                          listen: false);
+                                      Navigator.of(context)
+                                          .push(MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<
+                                                UserContext>.value(
+                                            value: uc,
+                                            child: const HomeScreen2()),
                                       ));
                                     },
                                   ),
-                                  const SizedBox(width: kFeatureCardWidth, height: 130),
-                                ),
-                              ],
-                            ],
                           ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Training Calendar',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                        TableCalendar(
-                          firstDay: DateTime.utc(2020, 1, 1),
-                          lastDay: DateTime.utc(2100, 12, 31),
-                          focusedDay: _focusedDay,
-                          calendarFormat: CalendarFormat.month,
-                          availableCalendarFormats: const {
-                            CalendarFormat.month: 'Month',
-                          }, // 🚫 disables switching format
-                          headerStyle: const HeaderStyle(
-                            formatButtonVisible:
-                                false, // ❌ hides the format toggle
-                            titleCentered: true,
-                          ),
-                          selectedDayPredicate: (day) =>
-                              isSameDay(_selectedDay, day),
-                          eventLoader: (day) {
-                            final normalized =
-                                DateTime(day.year, day.month, day.day);
-                            return _trainingDays.contains(normalized)
-                                ? [1]
-                                : [];
-                          },
-                          onDaySelected: (selectedDay, focusedDay) {
-                            setState(() {
-                              _selectedDay = selectedDay;
-                              _focusedDay = focusedDay;
-                            });
-
-                            if (!_isBlockReady()) {
-                              _showBlockNotReadySnack();
-                              return;
-                            }
-
-                            final userContext = UserContext.of(context, listen: false);
-
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                                  value: userContext,
-                                  child: Wes2Screen(initialDate: selectedDay),
-                                ),
+                          // Column 5 (coaches only): Home v2 entry
+                          if (UserContext.of(context).isCoach) ...[
+                            _buildQAColumn(
+                              _buildQACard(
+                                icon: Icons.home_outlined,
+                                label: 'Home',
+                                onTap: () {
+                                  final uc =
+                                      UserContext.of(context, listen: false);
+                                  Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => ChangeNotifierProvider<
+                                            UserContext>.value(
+                                        value: uc, child: const HomeScreen2()),
+                                  ));
+                                },
                               ),
-                            );
-                          },
-                          onPageChanged: (focusedDay) {
-                            setState(() {
-                              _focusedDay = focusedDay;
-                            });
-                            _fetchTrainingDaysForMonth(
-                                focusedDay); // 🔄 refresh for new month
-                          },
-                          calendarBuilders: CalendarBuilders(
-                            defaultBuilder: (context, date, _) {
-                              final isTraining = _trainingDays.contains(
-                                  DateTime(date.year, date.month, date.day));
-                              return Container(
-                                margin: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: isTraining
-                                      ? Border.all(
-                                    color: Theme.of(context).colorScheme.tertiary,
+                              const SizedBox(
+                                  width: kFeatureCardWidth, height: 130),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Training Calendar',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  TableCalendar(
+                    firstDay: DateTime.utc(2020, 1, 1),
+                    lastDay: DateTime.utc(2100, 12, 31),
+                    focusedDay: _focusedDay,
+                    calendarFormat: CalendarFormat.month,
+                    availableCalendarFormats: const {
+                      CalendarFormat.month: 'Month',
+                    }, // 🚫 disables switching format
+                    headerStyle: const HeaderStyle(
+                      formatButtonVisible: false, // ❌ hides the format toggle
+                      titleCentered: true,
+                    ),
+                    selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+                    eventLoader: (day) {
+                      final normalized = DateTime(day.year, day.month, day.day);
+                      return _trainingDays.contains(normalized) ? [1] : [];
+                    },
+                    onDaySelected: (selectedDay, focusedDay) {
+                      setState(() {
+                        _selectedDay = selectedDay;
+                        _focusedDay = focusedDay;
+                      });
+
+                      if (!_isBlockReady()) {
+                        _showBlockNotReadySnack();
+                        return;
+                      }
+
+                      final userContext =
+                          UserContext.of(context, listen: false);
+
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              ChangeNotifierProvider<UserContext>.value(
+                            value: userContext,
+                            child: Wes2Screen(initialDate: selectedDay),
+                          ),
+                        ),
+                      );
+                    },
+                    onPageChanged: (focusedDay) {
+                      setState(() {
+                        _focusedDay = focusedDay;
+                      });
+                      _fetchTrainingDaysForMonth(
+                          focusedDay); // 🔄 refresh for new month
+                    },
+                    calendarBuilders: CalendarBuilders(
+                      defaultBuilder: (context, date, _) {
+                        final isTraining = _trainingDays.contains(
+                            DateTime(date.year, date.month, date.day));
+                        return Container(
+                          margin: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: isTraining
+                                ? Border.all(
+                                    color:
+                                        Theme.of(context).colorScheme.tertiary,
                                     width: 2,
                                   )
-                                      : null,
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  '${date.day}',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              );
-                            },
-                            todayBuilder: (context, date, _) {
-                              // optionally highlight today differently
-                              return Container(
-                                margin: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.white24,
-                                  border: Border.all(
-                                    color: Theme.of(context).colorScheme.tertiary,
-                                    width: 2,
-                                  ),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  '${date.day}',
-                                  style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold),
-                                ),
-                              );
-                            },
-                            selectedBuilder: (context, date, _) {
-                              return Container(
-                                margin: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Theme.of(context).colorScheme.primary,
-                                  border: Border.all(
-                                      color: Theme.of(context).colorScheme.secondary, width: 2),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  '${date.day}',
-                                  style: const TextStyle(color: Colors.white),
-                                ),
-                              );
-                            },
+                                : null,
                           ),
-                        ),
-                        const SizedBox(height: 1),
-                        // Simple grey background input
+                          alignment: Alignment.center,
+                          child: Text(
+                            '${date.day}',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        );
+                      },
+                      todayBuilder: (context, date, _) {
+                        // optionally highlight today differently
+                        return Container(
+                          margin: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white24,
+                            border: Border.all(
+                              color: Theme.of(context).colorScheme.tertiary,
+                              width: 2,
+                            ),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            '${date.day}',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold),
+                          ),
+                        );
+                      },
+                      selectedBuilder: (context, date, _) {
+                        return Container(
+                          margin: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Theme.of(context).colorScheme.primary,
+                            border: Border.all(
+                                color: Theme.of(context).colorScheme.secondary,
+                                width: 2),
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            '${date.day}',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  // Simple grey background input
 
-                        // ── Feed Switcher ──────────────────────────────────────────────────────
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              // ── Feed switch buttons ───────────────────────────────
-                              Row(
-                                children: [
-                                  SegmentedButton<SelectedFeed>(
-                                    showSelectedIcon: false,
-                                    segments: const [
+                  // ── Feed Switcher ──────────────────────────────────────────────────────
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        // ── Feed switch buttons ───────────────────────────────
+                        Row(
+                          children: [
+                            SegmentedButton<SelectedFeed>(
+                              showSelectedIcon: false,
+                              segments: const [
+                                ButtonSegment<SelectedFeed>(
+                                  value: SelectedFeed.home,
+                                  icon: Icon(Icons.photo_library_outlined,
+                                      size: 16),
+                                  label: SizedBox.shrink(), // icon-only
+                                ),
+                                ButtonSegment<SelectedFeed>(
+                                  value: SelectedFeed.points,
+                                  icon: Icon(Icons.leaderboard_outlined,
+                                      size: 16),
+                                  label: SizedBox.shrink(), // icon-only
+                                ),
+                                ButtonSegment<SelectedFeed>(
+                                  value: SelectedFeed.leaderboard,
+                                  icon: Icon(Icons.emoji_events_outlined,
+                                      size: 16),
+                                  label: SizedBox.shrink(), // icon-only
+                                ),
+                              ],
+                              selected: <SelectedFeed>{_selectedFeed},
+                              onSelectionChanged: (s) async {
+                                final next = s.first;
+                                if (_selectedFeed == next) return;
 
-                                      ButtonSegment<SelectedFeed>(
-                                        value: SelectedFeed.home,
-                                        icon: Icon(Icons.photo_library_outlined, size: 16),
-                                        label: SizedBox.shrink(), // icon-only
-                                      ),
-                                      ButtonSegment<SelectedFeed>(
-                                        value: SelectedFeed.points,
-                                        icon: Icon(Icons.leaderboard_outlined, size: 16),
-                                        label: SizedBox.shrink(), // icon-only
-                                      ),
-                                      ButtonSegment<SelectedFeed>(
-                                        value: SelectedFeed.leaderboard,
-                                        icon: Icon(Icons.emoji_events_outlined, size: 16),
-                                        label: SizedBox.shrink(), // icon-only
-                                      ),
-                                    ],
-                                    selected: <SelectedFeed>{_selectedFeed},
-                                    onSelectionChanged: (s) async {
+                                setState(() => _selectedFeed = next);
+                                await _persistSelectedFeed();
 
-                                      final next = s.first;
-                                      if (_selectedFeed == next) return;
-
-                                      setState(() => _selectedFeed = next);
-                                      await _persistSelectedFeed();
-
-                                      if (next == SelectedFeed.home) {
-                                        if (_feedPosts.isEmpty && !_feedLoading) _loadInitialHomeFeed();
-                                      } else if (next == SelectedFeed.points) {
-                                        if (_pointsPosts.isEmpty && !_pointsLoading) _loadInitialPointsFeed();
-                                      } else { // SelectedFeed.leaderboard
-                                        // optional: _pickLeaderboardTagline();
-                                      }
-                                    },
-
-                                    style: ButtonStyle(
-                                      padding: MaterialStateProperty.all(const EdgeInsets.symmetric(horizontal: 6, vertical: 2)),
-                                      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-                                      side: MaterialStateProperty.resolveWith((states) {
-                                        final selected = states.contains(MaterialState.selected);
-                                        return BorderSide(color: selected ? Colors.white70 : Colors.white24, width: 1);
-                                      }),
-                                      backgroundColor: MaterialStateProperty.resolveWith((states) {
-                                        final selected = states.contains(MaterialState.selected);
-                                        return selected ? Colors.white12 : Colors.transparent;
-                                      }),
-                                      shape: MaterialStateProperty.all(
-                                        RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                      ),
-                                      foregroundColor: MaterialStateProperty.all(Colors.white),
-                                    ),
-                                  ),
-                                  /*if (_selectedFeed == SelectedFeed.points) ...[
+                                if (next == SelectedFeed.home) {
+                                  if (_feedPosts.isEmpty && !_feedLoading)
+                                    _loadInitialHomeFeed();
+                                } else if (next == SelectedFeed.points) {
+                                  if (_pointsPosts.isEmpty && !_pointsLoading)
+                                    _loadInitialPointsFeed();
+                                } else {
+                                  // SelectedFeed.leaderboard
+                                  // optional: _pickLeaderboardTagline();
+                                }
+                              },
+                              style: ButtonStyle(
+                                padding: MaterialStateProperty.all(
+                                    const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2)),
+                                visualDensity: const VisualDensity(
+                                    horizontal: -4, vertical: -4),
+                                side:
+                                    MaterialStateProperty.resolveWith((states) {
+                                  final selected =
+                                      states.contains(MaterialState.selected);
+                                  return BorderSide(
+                                      color: selected
+                                          ? Colors.white70
+                                          : Colors.white24,
+                                      width: 1);
+                                }),
+                                backgroundColor:
+                                    MaterialStateProperty.resolveWith((states) {
+                                  final selected =
+                                      states.contains(MaterialState.selected);
+                                  return selected
+                                      ? Colors.white12
+                                      : Colors.transparent;
+                                }),
+                                shape: MaterialStateProperty.all(
+                                  RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10)),
+                                ),
+                                foregroundColor:
+                                    MaterialStateProperty.all(Colors.white),
+                              ),
+                            ),
+                            /*if (_selectedFeed == SelectedFeed.points) ...[
                                     const SizedBox(width: 8),
                                     _MonthPickerChip(
                                       monthKey: _pointsMonthKey,
@@ -2359,10 +2446,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                       },
                                     ),
                                   ],*/
-                                ],
-                              ),
+                          ],
+                        ),
 
-                              /*// ── Motivational tagline on the same row ───────────────
+                        /*// ── Motivational tagline on the same row ───────────────
                               Flexible(
                                 child: Text(
                                   _selectedFeed == SelectedFeed.home
@@ -2375,14 +2462,14 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 ),
                               ),
                               */
-                            ],
-                          ),
-                        ),
+                      ],
+                    ),
+                  ),
 
-                        const SizedBox(width: 8),
+                  const SizedBox(width: 8),
 
-                        // 🔧 Sneaky debug button (one-time Firestore dump)
-                        /*TextButton.icon(
+                  // 🔧 Sneaky debug button (one-time Firestore dump)
+                  /*TextButton.icon(
                           onPressed: () async {
                             try {
                               // 👇 enable file output
@@ -2415,170 +2502,199 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         ),
 */
 
-                        // ── Home Feed ──────────────────────────────────────────────────────────
-                        if (_selectedFeed == SelectedFeed.home) ...[
-                          const SizedBox(height: 2),
-                          const SizedBox(height: 8),
-
-                          if (!_feedOwnersResolved)
-                            const Center(
-                              child: SizedBox(
-                                width: 24, height: 24,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                            )
-                          else if (_feedOwnerUids.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 8),
-                              child: Text(
-                                'No recent posts from you or your gym buddies yet.',
-                                style: TextStyle(color: Colors.white70),
-                              ),
-                            )
-                          else
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                // Cards (Home: media + RE posts that were explicitly shared to Home)
-                                ..._feedPosts.map((p) {
-                                  // Media: render immediately
-                                  if (p.type != 're_daily') {
-                                    return FeedPostCard(
-                                      post: p,
-                                      isHomeContext: true,
-                                      onOpenDetail: () async {
-                                        await Navigator.of(context).push(
-                                          MaterialPageRoute(
-                                            builder: (_) => PostDetailPage(
-                                              post: p,
-                                              onToggleLike: (pp) => PostService.instance.toggleLike(pp.id),
-                                              onToggleGoodLift: (pp) => PostService.instance.toggleGoodLift(
-                                                  pp.id, isVideo: pp.mediaType == 'video'),
-                                              onAddComment: (pp, text) =>
-                                                  PostService.instance.addComment(pp.id, text, usernameFallback: 'user'),
-                                              canDelete: (UserContext.of(context, listen: false).actorUid == p.ownerUid),
-                                            ),
-                                          ),
-                                        );
-                                        if (!context.mounted) return;
-                                        _loadInitialHomeFeed();
-                                      },
-                                    );
-                                  }
-
-                                  // re_daily: eligibility captured in Post model at load time — no stream needed
-                                  if (!p.promoteToHome || p.badges.isEmpty || p.dailyTotal <= 0.0) {
-                                    return const SizedBox.shrink();
-                                  }
-                                  return FeedPostCard(
-                                    post: p,
-                                    isHomeContext: true,
-                                    onOpenDetail: () async {
-                                      await Navigator.of(context).push(
-                                        MaterialPageRoute(builder: (_) => ReDailyDetailPage(postId: p.id)),
-                                      );
-                                      if (!context.mounted) return;
-                                      _loadInitialHomeFeed();
-                                    },
+                  // ── Home Feed ──────────────────────────────────────────────────────────
+                  if (_selectedFeed == SelectedFeed.home) ...[
+                    const SizedBox(height: 2),
+                    const SizedBox(height: 8),
+                    if (!_feedOwnersResolved)
+                      const Center(
+                        child: SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    else if (_feedOwnerUids.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: Text(
+                          'No recent posts from you or your gym buddies yet.',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      )
+                    else
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Cards (Home: media + RE posts that were explicitly shared to Home)
+                          ..._feedPosts.map((p) {
+                            // Media: render immediately
+                            if (p.type != 're_daily') {
+                              return FeedPostCard(
+                                post: p,
+                                isHomeContext: true,
+                                onOpenDetail: () async {
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => PostDetailPage(
+                                        post: p,
+                                        onToggleLike: (pp) => PostService
+                                            .instance
+                                            .toggleLike(pp.id),
+                                        onToggleGoodLift: (pp) => PostService
+                                            .instance
+                                            .toggleGoodLift(pp.id,
+                                                isVideo:
+                                                    pp.mediaType == 'video'),
+                                        onAddComment: (pp, text) => PostService
+                                            .instance
+                                            .addComment(pp.id, text,
+                                                usernameFallback: 'user'),
+                                        canDelete: (UserContext.of(context,
+                                                    listen: false)
+                                                .actorUid ==
+                                            p.ownerUid),
+                                      ),
+                                    ),
                                   );
-                                }),
+                                  if (!context.mounted) return;
+                                  _loadInitialHomeFeed();
+                                },
+                              );
+                            }
 
-                                // Footer (Home)
-                                SizedBox(
-                                  height: 52,
-                                  child: Center(
-                                    child: () {
-                                      if (_feedLoading) {
-                                        return const SizedBox(
-                                          width: 24, height: 24,
-                                          child: CircularProgressIndicator(strokeWidth: 2),
-                                        );
-                                      }
-                                      if (_feedError) {
-                                        return TextButton(onPressed: _loadInitialHomeFeed, child: const Text('Retry'));
-                                      }
-                                      if (_feedHasMore) {
-                                        return TextButton(onPressed: _loadMoreHomeFeed, child: const Text('Load more'));
-                                      }
-                                      return const SizedBox.shrink();
-                                    }(),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                              ],
+                            // re_daily: eligibility captured in Post model at load time — no stream needed
+                            if (!p.promoteToHome ||
+                                p.badges.isEmpty ||
+                                p.dailyTotal <= 0.0) {
+                              return const SizedBox.shrink();
+                            }
+                            return FeedPostCard(
+                              post: p,
+                              isHomeContext: true,
+                              onOpenDetail: () async {
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                      builder: (_) =>
+                                          ReDailyDetailPage(postId: p.id)),
+                                );
+                                if (!context.mounted) return;
+                                _loadInitialHomeFeed();
+                              },
+                            );
+                          }),
+
+                          // Footer (Home)
+                          SizedBox(
+                            height: 52,
+                            child: Center(
+                              child: () {
+                                if (_feedLoading) {
+                                  return const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  );
+                                }
+                                if (_feedError) {
+                                  return TextButton(
+                                      onPressed: _loadInitialHomeFeed,
+                                      child: const Text('Retry'));
+                                }
+                                if (_feedHasMore) {
+                                  return TextButton(
+                                      onPressed: _loadMoreHomeFeed,
+                                      child: const Text('Load more'));
+                                }
+                                return const SizedBox.shrink();
+                              }(),
                             ),
-                        ] else if (_selectedFeed == SelectedFeed.points) ...[
-                          // ── Points Feed ──────────────────────────────────────────────────────
-                          const SizedBox(height: 2),
+                          ),
                           const SizedBox(height: 8),
-
-                          if (_pointsLoading && _pointsPosts.isEmpty)
-                            const Center(
-                              child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
-                            )
-                          else if (_pointsPosts.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              child: Column(
-                                children: [
-                                  const Text(
-                                    'No points posts for this month yet, brah do you even lift.',
-                                    style: TextStyle(color: Colors.white70),
-                                  ),
-                                  TextButton.icon(
-                                    onPressed: () {},
-                                    icon: const Icon(Icons.fitness_center),
-                                    label: const Text('Log a workout'),
-                                  ),
-                                ],
-                              ),
-                            )
-                          else
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                ..._pointsPosts.map((p) => FeedPostCard(
-                                  post: p,
-                                  isHomeContext: false,
-                                  onOpenDetail: () async { /* ReDailyDetailPage */ },
-                                )),
-
-                                // Footer (Points)
-                                SizedBox(
-                                  height: 52,
-                                  child: Center(
-                                    child: () {
-                                      if (_pointsLoading) {
-                                        return const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2));
-                                      }
-                                      if (_pointsHasMore) {
-                                        return TextButton(onPressed: _loadMorePointsFeed, child: const Text('Load more'));
-                                      }
-                                      return const SizedBox.shrink();
-                                    }(),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                              ],
-                            ),
-                        ] else ...[
-                          // ── Leaderboard Tab ──────────────────────────────────────────────────
-                          const SizedBox(height: 2),
-                          const SizedBox(height: 8),
-
-                          // Inline leaderboard widget (no Scaffold inside this page)
-                          const LeaderboardEmbedded(),
-
-                          // Give short leaderboards some scrollable breathing room
-                          const SizedBox(height: 140),
-
                         ],
+                      ),
+                  ] else if (_selectedFeed == SelectedFeed.points) ...[
+                    // ── Points Feed ──────────────────────────────────────────────────────
+                    const SizedBox(height: 2),
+                    const SizedBox(height: 8),
 
-                      SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
+                    if (_pointsLoading && _pointsPosts.isEmpty)
+                      const Center(
+                        child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2)),
+                      )
+                    else if (_pointsPosts.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Column(
+                          children: [
+                            const Text(
+                              'No points posts for this month yet, brah do you even lift.',
+                              style: TextStyle(color: Colors.white70),
+                            ),
+                            TextButton.icon(
+                              onPressed: () {},
+                              icon: const Icon(Icons.fitness_center),
+                              label: const Text('Log a workout'),
+                            ),
+                          ],
+                        ),
+                      )
+                    else
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ..._pointsPosts.map((p) => FeedPostCard(
+                                post: p,
+                                isHomeContext: false,
+                                onOpenDetail: () async {
+                                  /* ReDailyDetailPage */
+                                },
+                              )),
 
-                    ],
-                  ),
-                ),
+                          // Footer (Points)
+                          SizedBox(
+                            height: 52,
+                            child: Center(
+                              child: () {
+                                if (_pointsLoading) {
+                                  return const SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2));
+                                }
+                                if (_pointsHasMore) {
+                                  return TextButton(
+                                      onPressed: _loadMorePointsFeed,
+                                      child: const Text('Load more'));
+                                }
+                                return const SizedBox.shrink();
+                              }(),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
+                  ] else ...[
+                    // ── Leaderboard Tab ──────────────────────────────────────────────────
+                    const SizedBox(height: 2),
+                    const SizedBox(height: 8),
+
+                    // Inline leaderboard widget (no Scaffold inside this page)
+                    const LeaderboardEmbedded(),
+
+                    // Give short leaderboards some scrollable breathing room
+                    const SizedBox(height: 140),
+                  ],
+
+                  SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
+                ],
+              ),
+            ),
     );
   }
 }

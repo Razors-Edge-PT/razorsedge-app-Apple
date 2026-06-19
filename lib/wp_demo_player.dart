@@ -2,7 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
-import 'onboarding_prefs.dart';
+import 'onboarding/onboarding_cue.dart';
+import 'onboarding/onboarding_cue_service.dart';
 
 /// Full-screen video demo overlay for the Workout Planner.
 ///
@@ -29,7 +30,7 @@ class WpDemoPlayer extends StatefulWidget {
 class _WpDemoPlayerState extends State<WpDemoPlayer> {
   late final VideoPlayerController _vpc;
   bool _initialized = false;
-  bool _loadError   = false;
+  bool _loadError = false;
   bool _markedComplete = false;
   Timer? _autoCloseTimer;
 
@@ -61,7 +62,10 @@ class _WpDemoPlayerState extends State<WpDemoPlayer> {
     if (!v.isInitialized || v.duration == Duration.zero) return;
     if (v.position >= v.duration - const Duration(milliseconds: 800)) {
       _markedComplete = true;
-      OnboardingPrefs.setWpDone(widget.actorUid);
+      // Permanent once-only completion (idempotent). Manual replay may call this
+      // again harmlessly; it never clears completion or re-enables autoplay.
+      OnboardingCueService.instance
+          .markCueComplete(OnboardingCueId.wpDemoVideo, widget.actorUid);
       if (widget.autoCloseAfterCompletion) {
         _autoCloseTimer = Timer(const Duration(seconds: 2), () {
           if (mounted) Navigator.of(context).maybePop();
@@ -119,10 +123,9 @@ class _WpDemoPlayerState extends State<WpDemoPlayer> {
                 valueListenable: _vpc,
                 builder: (_, v, __) {
                   final total = v.duration.inMilliseconds;
-                  final pos   = v.position.inMilliseconds;
-                  final prog  = (total > 0)
-                      ? (pos / total).clamp(0.0, 1.0)
-                      : 0.0;
+                  final pos = v.position.inMilliseconds;
+                  final prog =
+                      (total > 0) ? (pos / total).clamp(0.0, 1.0) : 0.0;
                   return LinearProgressIndicator(
                     value: prog,
                     backgroundColor: Colors.white24,

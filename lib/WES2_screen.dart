@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'onboarding_prefs.dart';
+import 'onboarding/onboarding_cue.dart';
+import 'onboarding/onboarding_cue_service.dart';
 import 'user_context.dart';
 import 'WES2_widgets/WES2_tutorial_banner.dart';
 import 'WES2_controller.dart';
@@ -48,6 +50,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2LocalStore _localStore = IsarWes2LocalStore();
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
+  // Guards against overlapping retry attempts from the polished load-error state.
+  bool _retryInProgress = false;
   String? _athleteUsername;
   String? _athleteGreeting;
   String? _fetchedForUid;
@@ -86,8 +90,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   int _tutorialStep = 0;
 
   // ── Settings cog tutorial cue ────────────────────────────────────────────
-  // Persisted once per FirebaseAuth actor UID via OnboardingPrefs.
-  // Loaded on open; set to true when the settings panel is first opened.
+  // Durable completion via OnboardingCueService (cue wes2_settings_cog_v1),
+  // keyed on the actor UID. Marked complete when the settings panel is opened.
   bool _cogCueDismissed = false;
   // True once the actor has logged qualifying sets on 3 distinct calendar days.
   bool _cogCueUnlocked = false;
@@ -117,23 +121,34 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // Uses Firebase Auth UID (logged-in actor), never the impersonated athlete.
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-    final wpDone  = await OnboardingPrefs.getWpDone(uid);
-    final wesDone = await OnboardingPrefs.getWesDone(uid);
-    if (!wpDone || wesDone || !mounted) return;
-    setState(() => _tutorialStep = 1);
+    final svc = OnboardingCueService.instance;
+    await svc.ensureLoaded(uid);
+    if (!mounted) return;
+    // WP video prerequisite (permanent) must be met before the WES chain.
+    if (!svc.isPermanentlyComplete(OnboardingCueId.wpDemoVideo, uid)) return;
+    if (svc.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, uid)) {
+      setState(() => _tutorialStep = 1);
+    }
   }
 
   Future<void> _loadCogCueState() async {
     // Uses FirebaseAuth actor UID — never the impersonated athlete UID.
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-    final done = await OnboardingPrefs.getWesCogCueDone(uid);
-    if (done) {
-      if (mounted) setState(() => _cogCueDismissed = true);
+    final svc = OnboardingCueService.instance;
+    await svc.ensureLoaded(uid);
+    if (!mounted) return;
+    // Already completed (build-aware for Richard) → never show.
+    if (!svc.shouldShowCue(OnboardingCueId.wes2SettingsCog, uid)) {
+      setState(() => _cogCueDismissed = true);
       return;
     }
-    final days = await OnboardingPrefs.getWesCogCueQualifiedDays(uid);
-    if (days.length >= 3 && mounted) setState(() => _cogCueUnlocked = true);
+    // 3-day unlock from the DURABLE membership qualification data so it survives
+    // reinstall / device change (local prefs are only a cache).
+    await _ensureQualifiedDatesLoaded();
+    if (_qualifiedDaysCountCached >= 3 && mounted) {
+      setState(() => _cogCueUnlocked = true);
+    }
   }
 
   Future<void> _onTutorialStepDismiss() async {
@@ -141,7 +156,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       setState(() => _tutorialStep++);
     } else {
       final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid != null) await OnboardingPrefs.setWesDone(uid);
+      if (uid != null) {
+        await OnboardingCueService.instance
+            .markCueComplete(OnboardingCueId.wes2FieldWalkthrough, uid);
+      }
       if (mounted) setState(() => _tutorialStep = 0);
     }
   }
@@ -158,21 +176,26 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   Future<void> _fetchAthleteUsername(String uid) async {
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final doc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
       final data = doc.data() ?? {};
 
       // Prefer username, fall back to displayName then fullName
       String? name;
       for (final key in ['username', 'displayName', 'fullName']) {
         final v = (data[key] as String?)?.trim();
-        if (v != null && v.isNotEmpty) { name = v; break; }
+        if (v != null && v.isNotEmpty) {
+          name = v;
+          break;
+        }
       }
 
       // Greeting from profile.gender (not sex)
       String greeting = 'Welcome';
       final profile = data['profile'];
       if (profile is Map<String, dynamic>) {
-        final gender = (profile['gender'] as String?)?.toLowerCase().trim() ?? '';
+        final gender =
+            (profile['gender'] as String?)?.toLowerCase().trim() ?? '';
         if (gender == 'female' || gender == 'woman' || gender == 'girl') {
           greeting = 'Welcome queen';
         } else if (gender == 'male' || gender == 'man' || gender == 'boy') {
@@ -401,7 +424,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
       if (!mounted) return;
       _controller.setRows(
-        _hardened(_applyDraftActuals(_mergeRows(completedRows, bb3Rows), draft?.rows)),
+        _hardened(_applyDraftActuals(
+            _mergeRows(completedRows, bb3Rows), draft?.rows)),
         epoch,
       );
       _workoutDurationMilliseconds = draft?.workoutDurationMs ?? 0;
@@ -423,9 +447,27 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           );
         }
       }
-    } catch (e) {
+    } catch (e, st) {
+      // Technical detail stays in logs/crash reporting only — never shown to the
+      // customer. The UI renders a polished error state instead.
+      debugPrint('[WES2] _loadDay failed: $e\n$st');
       if (!mounted) return;
       _controller.setLoadError(e.toString(), epoch);
+    }
+  }
+
+  /// Retries the current day load for the currently selected date and acting
+  /// athlete. Guards against overlapping retries via [_retryInProgress] and the
+  /// controller's loading state. Safe to wire directly to the Try again button.
+  Future<void> _retryLoad() async {
+    if (_retryInProgress || _controller.loadState == Wes2LoadState.loading) {
+      return;
+    }
+    setState(() => _retryInProgress = true);
+    try {
+      await _loadDay();
+    } finally {
+      if (mounted) setState(() => _retryInProgress = false);
     }
   }
 
@@ -457,16 +499,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // Ensures every row.exerciseId has exerciseSettings regardless of how
       // the row arrived (BB3 planned, completed workout, template, replace).
       // ensureExerciseDefaults is idempotent — rows already present are no-ops.
-      final missingIds = _controller.rows
-          .map((r) => r.exerciseId)
-          .where((id) {
-            if (id.isEmpty) return false;
-            final s = _cachedExerciseSettings[id];
-            return !BlockExerciseDefaultsRepository.isSettingsUsable(
-              s is Map<String, dynamic> ? s : null,
-            );
-          })
-          .toSet();
+      final missingIds = _controller.rows.map((r) => r.exerciseId).where((id) {
+        if (id.isEmpty) return false;
+        final s = _cachedExerciseSettings[id];
+        return !BlockExerciseDefaultsRepository.isSettingsUsable(
+          s is Map<String, dynamic> ? s : null,
+        );
+      }).toSet();
 
       if (missingIds.isNotEmpty) {
         for (final exerciseId in missingIds) {
@@ -532,7 +571,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           );
           _controller.applyModelHints(row.exerciseId, hinted);
         } catch (e) {
-          debugPrint('[WES2] Hint failed for ${row.name} (${row.exerciseId}): $e');
+          debugPrint(
+              '[WES2] Hint failed for ${row.name} (${row.exerciseId}): $e');
         }
       }
       // Snapshot hinted rows as baseline so same-set recalc can restore
@@ -562,8 +602,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     final key = '$uid|$blockId|${ymd(selectedDate)}';
     if (_lastHistoryRefreshKey == key) return;
 
-    final startKey = ymd(DateTime(blockStart.year, blockStart.month, blockStart.day));
-    final endKey   = ymd(DateTime(selectedDate.year, selectedDate.month, selectedDate.day));
+    final startKey =
+        ymd(DateTime(blockStart.year, blockStart.month, blockStart.day));
+    final endKey =
+        ymd(DateTime(selectedDate.year, selectedDate.month, selectedDate.day));
 
     try {
       final snap = await FirebaseFirestore.instance
@@ -571,23 +613,25 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           .doc(uid)
           .collection('workouts')
           .orderBy(FieldPath.documentId)
-          .startAt([startKey])
-          .endAt([endKey])
-          .get(const GetOptions(source: Source.server));
+          .startAt([startKey]).endAt([endKey]).get(
+              const GetOptions(source: Source.server));
 
       final freshData = snap.docs.map((doc) {
         final data = Map<String, dynamic>.from(doc.data());
         data['date'] ??= doc.id;
-        data['_uid'] = uid; // uid-stamp so cross-athlete entries can be filtered
+        data['_uid'] =
+            uid; // uid-stamp so cross-athlete entries can be filtered
         return data;
       }).toList();
 
       // Replace cached entries in [startKey, endKey]; leave earlier history intact.
       final merged = <Map<String, dynamic>>[];
       for (final w in PeriodizationModelUtils.savedWorkoutsList) {
-        final raw  = (w['date'] ?? '').toString();
+        final raw = (w['date'] ?? '').toString();
         final wKey = raw.length >= 10 ? raw.substring(0, 10) : '';
-        if (wKey.isEmpty || wKey.compareTo(startKey) < 0 || wKey.compareTo(endKey) > 0) {
+        if (wKey.isEmpty ||
+            wKey.compareTo(startKey) < 0 ||
+            wKey.compareTo(endKey) > 0) {
           merged.add(w);
         }
       }
@@ -599,7 +643,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         final bKey = (b['date'] ?? '').toString();
         final ak = aKey.length >= 10 ? aKey.substring(0, 10) : aKey;
         final bk = bKey.length >= 10 ? bKey.substring(0, 10) : bKey;
-        return bk.compareTo(ak); // newest-first, matching WarmupService convention
+        return bk
+            .compareTo(ak); // newest-first, matching WarmupService convention
       });
 
       PeriodizationModelUtils.savedWorkoutsList = merged;
@@ -628,9 +673,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (v is num) return v.toDouble();
       return double.tryParse(v.toString().trim()) ?? 0.0;
     }
+
     DateTime? parseDate(dynamic v) {
       if (v is DateTime) return v;
-      if (v is String && v.length >= 10) return DateTime.tryParse(v.substring(0, 10));
+      if (v is String && v.length >= 10)
+        return DateTime.tryParse(v.substring(0, 10));
       return null;
     }
 
@@ -656,8 +703,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         if (ex is! Map) continue;
         // exerciseId-first keying: exercises that share a display name but have
         // different canonical IDs each get their own isolated history bucket.
-        final exerciseId = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
-        final name       = (ex['name'] ?? '').toString().trim();
+        final exerciseId =
+            (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+        final name = (ex['name'] ?? '').toString().trim();
         // Must have at least one usable identity token.
         if (exerciseId.isEmpty && name.isEmpty) continue;
         final key = exerciseId.isNotEmpty ? exerciseId : name;
@@ -667,9 +715,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         Map<String, dynamic>? best;
         for (final s in sets) {
           if (s is! Map) continue;
-          final w2  = parseD(s['weight']  ?? s['actualWeight']);
-          final r   = parseD(s['reps']    ?? s['actualReps']);
-          final rir = parseD(s['rir']     ?? s['actualRir']);
+          final w2 = parseD(s['weight'] ?? s['actualWeight']);
+          final r = parseD(s['reps'] ?? s['actualReps']);
+          final rir = parseD(s['rir'] ?? s['actualRir']);
           if (w2 <= 0 || r <= 0) continue;
           final e1rm = PeriodizationModelUtils.calculateE1RM(w2, r, rir);
           if (e1rm > bestE1rm) {
@@ -679,7 +727,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         }
         if (best != null) {
           newMap.putIfAbsent(key, () => []).add(best);
-          if (exerciseId.isNotEmpty) { keyedById++; } else { keyedByName++; }
+          if (exerciseId.isNotEmpty) {
+            keyedById++;
+          } else {
+            keyedByName++;
+          }
         }
       }
     }
@@ -800,8 +852,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           .withHint(bb3Set.weight.hintValue, FieldOrigin.bb3Hint),
       reps: completedSet.reps
           .withHint(bb3Set.reps.hintValue, FieldOrigin.bb3Hint),
-      rir: completedSet.rir
-          .withHint(bb3Set.rir.hintValue, FieldOrigin.bb3Hint),
+      rir: completedSet.rir.withHint(bb3Set.rir.hintValue, FieldOrigin.bb3Hint),
       velocity: completedSet.velocity
           .withHint(bb3Set.velocity.hintValue, FieldOrigin.bb3Hint),
       executionNote: completedSet.executionNote,
@@ -922,9 +973,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         // Weight entered → advance to reps cue.
         if (mounted) setState(() => _tutorialStep = 4);
       } else if (_tutorialStep == 5 && fieldKey == Wes2FieldKey.rir) {
-        // RIR entered → complete tutorial.
+        // RIR entered → complete tutorial (idempotent with _onTutorialStepDismiss).
         final uid = FirebaseAuth.instance.currentUser?.uid;
-        if (uid != null) unawaited(OnboardingPrefs.setWesDone(uid));
+        if (uid != null) {
+          unawaited(OnboardingCueService.instance
+              .markCueComplete(OnboardingCueId.wes2FieldWalkthrough, uid));
+        }
         if (mounted) setState(() => _tutorialStep = 0);
       }
     }
@@ -1061,11 +1115,15 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _qualifiedDaysCountCached++;
     final triggerPaywall = _qualifiedDaysCountCached >= 4;
 
-    // Record qualifying day for cog cue (actor-keyed SharedPreferences).
-    // Done before the Firestore write so it succeeds even when offline.
+    // Record qualifying day in the local cache (actor-keyed). The DURABLE
+    // authority for the 3-day unlock is the membership doc count
+    // (_qualifiedDaysCountCached), updated just above, so the gate survives
+    // reinstall / device change.
     await OnboardingPrefs.addWesCogCueQualifiedDay(actorUid, dateKey);
-    final cogDays = await OnboardingPrefs.getWesCogCueQualifiedDays(actorUid);
-    if (!_cogCueDismissed && !_cogCueUnlocked && cogDays.length >= 3 && mounted) {
+    if (!_cogCueDismissed &&
+        !_cogCueUnlocked &&
+        _qualifiedDaysCountCached >= 3 &&
+        mounted) {
       setState(() => _cogCueUnlocked = true);
     }
 
@@ -1198,7 +1256,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       value: _controller,
       child: Consumer<Wes2SessionController>(
         builder: (context, controller, _) {
-          final uc = UserContext.of(context); // listen:true → rebuilds on athlete switch
+          final uc = UserContext.of(
+              context); // listen:true → rebuilds on athlete switch
           final actingUid = uc.currentUid;
 
           // Guard: if WES2 opened before activeBlockId was available (new-user race),
@@ -1222,168 +1281,206 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
           if (_fetchedForUid != actingUid) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _fetchedForUid != actingUid) _fetchAthleteUsername(actingUid);
+              if (mounted && _fetchedForUid != actingUid)
+                _fetchAthleteUsername(actingUid);
             });
           }
           return Scaffold(
-          appBar: AppBar(
-            title: const Text(' '),
-            actions: [
-              if (_athleteGreeting != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 120),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _athleteGreeting!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.secondary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        if (_athleteUsername != null)
+            appBar: AppBar(
+              title: const Text(' '),
+              actions: [
+                if (_athleteGreeting != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 120),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                           Text(
-                            _athleteUsername!,
+                            _athleteGreeting!,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: Theme.of(context).colorScheme.secondary,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
-                      ],
+                          if (_athleteUsername != null)
+                            Text(
+                              _athleteUsername!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.secondary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, right: 4),
+                  child: Image.asset(
+                    'assets/InApp/transparent_good_lift_logo_inApp.png',
+                    height: 44,
+                    fit: BoxFit.contain,
+                  ),
                 ),
-              Padding(
-                padding: const EdgeInsets.only(left: 4, right: 4),
-                child: Image.asset(
-                  'assets/InApp/transparent_good_lift_logo_inApp.png',
-                  height: 44,
-                  fit: BoxFit.contain,
+                IconButton(
+                  icon: const Icon(Icons.undo),
+                  tooltip: 'Undo',
+                  onPressed: controller.canUndo ? _performUndo : null,
                 ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.undo),
-                tooltip: 'Undo',
-                onPressed: controller.canUndo ? _performUndo : null,
-              ),
-              IconButton(
-                icon: const Icon(
-                  Icons.auto_awesome,
-                  color: Colors.amberAccent,
+                IconButton(
+                  icon: const Icon(
+                    Icons.auto_awesome,
+                    color: Colors.amberAccent,
+                  ),
+                  tooltip: 'Refresh',
+                  onPressed: () {
+                    _saveDraftNow();
+                    _loadDay();
+                  },
                 ),
-                tooltip: 'Refresh',
-                onPressed: () {
-                  _saveDraftNow();
-                  _loadDay();
-                },
-              ),
-              PopupMenuButton<_Wes2AppBarMenuAction>(
-                icon: const Icon(Icons.more_vert),
-                onSelected: (action) {
-                  switch (action) {
-                    case _Wes2AppBarMenuAction.timer:
-                      _toggleTimerVisible();
-                      break;
-                    case _Wes2AppBarMenuAction.templates:
-                      _showTemplatePicker();
-                      break;
-                    case _Wes2AppBarMenuAction.deleteAll:
-                      _onDeleteAllExercisesForDay();
-                      break;
-                  }
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(
-                    value: _Wes2AppBarMenuAction.timer,
-                    height: 40,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.timer_outlined, size: 18),
-                        SizedBox(width: 10),
-                        Text('Timer'),
-                      ],
+                PopupMenuButton<_Wes2AppBarMenuAction>(
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (action) {
+                    switch (action) {
+                      case _Wes2AppBarMenuAction.timer:
+                        _toggleTimerVisible();
+                        break;
+                      case _Wes2AppBarMenuAction.templates:
+                        _showTemplatePicker();
+                        break;
+                      case _Wes2AppBarMenuAction.deleteAll:
+                        _onDeleteAllExercisesForDay();
+                        break;
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: _Wes2AppBarMenuAction.timer,
+                      height: 40,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.timer_outlined, size: 18),
+                          SizedBox(width: 10),
+                          Text('Timer'),
+                        ],
+                      ),
                     ),
-                  ),
-                  const PopupMenuItem(
-                    value: _Wes2AppBarMenuAction.templates,
-                    height: 40,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.layers_outlined, size: 18),
-                        SizedBox(width: 10),
-                        Text('Templates'),
-                      ],
+                    const PopupMenuItem(
+                      value: _Wes2AppBarMenuAction.templates,
+                      height: 40,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.layers_outlined, size: 18),
+                          SizedBox(width: 10),
+                          Text('Templates'),
+                        ],
+                      ),
                     ),
-                  ),
-                  const PopupMenuItem(
-                    value: _Wes2AppBarMenuAction.deleteAll,
-                    height: 40,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.delete_outline, size: 18,
-                            color: Colors.redAccent),
-                        SizedBox(width: 10),
-                        Text('Delete Day',
-                            style: TextStyle(color: Colors.redAccent)),
-                      ],
+                    const PopupMenuItem(
+                      value: _Wes2AppBarMenuAction.deleteAll,
+                      height: 40,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.delete_outline,
+                              size: 18, color: Colors.redAccent),
+                          SizedBox(width: 10),
+                          Text('Delete Day',
+                              style: TextStyle(color: Colors.redAccent)),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          body: Stack(
-            children: [
-              Column(
-                children: [
-                  Wes2DayHeader(
-                    date: controller.selectedDate,
-                    onSelectDate: _onSelectDate,
-                    onPrevDay: _onPrevDay,
-                    onNextDay: _onNextDay,
-                  ),
-                  const Divider(height: 1),
-                  Expanded(child: _buildBody(context, controller)),
-                ],
-              ),
-              if (_timerVisible)
-                Positioned(
-                  right: 12,
-                  bottom: MediaQuery.of(context).padding.bottom + 2,
-                  child: _buildFloatingTimer(),
+                  ],
                 ),
-            ],
-          ),
-        );
+              ],
+            ),
+            body: Stack(
+              children: [
+                Column(
+                  children: [
+                    Wes2DayHeader(
+                      date: controller.selectedDate,
+                      onSelectDate: _onSelectDate,
+                      onPrevDay: _onPrevDay,
+                      onNextDay: _onNextDay,
+                    ),
+                    const Divider(height: 1),
+                    Expanded(child: _buildBody(context, controller)),
+                  ],
+                ),
+                if (_timerVisible)
+                  Positioned(
+                    right: 12,
+                    bottom: MediaQuery.of(context).padding.bottom + 2,
+                    child: _buildFloatingTimer(),
+                  ),
+              ],
+            ),
+          );
         },
       ),
     );
   }
 
   Widget _buildBody(BuildContext context, Wes2SessionController controller) {
-    // Error state: full-screen message, no action bar.
+    // Error state: full-screen polished message with a retry action.
+    // The raw exception is intentionally never rendered here — it is logged in
+    // _loadDay. App bar and date header remain mounted above _buildBody, so back
+    // and date navigation stay usable.
     if (controller.loadState == Wes2LoadState.error) {
+      final retrying =
+          _retryInProgress || controller.loadState == Wes2LoadState.loading;
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Text(
-            'Could not load workout.\n${controller.loadErrorMessage ?? ''}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.red, fontSize: 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.cloud_off_outlined,
+                size: 40,
+                color: Theme.of(context).colorScheme.secondary,
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'We couldn’t load this workout',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Check your connection and try again.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.white60),
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton(
+                onPressed: retrying ? null : _retryLoad,
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(
+                    color: Theme.of(context).colorScheme.secondary,
+                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                ),
+                child: const Text('Try again'),
+              ),
+            ],
           ),
         ),
       );
@@ -1440,9 +1537,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         final setsLogged =
             rows.expand((r) => r.sets).where((s) => s.hasAnyActual).length;
 
-        final showCogCue = _tutorialStep == 0 &&
-            !_cogCueDismissed &&
-            _cogCueUnlocked;
+        final showCogCue =
+            _tutorialStep == 0 && !_cogCueDismissed && _cogCueUnlocked;
 
         // Build flat item list: circuit headers inserted when circuitIndex changes.
         final items = <Widget>[];
@@ -1507,9 +1603,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
                 : null,
             showVelocityField: _shouldShowVelocityField(row),
-            tutorialStep: isFirstCard
-                ? (_tutorialStep >= 3 ? _tutorialStep - 2 : 0)
-                : 0,
+            tutorialStep:
+                isFirstCard ? (_tutorialStep >= 3 ? _tutorialStep - 2 : 0) : 0,
             onTutorialRepsAccepted: (isFirstCard && _tutorialStep == 4)
                 ? _onRepsTutorialAccepted
                 : null,
@@ -1522,9 +1617,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           setsLogged: setsLogged,
           onAddCircuit: _onAddCircuit,
           onSummary: _showWorkoutSummary,
-          onSaveAsTemplate: controller.canSaveAsTemplate
-              ? _showSaveAsTemplateDialog
-              : null,
+          onSaveAsTemplate:
+              controller.canSaveAsTemplate ? _showSaveAsTemplateDialog : null,
         ));
         return ListView(children: items);
       case Wes2LoadState.error:
@@ -1770,9 +1864,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   Future<void> _showExerciseSettingsDialog(Wes2ExerciseRow row) async {
     final blockId = _controller.activeBlockId;
     final blockStart = _controller.blockStartDate;
-    if (blockId == null ||
-        blockId.isEmpty ||
-        blockStart == null) {
+    if (blockId == null || blockId.isEmpty || blockStart == null) {
       _showSnackBar('No active block — settings require a training block.');
       return;
     }
@@ -1798,7 +1890,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       _controller.selectedDate.day,
     );
     final blockStartOnly = DateTime(
-      blockStart.year, blockStart.month, blockStart.day,
+      blockStart.year,
+      blockStart.month,
+      blockStart.day,
     );
     final blockEndOnly = blockEndDate != null
         ? DateTime(blockEndDate.year, blockEndDate.month, blockEndDate.day)
@@ -1834,8 +1928,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
       bool matched = false;
       for (final ex in exs) {
-        final exId =
-            (ex['exerciseId'] ?? ex['id'] ?? '').toString();
+        final exId = (ex['exerciseId'] ?? ex['id'] ?? '').toString();
         if (exId != row.exerciseId) continue;
         final setsRaw = ex['sets'];
         final sets = setsRaw is List ? setsRaw : const [];
@@ -1879,13 +1972,16 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // Compute history-aware active instance for DUP models so settings cog
     // shows the same instance as ProgressionEngine.
     int? resolvedActiveInstance;
-    final cogExSettings = _cachedExerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    final cogExSettings =
+        _cachedExerciseSettings[row.exerciseId] as Map<String, dynamic>?;
     final cogModel = (cogExSettings?['periodizationModel'] as String?) ?? '';
     if (cogModel == 'DUP, By Exposure' || cogModel == 'DUP, By Week') {
       final cogWeek1 = (cogExSettings?['repTargets'] as Map?)?['week1'];
       final cogSorted = (cogWeek1 is Map<String, dynamic>)
-          ? (cogWeek1.entries.where((e) => e.key.startsWith('instance')).toList()
-              ..sort((a, b) => a.key.compareTo(b.key)))
+          ? (cogWeek1.entries
+              .where((e) => e.key.startsWith('instance'))
+              .toList()
+            ..sort((a, b) => a.key.compareTo(b.key)))
           : <MapEntry<String, dynamic>>[];
       int cogPlannedBefore = 0;
       for (final r in _controller.rows) {
@@ -1908,7 +2004,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (!_cogCueDismissed && mounted) {
       setState(() => _cogCueDismissed = true);
       final actorUid = FirebaseAuth.instance.currentUser?.uid;
-      if (actorUid != null) unawaited(OnboardingPrefs.setWesCogCueDone(actorUid));
+      if (actorUid != null) {
+        unawaited(OnboardingCueService.instance
+            .markCueComplete(OnboardingCueId.wes2SettingsCog, actorUid));
+      }
     }
     final saved = await showDialog<bool>(
       context: context,
@@ -1923,6 +2022,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         planService: _planService,
         resolvedActiveInstanceOverride: resolvedActiveInstance,
         completedInstanceCount: completedInstanceCount,
+        // Active RIR session = block-relative dayIndex (days % 7) + 1, matching
+        // the hint engine's sessionIndex. Independent of the rep-target instance.
+        activeRirSessionIndex: wd.dayIndex + 1,
       ),
     );
     if (saved == true && mounted) {
@@ -1979,7 +2081,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   String? _buildCombinedPlanNote(Wes2ExerciseRow row) {
     final lines = <String>[];
-    if (row.exercisePlanNote != null && row.exercisePlanNote!.trim().isNotEmpty) {
+    if (row.exercisePlanNote != null &&
+        row.exercisePlanNote!.trim().isNotEmpty) {
       lines.add('Exercise note: ${row.exercisePlanNote!.trim()}');
     }
     for (int i = 0; i < row.sets.length; i++) {
@@ -2060,8 +2163,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
     if (!confirmed || !mounted) return;
 
-    final hadBb3Rows =
-        _bb3PlannedExerciseIds.isNotEmpty ||
+    final hadBb3Rows = _bb3PlannedExerciseIds.isNotEmpty ||
         _controller.rows.any((r) =>
             r.source == Wes2RowSource.bb3Planned ||
             _bb3PlannedExerciseIds.contains(r.exerciseId));
@@ -2276,7 +2378,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (!confirmed || !mounted) return;
       _controller.deleteExercise(currentRow.exerciseId);
       _saveDraftNow();
-      if (currentRow.hasAnyExecutionValue) _showUndoSnackBar('Exercise deleted');
+      if (currentRow.hasAnyExecutionValue)
+        _showUndoSnackBar('Exercise deleted');
       // ignore: discarded_futures
       _deleteExerciseSilently(
         uid: _controller.actingUid,
@@ -2480,7 +2583,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  _formatDuration(_elapsedMilliseconds, includeSplitSeconds: true),
+                  _formatDuration(_elapsedMilliseconds,
+                      includeSplitSeconds: true),
                   style: const TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.bold,
@@ -2505,11 +2609,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 TextButton(
                   onPressed: _timerRunning ? _stopTimer : _startTimer,
                   style: TextButton.styleFrom(
-                    foregroundColor: _timerRunning
-                        ? Colors.redAccent
-                        : Colors.greenAccent,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                    foregroundColor:
+                        _timerRunning ? Colors.redAccent : Colors.greenAccent,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     visualDensity: VisualDensity.compact,
@@ -2523,8 +2626,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 TextButton(
                   onPressed: _timerRunning ? null : _resetTimer,
                   style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     minimumSize: Size.zero,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     visualDensity: VisualDensity.compact,
@@ -2566,8 +2669,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
 
     final hadAnyRows = _controller.rows.isNotEmpty;
-    final hadBb3Rows = _controller.rows
-        .any((r) => r.source == Wes2RowSource.bb3Planned);
+    final hadBb3Rows =
+        _controller.rows.any((r) => r.source == Wes2RowSource.bb3Planned);
 
     _controller.replaceWithTemplateRows(reindexed);
     _saveDraftNow();
@@ -2686,8 +2789,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
               hintText: 'Template name',
               border: OutlineInputBorder(),
               isDense: true,
-              contentPadding: EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 8),
+              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             ),
           ),
           actions: [
@@ -2726,8 +2828,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   void _showWorkoutSummary() {
     final rows = _controller.rows;
     final date = _controller.selectedDate;
-    final dateStr =
-        '${date.year.toString().padLeft(4, '0')}-'
+    final dateStr = '${date.year.toString().padLeft(4, '0')}-'
         '${date.month.toString().padLeft(2, '0')}-'
         '${date.day.toString().padLeft(2, '0')}';
 
@@ -2813,8 +2914,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-                for (final row in circuitMap[ci]!)
-                  _summaryExerciseRow(row),
+                for (final row in circuitMap[ci]!) _summaryExerciseRow(row),
                 const SizedBox(height: 8),
               ],
             ],

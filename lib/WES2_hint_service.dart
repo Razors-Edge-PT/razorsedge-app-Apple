@@ -1,3 +1,5 @@
+import 'package:meta/meta.dart';
+
 import 'WES2_models.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
@@ -49,7 +51,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required String uid,
     required DateTime date,
   }) {
-    final base = DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
+    final base =
+        DateTime(blockStartDate.year, blockStartDate.month, blockStartDate.day);
     final sel = DateTime(date.year, date.month, date.day);
     final days = sel.difference(base).inDays;
     final weekIndex = days ~/ 7;
@@ -58,14 +61,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // Build a padded sets list that covers at least setCount slots.
     // WES2-manual rows are created with setCount > 0 but sets: const [],
     // so we must not bail out on sets.isEmpty.
-    final exSettings = exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    final exSettings =
+        exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
     final dupModel = (exSettings?['periodizationModel'] as String?) ?? '';
     final int planCount;
     if (dupModel == 'DUP, By Exposure' || dupModel == 'DUP, By Week') {
       final week1 = (exSettings?['repTargets'] as Map?)?['week1'];
       final sortedInst = (week1 is Map<String, dynamic>)
           ? (week1.entries.where((e) => e.key.startsWith('instance')).toList()
-              ..sort((a, b) => a.key.compareTo(b.key)))
+            ..sort((a, b) => a.key.compareTo(b.key)))
           : <MapEntry<String, dynamic>>[];
       final dupRes = ProgressionEngine.resolveDupActiveInstance(
         exerciseId: row.exerciseId,
@@ -79,7 +83,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
       );
       final dupRaw = dupRes?.raw ?? '';
       final dupMatch = RegExp(r'[xX]\s*(\d+)').firstMatch(dupRaw.trim());
-      planCount = (dupMatch != null ? int.tryParse(dupMatch.group(1)!) : null) ?? 0;
+      planCount =
+          (dupMatch != null ? int.tryParse(dupMatch.group(1)!) : null) ?? 0;
     } else if (dupModel == 'DUP, Signature') {
       final ds = (exSettings?['defaultSets'] as num?)?.toInt();
       planCount = (ds != null && ds > 0) ? ds : 0;
@@ -108,8 +113,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
             var u = s;
             if (_isBb3Locked(s.reps) && s.reps.hintValue != null) {
               u = u.copyWith(
-                  reps: u.reps.withHint(
-                      s.reps.hintValue! * 5, FieldOrigin.modelHint));
+                  reps: u.reps
+                      .withHint(s.reps.hintValue! * 5, FieldOrigin.modelHint));
             }
             if (_isBb3Locked(s.rir)) {
               u = u.copyWith(rir: u.rir.withHint(null, FieldOrigin.empty));
@@ -139,6 +144,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
         set: newSets[i],
         prevSet: newSets[i - 1],
         setIdx: i,
+        planCount: planCount,
         exSettings: exSettings,
         weekIndex: weekIndex,
         sessionIndex: sessionIndex,
@@ -157,7 +163,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required DateTime date,
   }) {
     return rows
-        .map((r) => computeRowHints(row: r, blockId: blockId, uid: uid, date: date))
+        .map((r) =>
+            computeRowHints(row: r, blockId: blockId, uid: uid, date: date))
         .toList();
   }
 
@@ -184,12 +191,13 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required DateTime date,
     required String uid,
   }) {
-    final exSettings = exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    final exSettings =
+        exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
 
     // Per-field constraints: user actual > BB3 explicit hint (non-null) > null.
     final constrainedWeight = _constraintWeight(set);
-    final constrainedReps   = _constraintReps(set);
-    final constrainedRir    = _constraintRir(set);
+    final constrainedReps = _constraintReps(set);
+    final constrainedRir = _constraintRir(set);
 
     final bool isTimed = PeriodizationModelUtils.isTimedExercise(
         id: row.exerciseId, name: row.name);
@@ -209,7 +217,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // DUP Signature: override planReps with history-aware rep target from exerciseSettings.
     int? dupSigReps;
     if (exSettings?['periodizationModel'] == 'DUP, Signature') {
-      dupSigReps = _computeDupSignatureReps(exSettings, weekIndex, row.exerciseId, row.name);
+      dupSigReps = _computeDupSignatureReps(
+          exSettings, weekIndex, row.exerciseId, row.name);
       if (dupSigReps != null) planReps = dupSigReps;
     }
     final planRir = BB3PlannedExerciseService.getRirFromPlan(
@@ -222,7 +231,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // Effective reps/RIR used to compute a default weight hint.
     // Constraint wins over plan, plan wins over hard fallback.
     final repsForWeight = constrainedReps ?? (planReps > 0 ? planReps : 8);
-    final rirForWeight  = constrainedRir  ?? (planRir  > 0 ? planRir  : 2.0);
+    final rirForWeight = constrainedRir ?? (planRir > 0 ? planRir : 2.0);
 
     // BB3-implied target E1RM: weight+reps locked (plus RIR when also locked).
     // Bodyweight-aware; used as priority target over history when BB3 has
@@ -230,7 +239,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final bb3SetTarget = _bb3ImpliedSetTargetE1rm(set, rirForWeight, row, date);
 
     double? weightHint;
-    int?    repsHint;
+    int? repsHint;
     double? rirHint;
 
     // ── History path ──────────────────────────────────────────────────────────
@@ -265,16 +274,17 @@ class Wes2HintServiceImpl implements Wes2HintService {
         selectedDate: date,
         uid: uid,
         userWeight: constrainedWeightForEngine,
-        userReps:   constrainedReps,
-        dupSigRep:  dupSigReps,
-        userRir:    constrainedRir,
+        userReps: constrainedReps,
+        dupSigRep: dupSigReps,
+        userRir: constrainedRir,
       );
 
       bool weightFromHistory = false;
       if (!hint.isEmpty) {
         if (hint.weightDisplay.isNotEmpty) {
           // Weight display may be a range like "95–100"; take the lower bound.
-          final clean = hint.weightDisplay.split('–').first.split('-').first.trim();
+          final clean =
+              hint.weightDisplay.split('–').first.split('-').first.trim();
           final parsed = double.tryParse(clean);
           if (parsed != null) {
             weightHint = parsed;
@@ -300,7 +310,10 @@ class Wes2HintServiceImpl implements Wes2HintService {
       // guarantee the resulting E1RM is closest to the day's progression target.
       // Get the unconstrained target E1RM, then generate floor/nearest/ceiling
       // candidates and pick the one whose E1RM is closest to the target.
-      if (weightFromHistory && (constrainedReps != null || dupSigReps != null || constrainedRir != null)) {
+      if (weightFromHistory &&
+          (constrainedReps != null ||
+              dupSigReps != null ||
+              constrainedRir != null)) {
         final targetE1rm = _getTargetE1rm(
           row: row,
           weekIndex: weekIndex,
@@ -334,7 +347,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // to adapt reactively to maintain the target E1RM.
     if (constrainedReps == null &&
         ((constrainedRir != null && set.rir.actualValue == null) ||
-         (constrainedWeight != null && set.weight.actualValue == null))) {
+            (constrainedWeight != null && set.weight.actualValue == null))) {
       // For timed exercises, set.reps.hintValue is already in seconds after
       // processedPadded conversion (e.g. 45). Using it with repsHintFromPlan=true
       // would double-convert (45 × 5 = 225). Use planReps (rep units) directly
@@ -433,20 +446,21 @@ class Wes2HintServiceImpl implements Wes2HintService {
                   asOfDate: date,
                 )
               : hW;
-          final e = PeriodizationModelUtils.calculateE1RM(absHW, hR.toDouble(), hRir);
+          final e =
+              PeriodizationModelUtils.calculateE1RM(absHW, hR.toDouble(), hRir);
           if (e > 0) baselineHintE1rm = e;
         }
       }
 
-      final targetE1rm = bb3SetTarget
-          ?? _getTargetE1rm(
-               row: row,
-               weekIndex: weekIndex,
-               sessionIndex: sessionIndex,
-               date: date,
-               uid: uid,
-             )
-          ?? baselineHintE1rm;
+      final targetE1rm = bb3SetTarget ??
+          _getTargetE1rm(
+            row: row,
+            weekIndex: weekIndex,
+            sessionIndex: sessionIndex,
+            date: date,
+            uid: uid,
+          ) ??
+          baselineHintE1rm;
 
       // Convert display-added BW load to absolute before solving.
       final solveWAbs = isBw1
@@ -486,15 +500,12 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
     final weightBb3Only =
         set.weight.actualValue == null && _isBb3Locked(set.weight);
-    final repsBb3Only =
-        set.reps.actualValue == null && _isBb3Locked(set.reps);
-    final rirBb3Only =
-        set.rir.actualValue == null && _isBb3Locked(set.rir);
+    final repsBb3Only = set.reps.actualValue == null && _isBb3Locked(set.reps);
+    final rirBb3Only = set.rir.actualValue == null && _isBb3Locked(set.rir);
 
     // Compute target E1RM once if any cue may fire.
     double? targetE1rmForCue;
-    final needsE1rm =
-        (weightBb3Only &&
+    final needsE1rm = (weightBb3Only &&
             (set.reps.actualValue != null || set.rir.actualValue != null)) ||
         (repsBb3Only &&
             (set.weight.actualValue != null || set.rir.actualValue != null)) ||
@@ -610,7 +621,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
       // No constraints — pure baseline to extract the day's target E1RM.
     );
     if (baseline.isEmpty) return null;
-    final cleanW = baseline.weightDisplay.split('–').first.split('-').first.trim();
+    final cleanW =
+        baseline.weightDisplay.split('–').first.split('-').first.trim();
     final w = double.tryParse(cleanW);
     final r = double.tryParse(baseline.repsDisplay);
     final rir = double.tryParse(baseline.rirDisplay) ?? 0.0;
@@ -630,13 +642,14 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required Wes2SetState set,
     required Wes2SetState prevSet,
     required int setIdx,
+    required int planCount,
     required Map<String, dynamic>? exSettings,
     required int weekIndex,
     required int sessionIndex,
     required DateTime date,
   }) {
     final prevWeight = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
-    final prevReps   = prevSet.reps.actualValue   ?? prevSet.reps.hintValue;
+    final prevReps = prevSet.reps.actualValue ?? prevSet.reps.hintValue;
     if (prevWeight == null || prevReps == null) return set;
 
     final prevRir = prevSet.rir.actualValue ?? prevSet.rir.hintValue ?? 0.0;
@@ -648,8 +661,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     );
     double _sNSnap(double t) => _sNValidWeights.isEmpty
         ? t
-        : _sNValidWeights.reduce(
-            (a, b) => (a - t).abs() < (b - t).abs() ? a : b);
+        : _sNValidWeights
+            .reduce((a, b) => (a - t).abs() < (b - t).abs() ? a : b);
 
     // Bodyweight exercises store display-added load; E1RM math needs absolute load.
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
@@ -693,13 +706,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
           )
         : prevWeight;
     final prevE1rm = PeriodizationModelUtils.calculateE1RM(
-      prevWeightAbs, prevReps.toDouble(), prevRir,
+      prevWeightAbs,
+      prevReps.toDouble(),
+      prevRir,
     );
     if (prevE1rm <= 0) return set;
 
-    final group      = _dropGroup(row.name, exSettings);
-    final rawDrop    = _rawDropFor(group, setIdx);
-    final drop       = _gatedDrop(rawDrop, prevRir);
+    final group = _dropGroup(row.name, exSettings);
+    final rawDrop = _rawDropFor(group, setIdx);
+    final drop = _gatedDrop(rawDrop, prevRir);
     final cascadeTarget = (prevE1rm - drop).clamp(1.0, 9999.0);
 
     // RIR precedence: actual > BB3 explicit > rirPlan > 0.0 fallback.
@@ -710,18 +725,31 @@ class Wes2HintServiceImpl implements Wes2HintService {
       sessionIndex: sessionIndex,
       setNumber: setIdx + 1,
     );
-    final thisRir = constrainedRir ?? (planRir > 0 ? planRir : 0.0);
+    // Change 4: extra added sets (beyond the planned set count) inherit the most
+    // recent set's RIR. Priority: prev actual RIR > prev RIR hint > plan/model.
+    // Scope is strictly setIdx >= planCount so planned sets keep their own RIR.
+    // The inherited value is stored as a hint (modelHint origin) — never an
+    // actual — so it stays editable, is never BB3-locked, and (per Change 3) does
+    // not grant a later weight increase. Planned sets are unaffected: their
+    // effectivePlanRir reduces to the original planRir-based fallback.
+    final bool isExtraSet = setIdx >= planCount;
+    final double? inheritedRir =
+        isExtraSet ? (prevSet.rir.actualValue ?? prevSet.rir.hintValue) : null;
+    final double? effectivePlanRir =
+        inheritedRir ?? (planRir > 0 ? planRir : null);
+    final thisRir = constrainedRir ?? effectivePlanRir ?? 0.0;
     // Emit RIR hint only when neither actual nor BB3 holds the field.
-    final rirHint = constrainedRir == null && planRir > 0 ? planRir : null;
+    final rirHint = constrainedRir == null ? effectivePlanRir : null;
 
     // BB3-implied target wins when BB3 has prescribed this set; cascade is fallback.
-    final targetE1rm = _bb3ImpliedSetTargetE1rm(set, thisRir, row, date) ?? cascadeTarget;
+    final targetE1rm =
+        _bb3ImpliedSetTargetE1rm(set, thisRir, row, date) ?? cascadeTarget;
 
-    final cwt   = _constraintWeight(set);
+    final cwt = _constraintWeight(set);
     final creps = _constraintReps(set);
 
     double? weightHint;
-    int?    repsHint;
+    int? repsHint;
 
     if (cwt != null && creps != null) {
       // Both locked — nothing to compute.
@@ -825,6 +853,17 @@ class Wes2HintServiceImpl implements Wes2HintService {
       }
     }
 
+    // Cap an upward weight suggestion against the previous set's resolved weight
+    // unless the previous set's ACTUAL RIR > 2.5. Applied after model
+    // calculation + increment snapping; weight-locked / BB3-locked branches keep
+    // weightHint null so this is a no-op for them. A manually typed actual weight
+    // lives in set.weight.actualValue and is never touched here.
+    weightHint = _capWeightToPrevSet(
+      proposed: weightHint,
+      prevSet: prevSet,
+      validWeights: _sNValidWeights,
+    );
+
     Wes2SetState result = _applyModelHintToSet(
       existing: set,
       weightHint: weightHint,
@@ -869,14 +908,11 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
     final weightBb3OnlyN =
         set.weight.actualValue == null && _isBb3Locked(set.weight);
-    final repsBb3OnlyN =
-        set.reps.actualValue == null && _isBb3Locked(set.reps);
-    final rirBb3OnlyN =
-        set.rir.actualValue == null && _isBb3Locked(set.rir);
+    final repsBb3OnlyN = set.reps.actualValue == null && _isBb3Locked(set.reps);
+    final rirBb3OnlyN = set.rir.actualValue == null && _isBb3Locked(set.rir);
 
     // Weight/reps cues share the unconstrained (free) computation.
-    final needsFreeN =
-        (weightBb3OnlyN &&
+    final needsFreeN = (weightBb3OnlyN &&
             (set.reps.actualValue != null || set.rir.actualValue != null)) ||
         (repsBb3OnlyN &&
             (set.weight.actualValue != null || set.rir.actualValue != null));
@@ -982,11 +1018,11 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
     double _snap(double t) {
       if (localValidWeights.isNotEmpty) {
-        return localValidWeights.reduce(
-          (a, b) => (a - t).abs() < (b - t).abs() ? a : b);
+        return localValidWeights
+            .reduce((a, b) => (a - t).abs() < (b - t).abs() ? a : b);
       }
       return PeriodizationModelUtils.roundToNearestValidIncrement(
-        targetWeight: t, exerciseName: exerciseName);
+          targetWeight: t, exerciseName: exerciseName);
     }
 
     final nearest = _snap(rawWeight);
@@ -1005,7 +1041,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     double bestW = nearest;
     double bestDiff = double.infinity;
     for (final w in candidates) {
-      final e1rm = PeriodizationModelUtils.calculateE1RM(w, reps.toDouble(), rir);
+      final e1rm =
+          PeriodizationModelUtils.calculateE1RM(w, reps.toDouble(), rir);
       final diff = (e1rm - targetE1rm).abs();
       if (diff < bestDiff) {
         bestDiff = diff;
@@ -1014,6 +1051,61 @@ class Wes2HintServiceImpl implements Wes2HintService {
     }
     return bestW;
   }
+
+  /// Caps a generated [proposed] weight hint so a set after Set 1 never exceeds
+  /// the immediately preceding set's resolved weight unless that previous set
+  /// has an ACTUAL entered RIR strictly greater than 2.5.
+  ///
+  /// Resolved previous weight = prev actual weight ?? prev weight hint.
+  /// Permission to increase comes only from [prevSet].rir.actualValue > 2.5 —
+  /// a hinted/planned RIR or an absent RIR never permits an increase.
+  ///
+  /// When capping, returns the greatest valid configured increment that does not
+  /// exceed the previous resolved weight (floor-snap). An on-grid previous hint
+  /// floor-snaps to itself; a manually entered off-grid previous actual snaps
+  /// down to the highest valid increment ≤ it, so the cap never produces an
+  /// off-grid model hint and snapping can never push the value back above the cap.
+  ///
+  /// Returns [proposed] unchanged when it is null, when there is no previous
+  /// resolved weight, when it does not exceed the cap, or when an increase is
+  /// permitted. Operates in the same units as [proposed] (display-added for BW).
+  static double? _capWeightToPrevSet({
+    required double? proposed,
+    required Wes2SetState prevSet,
+    required List<double> validWeights,
+  }) {
+    if (proposed == null) return null;
+    final prevResolved = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
+    if (prevResolved == null) return proposed;
+    final prevActualRir = prevSet.rir.actualValue;
+    final mayIncrease = prevActualRir != null && prevActualRir > 2.5;
+    if (mayIncrease) return proposed;
+    if (proposed <= prevResolved + 1e-9) return proposed;
+    // Cap active: floor-snap to the highest valid increment ≤ prevResolved.
+    if (validWeights.isEmpty) return prevResolved;
+    double? best;
+    for (final w in validWeights) {
+      if (w <= prevResolved + 1e-9 && (best == null || w > best)) best = w;
+    }
+    // If no grid value is ≤ the cap, fall back to the cap itself rather than
+    // ever returning an above-cap value.
+    return best ?? prevResolved;
+  }
+
+  /// Test-only entry point for the Change 3 weight cap rule. Forwards to
+  /// [_capWeightToPrevSet] so the boundary/floor-snap behaviour can be unit
+  /// tested without exercising the full Firestore-backed cascade.
+  @visibleForTesting
+  static double? debugCapWeightToPrevSet({
+    required double? proposed,
+    required Wes2SetState prevSet,
+    required List<double> validWeights,
+  }) =>
+      _capWeightToPrevSet(
+        proposed: proposed,
+        prevSet: prevSet,
+        validWeights: validWeights,
+      );
 
   /// Applies model hints to a single set.
   /// Priority: explicit BB3 hint (non-null hintValue) > model hint > empty.
@@ -1042,8 +1134,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
   /// [fallbackRir].  Handles partial locks (weight+reps only) in addition to
   /// full three-field locks.  Bodyweight-aware: converts display-added load to
   /// absolute load before calling calculateE1RM.
-  double? _bb3ImpliedSetTargetE1rm(
-      Wes2SetState set, double fallbackRir, Wes2ExerciseRow row, DateTime date) {
+  double? _bb3ImpliedSetTargetE1rm(Wes2SetState set, double fallbackRir,
+      Wes2ExerciseRow row, DateTime date) {
     if (!_isBb3Locked(set.weight) || !_isBb3Locked(set.reps)) return null;
     double absWeight = set.weight.hintValue!;
     if (PeriodizationModelUtils.isBodyweightExercise(
@@ -1056,9 +1148,12 @@ class Wes2HintServiceImpl implements Wes2HintService {
         asOfDate: date,
       );
     }
-    final effectiveRir = _isBb3Locked(set.rir) ? set.rir.hintValue! : fallbackRir;
+    final effectiveRir =
+        _isBb3Locked(set.rir) ? set.rir.hintValue! : fallbackRir;
     final e = PeriodizationModelUtils.calculateE1RM(
-      absWeight, set.reps.hintValue!.toDouble(), effectiveRir,
+      absWeight,
+      set.reps.hintValue!.toDouble(),
+      effectiveRir,
     );
     return e > 0 ? e : null;
   }
@@ -1077,10 +1172,10 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }
 
   /// Merges a model-derived [hint] into an int field.
-  static Wes2FieldState<int> _mergeInt(
-      Wes2FieldState<int> field, int? hint) {
+  static Wes2FieldState<int> _mergeInt(Wes2FieldState<int> field, int? hint) {
     if (_isBb3Locked(field)) return field;
-    if (hint != null && hint > 0) return field.withHint(hint, FieldOrigin.modelHint);
+    if (hint != null && hint > 0)
+      return field.withHint(hint, FieldOrigin.modelHint);
     if (field.origin == FieldOrigin.modelHint) {
       return field.withHint(null, FieldOrigin.empty);
     }
@@ -1121,12 +1216,14 @@ class Wes2HintServiceImpl implements Wes2HintService {
     for (int i = 0; i <= 20; i++) {
       final candidate = i * 0.5;
       final e1rm = PeriodizationModelUtils.calculateE1RM(
-        weight, reps.toDouble(), candidate,
+        weight,
+        reps.toDouble(),
+        candidate,
       );
       final diff = (e1rm - targetE1rm).abs();
       if (diff < bestDiff) {
         bestDiff = diff;
-        bestRir  = candidate;
+        bestRir = candidate;
       }
     }
     return bestRir;
@@ -1137,7 +1234,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
   /// WES drop-off group for an exercise.
   /// Mirrors workout_entry_screen.dart _groupFor exactly:
   /// named overrides first (A, B), then category from exerciseSettings, else C.
-  static String _dropGroup(String exerciseName, Map<String, dynamic>? exSettings) {
+  static String _dropGroup(
+      String exerciseName, Map<String, dynamic>? exSettings) {
     final n = exerciseName.trim().toLowerCase();
     const groupA = {
       'chin-up',
@@ -1163,7 +1261,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     };
     if (groupB.contains(n)) return 'B';
 
-    final cat = (exSettings?['category'] as String?)?.toLowerCase().trim() ?? '';
+    final cat =
+        (exSettings?['category'] as String?)?.toLowerCase().trim() ?? '';
     const groupC = {
       'horizontal press',
       'horizontal pull',
@@ -1226,22 +1325,29 @@ class Wes2HintServiceImpl implements Wes2HintService {
       (center - 1).clamp(1, 100),
       center,
       (center + 1).clamp(1, 100),
-    }.toList()..sort();
+    }.toList()
+      ..sort();
 
     int best = center;
     double bestErr = double.infinity;
     for (final r in candidates) {
-      final e   = PeriodizationModelUtils.calculateE1RM(weight, r.toDouble(), rir);
+      final e =
+          PeriodizationModelUtils.calculateE1RM(weight, r.toDouble(), rir);
       final err = (e - targetE1rm).abs();
       final withinTolBest = bestErr <= tol + 1e-6;
-      final withinTolCur  = err   <= tol + 1e-6;
-      final take =
-          (withinTolCur && !withinTolBest) ||
-          (withinTolCur  && withinTolBest  && (err < bestErr - 1e-9 || ((err - bestErr).abs() <= 1e-9 && r < best))) ||
-          (!withinTolCur && !withinTolBest && (err < bestErr - 1e-9 || ((err - bestErr).abs() <= 1e-9 && r < best)));
+      final withinTolCur = err <= tol + 1e-6;
+      final take = (withinTolCur && !withinTolBest) ||
+          (withinTolCur &&
+              withinTolBest &&
+              (err < bestErr - 1e-9 ||
+                  ((err - bestErr).abs() <= 1e-9 && r < best))) ||
+          (!withinTolCur &&
+              !withinTolBest &&
+              (err < bestErr - 1e-9 ||
+                  ((err - bestErr).abs() <= 1e-9 && r < best)));
       if (take) {
         bestErr = err;
-        best    = r;
+        best = r;
       }
     }
     return best;
@@ -1287,7 +1393,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
         if (exMap == null) continue;
         // exerciseId-first: use the workout doc's id when present so exercises
         // that share a display name but differ by id don't contaminate each other.
-        final docExId = (exMap['exerciseId'] ?? exMap['id'] ?? '').toString().trim();
+        final docExId =
+            (exMap['exerciseId'] ?? exMap['id'] ?? '').toString().trim();
         final docName = (exMap['name'] ?? '').toString().trim();
         final matchesExercise = docExId.isNotEmpty
             ? docExId == exerciseId
@@ -1305,9 +1412,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
           final rir = parseDouble(sMap['rir']);
           if (w <= 0 || r <= 0) continue;
           final total = r + rir;
-          final e1rm = total <= 6
-              ? w * (36 / (37 - total))
-              : w * (1 + 0.0333 * total);
+          final e1rm =
+              total <= 6 ? w * (36 / (37 - total)) : w * (1 + 0.0333 * total);
           if (e1rm > bestE1rm) {
             bestE1rm = e1rm;
             bestEffReps = (r + rir).floor();
@@ -1410,7 +1516,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
         if (m != null) {
           final mn = int.tryParse(m.group(1)!);
           final mx = int.tryParse(m.group(2)!);
-          if (mn != null && mx != null && mn < mx) return {'min': mn, 'max': mx};
+          if (mn != null && mx != null && mn < mx)
+            return {'min': mn, 'max': mx};
         }
       }
     }

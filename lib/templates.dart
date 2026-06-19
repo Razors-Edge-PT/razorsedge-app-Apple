@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'onboarding_prefs.dart';
+import 'onboarding/onboarding_cue.dart';
+import 'onboarding/onboarding_cue_service.dart';
 import 'wp_demo_player.dart';
 import 'package:provider/provider.dart';
 import 'block_exercise_defaults_repository.dart';
@@ -48,13 +49,11 @@ class _DraggedTemplateCard {
   });
 }
 
-
 class TemplatesScreen extends StatefulWidget {
   const TemplatesScreen({super.key, this.fromWorkoutPage = false});
 
   final bool
       fromWorkoutPage; // Add flag to determine if navigated from WorkoutPage
-
 
   @override
   State<TemplatesScreen> createState() => _TemplatesScreenState();
@@ -72,8 +71,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   // 🔁 block-aware grouping
   String? _activeBlockId;
-  final Map<String, Map<String, dynamic>> _blockMetaById = {}; // blockId -> {startDate, endDate, name?}
-  final Map<String, String?> _templateBlockIds = {}; // templateId -> blockId (from Firestore, may be null)
+  final Map<String, Map<String, dynamic>> _blockMetaById =
+      {}; // blockId -> {startDate, endDate, name?}
+  final Map<String, String?> _templateBlockIds =
+      {}; // templateId -> blockId (from Firestore, may be null)
 
   // which block groups are expanded (we always show active)
   bool _showPreviousBlocks = false;
@@ -85,14 +86,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   final Set<String> _expandedUpcomingBlockIds = {};
 
   bool _loadingBlocks = true;
-  bool _wpDemoShownThisSession = false; // prevents double auto-show within one session
+  bool _wpDemoShownThisSession =
+      false; // prevents double auto-show within one session
   _WpTutorialPhase _tutorialPhase = _WpTutorialPhase.inactive;
 
   // when you hover/drop we can give a little highlight
   String? _draggingOverTemplateId;
   // template.id -> extra circuit indices that have no exercises yet
   final Map<String, Set<int>> _extraEmptyCircuits = {};
-
 
   final _formKey = GlobalKey<FormState>();
   final String _templateName = '';
@@ -112,39 +113,45 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   void initState() {
     super.initState();
     _loadBlocksThenTemplates();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowWpDemoThenWalkthrough());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _maybeShowWpDemoThenWalkthrough());
   }
 
   // ── Workout Planner demo ──────────────────────────────────────────────────
 
   Future<void> _maybeShowWpDemoThenWalkthrough() async {
     if (!mounted) return;
+    // Actor UID only — never the impersonated athlete.
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
+    final svc = OnboardingCueService.instance;
+    await svc.ensureLoaded(uid);
+    if (!mounted) return;
 
-    // Step 1: auto-show video if not yet completed
-    if (!_wpDemoShownThisSession) {
-      final demoDone = await OnboardingPrefs.getWpDone(uid);
-      if (!demoDone && mounted) {
-        _wpDemoShownThisSession = true;
-        await _showWpDemoPlayer(autoCloseAfterCompletion: true);
-      }
+    // Step 1: auto-show video if eligible (permanent once-only for everyone,
+    // including Richard — it never autoplays again on a new build).
+    if (!_wpDemoShownThisSession &&
+        svc.shouldShowCue(OnboardingCueId.wpDemoVideo, uid)) {
+      _wpDemoShownThisSession = true;
+      await _showWpDemoPlayer(autoCloseAfterCompletion: true);
     }
 
     if (!mounted) return;
 
-    // Step 2: start walkthrough only if the video has now been completed
-    final demoDone = await OnboardingPrefs.getWpDone(uid);
-    if (!demoDone) return; // user closed the video before it finished
+    // Step 2: start walkthrough only once the video prerequisite is permanently
+    // met (the WpDemoPlayer marks it on first full playthrough). For Richard the
+    // video stays permanently complete, so this prerequisite never blocks his
+    // per-build walkthrough replay.
+    if (!svc.isPermanentlyComplete(OnboardingCueId.wpDemoVideo, uid)) return;
 
-    final walkthroughDone =
-        await OnboardingPrefs.getWpPlannerWalkthroughComplete(uid);
-    if (!walkthroughDone && mounted) {
+    if (svc.shouldShowCue(OnboardingCueId.wpPlannerWalkthrough, uid) &&
+        mounted) {
       setState(() => _tutorialPhase = _WpTutorialPhase.expandArrow);
     }
   }
 
-  Future<void> _showWpDemoPlayer({bool autoCloseAfterCompletion = false}) async {
+  Future<void> _showWpDemoPlayer(
+      {bool autoCloseAfterCompletion = false}) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || !mounted) return;
     await showGeneralDialog<void>(
@@ -184,7 +191,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   void _completePlannerWalkthrough() {
     setState(() => _tutorialPhase = _WpTutorialPhase.inactive);
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null) OnboardingPrefs.setWpPlannerWalkthroughComplete(uid);
+    if (uid != null) {
+      OnboardingCueService.instance
+          .markCueComplete(OnboardingCueId.wpPlannerWalkthrough, uid);
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -223,7 +233,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     setState(() {
       final i = templates.indexWhere((t) => t.id == template.id);
       if (i != -1) {
-        templates[i].name = newName; // assumes Template.name is mutable (most common in your codebase)
+        templates[i].name =
+            newName; // assumes Template.name is mutable (most common in your codebase)
       } else {
         template.name = newName;
       }
@@ -237,9 +248,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         .doc(uid)
         .collection('templates')
         .doc(template.id)
-        .update({'name': newName, 'isKept': true}); // rename signals "keep on regen"
+        .update({
+      'name': newName,
+      'isKept': true
+    }); // rename signals "keep on regen"
   }
-
 
   Future<void> _showExercisePickerDialogForTemplate(Template template) async {
     if (_tutorialPhase == _WpTutorialPhase.addExerciseCue) {
@@ -279,24 +292,23 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     final Map<String, bool> expandedGroups = {};
 
     final List<Map<String, String>>? selected =
-    await showDialog<List<Map<String, String>>>(
+        await showDialog<List<Map<String, String>>>(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(builder: (context, setLocalState) {
           // Planned-only filter
-          final filteredExercises =
-          (showPlannedOnly && plannedModeAvailable)
+          final filteredExercises = (showPlannedOnly && plannedModeAvailable)
               ? allExercises
-              .where((ex) => plannedExerciseIds.contains(ex['id']))
-              .toList()
+                  .where((ex) => plannedExerciseIds.contains(ex['id']))
+                  .toList()
               : allExercises;
 
           // Search filter
           final searched = searchQuery.isNotEmpty
               ? filteredExercises
-              .where((ex) =>
-              ex['name']!.toLowerCase().contains(searchQuery))
-              .toList()
+                  .where(
+                      (ex) => ex['name']!.toLowerCase().contains(searchQuery))
+                  .toList()
               : filteredExercises;
 
           // Group by category when not searching
@@ -349,15 +361,15 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               // flat list when searching
               return searched
                   .map((ex) => ListTile(
-                title: Text(
-                  ex['name']!,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                dense: true,
-                contentPadding:
-                const EdgeInsets.symmetric(horizontal: 10),
-                onTap: () => Navigator.pop(ctx, [ex]),
-              ))
+                        title: Text(
+                          ex['name']!,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        dense: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 10),
+                        onTap: () => Navigator.pop(ctx, [ex]),
+                      ))
                   .toList();
             }
 
@@ -374,26 +386,27 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                     title: Text(
                       category,
                       style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface, fontWeight: FontWeight.bold),
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.bold),
                     ),
                     trailing: Icon(
                       isExpanded ? Icons.expand_less : Icons.expand_more,
                       color: Colors.white70,
                     ),
                     onTap: () => setLocalState(
-                            () => expandedGroups[category] = !isExpanded),
+                        () => expandedGroups[category] = !isExpanded),
                   ),
                   if (isExpanded)
                     ...exercises.map((ex) => ListTile(
-                      title: Text(
-                        ex['name']!,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                      dense: true,
-                      contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 10),
-                      onTap: () => Navigator.pop(ctx, [ex]),
-                    )),
+                          title: Text(
+                            ex['name']!,
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                          dense: true,
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 10),
+                          onTap: () => Navigator.pop(ctx, [ex]),
+                        )),
                   const Divider(height: 10, color: Colors.grey),
                 ],
               );
@@ -402,14 +415,13 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
           return AlertDialog(
             insetPadding:
-            const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
             contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             title: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("Select Exercise",
-                    style: TextStyle(fontSize: 13)),
+                const Text("Select Exercise", style: TextStyle(fontSize: 13)),
                 if (plannedModeAvailable)
                   Row(
                     children: [
@@ -420,8 +432,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                       Switch(
                         value: showPlannedOnly,
                         activeColor: Theme.of(context).colorScheme.primary,
-                        onChanged: (value) => setLocalState(
-                                () => showPlannedOnly = value),
+                        onChanged: (value) =>
+                            setLocalState(() => showPlannedOnly = value),
                       ),
                     ],
                   )
@@ -441,14 +453,15 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                         decoration: InputDecoration(
                           hintText: 'Search exercises...',
                           filled: true,
-                          fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                          fillColor: Theme.of(context).cardTheme.color ??
+                              Theme.of(context).colorScheme.surface,
                           border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8.0)),
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 10.0, vertical: 10.0),
                         ),
                         onChanged: (val) => setLocalState(
-                                () => searchQuery = val.toLowerCase()),
+                            () => searchQuery = val.toLowerCase()),
                       ),
                     ),
                   ),
@@ -468,7 +481,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         });
       },
     );
-
 
     if (selected == null || selected.isEmpty) return;
 
@@ -509,9 +521,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }
 
   Future<void> _showExercisePickerDialogForChip(
-      Template template,
-      int exerciseIndex,
-      ) async {
+    Template template,
+    int exerciseIndex,
+  ) async {
     if (_tutorialPhase == _WpTutorialPhase.replaceExerciseCue) {
       _completePlannerWalkthrough();
     }
@@ -555,16 +567,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           // 1) Planned-only filter
           final filteredExercises = (showPlannedOnly && plannedModeAvailable)
               ? allExercises
-              .where((ex) => plannedExerciseIds.contains(ex['id']))
-              .toList()
+                  .where((ex) => plannedExerciseIds.contains(ex['id']))
+                  .toList()
               : allExercises;
 
           // 2) Search filter
           final searched = searchQuery.isNotEmpty
               ? filteredExercises
-              .where((ex) =>
-              ex['name']!.toLowerCase().contains(searchQuery))
-              .toList()
+                  .where(
+                      (ex) => ex['name']!.toLowerCase().contains(searchQuery))
+                  .toList()
               : filteredExercises;
 
           // 3) Group by category (only when not searching)
@@ -617,15 +629,15 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               // flat list when searching
               return searched
                   .map((ex) => ListTile(
-                title: Text(
-                  ex['name']!,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                dense: true,
-                contentPadding:
-                const EdgeInsets.symmetric(horizontal: 10),
-                onTap: () => Navigator.pop(ctx, ex),
-              ))
+                        title: Text(
+                          ex['name']!,
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        dense: true,
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 10),
+                        onTap: () => Navigator.pop(ctx, ex),
+                      ))
                   .toList();
             }
 
@@ -642,26 +654,27 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                     title: Text(
                       category,
                       style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface, fontWeight: FontWeight.bold),
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.bold),
                     ),
                     trailing: Icon(
                       isExpanded ? Icons.expand_less : Icons.expand_more,
                       color: Colors.white70,
                     ),
                     onTap: () => setLocalState(
-                            () => expandedGroups[category] = !isExpanded),
+                        () => expandedGroups[category] = !isExpanded),
                   ),
                   if (isExpanded)
                     ...exercises.map((ex) => ListTile(
-                      title: Text(
-                        ex['name']!,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                      dense: true,
-                      contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 10),
-                      onTap: () => Navigator.pop(ctx, ex),
-                    )),
+                          title: Text(
+                            ex['name']!,
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                          dense: true,
+                          contentPadding:
+                              const EdgeInsets.symmetric(horizontal: 10),
+                          onTap: () => Navigator.pop(ctx, ex),
+                        )),
                   const Divider(height: 10, color: Colors.grey),
                 ],
               );
@@ -670,14 +683,13 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
           return AlertDialog(
             insetPadding:
-            const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+                const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
             contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             title: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("Select Exercise",
-                    style: TextStyle(fontSize: 13)),
+                const Text("Select Exercise", style: TextStyle(fontSize: 13)),
                 if (plannedModeAvailable)
                   Row(
                     children: [
@@ -688,8 +700,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                       Switch(
                         value: showPlannedOnly,
                         activeColor: Theme.of(context).colorScheme.primary,
-                        onChanged: (value) => setLocalState(
-                                () => showPlannedOnly = value),
+                        onChanged: (value) =>
+                            setLocalState(() => showPlannedOnly = value),
                       ),
                     ],
                   )
@@ -709,14 +721,15 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                         decoration: InputDecoration(
                           hintText: 'Search exercises...',
                           filled: true,
-                          fillColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+                          fillColor: Theme.of(context).cardTheme.color ??
+                              Theme.of(context).colorScheme.surface,
                           border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8.0)),
                           contentPadding: const EdgeInsets.symmetric(
                               horizontal: 10.0, vertical: 10.0),
                         ),
                         onChanged: (val) => setLocalState(
-                                () => searchQuery = val.toLowerCase()),
+                            () => searchQuery = val.toLowerCase()),
                       ),
                     ),
                   ),
@@ -757,15 +770,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-
-
   void _createTemplate() {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => CreateTemplateScreen(
           onTemplateCreated: _fetchTemplates, // Pass the refresh function
-
         ),
       ),
     );
@@ -781,22 +791,25 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       return;
     }
 
-
-
     final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Regenerate templates?'),
-        content: const Text(
-          'Auto-generated templates will be deleted and rebuilt from onboarding settings. '
-          'Templates you created manually or renamed will be kept.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Regenerate')),
-        ],
-      ),
-    ) ?? false;
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Regenerate templates?'),
+            content: const Text(
+              'Auto-generated templates will be deleted and rebuilt from onboarding settings. '
+              'Templates you created manually or renamed will be kept.',
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel')),
+              ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Regenerate')),
+            ],
+          ),
+        ) ??
+        false;
 
     if (!ok) return;
 
@@ -813,9 +826,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       // Missing field is treated as auto (Policy D).
       DocumentSnapshot? lastDoc;
       while (true) {
-        var query = templatesCol
-            .orderBy(FieldPath.documentId)
-            .limit(300);
+        var query = templatesCol.orderBy(FieldPath.documentId).limit(300);
         if (lastDoc != null) query = query.startAfterDocument(lastDoc);
 
         final snap = await query.get();
@@ -823,9 +834,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
         lastDoc = snap.docs.last;
 
-        final toDelete = snap.docs
-            .where((d) => d.data()['isKept'] != true)
-            .toList();
+        final toDelete =
+            snap.docs.where((d) => d.data()['isKept'] != true).toList();
 
         if (toDelete.isNotEmpty) {
           final batch = db.batch();
@@ -837,10 +847,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       // 2️⃣ Clear the bootstrap flag(s) (keep both for backward compatibility)
       await userRef.set({
         'templatesBootstrapped_v1': FieldValue.delete(),
-        'templatesBootstrapped': FieldValue.delete(), // older field if it exists anywhere
+        'templatesBootstrapped':
+            FieldValue.delete(), // older field if it exists anywhere
       }, SetOptions(merge: true));
-
-
 
       // 3️⃣ Force-run the generator path (respect planned-only toggle)
       await TemplatesBootstrapper.ensureInitialTemplatesForUser(
@@ -849,7 +858,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         plannedOnly: _plannedOnly, // 🧩 new
       );
 
-
       // 4️⃣ ✅ Refresh your UI list using your actual method
       await _fetchTemplates();
 
@@ -857,16 +865,13 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       rootScaffoldMessengerKey.currentState?.showSnackBar(
         const SnackBar(content: Text('Templates regenerated successfully ✅')),
       );
-
     } catch (e, st) {
       debugPrint('❌ regenerate failed: $e\n$st');
       if (!mounted) return;
       rootScaffoldMessengerKey.currentState?.showSnackBar(
         SnackBar(content: Text('Regenerate failed: $e')),
       );
-
-    }
-    finally {
+    } finally {
       if (mounted) setState(() => _loadingBlocks = false);
     }
   }
@@ -876,7 +881,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     try {
       // Prefer actingAsUid (coach mode) else current user
-      final actingUid = Provider.of<UserContext>(context, listen: false).currentUid;
+      final actingUid =
+          Provider.of<UserContext>(context, listen: false).currentUid;
 // or equivalently: final actingUid = context.read<UserContext>().currentUid;
 
       final db = FirebaseFirestore.instance;
@@ -888,8 +894,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         final snap = await db.collection('users').doc(actingUid).get();
         final data = snap.data();
         sex = data?['sex']?.toString();
-        dob = data?['dob']?.toString(); // e.g. "dd-mm-yyyy" (your UI already handles both)
-        debugPrint('🧭 [Templates] Loaded profile for $actingUid → sex=$sex, dob=$dob');
+        dob = data?['dob']
+            ?.toString(); // e.g. "dd-mm-yyyy" (your UI already handles both)
+        debugPrint(
+            '🧭 [Templates] Loaded profile for $actingUid → sex=$sex, dob=$dob');
       } catch (e) {
         debugPrint('⚠️ [Templates] Could not prefetch sex/dob: $e');
         // continue; screen will degrade labels gracefully
@@ -898,7 +906,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       final email = FirebaseAuth.instance.currentUser?.email ?? '';
 
       // Navigate to the existing onboarding page in edit mode
-      debugPrint('🚪 [Templates] Pushing OnboardingPageTwo (entryFrom=templates)');
+      debugPrint(
+          '🚪 [Templates] Pushing OnboardingPageTwo (entryFrom=templates)');
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => OnboardingPageTwo(
@@ -926,14 +935,11 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     }
   }
 
-
-
   Future<void> _loadBlocksThenTemplates() async {
     // 1) get active block id (same source of truth as BB2/BP)
     String? activeId;
     try {
       activeId = await BlockRepository().fetchActiveBlockId(userId);
-
     } catch (e) {
       debugPrint('⚠️ [Templates] Could not fetch active block id: $e');
     }
@@ -945,17 +951,19 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         .doc(uid)
         .collection('blocks')
         .get();
-    debugPrint('📦 [Templates] blocksSnap.docs=${blocksSnap.docs.length} for uid=$uid');
+    debugPrint(
+        '📦 [Templates] blocksSnap.docs=${blocksSnap.docs.length} for uid=$uid');
     for (final d in blocksSnap.docs) {
       final data = d.data();
-      debugPrint('🧱 [Templates] blockId=${d.id} keys=${data.keys.toList()} name=${data['name']} isActive=${data['isActive']}');
+      debugPrint(
+          '🧱 [Templates] blockId=${d.id} keys=${data.keys.toList()} name=${data['name']} isActive=${data['isActive']}');
       final bm = data['blockMeta'];
       if (bm is Map) {
-        debugPrint('   ↳ blockMeta keys=${bm.keys.toList()} start=${bm['blockStartDate']} end=${bm['blockEndDate']}');
+        debugPrint(
+            '   ↳ blockMeta keys=${bm.keys.toList()} start=${bm['blockStartDate']} end=${bm['blockEndDate']}');
       }
     }
     debugPrint('⭐ [Templates] activeId(from BlockRepository)=$activeId');
-
 
     final meta = <String, Map<String, dynamic>>{};
     for (final doc in blocksSnap.docs) {
@@ -975,27 +983,28 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     });
   }
 
-
   Future<void> _fetchTemplates() async {
     final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
     templateSnapshot = await userDoc.collection('templates').get();
 
     if (templateSnapshot != null) {
-      print("📦 Raw Firestore template snapshot: ${templateSnapshot!.docs.length} templates");
+      print(
+          "📦 Raw Firestore template snapshot: ${templateSnapshot!.docs.length} templates");
 
       final templateList = templateSnapshot!.docs.map((doc) {
         final rawExercises = doc.get('exercises');
 
         final parsedExercises = rawExercises is List && rawExercises.isNotEmpty
             ? (rawExercises.first is Map
-            ? List<Map<String, dynamic>>.from(rawExercises)
-            : List<Map<String, dynamic>>.from(
-            (rawExercises).map((e) => {'name': e, 'circuitIndex': 0})))
+                ? List<Map<String, dynamic>>.from(rawExercises)
+                : List<Map<String, dynamic>>.from(
+                    (rawExercises).map((e) => {'name': e, 'circuitIndex': 0})))
             : <Map<String, dynamic>>[];
 
         // 👇 read blockId if it exists on the template doc
-        final String? blockIdFromDoc =
-        doc.data().containsKey('blockId') ? (doc.get('blockId') as String?) : null;
+        final String? blockIdFromDoc = doc.data().containsKey('blockId')
+            ? (doc.get('blockId') as String?)
+            : null;
 
 // store in side map so we can group later
         _templateBlockIds[doc.id] = blockIdFromDoc;
@@ -1005,19 +1014,18 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           name: doc.get('name') ?? 'Unnamed',
           day: doc.data().containsKey('day') ? doc.get('day') : null,
           exercises: parsedExercises,
-          blockId: blockIdFromDoc, // ✅ add this line so the Template itself keeps it
+          blockId:
+              blockIdFromDoc, // ✅ add this line so the Template itself keeps it
         );
-
       }).toList();
-
 
       setState(() {
         templates = templateList;
         print("✅ Parsed templates: ${templates.length}");
         for (final t in templates) {
-          debugPrint('🧾 tmpl "${t.name}" id=${t.id} blockId=${_templateBlockIds[t.id]} assign=${t.blockId}');
+          debugPrint(
+              '🧾 tmpl "${t.name}" id=${t.id} blockId=${_templateBlockIds[t.id]} assign=${t.blockId}');
         }
-
       });
     }
   }
@@ -1032,7 +1040,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     // If we can't find a day number, push it to the end
     return 9999;
   }
-
 
   List<Template> _templatesForBlock(String? blockId) {
     if (blockId == null) return const [];
@@ -1061,14 +1068,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     return results;
   }
 
-
-
-
   List<Template> get _templatesWithoutBlock {
     return templates.where((t) => _templateBlockIds[t.id] == null).toList();
   }
-
-
 
   void _toggleExpanded(String templateId) {
     setState(() {
@@ -1108,7 +1110,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   bool _isCircuitEmpty(Template template, int circuitIndex) {
     // if any real exercise uses this circuit, it's not empty
     final hasExercise = template.exercises.any(
-          (ex) => (ex['circuitIndex'] ?? 0) == circuitIndex,
+      (ex) => (ex['circuitIndex'] ?? 0) == circuitIndex,
     );
     if (hasExercise) return false;
 
@@ -1134,8 +1136,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     });
   }
 
-
-
   // given a GLOBAL index (position in template.exercises), tell me this exercise's position INSIDE its circuit
   int _positionInCircuit(Template template, int circuitIndex, int globalIndex) {
     int count = 0;
@@ -1151,10 +1151,10 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
   // find the GLOBAL index where we should insert something into the given circuit at the given circuit-position
   int _findGlobalInsertIndexForCircuit(
-      Template template, {
-        required int circuitIndex,
-        required int positionInCircuit,
-      }) {
+    Template template, {
+    required int circuitIndex,
+    required int positionInCircuit,
+  }) {
     int seen = 0;
     for (int i = 0; i < template.exercises.length; i++) {
       final ex = template.exercises[i];
@@ -1170,7 +1170,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     // if we got here: we want to append to the END of that circuit
     final lastIndexOfCircuit = template.exercises.lastIndexWhere(
-          (ex) => (ex['circuitIndex'] ?? 0) == circuitIndex,
+      (ex) => (ex['circuitIndex'] ?? 0) == circuitIndex,
     );
 
     if (lastIndexOfCircuit == -1) {
@@ -1185,15 +1185,19 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     setState(() {
       final existing = _getCircuitIndices(template);
       final newCircuitIndex = (existing.isEmpty ? 0 : (existing.last + 1));
-      _extraEmptyCircuits.putIfAbsent(template.id, () => <int>{}).add(newCircuitIndex);
+      _extraEmptyCircuits
+          .putIfAbsent(template.id, () => <int>{})
+          .add(newCircuitIndex);
       // no Firestore write yet — we persist when an exercise is dropped/added
     });
   }
 
   void _deleteExerciseFromDragged(_DraggedExercise dragged) {
     setState(() {
-      final sourceTemplate = templates.firstWhere((t) => t.id == dragged.sourceTemplateId);
-      if (dragged.sourceIndex < 0 || dragged.sourceIndex >= sourceTemplate.exercises.length) {
+      final sourceTemplate =
+          templates.firstWhere((t) => t.id == dragged.sourceTemplateId);
+      if (dragged.sourceIndex < 0 ||
+          dragged.sourceIndex >= sourceTemplate.exercises.length) {
         return;
       }
       sourceTemplate.exercises.removeAt(dragged.sourceIndex);
@@ -1210,9 +1214,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       );
     });
   }
-
-
-
 
   String _fmtDate(dynamic ts) {
     if (ts == null) return '';
@@ -1233,14 +1234,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     return ts.toString();
   }
 
-
   String _blockTitle(String blockId, Map<String, dynamic> meta) {
     if (meta.containsKey('name') && (meta['name'] as String).isNotEmpty) {
       return meta['name'] as String;
     }
     return 'Block $blockId';
   }
-
 
   Future<void> _reassignTemplateToBlock({
     required String templateId,
@@ -1258,8 +1257,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     });
   }
 
-
-  Future<void> _saveTemplateExercises(String templateId, List<Map<String, dynamic>> exercises) async {
+  Future<void> _saveTemplateExercises(
+      String templateId, List<Map<String, dynamic>> exercises) async {
     final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
     await userDoc.collection('templates').doc(templateId).update({
       'exercises': exercises,
@@ -1274,11 +1273,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }) {
     setState(() {
       // 1) source template + exercise
-      final sourceTemplate = templates.firstWhere((t) => t.id == dragged.sourceTemplateId);
-      final movedExercise = sourceTemplate.exercises.removeAt(dragged.sourceIndex);
+      final sourceTemplate =
+          templates.firstWhere((t) => t.id == dragged.sourceTemplateId);
+      final movedExercise =
+          sourceTemplate.exercises.removeAt(dragged.sourceIndex);
 
       // 2) target template
-      final targetTemplate = templates.firstWhere((t) => t.id == targetTemplateId);
+      final targetTemplate =
+          templates.firstWhere((t) => t.id == targetTemplateId);
 
       // 3) change the exercise's circuit to the target circuit
       movedExercise['circuitIndex'] = targetCircuitIndex;
@@ -1337,7 +1339,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       } else if (start != null) {
         subtitle = 'from ${_fmtDate(start)}';
       }
-
     }
 
     return DragTarget<_DraggedTemplateCard>(
@@ -1365,7 +1366,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                   : Colors.blueGrey.shade900.withOpacity(0.15),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: isDrop ? Theme.of(context).colorScheme.secondary.withOpacity(0.5) : Colors.white10,
+                color: isDrop
+                    ? Theme.of(context).colorScheme.secondary.withOpacity(0.5)
+                    : Colors.white10,
                 width: 0.6,
               ),
             ),
@@ -1394,7 +1397,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                           ),
                         ),
                       ),
-
                       if (subtitle.isNotEmpty) ...[
                         const SizedBox(width: 6),
                         Text(
@@ -1417,7 +1419,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
                 // 🔽 RIGHT SIDE (fixed width)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: Colors.tealAccent.withOpacity(0.05),
                     borderRadius: BorderRadius.circular(999),
@@ -1437,20 +1440,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 ),
               ],
             ),
-
           ),
         );
       },
     );
   }
 
-
-
-
   Widget _buildActiveBlockTemplatesList() {
     // templates tied to the active block
-    final activeBlockTemplates =
-    _activeBlockId != null ? _templatesForBlock(_activeBlockId) : <Template>[];
+    final activeBlockTemplates = _activeBlockId != null
+        ? _templatesForBlock(_activeBlockId)
+        : <Template>[];
 
     // only those tied to the active block
     final allToShow = activeBlockTemplates;
@@ -1463,7 +1463,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           children: [
             if (_tutorialPhase == _WpTutorialPhase.dragCue)
               _buildWordCue(
-                text: 'Press and hold any exercise to drag and reorder, or drag to the bin icon to delete.',
+                text:
+                    'Press and hold any exercise to drag and reorder, or drag to the bin icon to delete.',
                 onGotIt: () => setState(
                     () => _tutorialPhase = _WpTutorialPhase.addExerciseCue),
               ),
@@ -1492,7 +1493,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             else
               ReorderableListView.builder(
                 shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(), // ✔ outer scroll handles it
+                physics:
+                    const NeverScrollableScrollPhysics(), // ✔ outer scroll handles it
                 itemCount: allToShow.length,
                 onReorder: (oldIndex, newIndex) {
                   setState(() {
@@ -1515,16 +1517,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
             const SizedBox(height: 8),
 
-
-
             const SizedBox(height: 54),
           ],
         ),
       ),
     );
   }
-
-
 
   Widget _buildOtherTemplatesSection() {
     // Templates that are NOT shown inside any known block group.
@@ -1587,10 +1585,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-
-
-
-
   Widget _buildPhase1LabelRow() {
     return Align(
       alignment: Alignment.centerRight,
@@ -1607,8 +1601,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-  Widget _buildWordCue(
-      {required String text, required VoidCallback onGotIt}) {
+  Widget _buildWordCue({required String text, required VoidCallback onGotIt}) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8, left: 4, right: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1663,7 +1656,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+            color: Theme.of(context).cardTheme.color ??
+                Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(8),
             border: _draggingOverTemplateId == template.id
                 ? Border.all(color: Colors.white60, width: 1)
@@ -1688,7 +1682,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   Widget _buildTemplateHeaderRow(Template template) {
     return ListTile(
       dense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal:2, vertical: 0),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
       title: Text(
         template.name,
         style: const TextStyle(
@@ -1699,18 +1693,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       ),
       subtitle: template.day != null
           ? Text(
-        template.day!,
-        style: const TextStyle(
-          fontSize: 8,
-          fontWeight: FontWeight.w500,
-          color: Colors.white70,
-        ),
-      )
+              template.day!,
+              style: const TextStyle(
+                fontSize: 8,
+                fontWeight: FontWeight.w500,
+                color: Colors.white70,
+              ),
+            )
           : null,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-
           IconButton(
             icon: const Icon(Icons.edit, size: 15, color: Colors.white60),
             padding: EdgeInsets.zero,
@@ -1718,7 +1711,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
             onPressed: () => editTemplateName(template),
           ),
           const SizedBox(width: 0),
-
 
           // 🏁 cross-block drag handle
           LongPressDraggable<_DraggedTemplateCard>(
@@ -1792,7 +1784,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         ],
       ),
 
-     // onTap: () => _navigateToTemplateDetails(context, template),
+      // onTap: () => _navigateToTemplateDetails(context, template),
     );
   }
 
@@ -1832,7 +1824,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                                 // header row
                                 Row(
                                   mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
                                     Row(
                                       mainAxisSize: MainAxisSize.min,
@@ -1842,12 +1834,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                                           InkWell(
                                             onTap: () =>
                                                 _removeEmptyCircuitForTemplate(
-                                                  template,
-                                                  circuitIndex,
-                                                ),
+                                              template,
+                                              circuitIndex,
+                                            ),
                                             child: const Padding(
                                               padding:
-                                              EdgeInsets.only(right: 4.0),
+                                                  EdgeInsets.only(right: 4.0),
                                               child: Text(
                                                 ' - ',
                                                 style: TextStyle(
@@ -1871,7 +1863,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                                     if (isLast)
                                       InkWell(
                                         onTap: () =>
-                                            _addEmptyCircuitForTemplate(template),
+                                            _addEmptyCircuitForTemplate(
+                                                template),
                                         child: const Padding(
                                           padding: EdgeInsets.only(left: 6.0),
                                           child: Text(
@@ -1889,7 +1882,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
                                 // exercises in this circuit
                                 for (final entry
-                                in template.exercises.asMap().entries)
+                                    in template.exercises.asMap().entries)
                                   if ((entry.value['circuitIndex'] ?? 0) ==
                                       circuitIndex)
                                     _buildDraggableExerciseChip(
@@ -1917,25 +1910,25 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-
   Widget _buildPreviousBlocksSection() {
     final List<Widget> blockWidgets = [];
 
     // active block date
-    final activeMeta = _activeBlockId != null ? _blockMetaById[_activeBlockId] : null;
+    final activeMeta =
+        _activeBlockId != null ? _blockMetaById[_activeBlockId] : null;
     final activeBm = activeMeta != null ? activeMeta['blockMeta'] : null;
-    final activeStartStr = (activeBm is Map) ? activeBm['blockStartDate'] : null;
+    final activeStartStr =
+        (activeBm is Map) ? activeBm['blockStartDate'] : null;
     final DateTime? activeStart =
-    (activeStartStr is String) ? DateTime.tryParse(activeStartStr) : null;
-
+        (activeStartStr is String) ? DateTime.tryParse(activeStartStr) : null;
 
     _blockMetaById.forEach((blockId, meta) {
       if (blockId == _activeBlockId) return;
 
       final bm = meta['blockMeta'];
       final startStr = (bm is Map) ? bm['blockStartDate'] : null;
-      final DateTime? thisStart = (startStr is String) ? DateTime.tryParse(startStr) : null;
-
+      final DateTime? thisStart =
+          (startStr is String) ? DateTime.tryParse(startStr) : null;
 
       // classify as previous
       final isPrevious = () {
@@ -1986,7 +1979,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                     },
                     child: Padding(
                       // 🔽 very light padding to keep height same
-                      padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 1, vertical: 2),
                       child: Row(
                         children: [
                           Icon(
@@ -2020,19 +2014,18 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                         ],
                       ),
                     ),
-
                   ),
                   if (_expandedPreviousBlockIds.contains(blockId))
-                  // 🔽 NO extra left padding here so templates line up with active ones
+                    // 🔽 NO extra left padding here so templates line up with active ones
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: templatesForThisBlock
                           .map(
                             (t) => Container(
-                          margin: const EdgeInsets.only(bottom: 1),
-                          child: _buildTemplateCard(t),
-                        ),
-                      )
+                              margin: const EdgeInsets.only(bottom: 1),
+                              child: _buildTemplateCard(t),
+                            ),
+                          )
                           .toList(),
                     ),
                 ],
@@ -2073,7 +2066,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 child: Row(
                   children: [
                     Icon(
-                      _showPreviousBlocks ? Icons.expand_less : Icons.expand_more,
+                      _showPreviousBlocks
+                          ? Icons.expand_less
+                          : Icons.expand_more,
                       size: 15,
                       color: Colors.white70,
                     ),
@@ -2092,12 +2087,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               if (_showPreviousBlocks)
                 (blockWidgets.isEmpty)
                     ? const Padding(
-                  padding: EdgeInsets.only(left: 2, top: 3, bottom: 1),
-                  child: Text(
-                    'No previous blocks',
-                    style: TextStyle(color: Colors.white30, fontSize: 11),
-                  ),
-                )
+                        padding: EdgeInsets.only(left: 2, top: 3, bottom: 1),
+                        child: Text(
+                          'No previous blocks',
+                          style: TextStyle(color: Colors.white30, fontSize: 11),
+                        ),
+                      )
                     : Column(children: blockWidgets),
             ],
           ),
@@ -2106,21 +2101,21 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-
-
   Widget _buildUpcomingBlocksSection() {
     final List<Widget> blockWidgets = [];
 
-    final activeMeta = _activeBlockId != null ? _blockMetaById[_activeBlockId] : null;
+    final activeMeta =
+        _activeBlockId != null ? _blockMetaById[_activeBlockId] : null;
     final activeStartTs = activeMeta != null ? activeMeta['startDate'] : null;
     final DateTime? activeStart =
-    (activeStartTs is Timestamp) ? activeStartTs.toDate() : null;
+        (activeStartTs is Timestamp) ? activeStartTs.toDate() : null;
 
     _blockMetaById.forEach((blockId, meta) {
       if (blockId == _activeBlockId) return;
 
       final startTs = meta['startDate'];
-      final DateTime? thisStart = (startTs is Timestamp) ? startTs.toDate() : null;
+      final DateTime? thisStart =
+          (startTs is Timestamp) ? startTs.toDate() : null;
 
       final isUpcoming = () {
         if (activeStart != null && thisStart != null) {
@@ -2170,7 +2165,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                       });
                     },
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 4),
                       child: Row(
                         children: [
                           Icon(
@@ -2203,16 +2199,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                     ),
                   ),
                   if (_expandedUpcomingBlockIds.contains(blockId))
-                  // 🔽 no extra left padding → templates full width
+                    // 🔽 no extra left padding → templates full width
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: templatesForThisBlock
                           .map(
                             (t) => Container(
-                          margin: const EdgeInsets.only(bottom: 4),
-                          child: _buildTemplateCard(t),
-                        ),
-                      )
+                              margin: const EdgeInsets.only(bottom: 4),
+                              child: _buildTemplateCard(t),
+                            ),
+                          )
                           .toList(),
                     ),
                 ],
@@ -2251,7 +2247,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 child: Row(
                   children: [
                     Icon(
-                      _showUpcomingBlocks ? Icons.expand_less : Icons.expand_more,
+                      _showUpcomingBlocks
+                          ? Icons.expand_less
+                          : Icons.expand_more,
                       size: 15,
                       color: Colors.white70,
                     ),
@@ -2270,12 +2268,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
               if (_showUpcomingBlocks)
                 (blockWidgets.isEmpty)
                     ? const Padding(
-                  padding: EdgeInsets.only(left: 14, top: 3, bottom: 3),
-                  child: Text(
-                    'No upcoming blocks',
-                    style: TextStyle(color: Colors.white30, fontSize: 11),
-                  ),
-                )
+                        padding: EdgeInsets.only(left: 14, top: 3, bottom: 3),
+                        child: Text(
+                          'No upcoming blocks',
+                          style: TextStyle(color: Colors.white30, fontSize: 11),
+                        ),
+                      )
                     : Column(children: blockWidgets),
             ],
           ),
@@ -2293,7 +2291,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     final circuitIndex = (exercise['circuitIndex'] ?? 0) as int;
 
     // how far down in THIS circuit is this exercise?
-    final positionInCircuit = _positionInCircuit(template, circuitIndex, exerciseIndex);
+    final positionInCircuit =
+        _positionInCircuit(template, circuitIndex, exerciseIndex);
 
     return DragTarget<_DraggedExercise>(
       onWillAccept: (data) {
@@ -2338,20 +2337,20 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           childWhenDragging: Opacity(
             opacity: 0.35,
             child: GestureDetector(
-              onTap: () => _showExercisePickerDialogForChip(template, exerciseIndex),
+              onTap: () =>
+                  _showExercisePickerDialogForChip(template, exerciseIndex),
               child: _exerciseChipBody(name),
             ),
           ),
           child: GestureDetector(
-            onTap: () => _showExercisePickerDialogForChip(template, exerciseIndex),
+            onTap: () =>
+                _showExercisePickerDialogForChip(template, exerciseIndex),
             child: _exerciseChipBody(name),
           ),
-
         );
       },
     );
   }
-
 
   Widget _exerciseChipBody(String name) {
     return Container(
@@ -2371,6 +2370,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       ),
     );
   }
+
   Widget _buildEndDropZone(Template template, {required int circuitIndex}) {
     return DragTarget<_DraggedExercise>(
       onWillAccept: (data) {
@@ -2386,7 +2386,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       },
       onAccept: (data) {
         // drop to END of this circuit
-        final pos = 9999; // big number → _findGlobalInsertIndexForCircuit will append
+        final pos =
+            9999; // big number → _findGlobalInsertIndexForCircuit will append
         _moveExerciseToCircuit(
           targetTemplateId: template.id,
           targetCircuitIndex: circuitIndex,
@@ -2395,13 +2396,16 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
         );
       },
       builder: (context, candidate, rejected) {
-        final isActive = _draggingOverTemplateId == template.id && candidate.isNotEmpty;
+        final isActive =
+            _draggingOverTemplateId == template.id && candidate.isNotEmpty;
         return Container(
           height: 28,
           padding: const EdgeInsets.symmetric(horizontal: 6),
           margin: const EdgeInsets.only(right: 6, bottom: 4, top: 2),
           decoration: BoxDecoration(
-            color: isActive ? Colors.blueGrey.shade300.withOpacity(0.5) : Colors.transparent,
+            color: isActive
+                ? Colors.blueGrey.shade300.withOpacity(0.5)
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: isActive ? Colors.white54 : Colors.white24,
@@ -2454,9 +2458,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-
-
-
   Future<void> _undoDeleteTemplate() async {
     if (_lastDeletedTemplate == null) return;
 
@@ -2477,12 +2478,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     );
   }
 
-  Future<bool> _confirmDeleteTemplate(BuildContext context, String templateId) async {
+  Future<bool> _confirmDeleteTemplate(
+      BuildContext context, String templateId) async {
     final shouldDelete = await showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Confirm Delete'),
-        content: Text('Are you sure you want to delete the template "${findTemplateName(templateId)}"?'),
+        content: Text(
+            'Are you sure you want to delete the template "${findTemplateName(templateId)}"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2511,7 +2514,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete All Templates?'),
-        content: const Text('This will permanently remove all saved templates. This cannot be undone.'),
+        content: const Text(
+            'This will permanently remove all saved templates. This cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2519,7 +2523,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete All', style: TextStyle(color: Colors.red)),
+            child:
+                const Text('Delete All', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -2527,7 +2532,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     if (shouldDelete == true) {
       final batch = FirebaseFirestore.instance.batch();
-      final userDoc = FirebaseFirestore.instance.collection('users').doc(userId);
+      final userDoc =
+          FirebaseFirestore.instance.collection('users').doc(userId);
       final templatesRef = userDoc.collection('templates');
 
       final snapshot = await templatesRef.get();
@@ -2553,9 +2559,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     }
   }
 
-
-
-
   String findTemplateName(String templateId) {
     // Find the template document using the doc ID from Firestore
     final matchingDoc =
@@ -2576,18 +2579,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     await templateRef.delete();
   }
 
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-
         title: const Text('Workout Planner'),
         actions: [
           IconButton(
             icon: const Icon(Icons.undo),
             tooltip: 'Undo Delete',
-            onPressed: _lastDeletedTemplate != null ? _undoDeleteTemplate : null,
+            onPressed:
+                _lastDeletedTemplate != null ? _undoDeleteTemplate : null,
           ),
           IconButton(
             icon: const Icon(Icons.delete_forever),
@@ -2610,7 +2612,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
           ),
         ],
       ),
-
       body: Column(
         children: [
           const SizedBox(height: 1),
@@ -2629,7 +2630,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                     ),
                     label: Text(
                       _plannedOnly ? "Planned Exercises" : "Wild Card",
-                      style: const TextStyle(fontSize: 14), // ↓ slightly smaller text
+                      style: const TextStyle(
+                          fontSize: 14), // ↓ slightly smaller text
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _plannedOnly
@@ -2638,10 +2640,15 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                       foregroundColor: _plannedOnly
                           ? Theme.of(context).colorScheme.onPrimary
                           : Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6), // ↓ tighter vertical padding
-                      minimumSize: const Size(0, 28), // ✅ ensures button stays short
-                      visualDensity: VisualDensity.compact, // ✅ reduces height slightly more
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 6), // ↓ tighter vertical padding
+                      minimumSize:
+                          const Size(0, 28), // ✅ ensures button stays short
+                      visualDensity: VisualDensity
+                          .compact, // ✅ reduces height slightly more
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                     ),
                     onPressed: () {
                       setLocalState(() => _plannedOnly = !_plannedOnly);
@@ -2668,7 +2675,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
                   shape: RoundedRectangleBorder(
@@ -2677,7 +2685,6 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 ),
                 onPressed: _regenerateAllTemplates,
               ),
-
 
               // ➕ Create New Workout (existing)
               ElevatedButton.icon(
@@ -2689,7 +2696,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
                   shape: RoundedRectangleBorder(
@@ -2711,15 +2719,15 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).colorScheme.primary,
                   foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   minimumSize: const Size(0, 28),
                   visualDensity: VisualDensity.compact,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
                 ),
                 onPressed: _openEditFitnessPreferencesFromTemplates,
               ),
-
-
             ],
           ),
 
@@ -2761,10 +2769,8 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 ],
               ),
             ),
-
         ],
       ),
-
     );
   }
 
@@ -2833,8 +2839,8 @@ class _WpGlowArrowState extends State<_WpGlowArrow>
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: Colors.tealAccent
-                      .withOpacity(0.45 + _glow.value * 0.35),
+                  color:
+                      Colors.tealAccent.withOpacity(0.45 + _glow.value * 0.35),
                   width: 1.2,
                 ),
                 boxShadow: [
