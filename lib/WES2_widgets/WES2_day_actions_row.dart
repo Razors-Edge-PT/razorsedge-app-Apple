@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../app_theme.dart';
 
 /// Top action bar with "Add Exercise" and optional "Load Template" buttons.
 class Wes2TopActionsBar extends StatelessWidget {
@@ -226,7 +227,10 @@ class Wes2BottomActionsRow extends StatelessWidget {
                 label: Text(
                   'Add Circuit',
                   style: TextStyle(
-                    color: Theme.of(context).colorScheme.tertiary,
+                    color: Theme.of(context)
+                        .extension<GoodLiftColors>()
+                        ?.quaternary ??
+                        AppTheme.defaultQuaternary,
                   ),
                 ),
                 style: ElevatedButton.styleFrom(

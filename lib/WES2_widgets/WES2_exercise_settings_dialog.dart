@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 import '../block_exercise_defaults_repository.dart';
+import '../wes2_exercise_settings_patch.dart';
 
 const Set<String> _defaultVelocityExerciseIds = {
   'heeBViVINHO6tUScSd6y',
@@ -91,9 +92,15 @@ class _Wes2ExerciseSettingsDialogState
   // rirPlan for current week: sessionN_setM → rir string
   final Map<String, TextEditingController> _rirPlanCtrls = {};
 
-  // Snapshot of values as loaded from Firestore; used in _buildRirPlan to
-  // detect which fields the user actually changed before writing forward.
+  // Snapshots of values as loaded from Firestore (after repair); used at save
+  // time to build a dirty-field patch — only changed leaves are submitted.
   final Map<String, String> _originalRirPlanValues = {};
+  final Map<String, String> _originalRepTargetValues = {};
+  bool _initialShowVelocity = false;
+
+  // True only when the loaded configuration is complete and usable. When false
+  // the dialog fails closed: Save is disabled so a sparse object can't be saved.
+  bool _settingsUsable = false;
 
   @override
   void initState() {
@@ -244,10 +251,31 @@ class _Wes2ExerciseSettingsDialogState
           raw = reloaded[widget.exerciseId];
         } catch (_) {}
       }
-      final Map<String, dynamic> settings =
-          raw is Map<String, dynamic> ? raw : {};
+      Map<String, dynamic> settings = raw is Map<String, dynamic> ? raw : {};
+
+      // Repair recoverable sparse weekN shadows BEFORE controllers populate, so
+      // a valid exercise never opens with unexplained blank reps/RIR fields.
+      // Conservative + evidence-based: only removes proven sparse shadows or
+      // fills genuinely missing leaves — never overwrites present custom values.
+      // Performs a single-store transactional write only when a genuine repair
+      // is detected; otherwise no write occurs merely because the cog opened.
+      if (settings.isNotEmpty) {
+        try {
+          final repaired = await widget.planService.repairExerciseShadows(
+            uid: widget.uid,
+            blockId: widget.blockId,
+            exerciseId: widget.exerciseId,
+          );
+          if (repaired != null) settings = repaired;
+        } catch (_) {
+          // Repair is best-effort; fall back to the loaded object.
+        }
+      }
+      if (!mounted) return;
 
       _existingSettings = settings;
+      _settingsUsable =
+          BlockExerciseDefaultsRepository.isSettingsUsable(settings);
 
       _periodizationModel = settings['periodizationModel'] as String?;
       _rirModel = settings['rirModel'] as String?;
@@ -257,6 +285,7 @@ class _Wes2ExerciseSettingsDialogState
       _showVelocityField = explicitVelocity is bool
           ? explicitVelocity
           : _defaultVelocityExerciseIds.contains(widget.exerciseId);
+      _initialShowVelocity = _showVelocityField;
 
       final wf = settings['weeklyFrequency'];
       _weeklyFrequencyCtrl.text = wf != null ? '$wf' : '';
@@ -299,15 +328,16 @@ class _Wes2ExerciseSettingsDialogState
       c.dispose();
     }
     _repTargetCtrls.clear();
+    _originalRepTargetValues.clear();
 
     if (_isDupSignature) {
       final range = _parseDupSignatureRange(settings['repTargets']);
-      _repTargetCtrls['min'] = TextEditingController(
-        text: range?['min']?.toString() ?? '',
-      );
-      _repTargetCtrls['max'] = TextEditingController(
-        text: range?['max']?.toString() ?? '',
-      );
+      final minText = range?['min']?.toString() ?? '';
+      final maxText = range?['max']?.toString() ?? '';
+      _repTargetCtrls['min'] = TextEditingController(text: minText);
+      _repTargetCtrls['max'] = TextEditingController(text: maxText);
+      _originalRepTargetValues['min'] = minText;
+      _originalRepTargetValues['max'] = maxText;
     } else {
       final repTargets = settings['repTargets'] as Map<String, dynamic>?;
       // DUP By Week/Exposure: week1 is the single repeating microcycle template.
@@ -322,9 +352,9 @@ class _Wes2ExerciseSettingsDialogState
       final count = _sessionCount;
       for (int i = 1; i <= count; i++) {
         final key = 'instance$i';
-        _repTargetCtrls[key] = TextEditingController(
-          text: weekData?[key]?.toString() ?? '',
-        );
+        final text = weekData?[key]?.toString() ?? '';
+        _repTargetCtrls[key] = TextEditingController(text: text);
+        _originalRepTargetValues[key] = text;
       }
     }
   }
@@ -353,34 +383,6 @@ class _Wes2ExerciseSettingsDialogState
         _originalRirPlanValues[key] = loaded;
       }
     }
-  }
-
-  Map<String, dynamic> _buildRepTargets() {
-    final existing =
-        (_existingSettings['repTargets'] as Map<String, dynamic>?) ?? {};
-
-    if (_isDupSignature) {
-      // DUP Signature range is block-scoped: write to repRange.
-      // Spread existing first so week1, weekN, and any other keys are preserved.
-      final minVal = int.tryParse(_repTargetCtrls['min']?.text.trim() ?? '');
-      final maxVal = int.tryParse(_repTargetCtrls['max']?.text.trim() ?? '');
-      final existingRepRangeRaw = existing['repRange'];
-      final repRange = existingRepRangeRaw is Map
-          ? Map<String, dynamic>.from(existingRepRangeRaw)
-          : <String, dynamic>{};
-      if (minVal != null) repRange['min'] = minVal;
-      if (maxVal != null) repRange['max'] = maxVal;
-      return {...existing, 'repRange': repRange};
-    }
-
-    final Map<String, dynamic> weekData = {};
-    for (final entry in _repTargetCtrls.entries) {
-      final v = entry.value.text.trim();
-      if (v.isNotEmpty) weekData[entry.key] = v;
-    }
-    // DUP By Week/Exposure: save into week1 (the repeating template); never write weekN.
-    final saveKey = _isDupWeekOrExposure ? 'week1' : _weekKey;
-    return {...existing, saveKey: weekData};
   }
 
   /// Parses a DUP Signature min/max rep range from a raw repTargets value.
@@ -436,118 +438,135 @@ class _Wes2ExerciseSettingsDialogState
     return null;
   }
 
-  Map<String, dynamic> _buildRirPlan() {
-    final existing =
-        (_existingSettings['rirPlan'] as Map<String, dynamic>?) ?? {};
-    final result = Map<String, dynamic>.from(existing);
+  /// Builds an explicit dirty-field patch by diffing the live controllers
+  /// against the snapshot captured at load (after repair). Only leaves the user
+  /// actually changed are included — the dialog never submits a reconstructed
+  /// full rirPlan / repTargets / settings object.
+  ExerciseSettingsPatch _buildPatch() {
+    final scalarChanges = <String, dynamic>{};
+    final incrementChanges = <String, dynamic>{};
+    final repTargetChanges = <RepTargetChange>[];
+    final rirChanges = <RirChange>[];
 
-    // Only propagate session/set keys where the user actually changed the value.
-    // null = user cleared a previously non-empty field → remove 'rir' from future weeks.
-    // non-null = user set or updated a value → write it forward.
-    final sessionChanges = <String, Map<String, String?>>{};
+    // ── Scalars ──────────────────────────────────────────────────────────────
+    if (_periodizationModel != null &&
+        _periodizationModel != _existingSettings['periodizationModel']) {
+      scalarChanges['periodizationModel'] = _periodizationModel;
+    }
+    if (_rirModel != null && _rirModel != _existingSettings['rirModel']) {
+      scalarChanges['rirModel'] = _rirModel;
+    }
+    if (_progressionModel != null &&
+        _progressionModel != _existingSettings['progressionModel']) {
+      scalarChanges['progressionModel'] = _progressionModel;
+    }
+
+    final wf = int.tryParse(_weeklyFrequencyCtrl.text.trim());
+    final existingWf = (_existingSettings['weeklyFrequency'] as num?)?.toInt();
+    if (wf != null && wf != existingWf) {
+      scalarChanges['weeklyFrequency'] = wf;
+    }
+
+    if (_isDupSignature) {
+      final ds = int.tryParse(_defaultSetsCtrl.text.trim());
+      final existingDs = (_existingSettings['defaultSets'] as num?)?.toInt();
+      if (ds != null && ds != existingDs) {
+        scalarChanges['defaultSets'] = ds;
+      }
+    }
+
+    if (_showVelocityField != _initialShowVelocity) {
+      scalarChanges['showVelocityField'] = _showVelocityField;
+    }
+
+    // ── Increments (merge only changed sub-keys) ───────────────────────────────
+    final existingInc =
+        (_existingSettings['increments'] as Map<String, dynamic>?) ?? const {};
+    final primText = _incrementsPrimaryCtrl.text.trim();
+    final secText = _incrementsSecondaryCtrl.text.trim();
+    final primParsed = primText.isEmpty
+        ? null
+        : (double.tryParse(primText) ?? primText);
+    final secParsed =
+        secText.isEmpty ? null : (double.tryParse(secText) ?? secText);
+    if ('${primParsed ?? ''}' != '${existingInc['primary'] ?? ''}') {
+      incrementChanges['primary'] = primParsed;
+    }
+    if ('${secParsed ?? ''}' != '${existingInc['secondary'] ?? ''}') {
+      incrementChanges['secondary'] = secParsed;
+    }
+
+    // ── Rep targets ────────────────────────────────────────────────────────────
+    for (final entry in _repTargetCtrls.entries) {
+      final current = entry.value.text.trim();
+      final original = _originalRepTargetValues[entry.key] ?? '';
+      if (current == original) continue;
+      repTargetChanges.add(
+          RepTargetChange(entry.key, current.isEmpty ? null : current));
+    }
+
+    // ── RIR ────────────────────────────────────────────────────────────────────
     for (final entry in _rirPlanCtrls.entries) {
       final current = entry.value.text.trim();
       final original = _originalRirPlanValues[entry.key] ?? '';
-      if (current == original)
-        continue; // unchanged — do not touch future weeks
+      if (current == original) continue;
       final parts = entry.key.split('_'); // ['sessionN', 'setM']
       if (parts.length != 2) continue;
-      sessionChanges.putIfAbsent(parts[0], () => {})[parts[1]] =
-          current.isEmpty ? null : current;
+      rirChanges.add(RirChange(
+        session: parts[0],
+        set: parts[1],
+        rir: current.isEmpty ? null : current,
+      ));
     }
 
-    if (sessionChanges.isEmpty) return result; // nothing changed
-
-    // Write changes from the current week onward; leave previous weeks untouched.
-    for (int w = widget.weekIndex + 1; w <= widget.totalBlockWeeks; w++) {
-      final weekKey = 'week$w';
-      final existingWeek = (result[weekKey] as Map<String, dynamic>?) ?? {};
-      final weekData = Map<String, dynamic>.from(existingWeek);
-
-      for (final sessionEntry in sessionChanges.entries) {
-        final sessionKey = sessionEntry.key;
-        final existingSession =
-            (weekData[sessionKey] as Map<String, dynamic>?) ?? {};
-        final sessionData = Map<String, dynamic>.from(existingSession);
-
-        for (final setEntry in sessionEntry.value.entries) {
-          final setKey = setEntry.key;
-          final existingSet =
-              (sessionData[setKey] as Map<String, dynamic>?) ?? {};
-          if (setEntry.value == null) {
-            // User cleared — remove 'rir' key, preserve any other set-level keys.
-            final cleaned = Map<String, dynamic>.from(existingSet)
-              ..remove('rir');
-            if (cleaned.isEmpty) {
-              sessionData.remove(setKey);
-            } else {
-              sessionData[setKey] = cleaned;
-            }
-          } else {
-            sessionData[setKey] = {...existingSet, 'rir': setEntry.value};
-          }
-        }
-
-        weekData[sessionKey] = sessionData;
-      }
-
-      result[weekKey] = weekData;
-    }
-
-    return result;
+    return ExerciseSettingsPatch(
+      scalarChanges: scalarChanges,
+      incrementChanges: incrementChanges,
+      repTargetChanges: repTargetChanges,
+      rirChanges: rirChanges,
+      totalBlockWeeks: widget.totalBlockWeeks,
+    );
   }
 
   Future<void> _save() async {
+    // Fail closed: never persist when the loaded object is not a complete,
+    // usable configuration.
+    if (!_settingsUsable) {
+      setState(() {
+        _saveError =
+            'Settings are incomplete and could not be repaired safely. '
+            'Please reopen this exercise.';
+      });
+      return;
+    }
+
     setState(() {
       _saving = true;
       _saveError = null;
     });
     try {
-      final existingIncrements =
-          (_existingSettings['increments'] as Map<String, dynamic>?) ?? {};
-      final increments = Map<String, dynamic>.from(existingIncrements);
-      final primText = _incrementsPrimaryCtrl.text.trim();
-      final secText = _incrementsSecondaryCtrl.text.trim();
-      if (primText.isNotEmpty) {
-        increments['primary'] = double.tryParse(primText) ?? primText;
-      }
-      if (secText.isNotEmpty) {
-        increments['secondary'] = double.tryParse(secText) ?? secText;
-      }
-
-      final wfText = _weeklyFrequencyCtrl.text.trim();
-      final wf = wfText.isNotEmpty ? int.tryParse(wfText) : null;
-
-      final dsText = _defaultSetsCtrl.text.trim();
-      final ds = dsText.isNotEmpty ? int.tryParse(dsText) : null;
-      if (_isDupSignature && ds != null && ds < 1) {
-        setState(() {
-          _saving = false;
-          _saveError = 'Default Set Count must be at least 1.';
-        });
-        return;
+      if (_isDupSignature) {
+        final dsText = _defaultSetsCtrl.text.trim();
+        final ds = dsText.isNotEmpty ? int.tryParse(dsText) : null;
+        if (ds != null && ds < 1) {
+          setState(() {
+            _saving = false;
+            _saveError = 'Default Set Count must be at least 1.';
+          });
+          return;
+        }
       }
 
-      final merged = <String, dynamic>{
-        ..._existingSettings,
-        if (_periodizationModel != null)
-          'periodizationModel': _periodizationModel,
-        if (_rirModel != null) 'rirModel': _rirModel,
-        if (_progressionModel != null) 'progressionModel': _progressionModel,
-        if (wf != null) 'weeklyFrequency': wf,
-        if (increments.isNotEmpty) 'increments': increments,
-        if (_isDupSignature && ds != null) 'defaultSets': ds,
-        'repTargets': _buildRepTargets(),
-        'rirPlan': _buildRirPlan(),
-        'showVelocityField': _showVelocityField,
-      };
+      final patch = _buildPatch();
 
-      await widget.planService.saveExerciseSettings(
-        uid: widget.uid,
-        blockId: widget.blockId,
-        exerciseId: widget.exerciseId,
-        settings: merged,
-      );
+      if (!patch.isEmpty) {
+        await widget.planService.saveExerciseSettings(
+          uid: widget.uid,
+          blockId: widget.blockId,
+          exerciseId: widget.exerciseId,
+          patch: patch,
+        );
+      }
 
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -1159,7 +1178,7 @@ class _Wes2ExerciseSettingsDialogState
         child: const Text('Cancel'),
       ),
       TextButton(
-        onPressed: _saving ? null : _save,
+        onPressed: (_saving || !_settingsUsable) ? null : _save,
         child: _saving
             ? const SizedBox(
                 width: 16,

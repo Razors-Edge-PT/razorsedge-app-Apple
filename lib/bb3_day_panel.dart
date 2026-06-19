@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_theme.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'bb3_models.dart';
@@ -513,7 +514,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
       decoration: BoxDecoration(
-        color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.4),
+        color: theme.colorScheme.secondary,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(7)),
       ),
       child: Row(
@@ -1280,7 +1281,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                             fontWeight: FontWeight.w800,
                             fontSize: 10,
                             fontStyle: locked ? FontStyle.italic : null,
-                            color: locked ? Colors.grey.shade100 : null,
+                            color: locked
+                                ? Theme.of(context)
+                                .extension<GoodLiftColors>()
+                                ?.quaternary ??
+                                AppTheme.defaultQuaternary
+                                : null,
                           ),
                         ),
                       ),
@@ -1346,7 +1352,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                           fontWeight: FontWeight.w600,
                           fontSize: 12,
                           fontStyle: locked ? FontStyle.italic : null,
-                          color: locked ? Colors.grey.shade100 : null,
+                          color: locked
+                              ? Theme.of(context)
+                              .extension<GoodLiftColors>()
+                              ?.quaternary ??
+                              AppTheme.defaultQuaternary
+                              : null,
                         ),
                       ),
                     ),

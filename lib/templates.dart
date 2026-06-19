@@ -21,6 +21,8 @@ import 'template_details.dart';
 import 'template_model.dart'; // Import Exercise model
 import 'package:provider/provider.dart';
 import 'user_context.dart';
+import 'app_theme.dart';
+
 
 enum _WpTutorialPhase {
   inactive,
@@ -2353,11 +2355,17 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   }
 
   Widget _exerciseChipBody(String name) {
+    final goodLiftColors =
+    Theme.of(context).extension<GoodLiftColors>();
+
+    final exerciseColor =
+        goodLiftColors?.quaternary ?? AppTheme.defaultQuaternary;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       margin: const EdgeInsets.only(right: 6, bottom: 6),
       decoration: BoxDecoration(
-        color: Colors.blueGrey.shade500,
+        color: exerciseColor,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(

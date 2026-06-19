@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'WES2_models.dart';
 import 'local_cache/block_plan_cache.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'settings_merge.dart';
+import 'wes2_exercise_settings_patch.dart';
 
 // Abstract interface — unchanged from Phase 1.
 abstract class Wes2PlanService {
@@ -31,13 +33,27 @@ abstract class Wes2PlanService {
     required List<Wes2ExerciseRow> updatedRows,
   });
 
-  /// Save exerciseSettings for one exercise. Requires internet; must not be
-  /// queued offline.
-  Future<void> saveExerciseSettings({
+  /// Save exerciseSettings for one exercise from an explicit dirty-field
+  /// [patch]. Transactionally re-reads the latest canonical
+  /// `exerciseSettings[exerciseId]`, applies only the changed leaves with
+  /// model-aware block-wide propagation, preserves every untouched/unknown key,
+  /// writes only `exerciseSettings[exerciseId]`, and returns the canonical
+  /// saved object. Requires internet; must not be queued offline.
+  Future<Map<String, dynamic>> saveExerciseSettings({
     required String uid,
     required String blockId,
     required String exerciseId,
-    required Map<String, dynamic> settings,
+    required ExerciseSettingsPatch patch,
+  });
+
+  /// Detects and conservatively repairs sparse `weekN` shadows in the canonical
+  /// `exerciseSettings[exerciseId]` (rirPlan / repTargets), writing back only
+  /// when a genuine repair was made. Returns the (possibly repaired) settings
+  /// object for that exercise, or null when the exercise has no settings.
+  Future<Map<String, dynamic>?> repairExerciseShadows({
+    required String uid,
+    required String blockId,
+    required String exerciseId,
   });
 
   /// Fetch the exercise type (e.g. "Barbell", "Machine", "Dumbbell") for each
@@ -51,6 +67,12 @@ abstract class Wes2PlanService {
 /// Does not import or reuse BB3PlannedExerciseService or bb3_models.dart.
 /// Other methods throw UnimplementedError until later phases.
 class FirestoreWes2PlanService implements Wes2PlanService {
+  /// Injectable for tests; defaults to the app-wide Firestore instance.
+  final FirebaseFirestore _db;
+
+  FirestoreWes2PlanService({FirebaseFirestore? firestore})
+      : _db = firestore ?? FirebaseFirestore.instance;
+
   @override
   Future<List<Wes2ExerciseRow>> loadPlannedDay({
     required String uid,
@@ -190,7 +212,7 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required String uid,
     required String blockId,
   }) async {
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('planned_blocks')
         .doc(uid)
         .collection('blocks')
@@ -306,44 +328,91 @@ class FirestoreWes2PlanService implements Wes2PlanService {
   }
 
   @override
-  Future<void> saveExerciseSettings({
+  Future<Map<String, dynamic>> saveExerciseSettings({
     required String uid,
     required String blockId,
     required String exerciseId,
-    required Map<String, dynamic> settings,
+    required ExerciseSettingsPatch patch,
   }) async {
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('planned_blocks')
         .doc(uid)
         .collection('blocks')
         .doc(blockId);
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    return _db.runTransaction<Map<String, dynamic>>((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
           : <String, dynamic>{};
 
-      final rawExerciseSettings = data['exerciseSettings'];
-      final exerciseSettings = rawExerciseSettings is Map
-          ? Map<String, dynamic>.from(rawExerciseSettings)
-          : <String, dynamic>{};
+      // Full latest exerciseSettings map + this exercise's COMPLETE object.
+      final allSettings =
+          SettingsMerge.asMap(data['exerciseSettings']) ?? <String, dynamic>{};
+      final latest =
+          SettingsMerge.asMap(allSettings[exerciseId]) ?? <String, dynamic>{};
 
-      final rawExistingForExercise = exerciseSettings[exerciseId];
-      final existingForExercise = rawExistingForExercise is Map
-          ? Map<String, dynamic>.from(rawExistingForExercise)
-          : <String, dynamic>{};
+      // Apply only the changed leaves; preserves every untouched/unknown key
+      // and never replaces a complete nested map with a partial one.
+      final merged = SettingsMerge.applyPatch(latest, patch);
+      allSettings[exerciseId] = merged;
 
-      exerciseSettings[exerciseId] = {
-        ...existingForExercise,
-        ...settings,
-      };
+      _writeExerciseSettings(txn, docRef, allSettings);
+      return merged;
+    });
+  }
 
-      txn.set(
-        docRef,
-        {'exerciseSettings': exerciseSettings},
-        SetOptions(merge: true),
-      );
+  /// Writes the whole `exerciseSettings` field with REPLACE semantics via
+  /// `mergeFields`, so deliberately cleared leaves and pruned maps actually
+  /// disappear, while every OTHER top-level block field (including any
+  /// deprecated structures) is left completely untouched. [allSettings] must be
+  /// the complete map of all exercises carried through from the transactional
+  /// read with only the edited exercise replaced.
+  void _writeExerciseSettings(
+    Transaction txn,
+    DocumentReference<Map<String, dynamic>> docRef,
+    Map<String, dynamic> allSettings,
+  ) {
+    txn.set(
+      docRef,
+      {'exerciseSettings': allSettings},
+      SetOptions(mergeFields: ['exerciseSettings']),
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>?> repairExerciseShadows({
+    required String uid,
+    required String blockId,
+    required String exerciseId,
+  }) async {
+    final docRef = _db
+        .collection('planned_blocks')
+        .doc(uid)
+        .collection('blocks')
+        .doc(blockId);
+
+    return _db.runTransaction<Map<String, dynamic>?>((txn) async {
+      final snap = await txn.get(docRef);
+      if (!snap.exists) return null;
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final allSettings =
+          SettingsMerge.asMap(data['exerciseSettings']) ?? <String, dynamic>{};
+      final latest = SettingsMerge.asMap(allSettings[exerciseId]);
+      if (latest == null) return null;
+
+      final (repaired, changed) = SettingsMerge.repairShadows(latest);
+      if (!changed) return latest;
+      allSettings[exerciseId] = repaired;
+
+      // True-replace so removed sparse weekN shadows actually disappear, while
+      // all other top-level block fields stay untouched.
+      _writeExerciseSettings(txn, docRef, allSettings);
+
+      print(
+          '🩹 [WES2PlanService] repaired sparse weekN shadow(s) for $exerciseId in block=$blockId');
+      return repaired;
     });
   }
 

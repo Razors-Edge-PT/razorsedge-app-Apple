@@ -8,6 +8,7 @@ import 'demographics_cache.dart';
 import 'package:localtest222/user_context.dart'; // <-- your UserContext
 import 'themes_screen.dart';
 import 'account_deletion_screen.dart';
+import 'app_theme.dart';
 
 class UserSettingsScreen extends StatefulWidget {
   const UserSettingsScreen({super.key});
@@ -25,7 +26,7 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
   // Controllers
   final _usernameCtrl = TextEditingController();
   final _fullNameCtrl = TextEditingController();
-  final _dobCtrl      = TextEditingController(); // dd-mm-yyyy
+  final _dobCtrl = TextEditingController(); // dd-mm-yyyy
   String? _sex; // 'M' | 'F' | 'N'
 
   // State
@@ -35,8 +36,7 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
 
   // True when the signed-in user already has email/password as a provider.
   bool get _hasPasswordProvider =>
-      FirebaseAuth.instance.currentUser
-          ?.providerData
+      FirebaseAuth.instance.currentUser?.providerData
           .any((p) => p.providerId == 'password') ??
       false;
 
@@ -77,12 +77,11 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
     c.selection = TextSelection.collapsed(offset: newOffset);
   }
 
-
   // Accepts dd-mm-yyyy or yyyy-mm-dd; returns dd-mm-yyyy or null
   String? _normalizeDob(String input) {
     final s = input.trim();
     final ddmm = RegExp(r'^(\d{2})-(\d{2})-(\d{4})$');
-    final ymd  = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
+    final ymd = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');
 
     int y, m, d;
     if (ddmm.hasMatch(s)) {
@@ -117,7 +116,6 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
         _error = "🧙 I call BS! You are not that old.";
         return null;
       }
-
     } catch (_) {
       return null;
     }
@@ -127,11 +125,9 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
     return '$dd-$mm-$y';
   }
 
-
   bool _validUsername(String v) {
     return RegExp(r'^[^\s]{3,22}$').hasMatch(v.trim());
   }
-
 
   Future<bool> _isUsernameAvailable(String username) async {
     final lower = username.toLowerCase();
@@ -169,23 +165,35 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
   // ------------------- Load/Save -------------------
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final usersDoc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
-      final pubDoc   = await FirebaseFirestore.instance.collection('users_public').doc(userId).get();
+      final usersDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .get();
+      final pubDoc = await FirebaseFirestore.instance
+          .collection('users_public')
+          .doc(userId)
+          .get();
 
       final d = usersDoc.data() ?? {};
       final p = pubDoc.data() ?? {};
 
       _usernameCtrl.text = (d['username'] ?? p['username'] ?? '') as String;
       _fullNameCtrl.text = (d['fullName'] ?? p['fullName'] ?? '') as String;
-      _dobCtrl.text      = (d['dob'] ?? '') as String; // expect dd-mm-yyyy
-      _sex               = (d['sex'] as String?) ?? 'N';
+      _dobCtrl.text = (d['dob'] ?? '') as String; // expect dd-mm-yyyy
+      _sex = (d['sex'] as String?) ?? 'N';
     } catch (e, st) {
       // print('Load settings error: $e\n$st');
       _error = 'Failed to load settings.';
     } finally {
-      if (mounted) setState(() { _loading = false; });
+      if (mounted)
+        setState(() {
+          _loading = false;
+        });
     }
   }
 
@@ -194,23 +202,30 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
 
     if (!_formKey.currentState!.validate()) return;
 
-    setState(() { _saving = true; _error = null; });
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
     try {
       final username = _usernameCtrl.text.trim();
       final fullName = _fullNameCtrl.text.trim();
-      final dobRaw   = _dobCtrl.text.trim();
-      final sex      = _sex;
+      final dobRaw = _dobCtrl.text.trim();
+      final sex = _sex;
 
       final dobNorm = _normalizeDob(dobRaw);
       if (dobNorm == null) {
-        setState(() { _error = 'Enter a valid date (dd-mm-yyyy).'; });
+        setState(() {
+          _error = 'Enter a valid date (dd-mm-yyyy).';
+        });
         return;
       }
 
       // Final check on username uniqueness
       final available = await _isUsernameAvailable(username);
       if (!available) {
-        setState(() { _error = 'That username is taken. Choose another.'; });
+        setState(() {
+          _error = 'That username is taken. Choose another.';
+        });
         return;
       }
 
@@ -231,10 +246,14 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
-      await FirebaseFirestore.instance.collection('users').doc(userId)
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
           .set(payloadPrivate, SetOptions(merge: true));
 
-      await FirebaseFirestore.instance.collection('users_public').doc(userId)
+      await FirebaseFirestore.instance
+          .collection('users_public')
+          .doc(userId)
           .set(payloadPublic, SetOptions(merge: true));
       // ✅ Keep local demographics cache in sync (offline + no extra reads elsewhere)
       await DemographicsCache.save(
@@ -243,7 +262,6 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
         dob: dobNorm, // normalized string
       );
 
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Settings saved')),
@@ -251,9 +269,14 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
       }
     } catch (e, st) {
       // print('Save settings error: $e\n$st');
-      setState(() { _error = 'Failed to save settings.'; });
+      setState(() {
+        _error = 'Failed to save settings.';
+      });
     } finally {
-      if (mounted) setState(() { _saving = false; });
+      if (mounted)
+        setState(() {
+          _saving = false;
+        });
     }
   }
 
@@ -264,7 +287,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
     if (currentUser == null || currentUser.email == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('You need an email/password account to change password.'),
+          content:
+              Text('You need an email/password account to change password.'),
         ),
       );
       return;
@@ -396,7 +420,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                 if (mounted) {
                   Navigator.of(dialogCtx).pop(); // close dialog
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Password updated successfully.')),
+                    const SnackBar(
+                        content: Text('Password updated successfully.')),
                   );
                 }
               } on FirebaseAuthException catch (e) {
@@ -456,7 +481,9 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                           labelText: 'Current password',
                           suffixIcon: IconButton(
                             icon: Icon(
-                              showCurrent ? Icons.visibility_off : Icons.visibility,
+                              showCurrent
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
                             ),
                             onPressed: () {
                               setStateDialog(() {
@@ -513,7 +540,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         decoration: InputDecoration(
                           labelText: 'Confirm new password',
                           labelStyle: TextStyle(
-                            color: passwordsMatch ? Colors.green : Colors.black54,
+                            color:
+                                passwordsMatch ? Colors.green : Colors.black54,
                           ),
                           suffixIcon: IconButton(
                             icon: Icon(
@@ -547,18 +575,18 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                   onPressed: localSaving
                       ? null
                       : () {
-                    Navigator.of(dialogCtx).pop();
-                  },
+                          Navigator.of(dialogCtx).pop();
+                        },
                   child: const Text('Cancel'),
                 ),
                 TextButton(
                   onPressed: localSaving ? null : handleSave,
                   child: localSaving
                       ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Text('Save'),
                 ),
               ],
@@ -568,8 +596,6 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
       },
     );
   }
-
-
 
   Future<void> _showAddPasswordLoginDialog() async {
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -607,11 +633,13 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                 return;
               }
               if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-                setDlg(() => localError = 'Please enter a valid email address.');
+                setDlg(
+                    () => localError = 'Please enter a valid email address.');
                 return;
               }
               if (pw.length < 6) {
-                setDlg(() => localError = 'Password must be at least 6 characters.');
+                setDlg(() =>
+                    localError = 'Password must be at least 6 characters.');
                 return;
               }
               if (pw != cf) {
@@ -657,8 +685,7 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                     localError =
                         'That email is already linked to another account.';
                   } else if (e.code == 'requires-recent-login') {
-                    localError =
-                        'Please sign out and back in, then try again.';
+                    localError = 'Please sign out and back in, then try again.';
                   } else {
                     localError = e.message ?? 'Failed to add password login.';
                   }
@@ -731,9 +758,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
               ),
               actions: [
                 TextButton(
-                  onPressed: localSaving
-                      ? null
-                      : () => Navigator.of(dialogCtx).pop(),
+                  onPressed:
+                      localSaving ? null : () => Navigator.of(dialogCtx).pop(),
                   child: const Text('Cancel'),
                 ),
                 TextButton(
@@ -778,7 +804,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
           padding: const EdgeInsets.all(16),
           child: Card(
             elevation: 8,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Form(
@@ -788,7 +815,11 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                   children: [
                     const Text(
                       'Profile',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold,   color: Colors.white,),
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
                     ),
                     const SizedBox(height: 16),
 
@@ -801,23 +832,31 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         hintText: '3–22 chars, no spaces (emoji OK)',
                         suffixIcon: (_usernameChecking)
                             ? const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: SizedBox(width: 16, height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2)),
-                        )
+                                padding: EdgeInsets.all(12),
+                                child: SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2)),
+                              )
                             : (_usernameAvailable == null
-                            ? null
-                            : Icon(
-                          _usernameAvailable! ? Icons.check_circle : Icons.error,
-                          color: _usernameAvailable! ? Colors.green : Colors.redAccent,
-                        )),
+                                ? null
+                                : Icon(
+                                    _usernameAvailable!
+                                        ? Icons.check_circle
+                                        : Icons.error,
+                                    color: _usernameAvailable!
+                                        ? Colors.green
+                                        : Colors.redAccent,
+                                  )),
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
                           borderSide: const BorderSide(color: Colors.white70),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: Colors.white70, width: 2),
+                          borderSide:
+                              const BorderSide(color: Colors.white70, width: 2),
                         ),
                       ),
                       onChanged: _onUsernameChanged,
@@ -825,7 +864,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         final s = (v ?? '').trim();
                         if (s.isEmpty) return 'Please choose a username';
                         if (!_validUsername(s)) return '3–22 chars, no spaces';
-                        if (_usernameAvailable == false) return 'That username is taken';
+                        if (_usernameAvailable == false)
+                          return 'That username is taken';
                         return null;
                       },
                     ),
@@ -845,10 +885,13 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: Colors.white70, width: 2),
+                          borderSide:
+                              const BorderSide(color: Colors.white70, width: 2),
                         ),
                       ),
-                      validator: (v) => (v == null || v.trim().isEmpty) ? 'Please enter full name' : null,
+                      validator: (v) => (v == null || v.trim().isEmpty)
+                          ? 'Please enter full name'
+                          : null,
                     ),
 
                     const SizedBox(height: 12),
@@ -867,12 +910,16 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                           children: [
                             IconButton(
                               tooltip: 'Insert dash',
-                              icon: const Icon(Icons.remove, color: Colors.white70),
+                              icon: Icon(Icons.remove,
+                                  color:
+                                      Theme.of(context).colorScheme.tertiary),
                               onPressed: () => _insertDashAtCursor(_dobCtrl),
                             ),
                             IconButton(
                               tooltip: 'Pick date',
-                              icon: const Icon(Icons.calendar_today, color: Colors.white70),
+                              icon: Icon(Icons.calendar_today,
+                                  color:
+                                      Theme.of(context).colorScheme.tertiary),
                               onPressed: () async {
                                 // … your date picker code …
                               },
@@ -885,7 +932,8 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: Colors.white70, width: 2),
+                          borderSide:
+                              const BorderSide(color: Colors.white70, width: 2),
                         ),
                       ),
                       validator: (v) {
@@ -901,8 +949,6 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         return null;
                       },
                     ),
-
-
 
                     const SizedBox(height: 12),
 
@@ -924,10 +970,12 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: Colors.white70, width: 2),
+                          borderSide:
+                              const BorderSide(color: Colors.white70, width: 2),
                         ),
                       ),
-                      validator: (v) => (v == null || v.isEmpty) ? 'Please select' : null,
+                      validator: (v) =>
+                          (v == null || v.isEmpty) ? 'Please select' : null,
                     ),
 
                     const SizedBox(height: 12),
@@ -939,8 +987,12 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           child: Row(
-                            children: const [
-                              Icon(Icons.lock_reset, color: Colors.white70, size: 20),
+                            children: [
+                              Icon(
+                                Icons.lock_reset,
+                                color: Theme.of(context).colorScheme.tertiary,
+                                size: 20,
+                              ),
                               SizedBox(width: 12),
                               Text(
                                 'Change password',
@@ -951,7 +1003,9 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                                 ),
                               ),
                               Spacer(),
-                              Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                              Icon(Icons.chevron_right,
+                                  color: Theme.of(context).colorScheme.tertiary,
+                                  size: 20),
                             ],
                           ),
                         ),
@@ -963,10 +1017,12 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         child: Padding(
                           padding: const EdgeInsets.symmetric(vertical: 10),
                           child: Row(
-                            children: const [
-                              Icon(Icons.lock_outline, color: Colors.white70, size: 20),
-                              SizedBox(width: 12),
-                              Text(
+                            children: [
+                              Icon(Icons.lock_outline,
+                                  color: Theme.of(context).colorScheme.tertiary,
+                                  size: 20),
+                              const SizedBox(width: 12),
+                              const Text(
                                 'Add password login',
                                 style: TextStyle(
                                   color: Colors.white,
@@ -974,8 +1030,10 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
-                              Spacer(),
-                              Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                              const Spacer(),
+                              Icon(Icons.chevron_right,
+                                  color: Theme.of(context).colorScheme.tertiary,
+                                  size: 20),
                             ],
                           ),
                         ),
@@ -990,10 +1048,12 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         child: Row(
-                          children: const [
-                            Icon(Icons.palette, color: Colors.white70, size: 20),
-                            SizedBox(width: 12),
-                            Text(
+                          children: [
+                            Icon(Icons.palette,
+                                color: Theme.of(context).colorScheme.tertiary,
+                                size: 20),
+                            const SizedBox(width: 12),
+                            const Text(
                               'Themes',
                               style: TextStyle(
                                 color: Colors.white,
@@ -1001,8 +1061,10 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
-                            Spacer(),
-                            Icon(Icons.chevron_right, color: Colors.white38, size: 20),
+                            const Spacer(),
+                            Icon(Icons.chevron_right,
+                                color: Theme.of(context).colorScheme.tertiary,
+                                size: 20),
                           ],
                         ),
                       ),
@@ -1022,12 +1084,12 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                         child: Row(
                           children: const [
                             Icon(Icons.delete_forever,
-                                color: Colors.redAccent, size: 20),
+                                color: Colors.grey, size: 20),
                             SizedBox(width: 12),
                             Text(
                               'Delete Account',
                               style: TextStyle(
-                                color: Colors.redAccent,
+                                color: Colors.grey,
                                 fontSize: 15,
                                 fontWeight: FontWeight.w500,
                               ),
@@ -1040,8 +1102,6 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                       ),
                     ),
 
-
-
                     if (_error != null) ...[
                       const SizedBox(height: 12),
                       Text(_error!, style: const TextStyle(color: Colors.red)),
@@ -1053,10 +1113,22 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                       width: double.infinity,
                       child: ElevatedButton(
                         onPressed: _saving ? null : _save,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor:
+                              Theme.of(context).colorScheme.secondary,
+                          foregroundColor:
+                              Theme.of(context).colorScheme.onSecondary,
+                        ),
                         child: _saving
-                            ? const SizedBox(
-                            width: 18, height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            ? SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color:
+                                      Theme.of(context).colorScheme.onSecondary,
+                                ),
+                              )
                             : const Text('Save'),
                       ),
                     ),
