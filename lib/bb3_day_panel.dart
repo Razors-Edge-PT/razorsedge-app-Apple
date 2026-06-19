@@ -326,6 +326,17 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     return v.toStringAsFixed(v.remainder(0.5) == 0 ? 1 : 2);
   }
 
+  /// Completed-velocity display formatter. Mirrors WES2 _fmtVelocity exactly so
+  /// the value shown in BB3 matches how it was entered: at most three decimals,
+  /// trailing zeros and a trailing decimal point trimmed (0.625 → "0.625",
+  /// 0.730 → "0.73", 1.0 → "1"). Null → '' so a missing velocity renders blank
+  /// rather than a placeholder. Never used to calculate or hint velocity.
+  String _fmtVelocity(double? v) {
+    if (v == null) return '';
+    final s = v.toStringAsFixed(3);
+    return s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
+
   // ── Save on unfocus ───────────────────────────────────────────────────────
   // Fires when any field loses focus. Reads all current controller values
   // and saves the full day. _saveInProgress guards against concurrent saves.
@@ -1716,8 +1727,23 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         ),
       ),
       const SizedBox(width: 1),
-      // Velocity field (salmon text when user-entered, same convention)
-      if (velCtrl != null && velFn != null)
+      // Velocity cell.
+      //  - Completed/locked: read-only display sourced exclusively from
+      //    completedSet['velocity'] (matched by exerciseId + setIndex above).
+      //    Blank when absent — never the planned _velocityCtrl, never an 'm/s'
+      //    placeholder. Rendered with the same read-only cell as the completed
+      //    weight/reps/RIR fields so styling/width/alignment stay identical.
+      //  - Planned/editable: unchanged salmon-text entry field with 'm/s' hint.
+      if (locked)
+        _lockedReadOnlyCell(
+          theme: theme,
+          value: _fmtVelocity(completedSet != null
+              ? (completedSet['velocity'] as num?)?.toDouble()
+              : null),
+          label: '',
+          width: velWidth,
+        )
+      else if (velCtrl != null && velFn != null)
         SizedBox(
           width: velWidth,
           child: TextField(
@@ -1795,7 +1821,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       final e1rm = PeriodizationModelUtils.calculateE1RM(dispW, dispR, dispRir);
       if (e1rm > 0) e1rmLabel = _fmtNum(e1rm);
     }
-    final String velValue = completedSet['velocity']?.toString() ?? '';
+    final String velValue =
+        _fmtVelocity((completedSet['velocity'] as num?)?.toDouble());
 
     return [
       _lockedReadOnlyCell(
@@ -1828,7 +1855,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       ),
       const SizedBox(width: 1),
       _lockedReadOnlyCell(
-          theme: theme, value: velValue, label: 'm/s', width: velWidth),
+          theme: theme, value: velValue, label: '', width: velWidth),
       const SizedBox(width: 6),
       GestureDetector(
         onTap: () => _showSetNoteDialog(theme, exId, setIndex),
