@@ -9,6 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'body_weight_tracker.dart'; // Import the new file
 import 'exercises.dart';
 import 'home_screen.dart';
+import 'home_screen_2.dart';
 import 'login_screen.dart';
 import 'templates.dart';
 import 'week_planner.dart'; // Update path if needed
@@ -641,12 +642,21 @@ class AuthGate extends StatelessWidget {
 
 
 
+// ── ROLLBACK FLAG — flip to false to restore HomeScreen (v1) as default.
+const bool kUseHomeScreen2AsDefault = true;
+
 class MyApp extends StatelessWidget {
   final bool isAuthenticated;
   const MyApp({super.key, required this.isAuthenticated});
 
   @override
   Widget build(BuildContext context) {
+    if (kDebugMode) {
+      debugPrint(
+        '🏠 [APP ROOT] Default home = '
+        '${kUseHomeScreen2AsDefault ? "HomeScreen2" : "HomeScreen"}',
+      );
+    }
     final tc = context.watch<ThemeController>();
     return MaterialApp(
       scaffoldMessengerKey: rootScaffoldMessengerKey, // ✅ ROOT-SNACKBAR-KEY wired
@@ -671,12 +681,20 @@ class MyApp extends StatelessWidget {
 
       // AppRoot is the single auth-state authority — no second authStateChanges() here.
       home: isAuthenticated
-          ? const MembershipGate(child: HomeScreen())
+          ? MembershipGate(
+              child: kUseHomeScreen2AsDefault
+                  ? const HomeScreen2()
+                  : const HomeScreen(),
+            )
           : const LoginScreen(),
 
       routes: {
         '/login': (context) => const LoginScreen(),
-        '/home': (context) => const MembershipGate(child: HomeScreen()),
+        '/home': (context) => MembershipGate(
+              child: kUseHomeScreen2AsDefault
+                  ? const HomeScreen2()
+                  : const HomeScreen(),
+            ),
 
         '/exercises': (context) => const ExercisesScreen(),
         '/templates': (context) => const TemplatesScreen(),

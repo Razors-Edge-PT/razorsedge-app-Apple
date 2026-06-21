@@ -195,6 +195,9 @@ class Wes2ExerciseRow {
   final bool isExpanded;
   /// BB3 exercise-level plan note. Display-only; never written to WES2 execution data.
   final String? exercisePlanNote;
+  /// WES2 exercise-level execution note. Stored in exercises[].exerciseExecutionNote.
+  /// Never overwrites exercisePlanNote or BB3 perExerciseNote.
+  final String? exerciseExecutionNote;
 
   const Wes2ExerciseRow({
     required this.exerciseId,
@@ -207,6 +210,7 @@ class Wes2ExerciseRow {
     this.isMarkedDone = false,
     this.isExpanded = true,
     this.exercisePlanNote,
+    this.exerciseExecutionNote,
   });
 
   /// BB3 completion rule: at least one set has weight AND reps.
@@ -232,6 +236,8 @@ class Wes2ExerciseRow {
     bool? isMarkedDone,
     bool? isExpanded,
     String? exercisePlanNote,
+    String? exerciseExecutionNote,
+    bool clearExerciseExecutionNote = false,
   }) {
     return Wes2ExerciseRow(
       exerciseId: exerciseId ?? this.exerciseId,
@@ -244,6 +250,9 @@ class Wes2ExerciseRow {
       isMarkedDone: isMarkedDone ?? this.isMarkedDone,
       isExpanded: isExpanded ?? this.isExpanded,
       exercisePlanNote: exercisePlanNote ?? this.exercisePlanNote,
+      exerciseExecutionNote: clearExerciseExecutionNote
+          ? null
+          : (exerciseExecutionNote ?? this.exerciseExecutionNote),
     );
   }
 
@@ -257,6 +266,8 @@ class Wes2ExerciseRow {
         'isMarkedDone': isMarkedDone,
         'sets': sets.map((s) => s.toJson()).toList(),
         if (exercisePlanNote != null) 'exercisePlanNote': exercisePlanNote,
+        if (exerciseExecutionNote != null)
+          'exerciseExecutionNote': exerciseExecutionNote,
       };
 
   static Wes2ExerciseRow fromJson(Map<String, dynamic> map) {
@@ -274,6 +285,7 @@ class Wes2ExerciseRow {
       source: src,
       isMarkedDone: map['isMarkedDone'] as bool? ?? false,
       exercisePlanNote: map['exercisePlanNote'] as String?,
+      exerciseExecutionNote: map['exerciseExecutionNote'] as String?,
       sets: (map['sets'] as List<dynamic>)
           .map((s) => Wes2SetState.fromJson(s as Map<String, dynamic>))
           .toList(),

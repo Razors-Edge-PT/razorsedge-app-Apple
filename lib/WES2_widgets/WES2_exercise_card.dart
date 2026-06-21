@@ -20,8 +20,10 @@ PopupMenuItem<_ExerciseCardMenuAction> _menuItem({
   required String label,
   bool enabled = true,
   bool destructive = false,
+  Color? iconColor,
 }) {
-  final color = destructive ? Colors.redAccent : null;
+  final textColor = destructive ? Colors.redAccent : null;
+  final resolvedIconColor = destructive ? Colors.redAccent : iconColor;
   return PopupMenuItem<_ExerciseCardMenuAction>(
     value: value,
     enabled: enabled,
@@ -31,13 +33,13 @@ PopupMenuItem<_ExerciseCardMenuAction> _menuItem({
       child: Row(
         mainAxisSize: MainAxisSize.max,
         children: [
-          Icon(icon, size: 18, color: color),
+          Icon(icon, size: 18, color: resolvedIconColor),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               label,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: color),
+              style: TextStyle(color: textColor),
             ),
           ),
         ],
@@ -71,6 +73,7 @@ class Wes2ExerciseCard extends StatelessWidget {
   final VoidCallback? onTopSets;
   final VoidCallback? onOpenExercisePlanNote;
   final bool isExercisePlanNoteRead;
+  final bool hasExerciseExecutionNote;
   final bool showVelocityField;
   /// Tutorial step to highlight on the first set row (0 = inactive).
   final int tutorialStep;

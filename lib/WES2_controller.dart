@@ -703,6 +703,27 @@ class Wes2SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Updates exerciseExecutionNote for an exercise in local state. No _pushUndo.
+  /// Blank rawText clears the note (null). Direct construction mirrors the
+  /// per-set updateExecutionNote pattern — clearExerciseExecutionNote avoids
+  /// the copyWith null-coalescing limitation.
+  void updateExerciseExecutionNote({
+    required String exerciseId,
+    required String rawText,
+  }) {
+    final text = rawText.trim();
+    final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return;
+    final row = _rows[rowIdx];
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[rowIdx] = row.copyWith(
+      exerciseExecutionNote: text.isEmpty ? null : text,
+      clearExerciseExecutionNote: text.isEmpty,
+    );
+    _rows = newRows;
+    notifyListeners();
+  }
+
   /// Returns true if the plan note for this set has been read this session.
   bool isPlanNoteRead(String exerciseId, int setIndex) =>
       _readPlanNotes.contains('$exerciseId:$setIndex');

@@ -112,6 +112,16 @@ abstract class Wes2Repository {
     required String? note,
   });
 
+  /// Patch exerciseExecutionNote on an exercise row. [note] null removes the key.
+  /// Searches exercises[] first, then wesPlannedExercises[].
+  /// No-op if the row is not yet materialized in the workout document.
+  Future<void> saveExerciseExecutionNote({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required String? note,
+  });
+
   /// Replace the entire workout doc for [date] with template-loaded rows.
   /// Clears exercises[] and writes [rows] to wesPlannedExercises[] as blank rows.
   /// Preserves other doc fields (userId, date, etc.).
@@ -211,6 +221,7 @@ class FirestoreWes2Repository implements Wes2Repository {
       sets: _parseSets(rawSets, setCount),
       source: source,
       isMarkedDone: isMarkedDone,
+      exerciseExecutionNote: raw['exerciseExecutionNote'] as String?,
     );
   }
 
@@ -425,7 +436,7 @@ class FirestoreWes2Repository implements Wes2Repository {
       if (s.executionNote != null) setMap['executionNote'] = s.executionNote!;
       sets.add(setMap);
     }
-    return {
+    final rowMap = <String, dynamic>{
       'exerciseId': row.exerciseId,
       'name': row.name,
       'circuitIndex': row.circuitIndex,
@@ -434,6 +445,10 @@ class FirestoreWes2Repository implements Wes2Repository {
       'isMarkedDone': false,
       'sets': sets,
     };
+    if (row.exerciseExecutionNote != null) {
+      rowMap['exerciseExecutionNote'] = row.exerciseExecutionNote!;
+    }
+    return rowMap;
   }
 
   /// Builds a minimal Firestore map for a wesPlannedExercises[] row.
@@ -986,6 +1001,68 @@ class FirestoreWes2Repository implements Wes2Repository {
     return result;
   }
 
+  // ── saveExerciseExecutionNote ─────────────────────────────────────────────
+
+  @override
+  Future<void> saveExerciseExecutionNote({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required String? note,
+  }) async {
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((txn) async {
+      final snap = await txn.get(docRef);
+      if (!snap.exists) return;
+      final data = snap.data() ?? <String, dynamic>{};
+
+      final exercises = (data['exercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+      final wesPlanned = (data['wesPlannedExercises'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      final exIdx = exercises.indexWhere((m) => m['exerciseId'] == exerciseId);
+      final wpIdx =
+          wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
+
+      if (exIdx == -1 && wpIdx == -1) return; // unmaterialized — no-op
+
+      if (exIdx != -1) {
+        if (note == null) {
+          exercises[exIdx].remove('exerciseExecutionNote');
+        } else {
+          exercises[exIdx]['exerciseExecutionNote'] = note;
+        }
+      } else {
+        if (note == null) {
+          wesPlanned[wpIdx].remove('exerciseExecutionNote');
+        } else {
+          wesPlanned[wpIdx]['exerciseExecutionNote'] = note;
+        }
+      }
+
+      txn.set(
+        docRef,
+        {
+          'userId': uid,
+          'date': _dateDocId(date),
+          'lastEditedAt': FieldValue.serverTimestamp(),
+          'exercises': exercises,
+          'wesPlannedExercises': wesPlanned,
+        },
+        SetOptions(merge: true),
+      );
+    });
+  }
 
   // ── replaceAllWithTemplateRows (Phase 18) ──────────────────────────────
 
