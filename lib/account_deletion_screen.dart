@@ -37,8 +37,8 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
   Future<void> _deleteAccount() async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) {
-      setState(() =>
-          _error = 'Could not find your account. Please log out and try again.');
+      setState(() => _error =
+          'Could not find your account. Please log out and try again.');
       return;
     }
 
@@ -127,7 +127,22 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         title: const Text('Permanently delete account?'),
-        content: const Text('This cannot be undone.'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('This cannot be undone.'),
+            SizedBox(height: 16),
+            Text(
+              'Deleting your GoodLift account does not cancel an active subscription. '
+              'Cancel your subscription separately through Apple or your billing provider.',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                height: 1.35,
+              ),
+            ),
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -189,6 +204,39 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.12),
+                  border: Border.all(
+                    color: Colors.orange.withValues(alpha: 0.7),
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.orange,
+                      size: 22,
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Deleting your GoodLift account does not cancel an active subscription. '
+                        'Cancel your subscription separately through Apple or your billing provider.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          height: 1.35,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
               _yesNoRow(
                 question: 'I want to delete my account permanently.',
                 value: _q1,
@@ -220,7 +268,8 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
               ],
               const SizedBox(height: 32),
               ElevatedButton(
-                onPressed: (_canDelete && !_deleting) ? _confirmAndDelete : null,
+                onPressed:
+                    (_canDelete && !_deleting) ? _confirmAndDelete : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.red,
                   foregroundColor: Colors.white,
