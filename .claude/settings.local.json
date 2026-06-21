@@ -53,7 +53,8 @@
       "Bash(findstr /I \"error\\\\|home_screen_2\\\\|home_bootstrap\")",
       "Bash(Select-String -Pattern \"error|home_screen_2|home_bootstrap\")",
       "Bash(grep -v \"^Downloading\\\\|^Got dep\\\\|^  _\\\\|^  a\\\\|^  b\\\\|^  c\\\\|^  d\\\\|^  e\\\\|^  f\\\\|^  g\\\\|^  h\\\\|^  i\\\\|^  j\\\\|^  k\\\\|^  l\\\\|^  m\\\\|^  n\\\\|^  o\\\\|^  p\\\\|^  q\\\\|^  r\\\\|^  s\\\\|^  t\\\\|^  u\\\\|^  v\\\\|^  w\\\\|^  x\\\\|^  y\\\\|^  z\\\\|^107 packages\\\\|^Try \\\\`flutter\")",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(flutter test *)"
     ]
   }
 }

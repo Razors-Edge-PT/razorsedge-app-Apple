@@ -309,9 +309,12 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
         displayName: _ctrl.actingDisplayName,
       ),
       drawer: const AppDrawer(),
-      body: _ctrl.isFirstTimeSetup
-          ? _buildSetupBody()
-          : SingleChildScrollView(
+    body: SafeArea(
+    top: false,
+    minimum: const EdgeInsets.only(bottom: 16),
+    child: _ctrl.isFirstTimeSetup
+    ? _buildSetupBody()
+        : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -520,16 +523,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                     ),
                   ),
 
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Training Calendar',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
+
 
                   // ── Calendar ─────────────────────────────────────────────
                   TableCalendar(
@@ -674,35 +669,27 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                     const Center(
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 32),
-                        child: Text(
-                          'Feed coming soon',
-                          style: TextStyle(color: Colors.white54),
-                        ),
+                       // child: Text('New Feed coming soon',style: TextStyle(color: Colors.white54),),
                       ),
                     )
                   else if (_selectedFeed == _HomeV2Feed.points)
                     const Center(
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 32),
-                        child: Text(
-                          'Points feed coming soon',
-                          style: TextStyle(color: Colors.white54),
-                        ),
+                        //child: Text('New Points feed coming soon',style: TextStyle(color: Colors.white54),),
                       ),
                     )
                   else
                     const Center(
                       child: Padding(
                         padding: EdgeInsets.symmetric(vertical: 32),
-                        child: Text(
-                          'Leaderboard coming soon',
-                          style: TextStyle(color: Colors.white54),
-                        ),
+                       // child: Text('New Leaderboard coming soon', style: TextStyle(color: Colors.white54),                        ),
                       ),
                     ),
                 ],
               ),
             ),
+    ),
     );
   }
 }

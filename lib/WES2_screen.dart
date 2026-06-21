@@ -96,6 +96,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // True once the actor has logged qualifying sets on 3 distinct calendar days.
   bool _cogCueUnlocked = false;
 
+  // Prevents overlapping template-replacement operations (confirmation + load).
+  bool _isLoadingTemplate = false;
+
   // ── Day timer state (Phase 17) ─────────────────────────────────────────────
   bool _timerVisible = false;
   bool _timerRunning = false;
@@ -2068,8 +2071,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       final saved = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text(currentRow.name,
-              style: const TextStyle(fontSize: 16)),
+          title: Text(currentRow.name, style: const TextStyle(fontSize: 16)),
           contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           content: SingleChildScrollView(
             child: Column(
@@ -2080,8 +2082,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                   const Text('Plan note',
                       style: TextStyle(fontSize: 11, color: Colors.white54)),
                   const SizedBox(height: 4),
-                  Text(planNote,
-                      style: const TextStyle(fontSize: 13)),
+                  Text(planNote, style: const TextStyle(fontSize: 13)),
                   const Divider(height: 20),
                 ],
                 const Text('Execution note',
@@ -2201,6 +2202,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   Future<void> _showTemplatePicker() async {
     if (_controller.actingUid.isEmpty) return;
+    if (_isLoadingTemplate) return;
 
     // Tutorial: capture whether we're at the load-template cue step.
     final wasAtLoadStep = _tutorialStep == 1;
@@ -2225,12 +2227,50 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       return;
     }
 
-    await _onLoadTemplate(templateId);
+    if (_isLoadingTemplate) return;
+    setState(() => _isLoadingTemplate = true);
+    try {
+      // Confirm before replacing if the current workout has user-entered data.
+      if (workoutHasUserEnteredData(_controller.rows)) {
+        final confirmed = await _showReplaceWorkoutDialog();
+        if (!mounted || !confirmed) return;
+      }
 
-    // Advance to weight tutorial once template is successfully loaded.
-    if (mounted && wasAtLoadStep && _tutorialStep == 2) {
-      setState(() => _tutorialStep = 3);
+      await _onLoadTemplate(templateId);
+
+      // Advance to weight tutorial once template is successfully loaded.
+      if (mounted && wasAtLoadStep && _tutorialStep == 2) {
+        setState(() => _tutorialStep = 3);
+      }
+    } finally {
+      if (mounted) setState(() => _isLoadingTemplate = false);
     }
+  }
+
+  Future<bool> _showReplaceWorkoutDialog() async {
+    if (!mounted) return false;
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Replace current workout?'),
+        content: const Text(
+          'This workout contains entered data. Loading this template will'
+          ' replace the current exercises and remove that data.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Replace workout'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
   }
 
   // ── Delete Day (Phase 18b) ────────────────────────────────────────────────

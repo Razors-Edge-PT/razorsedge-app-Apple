@@ -28,6 +28,7 @@ class Wes2FieldState<T> {
   final T? actualValue;
   final T? hintValue;
   final FieldOrigin origin;
+
   /// Tracks the provenance of [hintValue] independently of [origin].
   /// [origin] encodes how the actual/current display value was set;
   /// [hintOrigin] encodes where the hint came from (bb3Hint, modelHint, empty).
@@ -54,7 +55,9 @@ class Wes2FieldState<T> {
         hintOrigin: hintOrigin,
         origin: value != null
             ? FieldOrigin.typed
-            : (hintOrigin != FieldOrigin.empty ? hintOrigin : FieldOrigin.empty),
+            : (hintOrigin != FieldOrigin.empty
+                ? hintOrigin
+                : FieldOrigin.empty),
         dirty: true,
         lastEditedAt: DateTime.now(),
       );
@@ -193,8 +196,10 @@ class Wes2ExerciseRow {
   final Wes2RowSource source;
   final bool isMarkedDone;
   final bool isExpanded;
+
   /// BB3 exercise-level plan note. Display-only; never written to WES2 execution data.
   final String? exercisePlanNote;
+
   /// WES2 exercise-level execution note. Stored in exercises[].exerciseExecutionNote.
   /// Never overwrites exercisePlanNote or BB3 perExerciseNote.
   final String? exerciseExecutionNote;
@@ -291,4 +296,31 @@ class Wes2ExerciseRow {
           .toList(),
     );
   }
+}
+
+// ── Workout user-data predicate ───────────────────────────────────────────────
+
+/// Returns true when [rows] contain any value deliberately entered or edited
+/// by the user. Specifically checks:
+///   • any set's actualValue for weight, reps, RIR, or velocity
+///   • any per-set execution note (non-empty after trim)
+///   • any exercise-level execution note (non-empty after trim)
+///   • any exercise marked as done by the user
+///
+/// Returns false for rows that carry only hint values (model-generated or
+/// BB3-prescribed), plan notes from BB3, template-prescribed planned values
+/// that have not been edited, or default/placeholder state.
+bool workoutHasUserEnteredData(List<Wes2ExerciseRow> rows) {
+  for (final row in rows) {
+    if (row.isMarkedDone) return true;
+    if (row.exerciseExecutionNote?.trim().isNotEmpty == true) return true;
+    for (final s in row.sets) {
+      if (s.weight.hasActual) return true;
+      if (s.reps.hasActual) return true;
+      if (s.rir.hasActual) return true;
+      if (s.velocity.hasActual) return true;
+      if (s.executionNote?.trim().isNotEmpty == true) return true;
+    }
+  }
+  return false;
 }
