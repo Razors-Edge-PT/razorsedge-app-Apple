@@ -101,6 +101,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.onTopSets,
     this.onOpenExercisePlanNote,
     this.isExercisePlanNoteRead = false,
+    this.hasExerciseExecutionNote = false,
     this.showVelocityField = false,
     this.tutorialStep = 0,
     this.onTutorialRepsAccepted,
@@ -295,6 +296,9 @@ class Wes2ExerciseCard extends StatelessWidget {
                   icon: Icons.notes,
                   label: 'Notes',
                   enabled: onNotes != null,
+                  iconColor: hasExerciseExecutionNote
+                      ? Colors.lightBlueAccent
+                      : null,
                 ),
                 _menuItem(
                   value: _ExerciseCardMenuAction.replace,

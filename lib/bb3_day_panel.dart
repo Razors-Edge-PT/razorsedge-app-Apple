@@ -1239,6 +1239,15 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final cardColor =
         locked ? _completedSurface(theme) : theme.colorScheme.surface;
 
+    // Execution note lookup — only relevant for locked (completed) rows.
+    final completedEx = locked ? _completedExMapForId(exId) : null;
+    final execNote =
+        locked ? _execNoteStr(completedEx?['exerciseExecutionNote']) : null;
+    final showNoteIcon = hasNote || execNote != null;
+    final noteIconColor = execNote != null
+        ? Colors.lightBlueAccent
+        : (noteViewed ? Colors.grey.shade400 : theme.colorScheme.secondary);
+
     final visibleSetIndex =
         locked ? _topCompletedSetIndex(ex.exerciseId, ex.sets.length - 1) : 0;
 
@@ -1293,6 +1302,14 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                       const SizedBox(width: 1),
                       ..._setFieldWidgets(theme, ex, visibleSetIndex, locked,
                           expandedMode: false, hint: hintFor(visibleSetIndex)),
+                      if (showNoteIcon) ...[
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () => _showExerciseNoteInBB3(ex, execNote),
+                          child: Icon(Icons.sticky_note_2_outlined,
+                              size: 14, color: noteIconColor),
+                        ),
+                      ],
                       if (!locked) ...[
                         const SizedBox(width: 6),
                         GestureDetector(
@@ -1378,16 +1395,14 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                         color: Colors.cyanAccent,
                       ),
                     ),
-                    if (hasNote) ...[
+                    if (showNoteIcon) ...[
                       const SizedBox(width: 4),
                       GestureDetector(
-                        onTap: () => _showNote(ex),
+                        onTap: () => _showExerciseNoteInBB3(ex, execNote),
                         child: Icon(
                           Icons.sticky_note_2_outlined,
                           size: 14,
-                          color: noteViewed
-                              ? Colors.grey.shade400
-                              : theme.colorScheme.secondary,
+                          color: noteIconColor,
                         ),
                       ),
                     ],
@@ -1794,19 +1809,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           ),
         ),
       const SizedBox(width: 6),
-      // Per-set note button — highlights when note is non-empty
-      GestureDetector(
-        onTap: () => _showSetNoteDialog(theme, exId, setIndex),
-        child: Icon(
-          Icons.edit_note,
-          size: 24,
-          color:
-              (_notesCtrl[exId]?.elementAtOrNull(setIndex)?.text.isNotEmpty ==
-                      true)
-                  ? theme.colorScheme.secondary
-                  : Colors.grey.shade100,
-        ),
-      ),
+      _buildSetNoteIcon(theme, exId, setIndex, locked, completedSet),
     ];
   }
 
@@ -1868,10 +1871,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       _lockedReadOnlyCell(
           theme: theme, value: velValue, label: '', width: velWidth),
       const SizedBox(width: 6),
-      GestureDetector(
-        onTap: () => _showSetNoteDialog(theme, exId, setIndex),
-        child: Icon(Icons.edit_note, size: 24, color: Colors.grey.shade100),
-      ),
+      _buildSetNoteIcon(theme, exId, setIndex, true, completedSet),
     ];
   }
 
@@ -2505,15 +2505,133 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     }
   }
 
-  // ── Note viewer ───────────────────────────────────────────────────────────
+  // ── Execution note helpers ────────────────────────────────────────────────
 
-  void _showNote(BB3Exercise ex) {
-    setState(() => _viewedNoteExIds.add(ex.exerciseId));
+  /// Returns the raw Firestore exercise map from completedExercises for [exId],
+  /// or null if not found. Used to read exerciseExecutionNote and set executionNotes.
+  Map<String, dynamic>? _completedExMapForId(String exId) {
+    for (final ex in widget.completedExercises) {
+      final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString();
+      if (id == exId) return ex;
+    }
+    return null;
+  }
+
+  /// Returns a trimmed non-empty string from [raw], or null.
+  static String? _execNoteStr(dynamic raw) {
+    if (raw is String) {
+      final t = raw.trim();
+      return t.isNotEmpty ? t : null;
+    }
+    return null;
+  }
+
+  /// Exercise-level note icon + dialog for BB3 (read-only for locked rows).
+  /// Shows plan note and/or execution note in labelled sections.
+  void _showExerciseNoteInBB3(BB3Exercise ex, String? execNote) {
+    final hasPlanNote = ex.perExerciseNote?.isNotEmpty == true;
+    final hasExecNote = execNote != null && execNote.isNotEmpty;
+    if (hasPlanNote) setState(() => _viewedNoteExIds.add(ex.exerciseId));
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(ex.name, style: const TextStyle(fontSize: 16)),
-        content: Text(ex.perExerciseNote ?? ''),
+        contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (hasPlanNote) ...[
+                const Text('Planned note',
+                    style: TextStyle(fontSize: 11, color: Colors.white54)),
+                const SizedBox(height: 4),
+                Text(ex.perExerciseNote!,
+                    style: const TextStyle(fontSize: 13)),
+                if (hasExecNote) const Divider(height: 20),
+              ],
+              if (hasExecNote) ...[
+                const Text('Execution note',
+                    style: TextStyle(fontSize: 11, color: Colors.white54)),
+                const SizedBox(height: 4),
+                Text(execNote, style: const TextStyle(fontSize: 13)),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Set-level note icon for BB3. For locked rows, shows execution note colour
+  /// and opens a read-only combined dialog. For unlocked rows, opens the
+  /// existing editable plan-note dialog.
+  Widget _buildSetNoteIcon(ThemeData theme, String exId, int setIndex,
+      bool locked, Map<String, dynamic>? completedSet) {
+    final rawExecNote = completedSet?['executionNote'];
+    final execNote = _execNoteStr(rawExecNote);
+    final hasPlanNote =
+        _notesCtrl[exId]?.elementAtOrNull(setIndex)?.text.isNotEmpty == true;
+
+    final Color iconColor;
+    if (execNote != null) {
+      iconColor = Colors.lightBlueAccent;
+    } else if (hasPlanNote) {
+      iconColor = theme.colorScheme.secondary;
+    } else {
+      iconColor = Colors.grey.shade100;
+    }
+
+    return GestureDetector(
+      onTap: () {
+        if (locked && (execNote != null || hasPlanNote)) {
+          _showCompletedSetNoteInBB3(theme, exId, setIndex, execNote);
+        } else if (!locked) {
+          _showSetNoteDialog(theme, exId, setIndex);
+        }
+      },
+      child: Icon(Icons.edit_note, size: 24, color: iconColor),
+    );
+  }
+
+  /// Read-only dialog showing plan note and/or execution note for a completed set.
+  void _showCompletedSetNoteInBB3(
+      ThemeData theme, String exId, int setIndex, String? execNote) {
+    final planNote =
+        _notesCtrl[exId]?.elementAtOrNull(setIndex)?.text.trim();
+    final hasPlanNote = planNote != null && planNote.isNotEmpty;
+    final hasExecNote = execNote != null && execNote.isNotEmpty;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Set ${setIndex + 1} note',
+            style: const TextStyle(fontSize: 14)),
+        contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (hasPlanNote) ...[
+              const Text('Planned note',
+                  style: TextStyle(fontSize: 11, color: Colors.white54)),
+              const SizedBox(height: 4),
+              Text(planNote, style: const TextStyle(fontSize: 13)),
+              if (hasExecNote) const Divider(height: 20),
+            ],
+            if (hasExecNote) ...[
+              const Text('Execution note',
+                  style: TextStyle(fontSize: 11, color: Colors.white54)),
+              const SizedBox(height: 4),
+              Text(execNote, style: const TextStyle(fontSize: 13)),
+            ],
+          ],
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),

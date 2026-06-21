@@ -919,6 +919,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         sets: overlaidSets,
         setCount: effectiveCount,
         isMarkedDone: d.isMarkedDone,
+        exerciseExecutionNote: d.exerciseExecutionNote,
+        // null draft defers to server — identical to per-set executionNote.
+        // A draft cleared offline will reappear from the server until
+        // Firestore confirms the delete. Accepted pre-existing limitation.
       );
     }).toList();
   }
@@ -1592,13 +1596,15 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onDelete: () => _onDeleteExercise(row),
             onReplace: () => _onReplaceExercise(row),
             onMoveToCircuit: () => _onMoveExerciseToCircuit(row),
-            onNotes: () => _showNotesPlaceholder(),
+            onNotes: () => _showExerciseNoteDialog(row),
             onRemoveSet: (setIndex) => _onRemoveSet(row, setIndex),
             onNoteTap: (setIndex) => _onOpenSetNoteDialog(row, setIndex),
             onExerciseDetails: () => _navigateToExerciseDetails(row),
             onTopSets: () => _navigateToTopSets(row),
             isExercisePlanNoteRead:
                 controller.isExercisePlanNoteRead(row.exerciseId),
+            hasExerciseExecutionNote:
+                row.exerciseExecutionNote?.trim().isNotEmpty == true,
             onOpenExercisePlanNote: combinedNote != null
                 ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
                 : null,
@@ -2048,8 +2054,85 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     return _defaultVelocityExerciseIds.contains(row.exerciseId);
   }
 
-  void _showNotesPlaceholder() {
-    _showSnackBar('Use the note icon beside each set to add notes.');
+  Future<void> _showExerciseNoteDialog(Wes2ExerciseRow row) async {
+    final currentRow = _controller.rows.firstWhere(
+      (r) => r.exerciseId == row.exerciseId,
+      orElse: () => row,
+    );
+    final planNote = currentRow.exercisePlanNote?.trim();
+    final hasPlanNote = planNote != null && planNote.isNotEmpty;
+    final noteCtrl = TextEditingController(
+      text: currentRow.exerciseExecutionNote?.trim() ?? '',
+    );
+    try {
+      final saved = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(currentRow.name,
+              style: const TextStyle(fontSize: 16)),
+          contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasPlanNote) ...[
+                  const Text('Plan note',
+                      style: TextStyle(fontSize: 11, color: Colors.white54)),
+                  const SizedBox(height: 4),
+                  Text(planNote,
+                      style: const TextStyle(fontSize: 13)),
+                  const Divider(height: 20),
+                ],
+                const Text('Execution note',
+                    style: TextStyle(fontSize: 11, color: Colors.white54)),
+                const SizedBox(height: 4),
+                TextField(
+                  controller: noteCtrl,
+                  autofocus: true,
+                  maxLines: 4,
+                  minLines: 2,
+                  decoration: const InputDecoration(
+                    hintText: 'How did this exercise feel?',
+                    border: OutlineInputBorder(),
+                    contentPadding:
+                        EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, noteCtrl.text),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || saved == null) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final trimmed = saved.trim();
+      _controller.updateExerciseExecutionNote(
+        exerciseId: currentRow.exerciseId,
+        rawText: trimmed,
+      );
+      _saveDraftNow();
+      // ignore: discarded_futures
+      _saveExerciseExecutionNoteSilently(
+        uid: _controller.actingUid,
+        date: _controller.selectedDate,
+        exerciseId: currentRow.exerciseId,
+        note: trimmed.isEmpty ? null : trimmed,
+      );
+    } finally {
+      noteCtrl.dispose();
+    }
   }
 
   void _navigateToExerciseDetails(Wes2ExerciseRow row) {
@@ -2558,6 +2641,24 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         date: date,
         exerciseId: exerciseId,
         setIndex: setIndex,
+        note: note,
+      );
+    } catch (_) {
+      // Silent failure; local draft preserves the note for next reopen.
+    }
+  }
+
+  Future<void> _saveExerciseExecutionNoteSilently({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required String? note,
+  }) async {
+    try {
+      await _repository.saveExerciseExecutionNote(
+        uid: uid,
+        date: date,
+        exerciseId: exerciseId,
         note: note,
       );
     } catch (_) {
