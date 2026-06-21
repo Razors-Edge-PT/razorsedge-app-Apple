@@ -6,6 +6,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'user_context.dart';
 import 'periodization_model_utils.dart';
 import 'warmup_service.dart';
+import 'app_theme.dart';
 import 'dart:async' show unawaited;
 
 import 'block_repository.dart';
@@ -722,6 +723,10 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
   Widget build(BuildContext context) {
     final mostRecent = _weights.isNotEmpty ? _weights.first : null;
 
+    final goodLiftColors = Theme.of(context).extension<GoodLiftColors>();
+    final quaternaryColor =
+        goodLiftColors?.quaternary ?? AppTheme.defaultQuaternary;
+
     final now = DateTime.now();
     final averageSourceWeights = _weightsForAverageSource();
 
@@ -1142,14 +1147,14 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                       (i) => FlSpot(i.toDouble(), (am[i]['weight'] as double)),
                                 ),
                                 barWidth: 2,
-                                color: Theme.of(context).colorScheme.primary, // AM
+                                color: Theme.of(context).colorScheme.tertiary, // AM
                                 dotData: FlDotData(
                                   show: true,
                                   getDotPainter: (spot, percent, bar, index) =>
                                       FlDotCirclePainter(
                                     radius: 2,
                                     strokeWidth: 0,
-                                    color: Theme.of(context).colorScheme.primary,
+                                          color: Theme.of(context).colorScheme.tertiary,
                                   ),
                                 ),
                               ),
@@ -1161,14 +1166,14 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                       (i) => FlSpot(i.toDouble(), (pm[i]['weight'] as double)),
                                 ),
                                 barWidth: 2,
-                                color: Colors.pinkAccent, // PM
+                                color: quaternaryColor, // PM
                                 dotData: FlDotData(
                                   show: true,
                                   getDotPainter: (spot, percent, bar, index) =>
                                       FlDotCirclePainter(
                                     radius: 2,
                                     strokeWidth: 0,
-                                    color: Colors.pinkAccent,
+                                          color: quaternaryColor,
                                   ),
                                 ),
                               ),
@@ -1264,7 +1269,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
             if (averageLast7 != null && averagePrev7 != null)
               Builder(
                 builder: (context) => Card(
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  color: Theme.of(context).colorScheme.tertiary,
                   elevation: 3,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: ListTile(
@@ -1339,10 +1344,10 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                               child: Text(
                                 'PM',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
-                                  color: Colors.pinkAccent, // ✅ match PM color
+                                  color: quaternaryColor,
                                 ),
                               ),
                             ),
@@ -1425,7 +1430,10 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                         child: Text(
                                           pm != null ? '${pm['weight']} ${pm['unit']}' : '＋',
                                           textAlign: TextAlign.center,
-                                          style: const TextStyle(fontSize: 13, color: Colors.pinkAccent),
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: quaternaryColor,
+                                          ),
                                         ),
                                       ),
                                     ),

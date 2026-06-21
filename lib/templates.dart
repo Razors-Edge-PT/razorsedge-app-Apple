@@ -2358,8 +2358,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     final goodLiftColors =
     Theme.of(context).extension<GoodLiftColors>();
 
-    final exerciseColor =
-        goodLiftColors?.quaternary ?? AppTheme.defaultQuaternary;
+    final exerciseColor = Theme.of(context).colorScheme.secondary;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

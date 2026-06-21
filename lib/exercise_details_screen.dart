@@ -954,17 +954,17 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                       child: Text(
                         'E1RM Trend • ${_rangeLabel(_trend)}',
                         style: TextStyle(
-                          color: Theme.of(context).colorScheme.secondary,
+                          color: Theme.of(context).colorScheme.tertiary,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      foregroundColor: Theme.of(context).colorScheme.secondary,
+                      foregroundColor: Theme.of(context).colorScheme.tertiary,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
-                        side: BorderSide(color: Theme.of(context).colorScheme.secondary),
+                        side: BorderSide(color: Theme.of(context).colorScheme.tertiary),
                       ),
                     ),
                   ),
@@ -979,14 +979,14 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 8),
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        border: Border.all(color: Theme.of(context).colorScheme.secondary),
+                        border: Border.all(color: Theme.of(context).colorScheme.tertiary),
                         borderRadius: BorderRadius.circular(8),
-                        color: Theme.of(context).colorScheme.secondary.withOpacity(0.08),
+                        color: Theme.of(context).colorScheme.tertiary.withOpacity(0.1),
                       ),
                       child: Text(
                         _rirToggleTextTrend(),
                         style: TextStyle(
-                          color: Theme.of(context).colorScheme.secondary,
+                          color: Theme.of(context).colorScheme.tertiary,
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                         ),
@@ -1083,7 +1083,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                     LineChartBarData(
                       spots: spots,
                       isCurved: true,
-                      color: Theme.of(context).colorScheme.secondary,
+                      color: Theme.of(context).colorScheme.tertiary,
                       // 👇 Hide circles for 6m+; show for 14d/1m
                       dotData: FlDotData(
                         show: _trend == TrendRange.d14 || _trend == TrendRange.m1,
@@ -1092,7 +1092,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                       barWidth: (_trend == TrendRange.m6 || _trend == TrendRange.y1 || _trend == TrendRange.y2) ? 2.0 : 1.0,
                       belowBarData: BarAreaData(
                         show: true,
-                        color: Theme.of(context).colorScheme.secondary.withOpacity(0.1),
+                        color: Theme.of(context).colorScheme.tertiary.withOpacity(0.1),
                       ),
                     ),
                   ],
@@ -1177,25 +1177,25 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                             FilteringTextInputFormatter.allow(RegExp(r'[0-9,\-\s]*')), // digits, commas, dash, spaces
                           ],
                           onChanged: (s) => setState(() { _onRepTargetChanged(s); }),
-                          cursorColor: Theme.of(context).colorScheme.secondary,
+                          cursorColor: Theme.of(context).colorScheme.tertiary,
                           style: TextStyle(
-                            color: Theme.of(context).colorScheme.secondary,
+                            color: Theme.of(context).colorScheme.tertiary,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
                           decoration: InputDecoration(
                             hintText: 'Reps',
-                            hintStyle: TextStyle(color: Theme.of(context).colorScheme.secondary),
+                            hintStyle: TextStyle(color: Theme.of(context).colorScheme.tertiary),
                             isDense: true,
                             contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                             filled: true,
-                            fillColor: Theme.of(context).colorScheme.secondary.withOpacity(0.08),
+                            fillColor: Theme.of(context).colorScheme.tertiary.withOpacity(0.08),
                             enabledBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Theme.of(context).colorScheme.secondary),
+                              borderSide: BorderSide(color: Theme.of(context).colorScheme.tertiary),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             focusedBorder: OutlineInputBorder(
-                              borderSide: BorderSide(color: Theme.of(context).colorScheme.secondary, width: 1.3),
+                              borderSide: BorderSide(color: Theme.of(context).colorScheme.tertiary, width: 1.3),
                               borderRadius: BorderRadius.circular(8),
                             ),
                           ),
@@ -1216,7 +1216,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                                 minimumSize: const Size(0, 32),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  side: BorderSide(color: Theme.of(context).colorScheme.secondary),
+                                  side: BorderSide(color: Theme.of(context).colorScheme.tertiary),
                                 ),
                               ),
                               child: FittedBox(
@@ -1225,7 +1225,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                                   _multiRepLabel(),
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: Theme.of(context).colorScheme.secondary,
+                                    color: Theme.of(context).colorScheme.tertiary,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -1245,14 +1245,14 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                             padding: const EdgeInsets.symmetric(horizontal: 8),
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              border: Border.all(color: Theme.of(context).colorScheme.secondary),
+                              border: Border.all(color: Theme.of(context).colorScheme.tertiary),
                               borderRadius: BorderRadius.circular(8),
-                              color: Theme.of(context).colorScheme.secondary.withOpacity(0.08),
+                              color: Theme.of(context).colorScheme.tertiary.withOpacity(0.08),
                             ),
                             child: Text(
                               _rirToggleText(), // e.g. "Including RIR" / "Excluding RIR"
                               style: TextStyle(
-                                color: Theme.of(context).colorScheme.secondary,
+                                color: Theme.of(context).colorScheme.tertiary,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -1463,7 +1463,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             ),
             subtitle: Text(
               '$weightLabel × ${topSet.reps}, RIR ${topSet.rir} → E1RM: $e1rmLabel',
-              style: TextStyle(color: Theme.of(context).colorScheme.secondary),
+              style: TextStyle(color: Theme.of(context).colorScheme.tertiary),
             ),
           );
         },
