@@ -39,6 +39,7 @@ import 'app_check_ready.dart';
 import 'startup_route_service.dart';
 import 'startup_trace.dart';
 import 'silent_restore_coordinator.dart';
+import 'valid_user_gate.dart';
 
 
 
@@ -272,14 +273,24 @@ class _AppRootState extends State<AppRoot> {
 
     // ── Explicit-logout prerequisite (shared by EVERY valid-user caller:
     // the synchronous fast path, authStateChanges, the watchdogs, restore
-    // steps and silent Google restore all route through here). A stale cached
-    // Firebase user must never override a deliberate logout, and the flag must
-    // not be cleared until it has been confirmed false for THIS generation.
-    final explicitLogout = prefs.getBool(_kExplicitLogout) ?? false;
-    if (explicitLogout) {
+    // steps and silent Google restore all route through here).
+    //
+    // The flag is read BEFORE it is cleared or the UI is authenticated. A stale
+    // / unexpected Firebase user that arrives AFTER an explicit logout — e.g. an
+    // older silent credential exchange whose authStateChanges(user) lands here
+    // before that exchange's own post-abandonment check runs — must NOT
+    // authenticate and must NOT clear the flag. The unexpected user is signed
+    // back out so the Firebase session matches the logged-out UI; a legitimate
+    // interactive login has already cleared the flag (login_screen /
+    // create_new_account_screen) BEFORE sign-in, so it passes the gate.
+    final allowed = await passesExplicitLogoutGate(
+      isExplicitLogout: () async => prefs.getBool(_kExplicitLogout) ?? false,
+      signOutUnexpected: _signOutUnexpectedUser,
+    );
+    if (gen != _authGen || !mounted) return;
+    if (!allowed) {
       unawaited(writeAuthBreadcrumb(
-          'handleValidUser explicitLogout=true → unauthenticated gen=$gen'));
-      if (gen != _authGen || !mounted) return;
+          'handleValidUser explicitLogout=true → signOut+unauthenticated gen=$gen'));
       _clearMemo();
       setState(() => _phase = _AuthPhase.unauthenticated);
       return;
@@ -565,6 +576,20 @@ class _AppRootState extends State<AppRoot> {
       onNativeWon: StartupTrace.nativeRestoreWon,
       onGoogleWon: StartupTrace.silentGoogleWon,
     );
+  }
+
+  /// Signs out an unexpected / stale Firebase user that arrived after an
+  /// explicit logout, so the Firebase session matches the logged-out UI. The
+  /// explicit-logout flag is left untouched (preserved by the caller). The
+  /// resulting authStateChanges(null) re-confirms the unauthenticated phase via
+  /// _handleNullOrAnon (which reads the preserved flag). Best-effort.
+  Future<void> _signOutUnexpectedUser() async {
+    try {
+      await GoogleSignIn().signOut();
+    } catch (_) {}
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (_) {}
   }
 
   void _clearMemo() {
