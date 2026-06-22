@@ -40,6 +40,8 @@ import 'startup_route_service.dart';
 import 'startup_trace.dart';
 import 'silent_restore_coordinator.dart';
 import 'valid_user_gate.dart';
+import 'auth_diag.dart';
+import 'auth_signout.dart';
 
 
 
@@ -93,7 +95,7 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class _AppRootState extends State<AppRoot> {
+class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   // SharedPreferences key written true only on an explicit user-initiated logout.
   // Prevents treating Firebase Auth's transient null on cold-start as a real logout.
   static const _kExplicitLogout = 'goodlift_explicit_logout';
@@ -158,6 +160,9 @@ class _AppRootState extends State<AppRoot> {
   @override
   void initState() {
     super.initState();
+    // Lifecycle observer is DIAGNOSTIC ONLY (logs the current Firebase UID at
+    // paused/inactive/detached/resumed) — it performs no auth work.
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => StartupTrace.firstFrame());
     _authSub = FirebaseAuth.instance.authStateChanges().listen(_onAuthEvent);
 
@@ -240,8 +245,17 @@ class _AppRootState extends State<AppRoot> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Diagnostic only — no auth side-effects. Captures the current Firebase UID
+    // at each lifecycle transition to prove the session is intact across
+    // background/foreground and at process detach.
+    AuthDiag.lifecycle(state.name);
   }
 
   // ─── auth stream handler ──────────────────────────────────────────────────
@@ -584,12 +598,10 @@ class _AppRootState extends State<AppRoot> {
   /// resulting authStateChanges(null) re-confirms the unauthenticated phase via
   /// _handleNullOrAnon (which reads the preserved flag). Best-effort.
   Future<void> _signOutUnexpectedUser() async {
-    try {
-      await GoogleSignIn().signOut();
-    } catch (_) {}
-    try {
-      await FirebaseAuth.instance.signOut();
-    } catch (_) {}
+    await performSignOut(
+      reason: SignOutReason.staleUserAfterExplicitLogout,
+      caller: 'AppRoot._handleValidUser',
+    );
   }
 
   void _clearMemo() {
@@ -690,15 +702,10 @@ class _AppRootState extends State<AppRoot> {
       // Abandonment: a stale success that lands after an explicit logout is
       // signed back out so the user is never silently signed back in.
       signOutLateCompletion: () async {
-        await writeAuthBreadcrumb('silentGoogleRestore abandonAfterLogout gen=$gen');
-        debugPrint('[AUTHRESTORE] silentGoogleRestore: explicit logout during '
-            'exchange — signing out late completion');
-        try {
-          await GoogleSignIn().signOut();
-        } catch (_) {}
-        try {
-          await FirebaseAuth.instance.signOut();
-        } catch (_) {}
+        await performSignOut(
+          reason: SignOutReason.lateSilentRestoreAbandon,
+          caller: 'AppRoot._runSilentGoogleRestore',
+        );
       },
     );
 
@@ -775,6 +782,10 @@ void main() async {
     );
   }
   StartupTrace.firebaseInitialized();
+  // Auth-persistence diagnostic: log project/app id + currentUser + last
+  // provider + explicit-logout immediately after init on this (possibly new)
+  // process. Fire-and-forget — proves whether the native session survived.
+  unawaited(AuthDiag.afterFirebaseInit());
 
   // App Check: invoke activation SYNCHRONOUSLY (registers the provider before
   // any widget builds / any Firestore request can start) but do NOT await it —

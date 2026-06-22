@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'startup_route_service.dart';
 import 'membership_gate.dart';
+import 'auth_signout.dart';
 
 class AccountDeletionScreen extends StatefulWidget {
   const AccountDeletionScreen({super.key});
@@ -108,7 +109,11 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
       MembershipGate.clearSessionAllowed();
 
       await FirebaseAuth.instance.currentUser?.delete();
-      await FirebaseAuth.instance.signOut();
+      await performSignOut(
+        reason: SignOutReason.accountDeletion,
+        caller: 'AccountDeletionScreen',
+        google: false, // parity with prior behaviour (Firebase-only)
+      );
 
       if (mounted) {
         Navigator.pushReplacementNamed(context, '/login');

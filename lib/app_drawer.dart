@@ -1,9 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_debug.dart';
+import 'auth_signout.dart';
 import 'startup_route_service.dart';
 import 'membership_gate.dart';
 import '../SavedWorkoutsScreen.dart';
@@ -226,8 +226,10 @@ class AppDrawer extends StatelessWidget {
             // Clear the restored-route marker + in-memory session-allow.
             if (uid != null) await StartupRouteService.clearForLogout(uid);
             MembershipGate.clearSessionAllowed();
-            await GoogleSignIn().signOut();
-            await FirebaseAuth.instance.signOut();
+            await performSignOut(
+              reason: SignOutReason.explicitLogoutDrawer,
+              caller: 'AppDrawer.logout',
+            );
             Navigator.pushReplacementNamed(context, '/login');
           }),
 

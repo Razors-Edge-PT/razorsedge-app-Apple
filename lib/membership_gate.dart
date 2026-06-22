@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
-import 'package:google_sign_in/google_sign_in.dart';
+import 'auth_signout.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_debug.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
@@ -431,8 +431,10 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
     // Clear the restored-route marker + in-memory session-allow for this UID.
     if (uid != null) await StartupRouteService.clearForLogout(uid);
     MembershipGate.clearSessionAllowed();
-    await GoogleSignIn().signOut();
-    await FirebaseAuth.instance.signOut();
+    await performSignOut(
+      reason: SignOutReason.explicitLogoutPaywall,
+      caller: 'MembershipInactiveScreen.logout',
+    );
     Navigator.pushReplacementNamed(context, '/login');
   }
 

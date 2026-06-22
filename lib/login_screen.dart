@@ -6,6 +6,8 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_debug.dart';
+import 'auth_diag.dart';
+import 'auth_signout.dart';
 import 'create_new_account_screen.dart';
 import 'template_generator.dart';
 
@@ -65,6 +67,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await _upsertUserDoc(cred.user);
       await writeAuthBreadcrumb('AUTHLOGIN provider=password uid=${cred.user?.uid}');
+      AuthDiag.afterLogin(provider: 'password', uid: cred.user?.uid);
       debugPrint('[AUTHLOGIN] email sign-in uid=${cred.user?.uid} — AppRoot will route');
       // No navigation here. AppRoot is the single auth-state authority: its
       // authStateChanges handler creates UserContext, mounts the authenticated
@@ -91,7 +94,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final googleSignIn = GoogleSignIn();
-      await googleSignIn.signOut(); // clears cached selection → forces account picker every time
+      // Google-only sign-out to force the account picker — does NOT touch the
+      // Firebase session. Routed through performSignOut so it is logged.
+      await performSignOut(
+        reason: SignOutReason.forceAccountPicker,
+        caller: 'LoginScreen.signInWithGoogle',
+        firebase: false,
+      );
       final googleUser = await googleSignIn.signIn();
       if (googleUser == null) {
         if (mounted) setState(() => _isLoading = false);
@@ -114,6 +123,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await _upsertUserDoc(cred.user);
       await writeAuthBreadcrumb('AUTHLOGIN provider=google uid=${cred.user?.uid}');
+      AuthDiag.afterLogin(provider: 'google', uid: cred.user?.uid);
       debugPrint('[AUTHLOGIN] Google sign-in uid=${cred.user?.uid} — AppRoot will route');
       // No navigation here — AppRoot routes on authStateChanges (see email method).
     } on FirebaseAuthException catch (e) {
@@ -142,6 +152,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final cred = await FirebaseAuth.instance.signInWithProvider(appleProvider);
       await _upsertUserDoc(cred.user);
       await writeAuthBreadcrumb('AUTHLOGIN provider=apple uid=${cred.user?.uid}');
+      AuthDiag.afterLogin(provider: 'apple', uid: cred.user?.uid);
       debugPrint('[AUTHLOGIN] Apple sign-in uid=${cred.user?.uid} — AppRoot will route');
       // No navigation here — AppRoot routes on authStateChanges (see email method).
     } on FirebaseAuthException catch (e) {

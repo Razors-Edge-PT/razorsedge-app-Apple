@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'auth_diag.dart';
+import 'auth_signout.dart';
 import 'dart:async'; // for Timer debounce
 import 'package:flutter/services.dart'; // for TextInputFormatter
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -108,7 +110,14 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 
   Future<void> _cleanupNewUserOnFailure() async {
     try { await FirebaseAuth.instance.currentUser?.delete(); }
-    catch (e, st) { print('⚠️ Cleanup failed: $e\n$st'); await FirebaseAuth.instance.signOut(); }
+    catch (e, st) {
+      print('⚠️ Cleanup failed: $e\n$st');
+      await performSignOut(
+        reason: SignOutReason.accountCreationCleanup,
+        caller: 'CreateNewAccount.cleanup',
+        google: false, // parity with prior behaviour (Firebase-only)
+      );
+    }
   }
 
   // Accepts "dd-mm-yyyy" or "yyyy-mm-dd"; returns normalized "yyyy-mm-dd" or null
@@ -286,6 +295,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       );
 
       final user = FirebaseAuth.instance.currentUser;
+      AuthDiag.afterLogin(provider: 'password(create)', uid: user?.uid);
       if (user != null) {
         // displayName = username
         if (username.isNotEmpty) {
