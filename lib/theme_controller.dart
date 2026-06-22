@@ -4,23 +4,23 @@ import 'app_theme.dart';
 
 /// Controls the app's theme colors and persists selections via SharedPreferences.
 class ThemeController extends ChangeNotifier {
-  static const _primaryKey    = 'primaryColor';
-  static const _secondaryKey  = 'secondaryColor';
-  static const _tertiaryKey   = 'tertiaryColor';
+  static const _primaryKey = 'primaryColor';
+  static const _secondaryKey = 'secondaryColor';
+  static const _tertiaryKey = 'tertiaryColor';
   static const _quaternaryKey = 'quaternaryColor';
-  static const _modeKey       = 'themeMode';
+  static const _modeKey = 'themeMode';
 
-  Color _primaryColor    = AppTheme.defaultPrimary;
-  Color _secondaryColor  = AppTheme.defaultSecondary;
-  Color _tertiaryColor   = AppTheme.defaultTertiary;
+  Color _primaryColor = AppTheme.defaultPrimary;
+  Color _secondaryColor = AppTheme.defaultSecondary;
+  Color _tertiaryColor = AppTheme.defaultTertiary;
   Color _quaternaryColor = AppTheme.defaultQuaternary;
-  ThemeMode _themeMode   = AppTheme.defaultThemeMode;
+  ThemeMode _themeMode = AppTheme.defaultThemeMode;
 
-  Color get primaryColor    => _primaryColor;
-  Color get secondaryColor  => _secondaryColor;
-  Color get tertiaryColor   => _tertiaryColor;
+  Color get primaryColor => _primaryColor;
+  Color get secondaryColor => _secondaryColor;
+  Color get tertiaryColor => _tertiaryColor;
   Color get quaternaryColor => _quaternaryColor;
-  ThemeMode get themeMode   => _themeMode;
+  ThemeMode get themeMode => _themeMode;
 
   /// Load persisted theme selections. Call before runApp.
   Future<void> load() async {
@@ -30,9 +30,9 @@ class ThemeController extends ChangeNotifier {
     final t = prefs.getInt(_tertiaryKey);
     final q = prefs.getInt(_quaternaryKey);
     final m = prefs.getInt(_modeKey);
-    if (p != null) _primaryColor    = Color(p);
-    if (s != null) _secondaryColor  = Color(s);
-    if (t != null) _tertiaryColor   = Color(t);
+    if (p != null) _primaryColor = Color(p);
+    if (s != null) _secondaryColor = Color(s);
+    if (t != null) _tertiaryColor = Color(t);
     if (q != null) _quaternaryColor = Color(q);
     // Existing users without a saved quaternary get AppTheme.defaultQuaternary.
     if (m != null && m >= 0 && m < ThemeMode.values.length) {
@@ -42,17 +42,27 @@ class ThemeController extends ChangeNotifier {
   }
 
   /// In-memory preview without persisting (for live previews in picker).
-  void preview({Color? primary, Color? secondary, Color? tertiary, Color? quaternary, ThemeMode? mode}) {
-    if (primary    != null) _primaryColor    = primary;
-    if (secondary  != null) _secondaryColor  = secondary;
-    if (tertiary   != null) _tertiaryColor   = tertiary;
+  void preview(
+      {Color? primary,
+      Color? secondary,
+      Color? tertiary,
+      Color? quaternary,
+      ThemeMode? mode}) {
+    if (primary != null) _primaryColor = primary;
+    if (secondary != null) _secondaryColor = secondary;
+    if (tertiary != null) _tertiaryColor = tertiary;
     if (quaternary != null) _quaternaryColor = quaternary;
-    if (mode       != null) _themeMode       = mode;
+    if (mode != null) _themeMode = mode;
     notifyListeners();
   }
 
   /// Update and immediately persist the given values.
-  Future<void> update({Color? primary, Color? secondary, Color? tertiary, Color? quaternary, ThemeMode? mode}) async {
+  Future<void> update(
+      {Color? primary,
+      Color? secondary,
+      Color? tertiary,
+      Color? quaternary,
+      ThemeMode? mode}) async {
     final prefs = await SharedPreferences.getInstance();
     if (primary != null) {
       _primaryColor = primary;
@@ -77,14 +87,26 @@ class ThemeController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reset all theme settings to app defaults and persist.
+  /// Remove customised selections and follow the app's current defaults.
+  ///
+  /// This deletes the persisted overrides rather than writing the current
+  /// defaults into SharedPreferences, so a reset user picks up any new
+  /// defaults introduced by future app updates.
   Future<void> reset() async {
-    await update(
-      primary:    AppTheme.defaultPrimary,
-      secondary:  AppTheme.defaultSecondary,
-      tertiary:   AppTheme.defaultTertiary,
-      quaternary: AppTheme.defaultQuaternary,
-      mode:       AppTheme.defaultThemeMode,
-    );
+    final prefs = await SharedPreferences.getInstance();
+
+    await prefs.remove(_primaryKey);
+    await prefs.remove(_secondaryKey);
+    await prefs.remove(_tertiaryKey);
+    await prefs.remove(_quaternaryKey);
+    await prefs.remove(_modeKey);
+
+    _primaryColor = AppTheme.defaultPrimary;
+    _secondaryColor = AppTheme.defaultSecondary;
+    _tertiaryColor = AppTheme.defaultTertiary;
+    _quaternaryColor = AppTheme.defaultQuaternary;
+    _themeMode = AppTheme.defaultThemeMode;
+
+    notifyListeners();
   }
 }

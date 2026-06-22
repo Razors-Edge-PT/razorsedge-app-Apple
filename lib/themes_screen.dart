@@ -32,9 +32,9 @@ class ThemesScreen extends StatelessWidget {
     // Blues / Cyans
     Color(0xFF00BCD4), // Cyan 500
     Color(0xFF18FFFF), // Cyan Accent (default tertiary)
-    Color(0xFF40C4FF), // Light Blue Accent (default secondary)
+    Color(0xFF40C4FF), // Light Blue Accent
     Color(0xFF03A9F4), // Light Blue 500
-    Color(0xFF2196F3), // Blue 500
+    Color(0xFF2196F3), // Blue 500 (default secondary)
     Color(0xFF448AFF), // Blue Accent 200
     Color(0xFF3F51B5), // Indigo 500
     // Purples
@@ -43,15 +43,15 @@ class ThemesScreen extends StatelessWidget {
     Color(0xFFCE93D8), // Purple 200
     Color(0xFFEA80FC), // Purple Accent 100
     // Dark / chrome tones (good for primary background role)
-    Color(0xFF263238), // BlueGrey 900 (default primary/chrome)
+    Color(0xFF263238), // BlueGrey 900
     Color(0xFF37474F), // BlueGrey 800
-    Color(0xFF455A64), // BlueGrey 700
+    Color(0xFF455A64), // BlueGrey 700 (default quaternary)
     Color(0xFF1A237E), // Indigo 900
     Color(0xFF006064), // Cyan 900
     Color(0xFF1B5E20), // Green 900
     Color(0xFF4A148C), // Purple 900
     Color(0xFF212121), // Grey 900
-    Color(0xFF000000), // Black
+    Color(0xFF000000), // Black (default primary/chrome)
   ];
 
   @override
@@ -98,9 +98,12 @@ class ThemesScreen extends StatelessWidget {
                     selected: {tc.themeMode},
                     style: SegmentedButton.styleFrom(
                       backgroundColor: Theme.of(context).colorScheme.secondary,
-                      selectedBackgroundColor: Theme.of(context).colorScheme.secondary,
-                      foregroundColor: AppTheme.onColor(Theme.of(context).colorScheme.secondary),
-                      selectedForegroundColor: AppTheme.onColor(Theme.of(context).colorScheme.secondary),
+                      selectedBackgroundColor:
+                          Theme.of(context).colorScheme.secondary,
+                      foregroundColor: AppTheme.onColor(
+                          Theme.of(context).colorScheme.secondary),
+                      selectedForegroundColor: AppTheme.onColor(
+                          Theme.of(context).colorScheme.secondary),
                     ),
                     onSelectionChanged: (s) => tc.update(mode: s.first),
                   ),
@@ -115,7 +118,8 @@ class ThemesScreen extends StatelessWidget {
                   const SizedBox(height: 28),
                   _ColorSection(
                     label: 'Secondary Color',
-                    subtitle: 'Active/selected states, switches, focused borders',
+                    subtitle:
+                        'Active/selected states, switches, focused borders',
                     current: tc.secondaryColor,
                     presets: _presets,
                     onChanged: (c) => tc.update(secondary: c),
@@ -123,7 +127,8 @@ class ThemesScreen extends StatelessWidget {
                   const SizedBox(height: 28),
                   _ColorSection(
                     label: 'Tertiary Color',
-                    subtitle: 'Action icons, chips, message bubbles, send accents',
+                    subtitle:
+                        'Action icons, chips, message bubbles, send accents',
                     current: tc.tertiaryColor,
                     presets: _presets,
                     onChanged: (c) => tc.update(tertiary: c),
@@ -131,7 +136,8 @@ class ThemesScreen extends StatelessWidget {
                   const SizedBox(height: 28),
                   _ColorSection(
                     label: 'Quaternary Color',
-                    subtitle: 'Completed workouts, success states, completed calendar markers',
+                    subtitle:
+                        'Completed workouts, success states, completed calendar markers',
                     current: tc.quaternaryColor,
                     presets: _presets,
                     onChanged: (c) => tc.update(quaternary: c),
@@ -141,8 +147,10 @@ class ThemesScreen extends StatelessWidget {
                     width: double.infinity,
                     child: OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
-                        backgroundColor: Theme.of(context).colorScheme.secondary,
-                        foregroundColor: AppTheme.onColor(Theme.of(context).colorScheme.secondary),
+                        backgroundColor:
+                            Theme.of(context).colorScheme.secondary,
+                        foregroundColor: AppTheme.onColor(
+                            Theme.of(context).colorScheme.secondary),
                         side: BorderSide(
                           color: Theme.of(context).colorScheme.secondary,
                         ),
@@ -220,15 +228,20 @@ class _ColorSection extends StatelessWidget {
           const SizedBox(height: 8),
           Row(
             children: [
-              Icon(Icons.info_outline, size: 14,
-                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5)),
+              Icon(Icons.info_outline,
+                  size: 14,
+                  color:
+                      Theme.of(context).colorScheme.onSurface.withOpacity(0.5)),
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
                   'Very light or very dark colors may reduce contrast in some areas.',
                   style: TextStyle(
                     fontSize: 11,
-                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withOpacity(0.5),
                   ),
                 ),
               ),

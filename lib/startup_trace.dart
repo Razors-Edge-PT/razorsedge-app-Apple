@@ -99,6 +99,14 @@ class StartupTrace {
   static void firebaseInitialized() => mark('firebase_initialized');
   static void appCheckInvoked() => mark('appcheck_activate_invoked');
   static void appCheckSettled() => mark('appcheck_ready_settled');
+  static void appCheckDisabled() => mark('appcheck_disabled');
+
+  // ── Cold-auth restoration race (Google graceful degradation) ───────────────
+  static void nativeRestoreStarted() => mark('native_restore_started');
+  static void silentGoogleStarted() => mark('silent_google_started');
+  static void nativeRestoreWon() => mark('native_restore_won');
+  static void silentGoogleWon() => mark('silent_google_won');
+  static void restoreFailedOrTimedOut() => mark('restore_failed_or_timed_out');
   static void runAppCalled() => mark('runApp_called');
   static void firstFrame() => mark('first_flutter_frame');
   static void cachedUserRead(String? uid) =>

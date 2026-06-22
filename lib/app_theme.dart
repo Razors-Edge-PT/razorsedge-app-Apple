@@ -9,14 +9,14 @@ import 'package:google_fonts/google_fonts.dart';
 ///   Tertiary   = action icons / accent highlights (FABs, chips, send icons, bubbles)
 ///   Quaternary = completed / success states (completed workout calendar markers)
 class AppTheme {
-  // Default primary = blueGrey.shade900 (app chrome — same hardcoded value as before)
-  static const Color defaultPrimary   = Color(0xFF263238); // BlueGrey 900
-  // Default secondary = lightBlueAccent (was defaultPrimary in Phase 1)
-  static const Color defaultSecondary = Color(0xFF40C4FF); // Colors.lightBlueAccent
-  // Default tertiary  = cyanAccent (was defaultSecondary in Phase 1)
-  static const Color defaultTertiary  = Color(0xFF18FFFF); // Colors.cyanAccent
-  // Default quaternary = green.shade400 — completed / success states
-  static const Color defaultQuaternary = Color(0xFF66BB6A); // Colors.green.shade400
+  // Primary = chrome / branded background surfaces (AppBar, scaffold, drawer).
+  static const Color defaultPrimary = Color(0xFF000000); // Black
+  // Secondary = active / selected states (switches, focused borders, chart lines).
+  static const Color defaultSecondary = Color(0xFF03A9F4); // Light Blue 500
+  // Tertiary = action icons / accent highlights (FABs, chips, send icons, bubbles).
+  static const Color defaultTertiary = Color(0xFF18FFFF); // Cyan Accent
+  // Quaternary = completed / success states (completed workout calendar markers).
+  static const Color defaultQuaternary = Color(0xFF263238); // BlueGrey 900
 
   static const ThemeMode defaultThemeMode = ThemeMode.dark;
 
@@ -30,10 +30,10 @@ class AppTheme {
     Color? tertiary,
     Color? quaternary,
   }) {
-    final chrome = primary    ?? defaultPrimary;    // scaffold / AppBar bg
-    final active = secondary  ?? defaultSecondary;  // colorScheme.primary slot
-    final accent = tertiary   ?? defaultTertiary;   // colorScheme.tertiary slot
-    final done   = quaternary ?? defaultQuaternary; // completed / success
+    final chrome = primary ?? defaultPrimary; // scaffold / AppBar bg
+    final active = secondary ?? defaultSecondary; // colorScheme.primary slot
+    final accent = tertiary ?? defaultTertiary; // colorScheme.tertiary slot
+    final done = quaternary ?? defaultQuaternary; // completed / success
     final onActive = onColor(active);
     final onAccent = onColor(accent);
 
@@ -111,11 +111,12 @@ class AppTheme {
     // At default (blueGrey 900) this produces ~#D0D4D5, near-identical to grey.shade200.
     final chrome = primary ?? defaultPrimary;
     final lightChrome = Color.lerp(chrome, Colors.white, 0.85)!;
-    final onChrome = onColor(lightChrome); // always black87 for any sensible chrome
+    final onChrome =
+        onColor(lightChrome); // always black87 for any sensible chrome
 
-    final active = secondary  ?? defaultSecondary;
-    final accent = tertiary   ?? defaultTertiary;
-    final done   = quaternary ?? defaultQuaternary;
+    final active = secondary ?? defaultSecondary;
+    final accent = tertiary ?? defaultTertiary;
+    final done = quaternary ?? defaultQuaternary;
     final onActive = onColor(active);
     final onAccent = onColor(accent);
 

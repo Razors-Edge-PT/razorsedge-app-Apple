@@ -38,6 +38,7 @@ import 'app_theme.dart';
 import 'app_check_ready.dart';
 import 'startup_route_service.dart';
 import 'startup_trace.dart';
+import 'silent_restore_coordinator.dart';
 
 
 
@@ -115,6 +116,31 @@ class _AppRootState extends State<AppRoot> {
   // Guards every async continuation so stale async chains are dropped when a
   // newer auth event supersedes them.
   int _authGen = 0;
+
+  // ── Cold-auth restoration budgets (Google graceful degradation) ────────────
+  // Native auth (idTokenChanges / currentUser) restoration grace. Bounds how
+  // long we wait for Firebase to surface a cached user after a spurious
+  // cold-start null before that lane reports failure.
+  static const Duration _nativeRestoreGrace = Duration(seconds: 4);
+  // Overall failure budget for the concurrent restoration race. Backstop so the
+  // restoring spinner can never linger near the old ~10–13 s; well under the
+  // 12 s hard-cap watchdog. The first valid Firebase user wins long before this.
+  // NOTE: this budget never routes to Login while the Google lane is still
+  // unsettled — a native signInWithCredential cannot be cancelled, so a late
+  // success would otherwise flip Login→Home. See [_raceRestore].
+  static const Duration _restoreBudget = Duration(seconds: 7);
+
+  // Bound on the PRE-credential Google steps (signInSilently / token fetch)
+  // only. Kept short (well under [_restoreBudget]) so that, by the time the
+  // budget could fire, the Google lane is either already failed or has entered
+  // the (genuinely awaited, non-timeout-bounded) credential exchange.
+  static const Duration _googleAcquireTimeout = Duration(seconds: 3);
+
+  // Shared silent Google restoration handle. The FIRST null-auth event creates
+  // the attempt; any later null event while it runs awaits and shares THE EXACT
+  // SAME future, so a concurrent attempt never returns null (a false
+  // "restoration failed"). See SharedRestoreAttempt.
+  final SharedRestoreAttempt<User> _silentRestore = SharedRestoreAttempt<User>();
 
   // Memoized per uid — reset on sign-out or uid change.
   String? _memoUid;
@@ -409,87 +435,147 @@ class _AppRootState extends State<AppRoot> {
     setState(() => _phase = _AuthPhase.restoring);
 
     // Step 1: synchronous currentUser read.
-    var current = FirebaseAuth.instance.currentUser;
+    final current = FirebaseAuth.instance.currentUser;
     debugPrint('[AUTHRESTORE] step1 currentUser=${current?.uid}');
     if (current != null && !current.isAnonymous) {
       await _handleValidUser(current, gen);
       return;
     }
 
-    // Step 2: brief pause, then re-read.
-    await Future.delayed(const Duration(milliseconds: 1500));
-    if (gen != _authGen || !mounted) return;
-    current = FirebaseAuth.instance.currentUser;
-    debugPrint('[AUTHRESTORE] step2 currentUser(1.5s)=${current?.uid}');
-    if (current != null && !current.isAnonymous) {
-      await _handleValidUser(current, gen);
-      return;
+    // ── Concurrent, race-safe restoration ──────────────────────────────────
+    // The old path waited 1.5 s, then up to 3 s on idTokenChanges, and only
+    // THEN began silent Google restore (≈4.5 s of serial delay before Google
+    // even started). Instead, start both lanes immediately and concurrently:
+    //   • native lane  — Firebase surfacing the cached user (idTokenChanges /
+    //     currentUser) after the spurious cold-start null;
+    //   • Google lane  — the existing silent Google restoration (only when the
+    //     last login provider was Google and there was no explicit logout).
+    // The FIRST valid non-anonymous Firebase user wins and routes through the
+    // existing _handleValidUser() path. _authGen guards drop stale completions.
+    final lastProvider = prefs.getString(_kLastLoginProvider);
+    final googleEligible = lastProvider == 'google';
+    debugPrint(
+        '[AUTHRESTORE] starting concurrent restore lastProvider=$lastProvider '
+        'googleEligible=$googleEligible gen=$gen');
+
+    StartupTrace.nativeRestoreStarted();
+    final nativeFuture = _awaitNativeRestore(gen);
+
+    Future<User?>? googleFuture;
+    if (googleEligible) {
+      StartupTrace.silentGoogleStarted();
+      // signInWithCredential fires authStateChanges() as a side-effect on
+      // success, advancing _authGen before this future resolves. That is the
+      // expected path — gen state is reconciled by the caller below.
+      googleFuture = _trySilentGoogleRestore(gen);
     }
 
-    // Step 3: wait for idTokenChanges to emit a real user (up to 3 s).
-    // Catches the case where Firebase Auth finishes loading the cached user
-    // slightly after authStateChanges already emitted null.
-    debugPrint('[AUTHRESTORE] step3 waiting on idTokenChanges (3s timeout)');
-    try {
-      final restored = await FirebaseAuth.instance
-          .idTokenChanges()
-          .where((u) => u != null && !u.isAnonymous)
-          .first
-          .timeout(const Duration(seconds: 3));
-      if (gen != _authGen || !mounted) return;
-      if (restored != null && !restored.isAnonymous) {
-        debugPrint('[AUTHRESTORE] idTokenChanges uid=${restored.uid}');
-        await _handleValidUser(restored, gen);
-        return;
-      }
-    } catch (_) {
-      debugPrint('[AUTHRESTORE] idTokenChanges timed out or errored');
-    }
+    final restored = await _raceRestore(
+      native: nativeFuture,
+      google: googleFuture,
+      budget: _restoreBudget,
+    );
 
-    // Step 4: final synchronous check before giving up.
-    if (gen != _authGen || !mounted) return;
-    current = FirebaseAuth.instance.currentUser;
-    debugPrint('[AUTHRESTORE] step4 final currentUser=${current?.uid}');
-    if (current != null && !current.isAnonymous) {
-      await _handleValidUser(current, gen);
-      return;
-    }
-
-    // Step 5: silent Google restore — only when last provider was Google.
-    // signInWithCredential fires authStateChanges() as a side-effect, advancing
-    // _authGen before _trySilentGoogleRestore returns. The function still returns
-    // the user on success; we handle gen state here in the caller.
-    if (gen != _authGen || !mounted) return;
-    final silentlyRestored = await _trySilentGoogleRestore(gen);
-    if (silentlyRestored != null && !silentlyRestored.isAnonymous) {
-      if (gen == _authGen && mounted) {
-        await writeAuthBreadcrumb(
-            'silentGoogleRestore returnedUser handleValidUser gen=$gen');
-        await _handleValidUser(silentlyRestored, gen);
-      } else {
-        await writeAuthBreadcrumb(
-            'silentGoogleRestore returnedUser newerGenOwnsRouting gen=$gen currentGen=$_authGen');
-        debugPrint(
-            '[AUTHRESTORE] silentGoogleRestore succeeded — gen=$_authGen owns routing, not falling to Login');
-      }
-      return;
-    }
-
-    debugPrint('[AUTHNULL] all restore checks confirm no user — showing Login');
-    await writeAuthBreadcrumb('allRestoreChecksFailed showLogin gen=$gen');
+    // A newer auth event may already own routing (e.g. the Google credential
+    // exchange's authStateChanges side-effect advanced _authGen and routed
+    // through _onAuthEvent). Never override it, and never fall to Login.
     if (gen != _authGen || !mounted) {
       await writeAuthBreadcrumb(
-          'allRestoreChecksFailed skipped stale gen=$gen currentGen=$_authGen');
+          'restoreRace newerGenOwnsRouting gen=$gen currentGen=$_authGen');
+      debugPrint(
+          '[AUTHRESTORE] restore race — gen=$_authGen owns routing, not falling to Login');
       return;
     }
+
+    if (restored != null && !restored.isAnonymous) {
+      await writeAuthBreadcrumb('restoreRace restored uid=${restored.uid} gen=$gen');
+      await _handleValidUser(restored, gen);
+      return;
+    }
+
+    // Genuine failure within the overall budget → show Login exactly once.
+    StartupTrace.restoreFailedOrTimedOut();
+    debugPrint('[AUTHNULL] restore race confirmed no user — showing Login');
+    await writeAuthBreadcrumb('restoreRaceFailed showLogin gen=$gen');
     _clearMemo();
     setState(() => _phase = _AuthPhase.unauthenticated);
+  }
+
+  /// Native restoration lane: completes with the first valid non-anonymous
+  /// Firebase user surfaced via idTokenChanges (or a currentUser that
+  /// materialised synchronously), or null after [_nativeRestoreGrace].
+  ///
+  /// Uses an explicit, cancelled subscription + timer so no idTokenChanges
+  /// listener leaks past the grace window. Routing is performed by the caller
+  /// (via the race) under the _authGen guard, never here.
+  Future<User?> _awaitNativeRestore(int gen) {
+    final completer = Completer<User?>();
+    StreamSubscription<User?>? sub;
+    Timer? timer;
+
+    void finish(User? user) {
+      if (completer.isCompleted) return;
+      timer?.cancel();
+      unawaited(sub?.cancel());
+      completer.complete(user);
+    }
+
+    sub = FirebaseAuth.instance.idTokenChanges().listen(
+      (user) {
+        if (user != null && !user.isAnonymous) {
+          debugPrint('[AUTHRESTORE] native lane idTokenChanges uid=${user.uid}');
+          finish(user);
+        }
+      },
+      onError: (_) {}, // errors fall through to the grace timeout
+    );
+
+    // A user may have materialised between the null event and this listener
+    // attaching — catch it synchronously.
+    final now = FirebaseAuth.instance.currentUser;
+    if (now != null && !now.isAnonymous) {
+      finish(now);
+    } else {
+      timer = Timer(_nativeRestoreGrace, () {
+        debugPrint('[AUTHRESTORE] native lane grace expired gen=$gen');
+        finish(null);
+      });
+    }
+
+    return completer.future;
+  }
+
+  /// Races the native and (optional) Google restoration lanes. Completes with
+  /// the FIRST lane to yield a valid non-anonymous user; with null only once
+  /// every started lane has reported failure, or when [budget] elapses
+  /// (whichever comes first). Emits the won/failed StartupTrace marks.
+  Future<User?> _raceRestore({
+    required Future<User?> native,
+    Future<User?>? google,
+    required Duration budget,
+  }) {
+    // Delegates to the pure, unit-tested race in silent_restore_coordinator.
+    // Lanes pre-filter anonymous users (native lane only completes non-anon;
+    // a Google credential is never anonymous), so a non-null value here is a
+    // valid restored user.
+    return raceRestore<User>(
+      native: native,
+      google: google,
+      budget: budget,
+      onNativeWon: StartupTrace.nativeRestoreWon,
+      onGoogleWon: StartupTrace.silentGoogleWon,
+    );
   }
 
   void _clearMemo() {
     _memoUid = null;
     _tokenFuture = null;
     _userContext = null;
+    // Invalidate the shared silent-restore handle so a NEW null event starts a
+    // fresh attempt rather than sharing the one being torn down. Any in-flight
+    // attempt self-abandons via its explicit-logout re-checks (it signs out a
+    // late credential completion that lands after an explicit logout).
+    _silentRestore.invalidate();
   }
 
   // ─── silent Google restore ────────────────────────────────────────────────
@@ -501,85 +587,104 @@ class _AppRootState extends State<AppRoot> {
   // expected, not a failure — the credential exchange succeeded. The caller
   // (step 5 in _handleNullOrAnon) is responsible for routing based on gen state.
 
-  Future<User?> _trySilentGoogleRestore(int gen) async {
-    var step = 'init';
-    try {
+  Future<User?> _trySilentGoogleRestore(int gen) {
+    // SHARED in-flight handle: a burst of cold-start null events must not launch
+    // parallel signInSilently chains, and — critically — a later caller must
+    // NOT receive a synchronous null that the race would read as "Google failed".
+    // Every concurrent caller awaits and shares THE EXACT SAME future.
+    return _silentRestore.run(() => _runSilentGoogleRestore(gen));
+  }
+
+  /// Reads the explicit-logout flag fresh from SharedPreferences.
+  Future<bool> _isExplicitLogout() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_kExplicitLogout) ?? false;
+  }
+
+  /// The actual silent Google restoration, expressed via the unit-tested
+  /// [runAbandonAwareRestore] sequence. Routing/gen reconciliation is the
+  /// caller's responsibility (via the race + `_authGen`); this does NOT gate its
+  /// own steps on `_authGen` (sibling null events legitimately advance the
+  /// generation while this shared attempt runs).
+  Future<User?> _runSilentGoogleRestore(int gen) async {
+    final user = await runAbandonAwareRestore<User, AuthCredential>(
+      isExplicitLogout: _isExplicitLogout,
+      // Bounded pre-credential acquisition. Returns null (graceful failure) on
+      // wrong provider / no cached account / timeout / any error.
+      acquire: () async {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          if (prefs.getString(_kLastLoginProvider) != 'google') {
+            await writeAuthBreadcrumb('silentGoogleRestore skipped notGoogle gen=$gen');
+            return null;
+          }
+          await writeAuthBreadcrumb('silentGoogleRestore start gen=$gen');
+          final googleUser = await GoogleSignIn()
+              .signInSilently()
+              .timeout(_googleAcquireTimeout);
+          if (googleUser == null) {
+            await writeAuthBreadcrumb('silentGoogleRestore noAccount gen=$gen');
+            return null;
+          }
+          final googleAuth =
+              await googleUser.authentication.timeout(_googleAcquireTimeout);
+          return GoogleAuthProvider.credential(
+            accessToken: googleAuth.accessToken,
+            idToken: googleAuth.idToken,
+          );
+        } on TimeoutException {
+          await writeAuthBreadcrumb('silentGoogleRestore acquireTimeout gen=$gen');
+          return null;
+        } catch (e) {
+          await writeAuthBreadcrumb('silentGoogleRestore acquireError gen=$gen');
+          debugPrint('[AUTHRESTORE] silentGoogleRestore acquire error: $e');
+          return null;
+        }
+      },
+      // GENUINE credential exchange — NOT timeout-bounded (a Dart .timeout()
+      // cannot cancel the native sign-in; abandoning a late success flips
+      // Login→Home). signInWithCredential fires authStateChanges as a side
+      // effect — that is the expected path, reconciled by the caller's gen.
+      exchange: (credential) async {
+        try {
+          await writeAuthBreadcrumb(
+              'silentGoogleRestore firebaseCredential start gen=$gen');
+          final cred =
+              await FirebaseAuth.instance.signInWithCredential(credential);
+          return cred.user;
+        } on FirebaseAuthException catch (e) {
+          await writeAuthBreadcrumb(
+              'silentGoogleRestore FirebaseAuthException ${e.code} gen=$gen');
+          return null;
+        } catch (e) {
+          await writeAuthBreadcrumb('silentGoogleRestore exchangeError gen=$gen');
+          debugPrint('[AUTHRESTORE] silentGoogleRestore exchange error: $e');
+          return null;
+        }
+      },
+      // Abandonment: a stale success that lands after an explicit logout is
+      // signed back out so the user is never silently signed back in.
+      signOutLateCompletion: () async {
+        await writeAuthBreadcrumb('silentGoogleRestore abandonAfterLogout gen=$gen');
+        debugPrint('[AUTHRESTORE] silentGoogleRestore: explicit logout during '
+            'exchange — signing out late completion');
+        try {
+          await GoogleSignIn().signOut();
+        } catch (_) {}
+        try {
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+      },
+    );
+
+    if (user != null) {
+      // Legitimate restore confirmed (not abandoned) → clear the logout flag.
       final prefs = await SharedPreferences.getInstance();
-      if (gen != _authGen || !mounted) return null;
-
-      final lastProvider = prefs.getString(_kLastLoginProvider);
-      if (lastProvider != 'google') {
-        await writeAuthBreadcrumb(
-            'silentGoogleRestore skipped lastProvider=$lastProvider gen=$gen');
-        return null;
-      }
-
-      await writeAuthBreadcrumb('silentGoogleRestore start gen=$gen');
-
-      step = 'signInSilently';
-      await writeAuthBreadcrumb(
-          'silentGoogleRestore signInSilently start gen=$gen');
-      final googleUser = await GoogleSignIn()
-          .signInSilently()
-          .timeout(const Duration(seconds: 4));
-      if (gen != _authGen || !mounted) return null;
-
-      if (googleUser == null) {
-        await writeAuthBreadcrumb('silentGoogleRestore noAccount gen=$gen');
-        debugPrint('[AUTHRESTORE] silentGoogleRestore: no Google account returned');
-        return null;
-      }
-
-      step = 'authTokens';
-      await writeAuthBreadcrumb(
-          'silentGoogleRestore authTokens start gen=$gen');
-      final googleAuth =
-          await googleUser.authentication.timeout(const Duration(seconds: 4));
-      if (gen != _authGen || !mounted) return null;
-
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      step = 'firebaseCredential';
-      await writeAuthBreadcrumb(
-          'silentGoogleRestore firebaseCredential start gen=$gen');
-      final cred = await FirebaseAuth.instance
-          .signInWithCredential(credential)
-          .timeout(const Duration(seconds: 6));
-
-      // signInWithCredential succeeded — do NOT return null because gen
-      // advanced. authStateChanges() fires as a side-effect and increments
-      // _authGen; that is the expected path, not a fault. Log it and return.
-      if (gen != _authGen) {
-        await writeAuthBreadcrumb(
-            'silentGoogleRestore success uid=${cred.user?.uid} gen=$gen currentGen=$_authGen — authStateChanges advanced gen');
-        debugPrint(
-            '[AUTHRESTORE] silentGoogleRestore success uid=${cred.user?.uid} — authStateChanges advanced gen to $_authGen');
-      }
       await prefs.setBool(_kExplicitLogout, false);
-      await writeAuthBreadcrumb(
-          'silentGoogleRestore success uid=${cred.user?.uid} gen=$gen');
-      debugPrint(
-          '[AUTHRESTORE] silentGoogleRestore success uid=${cred.user?.uid}');
-      return cred.user;
-    } on TimeoutException {
-      await writeAuthBreadcrumb(
-          'silentGoogleRestore timeout step=$step gen=$gen');
-      debugPrint('[AUTHRESTORE] silentGoogleRestore timeout at step=$step');
-      return null;
-    } on FirebaseAuthException catch (e) {
-      await writeAuthBreadcrumb(
-          'silentGoogleRestore FirebaseAuthException ${e.code} gen=$gen');
-      debugPrint('[AUTHRESTORE] silentGoogleRestore FirebaseAuthException: $e');
-      return null;
-    } catch (e) {
-      await writeAuthBreadcrumb(
-          'silentGoogleRestore error step=$step gen=$gen');
-      debugPrint('[AUTHRESTORE] silentGoogleRestore error at step=$step: $e');
-      return null;
+      await writeAuthBreadcrumb('silentGoogleRestore success gen=$gen');
+      debugPrint('[AUTHRESTORE] silentGoogleRestore success uid=${user.uid}');
     }
+    return user;
   }
 
   // ─── build ────────────────────────────────────────────────────────────────
@@ -651,9 +756,9 @@ void main() async {
   // the first visible Flutter frame must not wait on Play Integrity /
   // DeviceCheck attestation. Protected startup operations await `appCheckReady`
   // individually at their Firestore boundaries. See app_check_ready.dart.
+  // initAppCheck emits its own trace marks: `appcheck_disabled` when skipped,
+  // or `appcheck_activate_invoked` + `appcheck_ready_settled` when attempted.
   initAppCheck();
-  StartupTrace.appCheckInvoked();
-  unawaited(appCheckReady.then((_) => StartupTrace.appCheckSettled()));
 
   // Diagnostics/analytics — must never block the first frame.
   if (!kIsWeb && Platform.isIOS) {

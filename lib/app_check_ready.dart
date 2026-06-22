@@ -27,6 +27,22 @@ library;
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:flutter/foundation.dart';
 
+import 'startup_trace.dart';
+
+/// TEMPORARY kill-switch for Firebase App Check.
+///
+/// Set to `false` to skip `FirebaseAppCheck.instance.activate()` entirely:
+/// [appCheckReady] then resolves immediately so no `await appCheckReady` caller
+/// waits on Play Integrity / DeviceCheck attestation. The full Android Play
+/// Integrity + iOS DeviceCheck/App Attest implementation below is preserved and
+/// re-enabled simply by flipping this back to `true`.
+///
+/// Currently disabled because Play Integrity returns `API_NOT_AVAILABLE` on some
+/// devices, adding seconds to cold start. App Check *enforcement* is off
+/// server-side, so disabled activation changes nothing functionally — Firestore
+/// reads/writes already succeed without a token.
+const bool kEnableAppCheck = false;
+
 /// Bound on activation so a stalled attestation can never strand startup.
 const Duration _activationTimeout = Duration(seconds: 15);
 
@@ -43,6 +59,20 @@ Future<void> get appCheckReady => _appCheckReady ?? Future<void>.value();
 /// `activate()` call registers the provider; the returned future only completes
 /// when the first token attempt settles.
 Future<void> initAppCheck() {
+  // Kill-switch: skip activation and resolve readiness immediately. Every
+  // `await appCheckReady` caller proceeds without waiting on attestation. No
+  // error is surfaced; Firebase Auth / Firestore / routing are untouched.
+  if (!kEnableAppCheck) {
+    debugPrint('⏭️ [AppCheck] disabled via kEnableAppCheck — skipping activate()');
+    StartupTrace.appCheckDisabled();
+    final ready = Future<void>.value();
+    _appCheckReady = ready;
+    return ready;
+  }
+
+  // Activation is genuinely being attempted — emit the invoked mark here (NOT
+  // in main) so it is never emitted when activation was skipped above.
+  StartupTrace.appCheckInvoked();
   final future = () async {
     try {
       await FirebaseAppCheck.instance
@@ -58,6 +88,8 @@ Future<void> initAppCheck() {
       // Swallowed — never rethrown. A bare try/catch around a non-awaited
       // future would NOT catch async rejections; this wrapper does.
       debugPrint('❌ [AppCheck] activate failed/timed out: $e');
+    } finally {
+      StartupTrace.appCheckSettled();
     }
   }();
   _appCheckReady = future;
