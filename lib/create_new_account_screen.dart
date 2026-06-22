@@ -386,16 +386,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       _emailInlineError = null;
     });
     try {
-      // ignore: deprecated_member_use
-      final methods = await FirebaseAuth.instance.fetchSignInMethodsForEmail(email);
-      if (!mounted) return;
-      final taken = methods.isNotEmpty;
-      setState(() {
-        _emailAvailableFlag = !taken;
-        _emailInlineError = taken ? 'This email is already in use.' : null;
-      });
+      // fetchSignInMethodsForEmail was removed in firebase_auth 6.x (underlying
+      // Android SDK removal). Duplicate-email errors surface during
+      // createUserWithEmailAndPassword; validator covers final enforcement.
+      if (mounted) setState(() => _emailAvailableFlag = null);
     } catch (_) {
-      // silent failure — validator and server-side check handle final enforcement
       if (mounted) setState(() => _emailAvailableFlag = null);
     } finally {
       if (mounted) setState(() => _emailChecking = false);

@@ -6,8 +6,8 @@ plugins {
     id "com.google.gms.google-services"
 }
 
-def flutterVersionCode = project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "64"
-def flutterVersionName = project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.6.4"
+def flutterVersionCode = project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "66"
+def flutterVersionName = project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.6.6"
 
 android {
     namespace = "com.goodlift.razorsedge"
@@ -58,10 +58,6 @@ flutter {
 }
 
 dependencies {
-    implementation platform("com.google.firebase:firebase-bom:32.7.3")
-    implementation "com.google.firebase:firebase-analytics"
-    implementation "com.google.firebase:firebase-firestore"
-
     // ✅ Force AndroidX Core into all build variants
     implementation "androidx.core:core:1.13.1"
     implementation "androidx.appcompat:appcompat:1.6.1"
