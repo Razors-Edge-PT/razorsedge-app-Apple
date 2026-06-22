@@ -10,7 +10,7 @@ import 'package:google_fonts/google_fonts.dart';
 ///   Quaternary = completed / success states (completed workout calendar markers)
 class AppTheme {
   // Primary = chrome / branded background surfaces (AppBar, scaffold, drawer).
-  static const Color defaultPrimary = Color(0xFF000000); // Black
+  static const Color defaultPrimary = Color(0xFF000000); // Black primary
   // Secondary = active / selected states (switches, focused borders, chart lines).
   static const Color defaultSecondary = Color(0xFF03A9F4); // Light Blue 500
   // Tertiary = action icons / accent highlights (FABs, chips, send icons, bubbles).
