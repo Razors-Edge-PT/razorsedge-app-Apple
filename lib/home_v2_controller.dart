@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/widgets.dart';
 
 import 'app_check_ready.dart';
+import 'startup_trace.dart';
 import 'home_bootstrap_service.dart';
 import 'home_v2_calendar_service.dart';
 import 'onboarding/onboarding_cue.dart';
@@ -69,7 +70,19 @@ class HomeV2Controller extends ChangeNotifier {
     _currentMonth = initialMonth;
     debugPrint('🎮 [CTRL] onInitialStartup uid=$actingUid');
 
+    // Never decide new-user vs existing-user while local block-meta hydration is
+    // still pending FOR THE ACTING UID — a transiently-null activeBlockId would
+    // push an existing user into first-time setup (the slow ~10s cold-start
+    // path). UID-aware so a coach-impersonated athlete is hydrated for that
+    // athlete. AppRoot already awaits this for the self actor, so for normal
+    // (non-coach) startup this is an instant no-op.
+    if (!uc.isBlockMetaHydratedFor(actingUid)) {
+      await uc.hydrateBlockMetaFromPrefs(actingUid);
+      if (_disposed) return;
+    }
+
     final hasBlockMeta = uc.activeBlockId?.isNotEmpty == true;
+    StartupTrace.homeStartupDecision(hasBlockMeta);
     if (hasBlockMeta) {
       // Existing user: render immediately from cached state.
       blockSetupComplete = true;
@@ -191,6 +204,7 @@ class HomeV2Controller extends ChangeNotifier {
     required DateTime month,
   }) async {
     if (_disposed) return;
+    StartupTrace.firstTimeSetupEntered();
     isFirstTimeSetup = true;
     setupStatusMessage = '';
     _notify();

@@ -31,6 +31,7 @@ import 'block_exercise_defaults_repository.dart';
 import 'app_check_ready.dart';
 import 'startup_route_service.dart';
 import 'startup_trace.dart';
+import 'wes2_exit_coordinator.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
@@ -57,6 +58,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   bool _tracedFirstBuild = false;
   // Guards against overlapping retry attempts from the polished load-error state.
   bool _retryInProgress = false;
+  // Coordinates the single authoritative deliberate-exit path (_exitToHome).
+  // Holds the re-entrancy guard so repeated back taps cannot double-pop or
+  // create duplicate Home routes.
+  final Wes2ExitCoordinator _exitCoordinator = Wes2ExitCoordinator();
   String? _athleteUsername;
   String? _athleteGreeting;
   String? _fetchedForUid;
@@ -1274,6 +1279,32 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
+  /// Authoritative deliberate-exit path from WES2 back to Home.
+  ///
+  /// Delegates to [Wes2ExitCoordinator] (real production logic, also driven by
+  /// tests). The coordinator drops focus FIRST so the still-mounted Wes2SetRow
+  /// focus listener fires its existing onFieldUnfocused save exactly once and
+  /// the iOS keyboard is dismissed before the route subtree is torn down, then
+  /// navigates exactly once: a normal pop when Home exists beneath, or
+  /// pushReplacementNamed('/home') for a restored root WES2 route.
+  ///
+  /// The Firestore field patch is intentionally NOT awaited — the controller
+  /// already holds the latest typed value (synchronous onChanged), the focus
+  /// callback starts the existing field-patch save, and the local Isar draft is
+  /// the fallback.
+  Future<void> _exitToHome() {
+    return _exitCoordinator.exit(
+      dropFocus: () => FocusManager.instance.primaryFocus?.unfocus(),
+      isMounted: () => mounted,
+      markHomeActive: () => unawaited(
+        StartupRouteService.markHomeActive(
+          UserContext.of(context, listen: false).actorUid,
+        ),
+      ),
+      navigatorOf: () => mounted ? Navigator.of(context) : null,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider<Wes2SessionController>.value(
@@ -1314,18 +1345,18 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             StartupTrace.wes2FirstBuild();
           }
           return PopScope(
-            // A restored root WES2 route has nothing beneath it to pop to.
-            // Intercept the back gesture (canPop:false when root) and route to
-            // Home instead of closing the app, preserving expected back
-            // behaviour without eagerly building Home underneath (Issue 5).
-            canPop: Navigator.of(context).canPop(),
+            // Intercept EVERY deliberate back action so focus is dropped (iOS
+            // keyboard dismissed + latest field saved via the existing unfocus
+            // callback) BEFORE the route subtree is torn down. canPop:false
+            // also disables the native iOS interactive edge-swipe back gesture
+            // on WES2; AppBar/system back continue to work and route through
+            // _exitToHome, which also handles the restored-root '/home'
+            // replacement so a root WES2 never closes the app (Issue 5).
+            canPop: false,
             onPopInvokedWithResult: (didPop, result) {
-              // Deliberate exit from WES2 → flip the marker so the next cold
-              // start opens Home. Never written from dispose()/process death.
-              unawaited(StartupRouteService.markHomeActive(uc.actorUid));
-              if (!didPop && !Navigator.of(context).canPop()) {
-                Navigator.of(context).pushReplacementNamed('/home');
-              }
+              if (didPop) return;
+              // ignore: discarded_futures
+              _exitToHome();
             },
             child: Scaffold(
             appBar: AppBar(

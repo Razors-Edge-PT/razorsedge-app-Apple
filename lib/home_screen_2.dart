@@ -18,6 +18,7 @@ import 'templates.dart';
 import 'user_context.dart';
 import 'user_settings.dart';
 import 'membership_gate.dart';
+import 'startup_trace.dart';
 
 // Private to this file — avoids name collision with home_screen.dart's SelectedFeed.
 enum _HomeV2Feed { home, points, leaderboard }
@@ -34,6 +35,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
   late final UserContext _uc;
   bool _ucBound = false;
   bool _startupDone = false;
+  bool _tracedFirstBuild = false;
   String _lastActingUid = '';
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -88,6 +90,12 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
   @override
   void didPopNext() {
     if (!mounted) return;
+    // Defence-in-depth: drop any focus left over from the route above (e.g. a
+    // WES2 numeric field) so an orphaned iOS keyboard cannot linger over Home.
+    // Safe here because didPopNext only fires on return from a child route,
+    // where Home has no legitimately-focused input. NOT a blanket build()
+    // unfocus — the root-cause fix is WES2's _exitToHome.
+    FocusManager.instance.primaryFocus?.unfocus();
     final uc = Provider.of<UserContext>(context, listen: false);
     unawaited(_ctrl.onReturnedToHome(
       actingUid: uc.actingAsUid,
@@ -301,6 +309,11 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
   Widget build(BuildContext context) {
     // Watch UserContext so the coach-check and uc-bound widgets stay reactive.
     context.watch<UserContext>();
+
+    if (!_tracedFirstBuild) {
+      _tracedFirstBuild = true;
+      StartupTrace.homeFirstBuild();
+    }
 
     return Scaffold(
       key: _scaffoldKey,

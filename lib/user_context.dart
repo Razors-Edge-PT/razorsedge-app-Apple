@@ -9,6 +9,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'block_repository.dart';   // BlockRepository().fetchActiveBlockId(...)
 import 'warmup_service.dart';                  // WarmupService.instance.warmWES(...)
 import 'app_check_ready.dart';
+import 'startup_trace.dart';
 
 class UserContext extends ChangeNotifier {
   // Identity & roles
@@ -215,19 +216,68 @@ class UserContext extends ChangeNotifier {
     } catch (_) {/* ignore */}
   }
 
-  /// Public bootstrap that pages/app root can call.
-  /// - Hydrates from prefs immediately (if available) so pages can read.
-  /// - Starts a background server refresh + warmup (non-blocking).
-  Future<void> bootstrapBlockMeta({required String uid}) async {
-    // 1) Instant prefs hydrate (publish if found)
-    await _hydrateFromPrefs(uid);
+  // The UID whose local (SharedPreferences) block-meta hydration has completed
+  // for this UserContext instance, or null if none yet. UID-aware because a
+  // coach can change the acting UID at runtime — a bool would let the previous
+  // athlete's hydration satisfy the new athlete and expose the wrong block.
+  // "Hydrated" means: we finished reading whatever cached block meta exists for
+  // THAT uid (or confirmed there is none). Home must not decide new-user vs
+  // existing-user for an acting UID until that UID is hydrated, otherwise a
+  // pending prefs read makes activeBlockId transiently null and an existing
+  // user is wrongly pushed into first-time setup.
+  String? _blockMetaHydratedForUid;
 
-    // 2) Fire background refresh (does persistence + warmup on success)
-    //    DO NOT await – we never block app open.
+  /// True only when local block-meta hydration has completed for [uid] exactly.
+  bool isBlockMetaHydratedFor(String uid) => _blockMetaHydratedForUid == uid;
+
+  /// Clears in-memory block meta (no notify — callers control notification).
+  /// Used when the acting UID changes so the previous athlete's block is never
+  /// exposed as the new athlete's while the new prefs hydrate.
+  void _clearBlockMeta() {
+    _activeBlockId = null;
+    _blockStartDate = null;
+    _blockEndDate = null;
+    _blockMetaSource = 'unknown';
+  }
+
+  /// Awaits ONLY local SharedPreferences hydration of cached block meta for
+  /// [uid]. Touches no Firestore and no App Check, so it is safe to await
+  /// before rendering Home — the cost is a couple of cached prefs reads.
+  ///
+  /// UID-aware + idempotent: returns immediately only when [uid] is the exact
+  /// UID already hydrated. When switching to a different UID it first drops the
+  /// prior UID's meta so a not-found read can't expose it as [uid]'s block.
+  ///
+  /// Failure-safe: any local cache/SharedPreferences exception is caught, the
+  /// attempt is still marked complete (defaulting to no cached metadata), and
+  /// startup is allowed to continue — a diagnostics/cache error must never
+  /// prevent authentication.
+  Future<void> hydrateBlockMetaFromPrefs(String uid) async {
+    if (_blockMetaHydratedForUid == uid) return;
+    StartupTrace.blockMetaHydrateStart();
+    try {
+      // Switching UID: drop the prior UID's meta first so a not-found prefs
+      // read leaves "no cached block" rather than the previous athlete's block.
+      if (_blockMetaHydratedForUid != null &&
+          _blockMetaHydratedForUid != uid) {
+        _clearBlockMeta();
+      }
+      await _hydrateFromPrefs(uid); // publishes cached meta if found
+    } catch (e) {
+      debugPrint('[UC] hydrateBlockMetaFromPrefs($uid) failed: $e');
+      // Default safely to no cached metadata; do not block startup.
+    } finally {
+      _blockMetaHydratedForUid = uid; // attempt complete for THIS uid
+      StartupTrace.blockMetaHydrateDone(_activeBlockId);
+      notifyListeners();
+    }
+  }
+
+  /// Fire-and-forget server refresh + warmup. NEVER awaited on the render path.
+  /// Safe to call right after [hydrateBlockMetaFromPrefs].
+  void refreshBlockMetaInBackground(String uid) {
     // ignore: unawaited_futures
     _refreshFromServerInBackground(uid);
-
-    // 3) If we already have a cached id, nudge warmup immediately (best-effort)
     if (_activeBlockId != null && _activeBlockId!.isNotEmpty) {
       // ignore: unawaited_futures
       WarmupService.instance.warmWES(
@@ -236,6 +286,14 @@ class UserContext extends ChangeNotifier {
         selectedDate: DateTime.now(),
       );
     }
+  }
+
+  /// Public bootstrap that pages/app root can call.
+  /// - Hydrates from prefs (awaited — local only) so pages can read.
+  /// - Starts a background server refresh + warmup (non-blocking).
+  Future<void> bootstrapBlockMeta({required String uid}) async {
+    await hydrateBlockMetaFromPrefs(uid);
+    refreshBlockMetaInBackground(uid);
   }
 
   /// Fetches active block id + dates from Firestore and updates UserContext.
@@ -294,27 +352,24 @@ class UserContext extends ChangeNotifier {
     ));
   }
 
-  /// Coach switches athlete – publish UID immediately, then do the same bootstrap
+  /// Coach switches athlete – publish UID immediately, then re-hydrate.
   void switchAthlete(String newUid) {
+    if (newUid == actingAsUid) return;
     actingAsUid = newUid;
-    notifyListeners(); // let UI update the selected athlete immediately
 
-    // Kick a lightweight bootstrap for the new athlete (non-blocking for UI)
-    // 1) Prefs hydrate (fast) → publishes cached block info if any
-    // 2) Background refresh + warmup (best-effort)
+    // Synchronously drop the previous athlete's block meta + hydration marker
+    // so no listener can read the old block as belonging to the new athlete in
+    // the window before the new athlete's prefs hydrate.
+    _clearBlockMeta();
+    _blockMetaHydratedForUid = null;
+    notifyListeners(); // UI updates selected athlete; block meta now cleared
+
+    // Re-hydrate the new athlete's cached block meta (UID-aware), then start the
+    // background server refresh + warmup. Non-blocking for the UI.
     // ignore: unawaited_futures
     (() async {
-      await _hydrateFromPrefs(newUid);
-      // Fire warmup with whatever we have right now (best-effort)
-      if (_activeBlockId != null && _activeBlockId!.isNotEmpty) {
-        WarmupService.instance.warmWES(
-          newUid,
-          activeBlockId: _activeBlockId,
-          selectedDate: DateTime.now(),
-        );
-      }
-      // And get authoritative values in the background
-      await _refreshFromServerInBackground(newUid);
+      await hydrateBlockMetaFromPrefs(newUid);
+      refreshBlockMetaInBackground(newUid);
     })();
   }
 }

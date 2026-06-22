@@ -286,7 +286,18 @@ class _AppRootState extends State<AppRoot> {
       ensureMembershipDoc(user.uid);
       upsertUserLookup();
       _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
-      _userContext!.bootstrapBlockMeta(uid: user.uid);
+      StartupTrace.userContextCreated();
+
+      // Await ONLY local SharedPreferences hydration of cached block meta so
+      // Home can read activeBlockId on its first build. Without this, Home sees
+      // a transiently-null activeBlockId and wrongly enters first-time setup
+      // (a 30×500ms poll + 1.5s delay ≈ the ~10s slow Home cold start). This
+      // touches no Firestore / App Check — just a couple of cached prefs reads.
+      await _userContext!.hydrateBlockMetaFromPrefs(user.uid);
+      if (gen != _authGen || !mounted) return;
+
+      // Server refresh + warmup remain fire-and-forget (never block render).
+      _userContext!.refreshBlockMetaInBackground(user.uid);
 
       // Background: resolve real token claim, persist for next session, rebuild
       // UserContext only if coach status changed.
