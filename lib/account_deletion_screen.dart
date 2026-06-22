@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'startup_route_service.dart';
+import 'membership_gate.dart';
 
 class AccountDeletionScreen extends StatefulWidget {
   const AccountDeletionScreen({super.key});
@@ -99,6 +101,11 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
           await doc.reference.delete();
         }
       } catch (_) {}
+
+      // Clear the restored-route marker + in-memory session-allow for this UID
+      // before tearing down auth.
+      await StartupRouteService.clearForLogout(uid);
+      MembershipGate.clearSessionAllowed();
 
       await FirebaseAuth.instance.currentUser?.delete();
       await FirebaseAuth.instance.signOut();

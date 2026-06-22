@@ -7,6 +7,7 @@ import 'dart:convert'; // for jsonEncode / jsonDecode
 import 'dart:async' show unawaited; // if you use unawaited() here
 import 'package:intl/intl.dart';                 // for y-M-d convenience (optional)
 import 'block_repository.dart';
+import 'app_check_ready.dart';
 
 import 'local_cache/block_plan_cache.dart'; // BlockPlanCache.getDay/putDay/putWeek
 
@@ -48,14 +49,15 @@ class WarmupService {
         lastEx != null && (now - lastEx) < _cooldown.inMilliseconds;
     if (!exFresh) await prefs.setInt(keyEx, now);
 
-    // Fire-and-forget
-    unawaited(doWarmWES(
-      uid,
-      activeBlockId: activeBlockId,
-      selectedDate: selectedDate,
-      warmAthlete: !athFresh,
-      warmExercises: !exFresh,
-    ));
+    // Fire-and-forget — sequence the Firestore-heavy warm behind App Check
+    // activation (settles even on failure/timeout, so this never deadlocks).
+    unawaited(appCheckReady.then((_) => doWarmWES(
+          uid,
+          activeBlockId: activeBlockId,
+          selectedDate: selectedDate,
+          warmAthlete: !athFresh,
+          warmExercises: !exFresh,
+        )));
   }
 
   // ──────────────────────────────────────────────────────────────

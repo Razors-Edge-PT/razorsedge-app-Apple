@@ -10,7 +10,7 @@ import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'approve_requests_screen.dart';
 import 'bb3_week_planner.dart';
-import 'WES2_screen.dart';
+import 'membership_gate.dart';
 import 'core_exercises.dart';
 import 'profile_page.dart';
 import 'user_settings.dart';
@@ -2041,7 +2041,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                         builder: (_) => ChangeNotifierProvider<
                                                 UserContext>.value(
                                             value: uc,
-                                            child: const Wes2Screen()),
+                                            child: gatedWes2()),
                                       ));
                                 },
                                 iconWidget: SizedBox(
@@ -2275,7 +2275,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                           builder: (_) =>
                               ChangeNotifierProvider<UserContext>.value(
                             value: userContext,
-                            child: Wes2Screen(initialDate: selectedDay),
+                            child: gatedWes2(initialDate: selectedDay),
                           ),
                         ),
                       );

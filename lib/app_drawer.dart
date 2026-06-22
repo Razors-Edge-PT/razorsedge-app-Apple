@@ -4,6 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_debug.dart';
+import 'startup_route_service.dart';
+import 'membership_gate.dart';
 import '../SavedWorkoutsScreen.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
@@ -217,9 +219,13 @@ class AppDrawer extends StatelessWidget {
 
           _drawerTile(context, Icons.logout, 'Logout', () async {
             debugPrint('[AUTHLOGOUT] drawer logout');
+            final uid = FirebaseAuth.instance.currentUser?.uid;
             final prefs = await SharedPreferences.getInstance();
             await prefs.setBool('goodlift_explicit_logout', true);
-            await writeAuthBreadcrumb('AUTHLOGOUT drawer uid=${FirebaseAuth.instance.currentUser?.uid}');
+            await writeAuthBreadcrumb('AUTHLOGOUT drawer uid=$uid');
+            // Clear the restored-route marker + in-memory session-allow.
+            if (uid != null) await StartupRouteService.clearForLogout(uid);
+            MembershipGate.clearSessionAllowed();
             await GoogleSignIn().signOut();
             await FirebaseAuth.instance.signOut();
             Navigator.pushReplacementNamed(context, '/login');

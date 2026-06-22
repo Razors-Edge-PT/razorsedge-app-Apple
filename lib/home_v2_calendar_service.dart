@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'app_check_ready.dart';
 
 /// Calendar day state for the HomeScreen2 training calendar.
 enum HomeV2CalendarDayKind {
@@ -38,6 +39,9 @@ class HomeV2CalendarService {
     required DateTime month,
   }) async {
     if (uid.isEmpty) return {};
+
+    // Sequence behind App Check (settles even on failure/timeout).
+    await appCheckReady;
 
     var blockPlanned = <DateTime>{};
     var wes2Planned  = <DateTime>{};

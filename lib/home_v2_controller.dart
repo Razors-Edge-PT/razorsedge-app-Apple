@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/widgets.dart';
 
+import 'app_check_ready.dart';
 import 'home_bootstrap_service.dart';
 import 'home_v2_calendar_service.dart';
 import 'onboarding/onboarding_cue.dart';
@@ -256,6 +257,7 @@ class HomeV2Controller extends ChangeNotifier {
   Future<void> _loadDisplayName(String uid) async {
     if (uid.isEmpty) return;
     try {
+      await appCheckReady;
       final snap =
           await FirebaseFirestore.instance.collection('users').doc(uid).get();
       final data = snap.data();

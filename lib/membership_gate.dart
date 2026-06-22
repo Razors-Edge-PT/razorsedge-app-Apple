@@ -13,6 +13,16 @@ import 'package:http/http.dart' as http;
 
 import 'login_screen.dart';   // only as a very defensive fallback
 import 'account_deletion_screen.dart';
+import 'app_check_ready.dart';
+import 'startup_route_service.dart';
+import 'startup_trace.dart';
+import 'WES2_screen.dart';
+
+/// Wraps [Wes2Screen] in a [MembershipGate] so EVERY route capable of showing
+/// WES2 stays membership-governed (cold restore, named routes, and all in-app
+/// pushes). Restored cold starts pass no [initialDate] → WES2 opens today.
+Widget gatedWes2({DateTime? initialDate}) =>
+    MembershipGate(child: Wes2Screen(initialDate: initialDate));
 
 /// 🔐 UIDs that always have an "effective" active membership,
 /// regardless of what Firestore says.
@@ -30,6 +40,9 @@ const freeMembershipUids = <String>{
 /// - If it already exists → do nothing (do NOT overwrite active=true).
 Future<void> ensureMembershipDoc(String uid) async {
   try {
+    // Sequence behind App Check activation (see app_check_ready.dart). Settles
+    // even on failure/timeout, so this never deadlocks.
+    await appCheckReady;
     print('🔎 ensureMembershipDoc: checking membership for uid=$uid');
 
     final membershipDocRef = FirebaseFirestore.instance
@@ -60,72 +73,186 @@ Future<void> ensureMembershipDoc(String uid) async {
 
 
 /// Wraps any screen that should only be visible to active members.
-class MembershipGate extends StatelessWidget {
+///
+/// States are kept distinct so an error can never become a bypass:
+///   • confirmed MISSING document → brand-new user → pass through (business
+///     rule preserved),
+///   • confirmed EXISTING document → evaluate active / paywallTriggered,
+///   • stream / network / App Check ERROR → show a retryable verification
+///     screen (NOT protected content, NOT the missing-doc pass-through).
+///
+/// [sessionAllowed] (in-memory, per-process, UID-keyed, NOT persisted) lets an
+/// already-confirmed paying user reopen WES2 within the same session without a
+/// fresh full-screen spinner. It is set ONLY from a confirmed live allowed
+/// result, never from an error, and is cleared on logout / account deletion /
+/// UID change. Even when fast-passing, the live stream is attached and will
+/// demote to the paywall if membership actually changed.
+class MembershipGate extends StatefulWidget {
   final Widget child;
 
   const MembershipGate({super.key, required this.child});
 
+  /// UID confirmed allowed earlier in this process session (in-memory only).
+  static String? _sessionAllowedUid;
+
+  /// Clears the in-memory session-allow (logout / account deletion / UID change).
+  static void clearSessionAllowed() => _sessionAllowedUid = null;
+
+  @override
+  State<MembershipGate> createState() => _MembershipGateState();
+}
+
+class _MembershipGateState extends State<MembershipGate> {
+  User? _user;
+  String? _uid;
+  bool _isFree = false;
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _stream;
+
+  @override
+  void initState() {
+    super.initState();
+    _user = FirebaseAuth.instance.currentUser;
+    _uid = _user?.uid;
+
+    // A UID change invalidates any prior session-allow.
+    if (MembershipGate._sessionAllowedUid != null &&
+        MembershipGate._sessionAllowedUid != _uid) {
+      MembershipGate.clearSessionAllowed();
+    }
+
+    _isFree = _uid != null && freeMembershipUids.contains(_uid);
+    if (_uid != null && !_isFree) {
+      _attachStream();
+    }
+  }
+
+  /// Guarantees the membership doc exists and attaches the live stream — but
+  /// only after App Check activation settles, so the read carries a token when
+  /// enforcement is on. Safe to call again from the retry action.
+  Future<void> _attachStream() async {
+    final uid = _uid;
+    if (uid == null) return;
+    unawaited(ensureMembershipDoc(uid)); // awaits appCheckReady internally
+    await appCheckReady;
+    if (!mounted) return;
+    setState(() {
+      _stream = FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('profile') // ← if you change the path, change here
+          .doc('membership')
+          .snapshots();
+    });
+  }
+
+  Widget _loading() =>
+      const Scaffold(body: Center(child: CircularProgressIndicator()));
+
+  /// Retryable membership-verification error — shown on stream/network/App
+  /// Check failure. Never falls through to protected content.
+  Widget _verificationError() {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.cloud_off_outlined,
+                  size: 40, color: Theme.of(context).colorScheme.secondary),
+              const SizedBox(height: 16),
+              const Text(
+                "We couldn't verify your membership",
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Check your connection and try again.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton(
+                onPressed: () => _attachStream(),
+                child: const Text('Try again'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+    final uid = _uid;
 
     // Defensive: if auth state is transiently null here, return LoginScreen
     // directly — do NOT wrap in a new MaterialApp (would create a nested
     // Navigator that AppRoot cannot unwind).
-    if (user == null) {
+    if (_user == null || uid == null) {
       debugPrint('[MEMBERSHIP] currentUser null — falling back to LoginScreen');
-      unawaited(writeAuthBreadcrumb('MEMBERSHIP currentUser null fallback to LoginScreen'));
+      unawaited(writeAuthBreadcrumb(
+          'MEMBERSHIP currentUser null fallback to LoginScreen'));
       return const LoginScreen();
     }
 
-    final uid = user.uid;
-    debugPrint('[MEMBERSHIP] uid=$uid');
-    ensureMembershipDoc(uid); // guarantee /profile/membership exists for brand-new users
-
-    // 1) Free / comped users: always allowed in.
-    if (freeMembershipUids.contains(uid)) {
+    // 1) Free / comped users: always allowed in (no stream, no App Check wait).
+    if (_isFree) {
       debugPrint('[MEMBERSHIP] free-membership uid — access granted');
-      return child;
+      return widget.child;
     }
 
-    // 2) Everyone else: listen to membership doc.
-    final membershipDocRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('profile')      // ← if you change the path, change here
-        .doc('membership');
+    final canFastPass = MembershipGate._sessionAllowedUid == uid;
+
+    // Stream not attached yet (App Check still settling / first attach).
+    if (_stream == null) {
+      // Already confirmed allowed this session → show content immediately while
+      // the live stream re-attaches (it will demote if membership changed).
+      return canFastPass ? widget.child : _loading();
+    }
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: membershipDocRef.snapshots(),
+      stream: _stream,
       builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+        // ERROR: never pass through, never establish/retain allowed from it.
+        if (snap.hasError) {
+          debugPrint('[MEMBERSHIP] stream error: ${snap.error}');
+          // If already confirmed allowed earlier this session, keep showing
+          // content (the error is transient; allow was established from a prior
+          // confirmed result, not from this error). Otherwise show retry.
+          return canFastPass ? widget.child : _verificationError();
         }
 
+        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+          return canFastPass ? widget.child : _loading();
+        }
+
+        // CONFIRMED missing document → brand-new user, no real set logged yet.
         if (!snap.hasData || !snap.data!.exists) {
-          // No doc → brand-new user, no real set logged yet → pass through.
-          debugPrint('[MEMBERSHIP] no doc — new user, access granted');
-          return child;
+          debugPrint('[MEMBERSHIP] confirmed no doc — new user, access granted');
+          return widget.child;
         }
 
+        // CONFIRMED existing document.
         final data = snap.data!.data() ?? {};
+        final active = data['active'] == true;
+        final inFreeTrial = data['paywallTriggered'] != true;
 
-        // Check 2: active membership.
-        if (data['active'] == true) {
-          debugPrint('[MEMBERSHIP] active — access granted');
-          return child;
+        if (active || inFreeTrial) {
+          debugPrint('[MEMBERSHIP] '
+              '${active ? "active" : "free-trial"} — access granted');
+          // Set ONLY from a confirmed live allowed result.
+          MembershipGate._sessionAllowedUid = uid;
+          StartupTrace.membershipUiSelected('allowed');
+          return widget.child;
         }
 
-        // Check 3: fewer than 4 qualifying workout dates → still in free-trial window.
-        if (data['paywallTriggered'] != true) {
-          debugPrint('[MEMBERSHIP] paywallTriggered not set — free-trial access granted');
-          return child;
-        }
-
-        // Check 4: 4+ qualifying workout dates but inactive → paywall.
+        // Confirmed inactive + paywallTriggered → demote; never retain allowed.
         debugPrint('[MEMBERSHIP] paywallTriggered=true inactive — showing paywall');
+        MembershipGate.clearSessionAllowed();
+        StartupTrace.membershipUiSelected('paywall');
         return const MembershipInactiveScreen();
       },
     );
@@ -297,9 +424,13 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
 
   Future<void> _logout(BuildContext context) async {
     debugPrint('[AUTHLOGOUT] MembershipInactiveScreen logout');
+    final uid = FirebaseAuth.instance.currentUser?.uid;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('goodlift_explicit_logout', true);
-    await writeAuthBreadcrumb('AUTHLOGOUT membershipInactive uid=${FirebaseAuth.instance.currentUser?.uid}');
+    await writeAuthBreadcrumb('AUTHLOGOUT membershipInactive uid=$uid');
+    // Clear the restored-route marker + in-memory session-allow for this UID.
+    if (uid != null) await StartupRouteService.clearForLogout(uid);
+    MembershipGate.clearSessionAllowed();
     await GoogleSignIn().signOut();
     await FirebaseAuth.instance.signOut();
     Navigator.pushReplacementNamed(context, '/login');

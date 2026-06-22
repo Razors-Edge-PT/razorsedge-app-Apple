@@ -27,7 +27,6 @@ import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -36,6 +35,9 @@ import 'auth_debug.dart';
 import 'membership_gate.dart';
 import 'theme_controller.dart';
 import 'app_theme.dart';
+import 'app_check_ready.dart';
+import 'startup_route_service.dart';
+import 'startup_trace.dart';
 
 
 
@@ -119,12 +121,32 @@ class _AppRootState extends State<AppRoot> {
   Future<IdTokenResult>? _tokenFuture;
   UserContext? _userContext;
 
+  // Major route to restore on this cold start. Resolved (UID-keyed) during
+  // _handleValidUser before _phase becomes authenticated, so MyApp's initial
+  // route stack is built directly into WES2 when appropriate (no Home flash).
+  StartupDestination _startupDestination = StartupDestination.home;
+
   StreamSubscription<User?>? _authSub;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => StartupTrace.firstFrame());
     _authSub = FirebaseAuth.instance.authStateChanges().listen(_onAuthEvent);
+
+    // ── Synchronous fast path ────────────────────────────────────────────────
+    // For a remembered (already-restored) user, route immediately instead of
+    // waiting for authStateChanges to emit or for the 2 s watchdog. The
+    // explicit-logout prerequisite is enforced INSIDE _handleValidUser, so a
+    // stale cached Firebase user can never override a deliberate logout, and
+    // the logout flag is never cleared before being confirmed false for this
+    // generation. Stale async chains are dropped via the _authGen guards.
+    final fastGen = ++_authGen;
+    final cached = FirebaseAuth.instance.currentUser;
+    StartupTrace.cachedUserRead(cached?.uid);
+    if (cached != null && !cached.isAnonymous) {
+      unawaited(_handleValidUser(cached, fastGen));
+    }
     // Watchdog: if authStateChanges never emits within 2 s (Play Integrity / cold-start
     // race), manually kick the auth path so _phase never stays loading forever.
     Future.delayed(const Duration(seconds: 2), () async {
@@ -219,10 +241,27 @@ class _AppRootState extends State<AppRoot> {
   Future<void> _handleValidUser(User user, int gen) async {
     if (gen != _authGen || !mounted) return;
 
-    // Clear explicit-logout flag whenever Firebase confirms a real user.
     final prefs = await SharedPreferences.getInstance();
     if (gen != _authGen || !mounted) return;
-    await prefs.setBool(_kExplicitLogout, false);
+
+    // ── Explicit-logout prerequisite (shared by EVERY valid-user caller:
+    // the synchronous fast path, authStateChanges, the watchdogs, restore
+    // steps and silent Google restore all route through here). A stale cached
+    // Firebase user must never override a deliberate logout, and the flag must
+    // not be cleared until it has been confirmed false for THIS generation.
+    final explicitLogout = prefs.getBool(_kExplicitLogout) ?? false;
+    if (explicitLogout) {
+      unawaited(writeAuthBreadcrumb(
+          'handleValidUser explicitLogout=true → unauthenticated gen=$gen'));
+      if (gen != _authGen || !mounted) return;
+      _clearMemo();
+      setState(() => _phase = _AuthPhase.unauthenticated);
+      return;
+    }
+
+    // Confirmed false → safe to clear. Fire-and-forget so the disk write never
+    // delays routing.
+    unawaited(prefs.setBool(_kExplicitLogout, false));
 
     // Memoize per uid so WarmupService is not re-triggered on provider rebuilds.
     if (user.uid != _memoUid) {
@@ -259,9 +298,17 @@ class _AppRootState extends State<AppRoot> {
       );
     }
 
+    // Resolve the UID-keyed restore destination from prefs already in hand, so
+    // MyApp builds the initial route stack straight into WES2 when appropriate
+    // (no transient Home frame). Defaults to Home on any miss/mismatch/error.
+    final dest = await StartupRouteService.readStartupDestination(user.uid);
     if (gen != _authGen || !mounted) return;
-    await writeAuthBreadcrumb('authenticated uid=${user.uid}');
+    _startupDestination = dest;
+    StartupTrace.restoredDestination(dest.name);
+
+    unawaited(writeAuthBreadcrumb('authenticated uid=${user.uid}'));
     // Route immediately — never stall on tokenPending for remembered users.
+    StartupTrace.authenticatedSelected();
     setState(() => _phase = _AuthPhase.authenticated);
   }
 
@@ -315,6 +362,21 @@ class _AppRootState extends State<AppRoot> {
 
   Future<void> _handleNullOrAnon(int gen) async {
     if (!mounted) return;
+
+    // Transient-null guard: authStateChanges can emit a spurious null on cold
+    // start (the very reason the restore grace exists). If the synchronous fast
+    // path already authenticated and Firebase still holds a non-anon
+    // currentUser, this null is NOT a logout — do not downgrade the live
+    // authenticated UI to a restore spinner. A real logout leaves currentUser
+    // null and still flows through below.
+    final liveUser = FirebaseAuth.instance.currentUser;
+    if (_phase == _AuthPhase.authenticated &&
+        liveUser != null &&
+        !liveUser.isAnonymous) {
+      debugPrint('[AUTHNULL] ignoring transient null — authenticated user '
+          '${liveUser.uid} still present gen=$gen');
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
     if (gen != _authGen || !mounted) return;
@@ -511,6 +573,31 @@ class _AppRootState extends State<AppRoot> {
 
   // ─── build ────────────────────────────────────────────────────────────────
 
+  /// Themed loading shell so the pre-auth spinner never flashes an unthemed
+  /// (default Material) screen before the real theme is applied.
+  Widget _loadingApp(BuildContext context) {
+    final tc = context.watch<ThemeController>();
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light(
+        primary: tc.primaryColor,
+        secondary: tc.secondaryColor,
+        tertiary: tc.tertiaryColor,
+        quaternary: tc.quaternaryColor,
+      ),
+      darkTheme: AppTheme.dark(
+        primary: tc.primaryColor,
+        secondary: tc.secondaryColor,
+        tertiary: tc.tertiaryColor,
+        quaternary: tc.quaternaryColor,
+      ),
+      themeMode: tc.themeMode,
+      home: const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     debugPrint('[AUTHROOT] build phase=$_phase');
@@ -518,24 +605,19 @@ class _AppRootState extends State<AppRoot> {
       case _AuthPhase.loading:
       case _AuthPhase.restoring:
       case _AuthPhase.tokenPending:
-        return const MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(),
-            ),
-          ),
-        );
+        return _loadingApp(context);
       case _AuthPhase.unauthenticated:
         return const MyApp(isAuthenticated: false);
       case _AuthPhase.authenticated:
         if (_userContext == null) {
-          return const MaterialApp(
-            home: Scaffold(body: Center(child: CircularProgressIndicator())),
-          );
+          return _loadingApp(context);
         }
         return ChangeNotifierProvider<UserContext>.value(
           value: _userContext!,
-          child: const MyApp(isAuthenticated: true),
+          child: MyApp(
+            isAuthenticated: true,
+            startupDestination: _startupDestination,
+          ),
         );
     }
   }
@@ -544,39 +626,35 @@ class _AppRootState extends State<AppRoot> {
 
 void main() async {
 
+  StartupTrace.processStart();
   WidgetsFlutterBinding.ensureInitialized();
   if (Firebase.apps.isEmpty) {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
   }
+  StartupTrace.firebaseInitialized();
 
+  // App Check: invoke activation SYNCHRONOUSLY (registers the provider before
+  // any widget builds / any Firestore request can start) but do NOT await it —
+  // the first visible Flutter frame must not wait on Play Integrity /
+  // DeviceCheck attestation. Protected startup operations await `appCheckReady`
+  // individually at their Firestore boundaries. See app_check_ready.dart.
+  initAppCheck();
+  StartupTrace.appCheckInvoked();
+  unawaited(appCheckReady.then((_) => StartupTrace.appCheckSettled()));
 
-  // Search-bar anchor: FirebaseAppCheck.instance.activate
-  // ✅ Production-safe: App Check should never prevent the UI from rendering.
-  try {
-    await FirebaseAppCheck.instance.activate(
-      androidProvider: kReleaseMode
-          ? AndroidProvider.playIntegrity
-          : AndroidProvider.debug,
-
-      appleProvider: kReleaseMode
-          ? AppleProvider.deviceCheck
-          : AppleProvider.debug,
-    );
-  } catch (e, st) {
-    debugPrint('❌ AppCheck activate failed: $e');
-    debugPrint('$st');
-  }
-
-
+  // Diagnostics/analytics — must never block the first frame.
   if (!kIsWeb && Platform.isIOS) {
-    await FacebookAppEvents().activateApp();
+    unawaited(FacebookAppEvents().activateApp());
   }
 
+  // Theme load is a single SharedPreferences read (sub-ms) — kept awaited so
+  // the first frame renders with the user's persisted theme (no theme flash).
   final themeController = ThemeController();
   await themeController.load();
 
+  StartupTrace.runAppCalled();
   runApp(
     ChangeNotifierProvider<ThemeController>.value(
       value: themeController,
@@ -647,7 +725,20 @@ const bool kUseHomeScreen2AsDefault = true;
 
 class MyApp extends StatelessWidget {
   final bool isAuthenticated;
-  const MyApp({super.key, required this.isAuthenticated});
+  final StartupDestination startupDestination;
+  const MyApp({
+    super.key,
+    required this.isAuthenticated,
+    this.startupDestination = StartupDestination.home,
+  });
+
+  /// Gated default Home — used by `/home`, the initial route, and as the
+  /// restore target when a root WES2 route is deliberately exited.
+  static Widget _gatedHome() => MembershipGate(
+        child: kUseHomeScreen2AsDefault
+            ? const HomeScreen2()
+            : const HomeScreen(),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -680,30 +771,50 @@ class MyApp extends StatelessWidget {
       navigatorObservers: [routeObserver],
 
       // AppRoot is the single auth-state authority — no second authStateChanges() here.
-      home: isAuthenticated
-          ? MembershipGate(
-              child: kUseHomeScreen2AsDefault
-                  ? const HomeScreen2()
-                  : const HomeScreen(),
-            )
-          : const LoginScreen(),
+      //
+      // Authenticated: build the initial route stack directly via
+      // onGenerateInitialRoutes (home must be null when that is set). When the
+      // last major route was WES2 we restore ONLY a gated WES2 root — Home is
+      // NOT constructed beneath it, so Home's heavy startup work cannot compete
+      // with WES2 startup (Issue 5). The WES2 PopScope routes to '/home' when
+      // that root is deliberately exited, preserving expected back behaviour.
+      home: isAuthenticated ? null : const LoginScreen(),
+      initialRoute: isAuthenticated ? '/home' : null,
+      onGenerateInitialRoutes: isAuthenticated
+          ? (_) {
+              if (startupDestination == StartupDestination.wes2) {
+                StartupTrace.restoredDestination('wes2');
+                return [
+                  MaterialPageRoute<void>(
+                    settings: const RouteSettings(name: '/workouts'),
+                    builder: (_) =>
+                        const MembershipGate(child: Wes2Screen()),
+                  ),
+                ];
+              }
+              StartupTrace.restoredDestination('home');
+              return [
+                MaterialPageRoute<void>(
+                  settings: const RouteSettings(name: '/home'),
+                  builder: (_) => _gatedHome(),
+                ),
+              ];
+            }
+          : null,
 
       routes: {
         '/login': (context) => const LoginScreen(),
-        '/home': (context) => MembershipGate(
-              child: kUseHomeScreen2AsDefault
-                  ? const HomeScreen2()
-                  : const HomeScreen(),
-            ),
+        '/home': (context) => _gatedHome(),
 
         '/exercises': (context) => const ExercisesScreen(),
         '/templates': (context) => const TemplatesScreen(),
-        '/workouts': (context) => const Wes2Screen(),
+        // Gated so a direct/deep-link to WES2 can never bypass the paywall.
+        '/workouts': (context) => const MembershipGate(child: Wes2Screen()),
         '/week_planner': (context) => const BB3WeekPlanner(),
         '/body_weight_tracker': (context) => const BodyWeightTracker(),
         '/planned_blocks': (context) => const PlannedBlocksScreen(),
         '/block_builder': (context) => const Block_Planner(),
-        '/workout_entry': (c) => const Wes2Screen(),
+        '/workout_entry': (c) => const MembershipGate(child: Wes2Screen()),
         '/week_planner_b': (c) => const BB3WeekPlanner(),
         '/saved_workouts': (c) => const SavedWorkoutsScreen(),
         '/body_weight': (c) => const BodyWeightTracker(),

@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'app_check_ready.dart';
 
 String emailHash(String email) {
   final lower = email.trim().toLowerCase();
@@ -17,6 +18,9 @@ String emailHash(String email) {
 Future<void> upsertUserLookup() async {
   final user = FirebaseAuth.instance.currentUser;
   if (user == null || user.email == null) return;
+
+  // Sequence behind App Check activation (settles even on failure/timeout).
+  await appCheckReady;
 
   final hash = emailHash(user.email!);
   await FirebaseFirestore.instance

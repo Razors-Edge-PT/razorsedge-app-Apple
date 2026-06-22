@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'user_context.dart';
+import 'app_check_ready.dart';
 import 'block_creation_helper.dart';
 import 'block_exercise_defaults_repository.dart';
 import 'template_bootstrapper.dart';
@@ -23,6 +24,9 @@ class HomeBootstrapService {
     required UserContext uc,
   }) async {
     if (uid.isEmpty) return;
+
+    // Sequence Firestore behind App Check (settles even on failure/timeout).
+    await appCheckReady;
 
     // Never create blocks for an athlete being coached — only for self users.
     if (uid != uc.actorUid) {
@@ -543,6 +547,7 @@ class HomeBootstrapService {
     required String blockId,
   }) async {
     try {
+      await appCheckReady;
       await BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
         uid: uid,
         blockId: blockId,
@@ -641,6 +646,8 @@ class HomeBootstrapService {
   /// carry the metadata.  Safe to call repeatedly — idempotent.
   static Future<void> backfillOwnerMetadata(String uid) async {
     if (uid.isEmpty) return;
+
+    await appCheckReady;
 
     final blocksRef = FirebaseFirestore.instance
         .collection('planned_blocks')

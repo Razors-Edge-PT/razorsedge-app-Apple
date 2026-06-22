@@ -8,6 +8,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 // ⬇️ Bring in your existing classes (names taken from your snippets)
 import 'block_repository.dart';   // BlockRepository().fetchActiveBlockId(...)
 import 'warmup_service.dart';                  // WarmupService.instance.warmWES(...)
+import 'app_check_ready.dart';
 
 class UserContext extends ChangeNotifier {
   // Identity & roles
@@ -161,6 +162,8 @@ class UserContext extends ChangeNotifier {
   Future<void> _refreshFromServerInBackground(String uid, {int attempt = 1}) async {
     // ⚠️ MUST NOT throw; never block UI
     try {
+      // Sequence Firestore behind App Check (settles even on failure/timeout).
+      await appCheckReady;
       final repo = BlockRepository();
       final id = await repo.fetchActiveBlockId(uid);
       if (id == null || id.isEmpty) {
@@ -240,6 +243,7 @@ class UserContext extends ChangeNotifier {
   /// WES2 always has up-to-date block context before the user navigates there.
   Future<void> refreshBlockMetaFromServer({required String uid}) async {
     try {
+      await appCheckReady;
       final repo = BlockRepository();
       final id = await repo.fetchActiveBlockId(uid);
       if (id == null || id.isEmpty) return;

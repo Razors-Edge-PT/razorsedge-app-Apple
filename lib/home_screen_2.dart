@@ -17,7 +17,7 @@ import 'profile_page.dart';
 import 'templates.dart';
 import 'user_context.dart';
 import 'user_settings.dart';
-import 'WES2_screen.dart';
+import 'membership_gate.dart';
 
 // Private to this file — avoids name collision with home_screen.dart's SelectedFeed.
 enum _HomeV2Feed { home, points, leaderboard }
@@ -348,7 +348,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                       builder: (_) =>
                                           ChangeNotifierProvider<UserContext>.value(
                                         value: uc,
-                                        child: const Wes2Screen(),
+                                        child: gatedWes2(),
                                       ),
                                     ),
                                   );
@@ -560,7 +560,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                           builder: (_) =>
                               ChangeNotifierProvider<UserContext>.value(
                             value: userContext,
-                            child: Wes2Screen(initialDate: selectedDay),
+                            child: gatedWes2(initialDate: selectedDay),
                           ),
                         ),
                       );

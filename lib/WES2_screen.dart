@@ -28,6 +28,9 @@ import 'top_sets_screen.dart';
 import 'periodization_model_utils.dart';
 import 'progression_engine.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'app_check_ready.dart';
+import 'startup_route_service.dart';
+import 'startup_trace.dart';
 
 enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
 
@@ -50,6 +53,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   final Wes2LocalStore _localStore = IsarWes2LocalStore();
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
+  // One-shot guard so the WES2-first-build timing trace fires only once.
+  bool _tracedFirstBuild = false;
   // Guards against overlapping retry attempts from the polished load-error state.
   bool _retryInProgress = false;
   String? _athleteUsername;
@@ -242,6 +247,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
     if (!_loadStarted) {
       _loadStarted = true;
+      // Mark WES2 as the last active major route (UserContext is available
+      // here, so we use the actor UID — never assume FirebaseAuth in initState).
+      // Fire-and-forget; cleared only on deliberate exit (PopScope), never from
+      // dispose(), so process death cannot wipe the WES2 marker.
+      unawaited(StartupRouteService.markWes2Active(uc.actorUid));
       _loadDay();
       unawaited(_loadTutorialState());
       unawaited(_loadCogCueState());
@@ -393,7 +403,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// beginLoad() increments the epoch; stale completions are discarded.
   Future<void> _loadDay() async {
     final epoch = _controller.beginLoad();
+    StartupTrace.wes2LoadStart();
     try {
+      // Sequence Firestore behind App Check activation (settles even on
+      // failure/timeout, so this never deadlocks). WES2 shows its existing
+      // loading state while activation settles.
+      await appCheckReady;
+      if (!mounted) return;
       // Phase 3: completed workout document (exercises[] + wesPlannedExercises[])
       final completedRows = await _repository.loadDay(
         uid: _controller.actingUid,
@@ -431,6 +447,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             _mergeRows(completedRows, bb3Rows), draft?.rows)),
         epoch,
       );
+      StartupTrace.wes2LoadComplete();
       _workoutDurationMilliseconds = draft?.workoutDurationMs ?? 0;
       _workoutDurationSegmentStartedAt = null;
       // Phase 21B: apply Set 1 model/default hints after rows settle.
@@ -1292,7 +1309,25 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 _fetchAthleteUsername(actingUid);
             });
           }
-          return Scaffold(
+          if (!_tracedFirstBuild) {
+            _tracedFirstBuild = true;
+            StartupTrace.wes2FirstBuild();
+          }
+          return PopScope(
+            // A restored root WES2 route has nothing beneath it to pop to.
+            // Intercept the back gesture (canPop:false when root) and route to
+            // Home instead of closing the app, preserving expected back
+            // behaviour without eagerly building Home underneath (Issue 5).
+            canPop: Navigator.of(context).canPop(),
+            onPopInvokedWithResult: (didPop, result) {
+              // Deliberate exit from WES2 → flip the marker so the next cold
+              // start opens Home. Never written from dispose()/process death.
+              unawaited(StartupRouteService.markHomeActive(uc.actorUid));
+              if (!didPop && !Navigator.of(context).canPop()) {
+                Navigator.of(context).pushReplacementNamed('/home');
+              }
+            },
+            child: Scaffold(
             appBar: AppBar(
               title: const Text(' '),
               actions: [
@@ -1435,6 +1470,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                   ),
               ],
             ),
+          ),
           );
         },
       ),
