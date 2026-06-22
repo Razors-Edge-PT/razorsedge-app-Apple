@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async'; // for Timer debounce
 import 'package:flutter/services.dart'; // for TextInputFormatter
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -270,6 +271,14 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
         return;
       }
 
+      // Clear the explicit-logout flag BEFORE creating the account. Creating a
+      // user signs them in and fires authStateChanges; AppRoot's handler gates
+      // valid-user routing on this flag, so it must already be false (e.g. when
+      // a previously logged-out user creates a fresh account).
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('goodlift_explicit_logout', false);
+      await prefs.setString('goodlift_last_login_provider', 'password');
+
       // Create the user
       await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: email,
@@ -318,9 +327,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
             .set(payload, SetOptions(merge: true));
       }
 
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, '/home');
-      }
+      // No navigation here. Creating the account signed the user in, which
+      // fires authStateChanges; AppRoot creates UserContext, mounts the
+      // authenticated Navigator under ChangeNotifierProvider<UserContext>, and
+      // selects the startup route. Pushing '/home' on this (unauthenticated)
+      // Navigator would mount it with no UserContext above → ProviderNotFound.
 
     } on FirebaseAuthException catch (e) {
       String message;

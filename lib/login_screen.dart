@@ -50,22 +50,33 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
+      // Clear the explicit-logout flag BEFORE sign-in. AppRoot's
+      // authStateChanges handler gates valid-user routing on this flag, so it
+      // must already be false when the sign-in fires the auth event — otherwise
+      // a prior logout would be treated as still in effect.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('goodlift_explicit_logout', false);
+      await prefs.setString('goodlift_last_login_provider', 'password');
+
       final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
       await _upsertUserDoc(cred.user);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('goodlift_explicit_logout', false);
-      await prefs.setString('goodlift_last_login_provider', 'password');
       await writeAuthBreadcrumb('AUTHLOGIN provider=password uid=${cred.user?.uid}');
-      debugPrint('[AUTHLOGIN] email sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
-      Navigator.pushReplacementNamed(context, '/home');
+      debugPrint('[AUTHLOGIN] email sign-in uid=${cred.user?.uid} — AppRoot will route');
+      // No navigation here. AppRoot is the single auth-state authority: its
+      // authStateChanges handler creates UserContext, mounts the authenticated
+      // Navigator under ChangeNotifierProvider<UserContext>, and selects the
+      // startup route. Pushing '/home' here would mount it in the
+      // unauthenticated Navigator (no UserContext) → ProviderNotFound.
     } on FirebaseAuthException catch (e) {
-      setState(() => _errorMessage = e.message);
+      if (mounted) setState(() => _errorMessage = e.message);
     } finally {
-      setState(() => _isLoading = false);
+      // Guard: a successful sign-in disposes LoginScreen (AppRoot rebuilds)
+      // before this runs — never setState after dispose.
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -83,7 +94,7 @@ class _LoginScreenState extends State<LoginScreen> {
       await googleSignIn.signOut(); // clears cached selection → forces account picker every time
       final googleUser = await googleSignIn.signIn();
       if (googleUser == null) {
-        setState(() => _isLoading = false);
+        if (mounted) setState(() => _isLoading = false);
         return;
       }
 
@@ -93,19 +104,22 @@ class _LoginScreenState extends State<LoginScreen> {
         idToken: googleAuth.idToken,
       );
 
-      final cred = await FirebaseAuth.instance.signInWithCredential(credential);
-
-      await _upsertUserDoc(cred.user);
+      // Clear the explicit-logout flag BEFORE the Firebase credential sign-in
+      // (see signInWithEmailAndPassword for the rationale).
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('goodlift_explicit_logout', false);
       await prefs.setString('goodlift_last_login_provider', 'google');
+
+      final cred = await FirebaseAuth.instance.signInWithCredential(credential);
+
+      await _upsertUserDoc(cred.user);
       await writeAuthBreadcrumb('AUTHLOGIN provider=google uid=${cred.user?.uid}');
-      debugPrint('[AUTHLOGIN] Google sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
-      Navigator.pushReplacementNamed(context, '/home');
+      debugPrint('[AUTHLOGIN] Google sign-in uid=${cred.user?.uid} — AppRoot will route');
+      // No navigation here — AppRoot routes on authStateChanges (see email method).
     } on FirebaseAuthException catch (e) {
-      setState(() => _errorMessage = e.message);
+      if (mounted) setState(() => _errorMessage = e.message);
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -120,20 +134,22 @@ class _LoginScreenState extends State<LoginScreen> {
         ..addScope('email')
         ..addScope('name');
 
-      final cred = await FirebaseAuth.instance.signInWithProvider(appleProvider);
-      await _upsertUserDoc(cred.user);
+      // Clear the explicit-logout flag BEFORE sign-in (see email method).
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('goodlift_explicit_logout', false);
       await prefs.setString('goodlift_last_login_provider', 'apple');
+
+      final cred = await FirebaseAuth.instance.signInWithProvider(appleProvider);
+      await _upsertUserDoc(cred.user);
       await writeAuthBreadcrumb('AUTHLOGIN provider=apple uid=${cred.user?.uid}');
-      debugPrint('[AUTHLOGIN] Apple sign-in uid=${cred.user?.uid} — explicit logout flag cleared');
-      Navigator.pushReplacementNamed(context, '/home');
+      debugPrint('[AUTHLOGIN] Apple sign-in uid=${cred.user?.uid} — AppRoot will route');
+      // No navigation here — AppRoot routes on authStateChanges (see email method).
     } on FirebaseAuthException catch (e) {
-      setState(() => _errorMessage = e.message);
+      if (mounted) setState(() => _errorMessage = e.message);
     } catch (_) {
       // user cancelled Apple sheet — loading state reset by finally
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
