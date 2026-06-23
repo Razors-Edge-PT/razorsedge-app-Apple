@@ -62,7 +62,8 @@
       "PowerShell(flutter *)",
       "PowerShell(flutter pub *)",
       "PowerShell($result = flutter analyze 2>&1; $errors = $result | Select-String \" error - \"; \"Error count: $\\($errors.Count\\)\"; if \\($errors.Count -gt 0\\) { $errors })",
-      "PowerShell(adb *)"
+      "PowerShell(adb *)",
+      "PowerShell($result = flutter analyze 2>&1; $errors = $result | Select-String \" error - \"; \"Error count: $\\($errors.Count\\)\"; $result | Select-Object -Last 3)"
     ]
   }
 }
