@@ -8,6 +8,7 @@ import 'onboarding_prefs.dart';
 import 'onboarding/onboarding_cue.dart';
 import 'onboarding/onboarding_cue_service.dart';
 import 'user_context.dart';
+import 'WES2_widgets/WES2_app_bar.dart';
 import 'WES2_widgets/WES2_tutorial_banner.dart';
 import 'WES2_controller.dart';
 import 'WES2_models.dart';
@@ -33,8 +34,6 @@ import 'startup_route_service.dart';
 import 'startup_trace.dart';
 import 'wes2_exit_coordinator.dart';
 
-enum _Wes2AppBarMenuAction { timer, templates, deleteAll }
-
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
 /// Accesses athlete identity via UserContext — never via FirebaseAuth directly.
@@ -58,9 +57,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   bool _tracedFirstBuild = false;
   // Guards against overlapping retry attempts from the polished load-error state.
   bool _retryInProgress = false;
-  // Coordinates the single authoritative deliberate-exit path (_exitToHome).
-  // Holds the re-entrancy guard so repeated back taps cannot double-pop or
-  // create duplicate Home routes.
+  // Coordinates the deliberate-exit paths (_exitToPreviousRoute and
+  // _exitDirectlyToHome). Holds the re-entrancy guard so repeated back/logo
+  // taps cannot double-pop or create duplicate Home routes.
   final Wes2ExitCoordinator _exitCoordinator = Wes2ExitCoordinator();
   String? _athleteUsername;
   String? _athleteGreeting;
@@ -1279,21 +1278,43 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
-  /// Authoritative deliberate-exit path from WES2 back to Home.
+  /// Deliberate exit to the actual previous route (explicit Back button and
+  /// Android/system Back via PopScope).
   ///
   /// Delegates to [Wes2ExitCoordinator] (real production logic, also driven by
   /// tests). The coordinator drops focus FIRST so the still-mounted Wes2SetRow
   /// focus listener fires its existing onFieldUnfocused save exactly once and
   /// the iOS keyboard is dismissed before the route subtree is torn down, then
-  /// navigates exactly once: a normal pop when Home exists beneath, or
-  /// pushReplacementNamed('/home') for a restored root WES2 route.
+  /// navigates exactly once: pops one route when one exists beneath (returning
+  /// to Home, BB3, or whatever pushed WES2), or pushReplacementNamed('/home')
+  /// for a restored root WES2 route so the app never closes.
   ///
   /// The Firestore field patch is intentionally NOT awaited — the controller
   /// already holds the latest typed value (synchronous onChanged), the focus
   /// callback starts the existing field-patch save, and the local Isar draft is
   /// the fallback.
-  Future<void> _exitToHome() {
-    return _exitCoordinator.exit(
+  Future<void> _exitToPreviousRoute() {
+    return _exitCoordinator.exitToPreviousRoute(
+      dropFocus: () => FocusManager.instance.primaryFocus?.unfocus(),
+      isMounted: () => mounted,
+      markHomeActive: () => unawaited(
+        StartupRouteService.markHomeActive(
+          UserContext.of(context, listen: false).actorUid,
+        ),
+      ),
+      navigatorOf: () => mounted ? Navigator.of(context) : null,
+    );
+  }
+
+  /// Deliberate exit straight to Home (GoodLift logo). Intentionally different
+  /// from Back: it pops past any intermediate routes (e.g. BB3) to the existing
+  /// '/home' route, retaining Home state without creating a duplicate, or
+  /// pushReplacementNamed('/home') for a restored root WES2 route.
+  ///
+  /// Shares the coordinator's focus/keyboard sequencing and re-entrancy guard
+  /// with [_exitToPreviousRoute]; the focus/draft ordering note above applies.
+  Future<void> _exitDirectlyToHome() {
+    return _exitCoordinator.exitDirectlyToHome(
       dropFocus: () => FocusManager.instance.primaryFocus?.unfocus(),
       isMounted: () => mounted,
       markHomeActive: () => unawaited(
@@ -1349,159 +1370,57 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             // keyboard dismissed + latest field saved via the existing unfocus
             // callback) BEFORE the route subtree is torn down. canPop:false
             // also disables the native iOS interactive edge-swipe back gesture
-            // on WES2; AppBar/system back continue to work and route through
-            // _exitToHome, which also handles the restored-root '/home'
-            // replacement so a root WES2 never closes the app (Issue 5).
+            // on WES2; the explicit AppBar Back button and system back continue
+            // to work and route through _exitToPreviousRoute, which also handles
+            // the restored-root '/home' replacement so a root WES2 never closes
+            // the app (Issue 5).
             canPop: false,
             onPopInvokedWithResult: (didPop, result) {
               if (didPop) return;
               // ignore: discarded_futures
-              _exitToHome();
+              _exitToPreviousRoute();
             },
             child: Scaffold(
-            appBar: AppBar(
-              title: const Text(' '),
-              actions: [
-                if (_athleteGreeting != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 120),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _athleteGreeting!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.secondary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          if (_athleteUsername != null)
-                            Text(
-                              _athleteUsername!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.secondary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                        ],
+              appBar: Wes2AppBar(
+                // Back → previous route; logo → straight Home. Both route through
+                // the shared exit coordinator (focus drop + guard).
+                onBack: _exitToPreviousRoute,
+                onHome: _exitDirectlyToHome,
+                greeting: _athleteGreeting,
+                username: _athleteUsername,
+                canUndo: controller.canUndo,
+                onUndo: _performUndo,
+                onRefresh: () {
+                  _saveDraftNow();
+                  _loadDay();
+                },
+                onToggleTimer: _toggleTimerVisible,
+                onShowTemplates: _showTemplatePicker,
+                onDeleteAll: _onDeleteAllExercisesForDay,
+              ),
+              body: Stack(
+                children: [
+                  Column(
+                    children: [
+                      Wes2DayHeader(
+                        date: controller.selectedDate,
+                        onSelectDate: _onSelectDate,
+                        onPrevDay: _onPrevDay,
+                        onNextDay: _onNextDay,
                       ),
-                    ),
+                      const Divider(height: 1),
+                      Expanded(child: _buildBody(context, controller)),
+                    ],
                   ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, right: 4),
-                  child: Image.asset(
-                    'assets/InApp/transparent_good_lift_logo_inApp.png',
-                    height: 44,
-                    fit: BoxFit.contain,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.undo),
-                  tooltip: 'Undo',
-                  onPressed: controller.canUndo ? _performUndo : null,
-                ),
-                IconButton(
-                  icon: const Icon(
-                    Icons.auto_awesome,
-                    color: Colors.amberAccent,
-                  ),
-                  tooltip: 'Refresh',
-                  onPressed: () {
-                    _saveDraftNow();
-                    _loadDay();
-                  },
-                ),
-                PopupMenuButton<_Wes2AppBarMenuAction>(
-                  icon: const Icon(Icons.more_vert),
-                  onSelected: (action) {
-                    switch (action) {
-                      case _Wes2AppBarMenuAction.timer:
-                        _toggleTimerVisible();
-                        break;
-                      case _Wes2AppBarMenuAction.templates:
-                        _showTemplatePicker();
-                        break;
-                      case _Wes2AppBarMenuAction.deleteAll:
-                        _onDeleteAllExercisesForDay();
-                        break;
-                    }
-                  },
-                  itemBuilder: (_) => [
-                    const PopupMenuItem(
-                      value: _Wes2AppBarMenuAction.timer,
-                      height: 40,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.timer_outlined, size: 18),
-                          SizedBox(width: 10),
-                          Text('Timer'),
-                        ],
-                      ),
+                  if (_timerVisible)
+                    Positioned(
+                      right: 12,
+                      bottom: MediaQuery.of(context).padding.bottom + 2,
+                      child: _buildFloatingTimer(),
                     ),
-                    const PopupMenuItem(
-                      value: _Wes2AppBarMenuAction.templates,
-                      height: 40,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.layers_outlined, size: 18),
-                          SizedBox(width: 10),
-                          Text('Templates'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuItem(
-                      value: _Wes2AppBarMenuAction.deleteAll,
-                      height: 40,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.delete_outline,
-                              size: 18, color: Colors.redAccent),
-                          SizedBox(width: 10),
-                          Text('Delete Day',
-                              style: TextStyle(color: Colors.redAccent)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                ],
+              ),
             ),
-            body: Stack(
-              children: [
-                Column(
-                  children: [
-                    Wes2DayHeader(
-                      date: controller.selectedDate,
-                      onSelectDate: _onSelectDate,
-                      onPrevDay: _onPrevDay,
-                      onNextDay: _onNextDay,
-                    ),
-                    const Divider(height: 1),
-                    Expanded(child: _buildBody(context, controller)),
-                  ],
-                ),
-                if (_timerVisible)
-                  Positioned(
-                    right: 12,
-                    bottom: MediaQuery.of(context).padding.bottom + 2,
-                    child: _buildFloatingTimer(),
-                  ),
-              ],
-            ),
-          ),
           );
         },
       ),

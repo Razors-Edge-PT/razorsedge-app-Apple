@@ -94,7 +94,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     // WES2 numeric field) so an orphaned iOS keyboard cannot linger over Home.
     // Safe here because didPopNext only fires on return from a child route,
     // where Home has no legitimately-focused input. NOT a blanket build()
-    // unfocus — the root-cause fix is WES2's _exitToHome.
+    // unfocus — the root-cause fix is WES2's _exitToPreviousRoute.
     FocusManager.instance.primaryFocus?.unfocus();
     final uc = Provider.of<UserContext>(context, listen: false);
     unawaited(_ctrl.onReturnedToHome(
@@ -151,7 +151,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
       child: GestureDetector(
         onTap: onTap,
         child: Card(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Stack(
@@ -160,7 +161,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                   top: 0,
                   left: 0,
                   child: iconWidget ??
-                      Icon(icon, size: 44,
+                      Icon(icon,
+                          size: 44,
                           color: iconColor ??
                               Theme.of(context).colorScheme.secondary),
                 ),
@@ -172,9 +174,9 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                     label,
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      height: 1.3,
-                      fontWeight: FontWeight.bold,
-                    ),
+                          height: 1.3,
+                          fontWeight: FontWeight.bold,
+                        ),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -322,90 +324,154 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
         displayName: _ctrl.actingDisplayName,
       ),
       drawer: const AppDrawer(),
-    body: SafeArea(
-    top: false,
-    minimum: const EdgeInsets.only(bottom: 16),
-    child: _ctrl.isFirstTimeSetup
-    ? _buildSetupBody()
-        : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Quick Access ──────────────────────────────────────────
-                  SizedBox(
-                    height: (!_ctrl.wpDone || !_ctrl.wesDone) ? 296.0 : 280.0,
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Column 1: Enter Workout / Body Weight Tracker
-                          _buildQAColumn(
-                            _GlowingCueWrapper(
-                              active: _ctrl.wpDone && !_ctrl.wesDone,
-                              label: 'Tap here next',
-                              child: _buildQACard(
-                                icon: Icons.fitness_center,
-                                label: 'Enter\nWorkout',
-                                onTap: () {
-                                  if (!_isBlockReady()) {
-                                    _showBlockNotReadySnack();
-                                    return;
-                                  }
-                                  final uc =
-                                      UserContext.of(context, listen: false);
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) =>
-                                          ChangeNotifierProvider<UserContext>.value(
-                                        value: uc,
-                                        child: gatedWes2(),
+      body: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(bottom: 16),
+        child: _ctrl.isFirstTimeSetup
+            ? _buildSetupBody()
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Quick Access ──────────────────────────────────────────
+                    SizedBox(
+                      height: (!_ctrl.wpDone || !_ctrl.wesDone) ? 296.0 : 280.0,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Column 1: Enter Workout / Body Weight Tracker
+                            _buildQAColumn(
+                              _GlowingCueWrapper(
+                                active: _ctrl.wpDone && !_ctrl.wesDone,
+                                label: 'Tap here next',
+                                child: _buildQACard(
+                                  icon: Icons.fitness_center,
+                                  label: 'Enter\nWorkout',
+                                  onTap: () {
+                                    if (!_isBlockReady()) {
+                                      _showBlockNotReadySnack();
+                                      return;
+                                    }
+                                    final uc =
+                                        UserContext.of(context, listen: false);
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<
+                                            UserContext>.value(
+                                          value: uc,
+                                          child: gatedWes2(),
+                                        ),
                                       ),
-                                    ),
-                                  );
-                                },
-                                iconWidget: SizedBox(
-                                  width: 52,
-                                  height: 56,
-                                  child: Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      Icon(Icons.fitness_center,
-                                          size: 44,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .secondary),
-                                      Positioned(
-                                        right: -2,
-                                        bottom: -2,
-                                        child: Icon(Icons.bolt,
-                                            size: 20,
+                                    );
+                                  },
+                                  iconWidget: SizedBox(
+                                    width: 52,
+                                    height: 56,
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        Icon(Icons.fitness_center,
+                                            size: 44,
                                             color: Theme.of(context)
                                                 .colorScheme
-                                                .tertiary),
-                                      ),
-                                    ],
+                                                .secondary),
+                                        Positioned(
+                                          right: -2,
+                                          bottom: -2,
+                                          child: Icon(Icons.bolt,
+                                              size: 20,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .tertiary),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
+                              _buildQACard(
+                                icon: Icons.monitor_weight,
+                                label: 'Body\nWeight\nTracker',
+                                onTap: () => Navigator.pushNamed(
+                                    context, '/body_weight'),
+                              ),
                             ),
-                            _buildQACard(
-                              icon: Icons.monitor_weight,
-                              label: 'Body\nWeight\nTracker',
-                              onTap: () =>
-                                  Navigator.pushNamed(context, '/body_weight'),
+                            // Column 2: Workout Planner / Profile
+                            _buildQAColumn(
+                              _GlowingCueWrapper(
+                                active: !_ctrl.wpDone,
+                                label: 'Tap here first',
+                                child: _buildQACard(
+                                  icon: Icons.view_list,
+                                  label: 'Workout\nPlanner',
+                                  onTap: () {
+                                    if (!_isBlockReady()) {
+                                      _showBlockNotReadySnack();
+                                      return;
+                                    }
+                                    final uc =
+                                        UserContext.of(context, listen: false);
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ChangeNotifierProvider<
+                                            UserContext>.value(
+                                          value: uc,
+                                          child: const TemplatesScreen(),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                              _buildQACard(
+                                icon: Icons.person_outline,
+                                label: 'Profile',
+                                onTap: () {
+                                  final uc =
+                                      UserContext.of(context, listen: false);
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<
+                                          UserContext>.value(
+                                        value: uc,
+                                        child: const ProfilePage(),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
                             ),
-                          ),
-                          // Column 2: Workout Planner / Profile
-                          _buildQAColumn(
-                            _GlowingCueWrapper(
-                              active: !_ctrl.wpDone,
-                              label: 'Tap here first',
-                              child: _buildQACard(
-                                icon: Icons.view_list,
-                                label: 'Workout\nPlanner',
+                            // Column 3: Planned Blocks / Week Planner
+                            _buildQAColumn(
+                              _buildQACard(
+                                icon: Icons.track_changes,
+                                label: 'Planned\nBlocks',
+                                onTap: () {
+                                  if (_ctrl.isFirstTimeSetup) {
+                                    _showBlockNotReadySnack();
+                                    return;
+                                  }
+                                  final uc =
+                                      UserContext.of(context, listen: false);
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<
+                                          UserContext>.value(
+                                        value: uc,
+                                        child: const PlannedBlocksScreen(),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                              _buildQACard(
+                                icon: Icons.calendar_view_week,
+                                label: 'Week\nPlanner',
                                 onTap: () {
                                   if (!_isBlockReady()) {
                                     _showBlockNotReadySnack();
@@ -416,293 +482,230 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) =>
-                                          ChangeNotifierProvider<UserContext>.value(
+                                      builder: (_) => ChangeNotifierProvider<
+                                          UserContext>.value(
                                         value: uc,
-                                        child: const TemplatesScreen(),
+                                        child: const BB3WeekPlanner(),
                                       ),
                                     ),
                                   );
                                 },
                               ),
                             ),
-                            _buildQACard(
-                              icon: Icons.person_outline,
-                              label: 'Profile',
-                              onTap: () {
-                                final uc =
-                                    UserContext.of(context, listen: false);
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        ChangeNotifierProvider<UserContext>.value(
-                                      value: uc,
-                                      child: const ProfilePage(),
+                            // Column 4: Settings / Coach Dashboard (coach only)
+                            _buildQAColumn(
+                              _buildQACard(
+                                icon: Icons.settings_outlined,
+                                label: 'Settings',
+                                onTap: () {
+                                  final uc =
+                                      UserContext.of(context, listen: false);
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => ChangeNotifierProvider<
+                                          UserContext>.value(
+                                        value: uc,
+                                        child: const UserSettingsScreen(),
+                                      ),
                                     ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          // Column 3: Planned Blocks / Week Planner
-                          _buildQAColumn(
-                            _buildQACard(
-                              icon: Icons.track_changes,
-                              label: 'Planned\nBlocks',
-                              onTap: () {
-                                if (_ctrl.isFirstTimeSetup) {
-                                  _showBlockNotReadySnack();
-                                  return;
-                                }
-                                final uc =
-                                    UserContext.of(context, listen: false);
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        ChangeNotifierProvider<UserContext>.value(
-                                      value: uc,
-                                      child: const PlannedBlocksScreen(),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            _buildQACard(
-                              icon: Icons.calendar_view_week,
-                              label: 'Week\nPlanner',
-                              onTap: () {
-                                if (!_isBlockReady()) {
-                                  _showBlockNotReadySnack();
-                                  return;
-                                }
-                                final uc =
-                                    UserContext.of(context, listen: false);
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        ChangeNotifierProvider<UserContext>.value(
-                                      value: uc,
-                                      child: const BB3WeekPlanner(),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                          // Column 4: Settings / Coach Dashboard (coach only)
-                          _buildQAColumn(
-                            _buildQACard(
-                              icon: Icons.settings_outlined,
-                              label: 'Settings',
-                              onTap: () {
-                                final uc =
-                                    UserContext.of(context, listen: false);
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        ChangeNotifierProvider<UserContext>.value(
-                                      value: uc,
-                                      child: const UserSettingsScreen(),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            UserContext.of(context).isCoach
-                                ? _buildQACard(
-                                    icon: Icons.supervisor_account,
-                                    label: 'Coach\nDashboard',
-                                    iconColor: Colors.amberAccent,
-                                    onTap: () {
-                                      final uc = context.read<UserContext>();
-                                      Navigator.of(context).push(
-                                        MaterialPageRoute(
-                                          builder: (_) =>
-                                              ChangeNotifierProvider<
-                                                  UserContext>.value(
-                                            value: uc,
-                                            child: const CoachHomeScreen(),
+                                  );
+                                },
+                              ),
+                              UserContext.of(context).isCoach
+                                  ? _buildQACard(
+                                      icon: Icons.supervisor_account,
+                                      label: 'Coach\nDashboard',
+                                      iconColor: Colors.amberAccent,
+                                      onTap: () {
+                                        final uc = context.read<UserContext>();
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                ChangeNotifierProvider<
+                                                    UserContext>.value(
+                                              value: uc,
+                                              child: const CoachHomeScreen(),
+                                            ),
                                           ),
-                                        ),
-                                      );
-                                    },
-                                  )
-                                : const SizedBox(
-                                    width: kFeatureCardWidth, height: 130),
+                                        );
+                                      },
+                                    )
+                                  : const SizedBox(
+                                      width: kFeatureCardWidth, height: 130),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 3),
+
+                    // ── Calendar ─────────────────────────────────────────────
+                    TableCalendar(
+                      firstDay: DateTime.utc(2020, 1, 1),
+                      lastDay: DateTime.utc(2100, 12, 31),
+                      focusedDay: _focusedDay,
+                      calendarFormat: CalendarFormat.month,
+                      availableCalendarFormats: const {
+                        CalendarFormat.month: 'Month',
+                      },
+                      headerStyle: const HeaderStyle(
+                        formatButtonVisible: false,
+                        titleCentered: true,
+                      ),
+                      selectedDayPredicate: (day) =>
+                          isSameDay(_selectedDay, day),
+                      onDaySelected: (selectedDay, focusedDay) {
+                        setState(() {
+                          _selectedDay = selectedDay;
+                          _focusedDay = focusedDay;
+                        });
+                        _ctrl.updateFocusedMonth(focusedDay);
+
+                        if (!_isBlockReady()) {
+                          _showBlockNotReadySnack();
+                          return;
+                        }
+
+                        final userContext =
+                            UserContext.of(context, listen: false);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                ChangeNotifierProvider<UserContext>.value(
+                              value: userContext,
+                              child: gatedWes2(initialDate: selectedDay),
+                            ),
+                          ),
+                        );
+                      },
+                      onPageChanged: (focusedDay) {
+                        setState(() => _focusedDay = focusedDay);
+                        _ctrl.updateFocusedMonth(focusedDay);
+                        unawaited(_ctrl.refreshCalendar(
+                          focusedDay,
+                          uid: Provider.of<UserContext>(context, listen: false)
+                              .actingAsUid,
+                        ));
+                      },
+                      calendarBuilders: CalendarBuilders(
+                        defaultBuilder: (context, date, _) {
+                          final kind = _ctrl.dayKindFor(date);
+                          return _buildCalendarDay(context, date, kind);
+                        },
+                        todayBuilder: (context, date, _) {
+                          final kind = _ctrl.dayKindFor(date);
+                          return _buildCalendarDay(context, date, kind,
+                              isToday: true);
+                        },
+                        selectedBuilder: (context, date, _) {
+                          final kind = _ctrl.dayKindFor(date);
+                          return _buildCalendarDay(context, date, kind,
+                              isSelected: true);
+                        },
+                      ),
+                    ),
+
+                    const SizedBox(height: 1),
+
+                    // ── Feed Switcher ─────────────────────────────────────────
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 2, vertical: 2),
+                      child: Row(
+                        children: [
+                          SegmentedButton<_HomeV2Feed>(
+                            showSelectedIcon: false,
+                            segments: const [
+                              ButtonSegment<_HomeV2Feed>(
+                                value: _HomeV2Feed.home,
+                                icon: Icon(Icons.photo_library_outlined,
+                                    size: 16),
+                                label: SizedBox.shrink(),
+                              ),
+                              ButtonSegment<_HomeV2Feed>(
+                                value: _HomeV2Feed.points,
+                                icon:
+                                    Icon(Icons.leaderboard_outlined, size: 16),
+                                label: SizedBox.shrink(),
+                              ),
+                              ButtonSegment<_HomeV2Feed>(
+                                value: _HomeV2Feed.leaderboard,
+                                icon:
+                                    Icon(Icons.emoji_events_outlined, size: 16),
+                                label: SizedBox.shrink(),
+                              ),
+                            ],
+                            selected: <_HomeV2Feed>{_selectedFeed},
+                            onSelectionChanged: (s) {
+                              final next = s.first;
+                              if (_selectedFeed == next) return;
+                              setState(() => _selectedFeed = next);
+                            },
+                            style: ButtonStyle(
+                              padding: MaterialStateProperty.all(
+                                  const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 2)),
+                              visualDensity: const VisualDensity(
+                                  horizontal: -4, vertical: -4),
+                              side: MaterialStateProperty.resolveWith((states) {
+                                final selected =
+                                    states.contains(MaterialState.selected);
+                                return BorderSide(
+                                    color: selected
+                                        ? Colors.white70
+                                        : Colors.white24,
+                                    width: 1);
+                              }),
+                              backgroundColor:
+                                  MaterialStateProperty.resolveWith((states) {
+                                final selected =
+                                    states.contains(MaterialState.selected);
+                                return selected
+                                    ? Colors.white12
+                                    : Colors.transparent;
+                              }),
+                              shape: MaterialStateProperty.all(
+                                RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10)),
+                              ),
+                              foregroundColor:
+                                  MaterialStateProperty.all(Colors.white),
+                            ),
                           ),
                         ],
                       ),
                     ),
-                  ),
 
-                  const SizedBox(height: 3),
+                    const SizedBox(height: 16),
 
-
-                  // ── Calendar ─────────────────────────────────────────────
-                  TableCalendar(
-                    firstDay: DateTime.utc(2020, 1, 1),
-                    lastDay: DateTime.utc(2100, 12, 31),
-                    focusedDay: _focusedDay,
-                    calendarFormat: CalendarFormat.month,
-                    availableCalendarFormats: const {
-                      CalendarFormat.month: 'Month',
-                    },
-                    headerStyle: const HeaderStyle(
-                      formatButtonVisible: false,
-                      titleCentered: true,
-                    ),
-                    selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
-                    onDaySelected: (selectedDay, focusedDay) {
-                      setState(() {
-                        _selectedDay = selectedDay;
-                        _focusedDay = focusedDay;
-                      });
-                      _ctrl.updateFocusedMonth(focusedDay);
-
-                      if (!_isBlockReady()) {
-                        _showBlockNotReadySnack();
-                        return;
-                      }
-
-                      final userContext =
-                          UserContext.of(context, listen: false);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              ChangeNotifierProvider<UserContext>.value(
-                            value: userContext,
-                            child: gatedWes2(initialDate: selectedDay),
-                          ),
+                    // ── Feed stubs ────────────────────────────────────────────
+                    if (_selectedFeed == _HomeV2Feed.home)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          // child: Text('New Feed coming soon',style: TextStyle(color: Colors.white54),),
                         ),
-                      );
-                    },
-                    onPageChanged: (focusedDay) {
-                      setState(() => _focusedDay = focusedDay);
-                      _ctrl.updateFocusedMonth(focusedDay);
-                      unawaited(_ctrl.refreshCalendar(
-                        focusedDay,
-                        uid: Provider.of<UserContext>(context, listen: false)
-                            .actingAsUid,
-                      ));
-                    },
-                    calendarBuilders: CalendarBuilders(
-                      defaultBuilder: (context, date, _) {
-                        final kind = _ctrl.dayKindFor(date);
-                        return _buildCalendarDay(context, date, kind);
-                      },
-                      todayBuilder: (context, date, _) {
-                        final kind = _ctrl.dayKindFor(date);
-                        return _buildCalendarDay(context, date, kind,
-                            isToday: true);
-                      },
-                      selectedBuilder: (context, date, _) {
-                        final kind = _ctrl.dayKindFor(date);
-                        return _buildCalendarDay(context, date, kind,
-                            isSelected: true);
-                      },
-                    ),
-                  ),
-
-                  const SizedBox(height: 1),
-
-                  // ── Feed Switcher ─────────────────────────────────────────
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 2, vertical: 2),
-                    child: Row(
-                      children: [
-                        SegmentedButton<_HomeV2Feed>(
-                          showSelectedIcon: false,
-                          segments: const [
-                            ButtonSegment<_HomeV2Feed>(
-                              value: _HomeV2Feed.home,
-                              icon: Icon(Icons.photo_library_outlined,
-                                  size: 16),
-                              label: SizedBox.shrink(),
-                            ),
-                            ButtonSegment<_HomeV2Feed>(
-                              value: _HomeV2Feed.points,
-                              icon: Icon(Icons.leaderboard_outlined, size: 16),
-                              label: SizedBox.shrink(),
-                            ),
-                            ButtonSegment<_HomeV2Feed>(
-                              value: _HomeV2Feed.leaderboard,
-                              icon: Icon(Icons.emoji_events_outlined, size: 16),
-                              label: SizedBox.shrink(),
-                            ),
-                          ],
-                          selected: <_HomeV2Feed>{_selectedFeed},
-                          onSelectionChanged: (s) {
-                            final next = s.first;
-                            if (_selectedFeed == next) return;
-                            setState(() => _selectedFeed = next);
-                          },
-                          style: ButtonStyle(
-                            padding: MaterialStateProperty.all(
-                                const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2)),
-                            visualDensity: const VisualDensity(
-                                horizontal: -4, vertical: -4),
-                            side: MaterialStateProperty.resolveWith(
-                                (states) {
-                              final selected =
-                                  states.contains(MaterialState.selected);
-                              return BorderSide(
-                                  color: selected
-                                      ? Colors.white70
-                                      : Colors.white24,
-                                  width: 1);
-                            }),
-                            backgroundColor:
-                                MaterialStateProperty.resolveWith((states) {
-                              final selected =
-                                  states.contains(MaterialState.selected);
-                              return selected
-                                  ? Colors.white12
-                                  : Colors.transparent;
-                            }),
-                            shape: MaterialStateProperty.all(
-                              RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10)),
-                            ),
-                            foregroundColor:
-                                MaterialStateProperty.all(Colors.white),
-                          ),
+                      )
+                    else if (_selectedFeed == _HomeV2Feed.points)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          //child: Text('New Points feed coming soon',style: TextStyle(color: Colors.white54),),
                         ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // ── Feed stubs ────────────────────────────────────────────
-                  if (_selectedFeed == _HomeV2Feed.home)
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 32),
-                       // child: Text('New Feed coming soon',style: TextStyle(color: Colors.white54),),
+                      )
+                    else
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 32),
+                          // child: Text('New Leaderboard coming soon', style: TextStyle(color: Colors.white54),                        ),
+                        ),
                       ),
-                    )
-                  else if (_selectedFeed == _HomeV2Feed.points)
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 32),
-                        //child: Text('New Points feed coming soon',style: TextStyle(color: Colors.white54),),
-                      ),
-                    )
-                  else
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 32),
-                       // child: Text('New Leaderboard coming soon', style: TextStyle(color: Colors.white54),                        ),
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-    ),
+      ),
     );
   }
 }
@@ -731,7 +734,7 @@ class _HomeV2CalendarColors {
     final cs = Theme.of(context).colorScheme;
     final gl = Theme.of(context).extension<GoodLiftColors>();
     return _HomeV2CalendarColors(
-      planned:   cs.tertiary,
+      planned: cs.tertiary,
       completed: gl?.quaternary ?? AppTheme.defaultQuaternary,
     );
   }

@@ -5,8 +5,14 @@ import 'package:flutter/widgets.dart';
 /// Outcome of a WES2 deliberate-exit attempt. Exposed so production logging and
 /// tests can assert which branch ran without reimplementing the logic.
 enum Wes2ExitAction {
-  /// A route existed beneath WES2 — popped back to it.
-  popped,
+  /// A route existed beneath WES2 — popped exactly once to the actual previous
+  /// route (Home, BB3, or whatever pushed WES2). Used by Back / system Back.
+  poppedToPrevious,
+
+  /// A route named [homeRouteName] existed beneath WES2 — popped straight back
+  /// to that existing Home route (BB3/WES2 removed from above it, no duplicate
+  /// Home created). Used by the direct-Home logo.
+  poppedToHome,
 
   /// WES2 was the restored root route — replaced with the Home route.
   replacedWithHome,
@@ -21,39 +27,102 @@ enum Wes2ExitAction {
   failed,
 }
 
-/// Coordinates the single authoritative WES2 → Home deliberate-exit sequence.
+/// Coordinates the single authoritative WES2 deliberate-exit sequence.
 ///
 /// Extracted from `Wes2Screen` so the real guard, ordering, and navigation
 /// decision run identically in production and in tests: production
-/// `_exitToHome` delegates straight to [exit], so a test that drives [exit]
+/// `_exitToPreviousRoute` / `_exitDirectlyToHome` delegate straight to
+/// [exitToPreviousRoute] / [exitDirectlyToHome], so a test that drives those
 /// cannot pass while the real exit path is broken.
 ///
-/// Ordering contract:
-///   1. [dropFocus] runs first. In production it unfocuses the primary focus,
+/// Ordering contract (shared by both intents, owned by [_run]):
+///   1. `dropFocus` runs first. In production it unfocuses the primary focus,
 ///      which fires the still-mounted WES2 field's focus-loss listener (the
 ///      existing `onFieldUnfocused` save, exactly once) and dismisses the iOS
 ///      keyboard before the route subtree is torn down.
 ///   2. One event-loop turn is yielded so that queued focus-loss notification
 ///      reaches the listener before route navigation begins.
 ///   3. After re-checking mount, Home is marked active and navigation is
-///      performed exactly once: pop when Home exists beneath, otherwise
-///      `pushReplacementNamed(homeRouteName)` for a restored root WES2 route.
+///      performed exactly once by the per-intent decision.
 ///
-/// The [_isExiting] guard prevents repeated back actions from double-popping or
-/// duplicating Home. It is reset only when navigation throws, so the screen is
-/// never permanently locked.
+/// The [_isExiting] guard prevents repeated back/logo taps from double-popping
+/// or duplicating Home. It is reset only when navigation throws, so the screen
+/// is never permanently locked.
 class Wes2ExitCoordinator {
   bool _isExiting = false;
 
   /// True once an exit is in flight (visible for assertions/testing).
   bool get isExiting => _isExiting;
 
-  Future<Wes2ExitAction> exit({
+  /// Exit to the actual previous route (Back / system Back).
+  ///
+  /// Pops exactly one route when one exists beneath WES2; otherwise (restored
+  /// root WES2) replaces it with [homeRouteName] so the app never closes.
+  Future<Wes2ExitAction> exitToPreviousRoute({
     required VoidCallback dropFocus,
     required bool Function() isMounted,
     required VoidCallback markHomeActive,
     required NavigatorState? Function() navigatorOf,
     String homeRouteName = '/home',
+  }) {
+    return _run(
+      dropFocus: dropFocus,
+      isMounted: isMounted,
+      markHomeActive: markHomeActive,
+      navigatorOf: navigatorOf,
+      navigate: (navigator) {
+        if (navigator.canPop()) {
+          navigator.pop();
+          return Wes2ExitAction.poppedToPrevious;
+        }
+        navigator.pushReplacementNamed(homeRouteName);
+        return Wes2ExitAction.replacedWithHome;
+      },
+    );
+  }
+
+  /// Exit directly to Home (GoodLift logo).
+  ///
+  /// In a normal stack, pops back to the existing [homeRouteName] route so its
+  /// state is retained and no duplicate Home is created (any BB3/WES2 routes
+  /// above it are removed). For a restored root WES2 (nothing beneath) it
+  /// replaces WES2 with [homeRouteName].
+  Future<Wes2ExitAction> exitDirectlyToHome({
+    required VoidCallback dropFocus,
+    required bool Function() isMounted,
+    required VoidCallback markHomeActive,
+    required NavigatorState? Function() navigatorOf,
+    String homeRouteName = '/home',
+  }) {
+    return _run(
+      dropFocus: dropFocus,
+      isMounted: isMounted,
+      markHomeActive: markHomeActive,
+      navigatorOf: navigatorOf,
+      navigate: (navigator) {
+        if (navigator.canPop()) {
+          // Pop to the existing named Home route. The `isFirst` clause is
+          // defence-in-depth: popUntil can never run past the root route even
+          // if Home were somehow not the named '/home' route.
+          navigator.popUntil(
+            (route) => route.isFirst || route.settings.name == homeRouteName,
+          );
+          return Wes2ExitAction.poppedToHome;
+        }
+        navigator.pushReplacementNamed(homeRouteName);
+        return Wes2ExitAction.replacedWithHome;
+      },
+    );
+  }
+
+  /// Shared guard + focus/keyboard sequencing + mount re-check + navigation
+  /// exception handling. Only [navigate] differs between the two public intents.
+  Future<Wes2ExitAction> _run({
+    required VoidCallback dropFocus,
+    required bool Function() isMounted,
+    required VoidCallback markHomeActive,
+    required NavigatorState? Function() navigatorOf,
+    required Wes2ExitAction Function(NavigatorState navigator) navigate,
   }) async {
     if (_isExiting) return Wes2ExitAction.skippedAlreadyExiting;
     _isExiting = true;
@@ -71,15 +140,10 @@ class Wes2ExitCoordinator {
       final navigator = navigatorOf();
       if (navigator == null) return Wes2ExitAction.skippedUnmounted;
 
-      if (navigator.canPop()) {
-        navigator.pop();
-        return Wes2ExitAction.popped;
-      }
-      navigator.pushReplacementNamed(homeRouteName);
-      return Wes2ExitAction.replacedWithHome;
+      return navigate(navigator);
     } catch (e, st) {
       // Never leave the screen permanently locked if navigation throws.
-      debugPrint('[WES2] Wes2ExitCoordinator.exit failed: $e\n$st');
+      debugPrint('[WES2] Wes2ExitCoordinator exit failed: $e\n$st');
       _isExiting = false;
       return Wes2ExitAction.failed;
     }
