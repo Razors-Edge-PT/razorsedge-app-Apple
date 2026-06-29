@@ -371,6 +371,47 @@ void main() {
     fn.dispose();
   });
 
+  testWidgets(
+      'Logo: unexpected non-Home root → replaces root with /home, not poppedToHome',
+      (tester) async {
+    final navKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(MaterialApp(
+      navigatorKey: navKey,
+      // Root is NOT '/home' — an unexpected root the predicate must not mistake
+      // for Home.
+      initialRoute: '/unexpected-root',
+      routes: {
+        '/unexpected-root': (_) => const Scaffold(body: Text('UNEXPECTED')),
+        '/home': (_) => const Scaffold(body: Text('HOME-ROUTE')),
+      },
+    ));
+    // /unexpected-root → BB3 → WES2 (both pushed unnamed).
+    navKey.currentState!.push(MaterialPageRoute<void>(
+      builder: (_) => const Scaffold(body: Text('BB3')),
+    ));
+    navKey.currentState!.push(MaterialPageRoute<void>(
+      builder: (_) => const Scaffold(body: Text('WES2')),
+    ));
+    await tester.pumpAndSettle();
+
+    final coordinator = Wes2ExitCoordinator();
+    final actionFuture = coordinator.exitDirectlyToHome(
+      dropFocus: dropPrimaryFocus,
+      isMounted: () => true,
+      markHomeActive: () {},
+      navigatorOf: () => navKey.currentState,
+    );
+    await tester.pumpAndSettle();
+    final action = await actionFuture;
+
+    expect(action, Wes2ExitAction.replacedWithHome);
+    expect(find.text('HOME-ROUTE'), findsOneWidget); // Home is the sole route
+    expect(find.text('UNEXPECTED'), findsNothing); // unexpected root replaced
+    expect(find.text('BB3'), findsNothing);
+    expect(find.text('WES2'), findsNothing);
+    expect(navKey.currentState!.canPop(), isFalse);
+  });
+
   testWidgets('Logo: rapid repeated taps create no duplicate Home / exception',
       (tester) async {
     final navKey = GlobalKey<NavigatorState>();

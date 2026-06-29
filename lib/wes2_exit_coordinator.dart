@@ -101,13 +101,24 @@ class Wes2ExitCoordinator {
       navigatorOf: navigatorOf,
       navigate: (navigator) {
         if (navigator.canPop()) {
-          // Pop to the existing named Home route. The `isFirst` clause is
-          // defence-in-depth: popUntil can never run past the root route even
-          // if Home were somehow not the named '/home' route.
-          navigator.popUntil(
-            (route) => route.isFirst || route.settings.name == homeRouteName,
-          );
-          return Wes2ExitAction.poppedToHome;
+          // Pop back to the existing named Home route, recording whether it was
+          // actually found. The `isFirst` clause stops traversal at the root so
+          // popUntil never runs past it — but reaching an UNEXPECTED non-Home
+          // root must not be reported as poppedToHome. In that case replace the
+          // unexpected root with '/home' instead.
+          var foundHome = false;
+          navigator.popUntil((route) {
+            if (route.settings.name == homeRouteName) {
+              foundHome = true;
+              return true;
+            }
+            return route.isFirst;
+          });
+          if (foundHome) {
+            return Wes2ExitAction.poppedToHome;
+          }
+          navigator.pushReplacementNamed(homeRouteName);
+          return Wes2ExitAction.replacedWithHome;
         }
         navigator.pushReplacementNamed(homeRouteName);
         return Wes2ExitAction.replacedWithHome;
