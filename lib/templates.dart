@@ -10,7 +10,9 @@ import 'package:provider/provider.dart';
 import 'block_exercise_defaults_repository.dart';
 import 'planned_only_resolver.dart';
 
+import 'block_repair_service.dart';
 import 'block_repository.dart'; // 👈 to get active block id + meta
+import 'home_bootstrap_service.dart';
 import 'template_bootstrapper.dart';
 import 'create_new_account_screen.dart';
 import 'main.dart';
@@ -88,6 +90,7 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
   final Set<String> _expandedUpcomingBlockIds = {};
 
   bool _loadingBlocks = true;
+  bool _repairInProgress = false;
   bool _wpDemoShownThisSession =
       false; // prevents double auto-show within one session
   _WpTutorialPhase _tutorialPhase = _WpTutorialPhase.inactive;
@@ -946,6 +949,28 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       debugPrint('⚠️ [Templates] Could not fetch active block id: $e');
     }
 
+    // 1b) Self-heal: no active block is a broken state (Warmup/WES/grouping
+    // all key off it). Try the idempotent repair — it re-activates an existing
+    // block and runs the flag-guarded template bootstrap. It never creates
+    // blocks from here; that requires the explicit repair button below.
+    if (activeId == null && mounted) {
+      debugPrint(
+          '🩹 [Templates] no active block for uid=$userId — attempting auto-repair');
+      try {
+        final result = await BlockRepairService()
+            .ensureActiveBlockAndTemplatesForUser(userId,
+                alwaysEnsureTemplates: true);
+        activeId = result.activeBlockId;
+        if (result.activatedExistingBlock && mounted) {
+          final uc = UserContext.of(context, listen: false);
+          unawaited(uc.refreshBlockMetaFromServer(uid: userId));
+        }
+      } catch (e) {
+        debugPrint('🩹 [Templates] auto-repair failed: $e');
+      }
+    }
+    if (!mounted) return;
+
     // 2) load block meta (dates) → we show under the headers
     final uid = userId;
     final blocksSnap = await FirebaseFirestore.instance
@@ -983,6 +1008,114 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
       _blockMetaById.addAll(meta);
       _loadingBlocks = false;
     });
+  }
+
+  /// Explicit repair for a user with no training blocks at all (or where the
+  /// lighter auto-repair could not restore an active block). Reuses the
+  /// production block-creation path (ensureBlocksExist in repair mode) for the
+  /// SELECTED user — never the coach — then bootstraps templates and reloads.
+  /// Idempotent: creation only runs when the blocks collection is empty, and
+  /// the template bootstrapper is flag-guarded.
+  Future<void> _runFullRepair() async {
+    if (_repairInProgress) return;
+    final uc = UserContext.of(context, listen: false);
+    final uid = uc.currentUid;
+    if (uid.isEmpty) {
+      showAppSnack('No user selected');
+      return;
+    }
+    setState(() {
+      _repairInProgress = true;
+      _loadingBlocks = true;
+    });
+    try {
+      final service = BlockRepairService(
+        createBlocks: (u) => HomeBootstrapService.ensureBlocksExist(
+          uid: u,
+          uc: uc,
+          forAthleteRepair: true,
+        ),
+      );
+      final result = await service.ensureActiveBlockAndTemplatesForUser(
+        uid,
+        allowCreate: true,
+        alwaysEnsureTemplates: true,
+      );
+      debugPrint(
+          '🩹 [Templates] full repair uid=$uid → active=${result.activeBlockId} '
+          'created=${result.createdBlocks} templates=${result.templateCount}');
+      if (result.hasActiveBlock) {
+        await uc.refreshBlockMetaFromServer(uid: uid);
+      }
+      showAppSnack(result.message);
+    } catch (e, st) {
+      debugPrint('🩹 [Templates] full repair failed: $e\n$st');
+      showAppSnack('Repair failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _repairInProgress = false);
+        await _loadBlocksThenTemplates();
+      }
+    }
+  }
+
+  /// Shown inside the Active-block section when no active block exists even
+  /// after auto-repair — replaces the old silent dead-end.
+  Widget _buildRepairCard() {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.blueGrey.shade900.withOpacity(0.35),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.build_circle_outlined,
+                  color: Colors.orangeAccent, size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'No active training block found for this user',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Training blocks and workout templates are missing or inactive. '
+            'Repair will restore them without touching any existing workouts '
+            'or history.',
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: ElevatedButton.icon(
+              icon: _repairInProgress
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.healing, size: 18),
+              label: Text(
+                  _repairInProgress ? 'Repairing...' : 'Repair training setup'),
+              onPressed: _repairInProgress ? null : _runFullRepair,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _fetchTemplates() async {
@@ -1481,8 +1614,12 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
                 text: 'Tap any exercise once to replace it.',
                 onGotIt: _completePlannerWalkthrough,
               ),
+            // 🔹 Repair path: no active block at all (auto-repair already
+            // attempted during load) — show a clear fix instead of a dead-end.
+            if (_activeBlockId == null)
+              _buildRepairCard()
             // 🔹 Active block templates (reorderable)
-            if (allToShow.isEmpty)
+            else if (allToShow.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12.0),
                 child: Center(

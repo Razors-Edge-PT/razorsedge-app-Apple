@@ -15,26 +15,38 @@ class HomeBootstrapService {
   // ── Block setup ─────────────────────────────────────────────────────────────
 
   /// Creates the three default 26-week blocks for a brand-new self user.
-  /// Skips silently when [uid] != [uc.actorUid] (coach viewing an athlete).
+  /// Skips silently when [uid] != [uc.actorUid] (coach viewing an athlete),
+  /// unless [forAthleteRepair] is true — the explicit repair path lets a coach
+  /// run the same creation for a broken athlete, using ONLY the athlete's own
+  /// user-doc identity (never the coach's auth identity).
   /// When the user doc is not yet ready (missing sex/username), schedules
   /// a retry in 800 ms and returns — the [runFirstTimeSetup] polling loop
-  /// will catch the result once the retry fires.
+  /// will catch the result once the retry fires. In repair mode it returns
+  /// without retrying so the caller can surface the failure.
   static Future<void> ensureBlocksExist({
     required String uid,
     required UserContext uc,
+    bool forAthleteRepair = false,
   }) async {
     if (uid.isEmpty) return;
 
     // Sequence Firestore behind App Check (settles even on failure/timeout).
     await appCheckReady;
 
-    // Never create blocks for an athlete being coached — only for self users.
-    if (uid != uc.actorUid) {
+    // Never create blocks for an athlete being coached — only for self users,
+    // or via the explicit repair path.
+    if (uid != uc.actorUid && !forAthleteRepair) {
       debugPrint(
         '🛑 [BOOTSTRAP] Block setup skipped — coaching athlete uid=$uid '
         '(actorUid=${uc.actorUid})',
       );
       return;
+    }
+    if (uid != uc.actorUid) {
+      debugPrint(
+        '🩹 [BOOTSTRAP] Repair-mode block setup for athlete uid=$uid '
+        '(actorUid=${uc.actorUid})',
+      );
     }
 
     final swTotal = Stopwatch()..start();
@@ -57,6 +69,10 @@ class HomeBootstrapService {
           (data['username'] != null || data['fullName'] != null);
 
       if (!hasCore) {
+        if (forAthleteRepair) {
+          debugPrint('🛑 [BOOTSTRAP] Repair abort: /users/$uid incomplete (no retry in repair mode)');
+          return;
+        }
         debugPrint('🛑 [BOOTSTRAP] Block gate: /users/$uid incomplete → retry in 800ms');
         unawaited(Future.delayed(const Duration(milliseconds: 800), () async {
           await HomeBootstrapService.ensureBlocksExist(uid: uid, uc: uc);
@@ -67,17 +83,26 @@ class HomeBootstrapService {
       debugPrint('🔎 [BOOTSTRAP] /users/$uid exists=${userSnap.exists} keys=${data.keys.toList()}');
 
       final usernameFromDoc = (data['username'] as String?)?.trim();
+      final fullNameFromDoc = (data['fullName'] as String?)?.trim();
       final sexRawFromDoc   = (data['sex'] as String?)?.trim();
 
-      // Fallbacks so the block is named even when the user doc isn't fully ready.
-      final auth = FirebaseAuth.instance.currentUser!;
-      final fallbackUsername = (auth.displayName?.trim().isNotEmpty == true)
-          ? auth.displayName!.trim()
-          : (auth.email?.split('@').first ?? '').trim();
+      // Fallbacks so the block is named even when the user doc isn't fully
+      // ready. Auth-based fallbacks apply ONLY when creating for self — in
+      // repair mode the authenticated user is the coach, and the coach's
+      // display name/email must never be stamped onto the athlete's blocks.
+      final auth = FirebaseAuth.instance.currentUser;
+      final isSelf = auth != null && auth.uid == uid;
+      final fallbackUsername = !isSelf
+          ? ''
+          : (auth.displayName?.trim().isNotEmpty == true)
+              ? auth.displayName!.trim()
+              : (auth.email?.split('@').first ?? '').trim();
 
       final username = (usernameFromDoc?.isNotEmpty == true)
           ? usernameFromDoc
-          : (fallbackUsername.isNotEmpty ? fallbackUsername : null);
+          : (fullNameFromDoc?.isNotEmpty == true)
+              ? fullNameFromDoc
+              : (fallbackUsername.isNotEmpty ? fallbackUsername : null);
 
       final sex = (sexRawFromDoc == null || sexRawFromDoc.isEmpty)
           ? 'N' // default → treated as female branch
@@ -89,7 +114,8 @@ class HomeBootstrapService {
       final ownerEmail = (() {
         final fromDoc = (data['email'] as String?)?.trim();
         if (fromDoc != null && fromDoc.isNotEmpty) return fromDoc;
-        final fromAuth = auth.email?.trim();
+        // Auth email is the coach's when repairing an athlete — self only.
+        final fromAuth = isSelf ? auth.email?.trim() : null;
         if (fromAuth != null && fromAuth.isNotEmpty) return fromAuth;
         return null;
       })();

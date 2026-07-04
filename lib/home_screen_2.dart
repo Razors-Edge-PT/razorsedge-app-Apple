@@ -409,7 +409,11 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   icon: Icons.view_list,
                                   label: 'Workout\nPlanner',
                                   onTap: () {
-                                    if (!_isBlockReady()) {
+                                    // Block only while first-time setup is
+                                    // actively running. A missing active block
+                                    // must NOT dead-end here — TemplatesScreen
+                                    // has its own repair path for that state.
+                                    if (_ctrl.isFirstTimeSetup) {
                                       _showBlockNotReadySnack();
                                       return;
                                     }

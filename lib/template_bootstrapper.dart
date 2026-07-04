@@ -6,9 +6,22 @@ import'template_generator.dart';
 class TemplatesBootstrapper {
   static const _flagField = 'templatesBootstrapped_v1';
 
+  /// Test seam: unit tests inject a FakeFirebaseFirestore here. Always null in
+  /// production, so behaviour is unchanged.
+  @visibleForTesting
+  static FirebaseFirestore? debugFirestore;
+
+  static FirebaseFirestore get _db => debugFirestore ?? FirebaseFirestore.instance;
+
+  /// Uids with a bootstrap currently running. Two concurrent callers (e.g. the
+  /// home gated listener and a repair path) could both pass the
+  /// existing-templates check before either commits, duplicating templates —
+  /// the second caller must wait for the first flag write instead.
+  static final Set<String> _inFlight = <String>{};
+
   /// Returns the active blockId and a startDate-ordered list of all upcoming (non-active) blockIds.
   static Future<({String? activeId, List<String> upcomingIds})> _resolveOrderedBlockIds(String uid) async {
-    final blocksCol = FirebaseFirestore.instance
+    final blocksCol = _db
         .collection('planned_blocks')
         .doc(uid)
         .collection('blocks');
@@ -76,7 +89,7 @@ class TemplatesBootstrapper {
     final allDocs = await templatesCol.get();
     final validIds = <String>{activeId, ...upcomingIds};
 
-    final batch = FirebaseFirestore.instance.batch();
+    final batch = _db.batch();
     int repaired = 0;
 
     for (final doc in allDocs.docs) {
@@ -107,7 +120,7 @@ class TemplatesBootstrapper {
 
   /// Debug utility: lists all blocks for a given user
   static Future<void> debugPrintAllBlocks(String uid) async {
-    final blocksCol = FirebaseFirestore.instance
+    final blocksCol = _db
         .collection('planned_blocks')
         .doc(uid)
         .collection('blocks');
@@ -147,7 +160,20 @@ class TemplatesBootstrapper {
       return;
     }
 
-    final users = FirebaseFirestore.instance.collection('users');
+    if (_inFlight.contains(uid)) {
+      debugPrint('🧰 [TB] abort: bootstrap already in flight for uid=$uid');
+      return;
+    }
+    _inFlight.add(uid);
+    try {
+      await _ensureInitialTemplatesForUserInner(uid, force: force, plannedOnly: plannedOnly);
+    } finally {
+      _inFlight.remove(uid);
+    }
+  }
+
+  static Future<void> _ensureInitialTemplatesForUserInner(String uid, {required bool force, required bool plannedOnly}) async {
+    final users = _db.collection('users');
     final userRef = users.doc(uid);
 
     // Read user doc + flag
@@ -325,7 +351,7 @@ class TemplatesBootstrapper {
           const branchLabel = 'GEN_V1';
 
           // Write exactly like your legacy path does, including name→blockId routing.
-          final batch = FirebaseFirestore.instance.batch();
+          final batch = _db.batch();
 
           for (final t in genPayloads) {
             final exercises = (t['exercises'] as List).cast<Map<String, dynamic>>();
@@ -988,7 +1014,7 @@ class TemplatesBootstrapper {
 
 
     try {
-      final batch = FirebaseFirestore.instance.batch();
+      final batch = _db.batch();
 
       // Filter per-template for missing exerciseId (skip & log)
       for (final t in payloads) {

@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/widgets.dart';
 
 import 'app_check_ready.dart';
+import 'block_repair_service.dart';
 import 'startup_trace.dart';
 import 'home_bootstrap_service.dart';
 import 'home_v2_calendar_service.dart';
@@ -126,6 +127,28 @@ class HomeV2Controller extends ChangeNotifier {
     unawaited(_refreshCalendar(month, uid: newUid));
     unawaited(WarmupService.instance.warmWES(newUid));
     _tryRirHeal(uid: newUid, blockId: uc.activeBlockId);
+    // Self-heal: an athlete whose blocks exist but carry no isActive flag
+    // would otherwise dead-end every block-gated screen. Metadata-only,
+    // idempotent, never creates blocks.
+    unawaited(_autoRepairActingUser(newUid, uc));
+  }
+
+  /// Re-activates the date-correct block for [uid] when blocks exist but none
+  /// is active, then refreshes UserContext meta so the UI gate unblocks.
+  /// No-op for healthy users and for users with no blocks at all.
+  Future<void> _autoRepairActingUser(String uid, UserContext uc) async {
+    try {
+      final result =
+          await BlockRepairService().ensureActiveBlockAndTemplatesForUser(uid);
+      if (_disposed || uc.actingAsUid != uid) return;
+      if (result.activatedExistingBlock && result.hasActiveBlock) {
+        debugPrint(
+            '🩹 [CTRL] auto-repair activated block=${result.activeBlockId} for $uid');
+        await uc.refreshBlockMetaFromServer(uid: uid);
+      }
+    } catch (e) {
+      debugPrint('🩹 [CTRL] auto-repair failed for $uid: $e');
+    }
   }
 
   /// Call when the calendar page changes so the block-listener refresh uses
@@ -204,6 +227,33 @@ class HomeV2Controller extends ChangeNotifier {
     required DateTime month,
   }) async {
     if (_disposed) return;
+
+    // Heal-first: "no cached block meta" can also mean an existing user whose
+    // blocks lost the isActive flag (interrupted setup, deactivation). Full
+    // first-time setup cannot fix that state — ensureBlocksExist only creates
+    // when the blocks collection is empty — so it would spin for 15 s and
+    // fail. One cheap blocks read decides; genuinely-new users fall through.
+    try {
+      final healed = await BlockRepairService()
+          .ensureActiveBlockAndTemplatesForUser(actingUid);
+      if (_disposed) return;
+      if (healed.hasActiveBlock) {
+        debugPrint(
+            '🩹 [CTRL] heal-first: active block=${healed.activeBlockId} for '
+            '$actingUid (activated=${healed.activatedExistingBlock}) — '
+            'skipping first-time setup');
+        await uc.refreshBlockMetaFromServer(uid: actingUid);
+        if (_disposed) return;
+        blockSetupComplete = uc.activeBlockId?.isNotEmpty == true;
+        _notify();
+        _setupBlockListener(actingUid);
+        _schedulePostFrameWork(uc: uc, month: month);
+        return;
+      }
+    } catch (e) {
+      debugPrint('🩹 [CTRL] heal-first check failed (continuing to setup): $e');
+    }
+
     StartupTrace.firstTimeSetupEntered();
     isFirstTimeSetup = true;
     setupStatusMessage = '';
