@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'WES2_models.dart';
+import 'exercise_catalog.dart';
 import 'local_cache/block_plan_cache.dart';
 import 'block_exercise_defaults_repository.dart';
 import 'settings_merge.dart';
@@ -57,9 +58,11 @@ abstract class Wes2PlanService {
   });
 
   /// Fetch the exercise type (e.g. "Barbell", "Machine", "Dumbbell") for each
-  /// given exerciseId from /exercises/{exerciseId}.type. Missing or blank types
-  /// are excluded from the result.
-  Future<Map<String, String>> loadExerciseTypes(List<String> exerciseIds);
+  /// given exerciseId. Resolves global /exercises first, then the account's
+  /// custom pool (/users/{uid}/customExercises) when [uid] is provided. Missing
+  /// or blank types are excluded from the result.
+  Future<Map<String, String>> loadExerciseTypes(List<String> exerciseIds,
+      {String uid = ''});
 }
 
 /// Concrete Firestore implementation.
@@ -417,17 +420,15 @@ class FirestoreWes2PlanService implements Wes2PlanService {
   }
 
   @override
-  Future<Map<String, String>> loadExerciseTypes(
-      List<String> exerciseIds) async {
+  Future<Map<String, String>> loadExerciseTypes(List<String> exerciseIds,
+      {String uid = ''}) async {
     if (exerciseIds.isEmpty) return const {};
     final futures = exerciseIds.map((id) async {
       try {
-        final doc = await FirebaseFirestore.instance
-            .collection('exercises')
-            .doc(id)
-            .get();
-        final type = doc.data()?['type'] as String?;
-        return MapEntry(id, type ?? '');
+        // Global first, then this account's custom pool.
+        final ex =
+            await ExerciseCatalog.resolveExercise(exerciseId: id, uid: uid);
+        return MapEntry(id, ex?.type ?? '');
       } catch (_) {
         return MapEntry(id, '');
       }

@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'bb3_day_panel.dart';
 import 'bb3_models.dart';
 import 'bb3_planned_exercise_service.dart';
+import 'exercise_catalog.dart';
 import 'planned_only_resolver.dart';
 import 'template_model.dart';
 import 'user_context.dart';
@@ -204,15 +205,13 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
   Future<void> _loadExercises() async {
     try {
-      final snap =
-          await FirebaseFirestore.instance.collection('exercises').get();
+      // Combined pool = global /exercises + the acting account's custom
+      // exercises (_uid = selected athlete in coach mode).
+      final combined =
+          await ExerciseCatalog.loadCombinedExercisesForUser(_uid);
       if (!mounted) return;
       setState(() {
-        _allExercises = snap.docs.map((d) {
-          final data = Map<String, dynamic>.from(d.data());
-          data['id'] = d.id;
-          return data;
-        }).toList();
+        _allExercises = combined.map((e) => e.toDisplayMap()).toList();
       });
     } catch (_) {}
   }

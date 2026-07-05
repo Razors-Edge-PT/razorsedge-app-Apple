@@ -562,7 +562,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           .toList();
       if (uncachedIds.isNotEmpty) {
         try {
-          final fetched = await _planService.loadExerciseTypes(uncachedIds);
+          final fetched = await _planService.loadExerciseTypes(uncachedIds,
+              uid: _controller.actingUid);
           _cachedExerciseTypes = {..._cachedExerciseTypes, ...fetched};
         } catch (_) {
           // Type fetch is non-critical; hints still work without it.

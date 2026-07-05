@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'template_model.dart';
+import 'exercise_catalog.dart';
 
 class ExerciseRow {
   final String id;
@@ -92,12 +93,13 @@ class _TemplateDetailsScreenState extends State<TemplateDetailsScreen> {
     // ✅ Make sure planned exercises are loaded first
     await _loadPlannedExercises();
 
-    // Fetch all exercises
-    final allSnapshot = await FirebaseFirestore.instance.collection('exercises').get();
-    final allExercises = allSnapshot.docs.map((doc) => {
-      'id': doc.id, // ✅ important
-      'name': doc['name'] as String,
-      'category': doc['category'] as String,
+    // Combined pool = global /exercises + this account's custom exercises.
+    final combined =
+        await ExerciseCatalog.loadCombinedExercisesForUser(userId);
+    final allExercises = combined.map((e) => {
+      'id': e.id, // ✅ important
+      'name': e.name,
+      'category': e.category,
     }).toList();
 
 

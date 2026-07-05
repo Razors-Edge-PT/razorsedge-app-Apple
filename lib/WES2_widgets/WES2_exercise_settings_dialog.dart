@@ -1,7 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 import '../block_exercise_defaults_repository.dart';
+import '../exercise_catalog.dart';
 import '../wes2_exercise_settings_patch.dart';
 
 const Set<String> _defaultVelocityExerciseIds = {
@@ -300,14 +300,15 @@ class _Wes2ExerciseSettingsDialogState
       _populateRepTargets(settings);
       _populateRirPlan(settings);
 
-      // Fetch exercise type for display in footer.
+      // Fetch exercise type for display in footer. Resolve global first, then
+      // this account's custom pool so custom exercises show their type too.
       try {
-        final exDoc = await FirebaseFirestore.instance
-            .collection('exercises')
-            .doc(widget.exerciseId)
-            .get();
+        final ex = await ExerciseCatalog.resolveExercise(
+          exerciseId: widget.exerciseId,
+          uid: widget.uid,
+        );
         if (mounted) {
-          _exerciseType = exDoc.data()?['type'] as String?;
+          _exerciseType = ex?.type;
         }
       } catch (_) {
         // Non-critical; footer shows 'Not set' if unavailable.

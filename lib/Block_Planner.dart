@@ -6,6 +6,7 @@ import 'template_model.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'block_creation_helper.dart';
 import 'bb3_week_planner.dart';
+import 'exercise_catalog.dart';
 import 'periodization_model_utils.dart';
 import 'core_exercises.dart';
 import 'dart:convert';
@@ -726,20 +727,16 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     }
 
     if (idsNeedingFetch.isNotEmpty) {
-      final snaps = await Future.wait(idsNeedingFetch.map(
-            (id) => FirebaseFirestore.instance.collection('exercises').doc(id).get(),
+      // Resolve global first, then this account's custom pool.
+      final resolved = await Future.wait(idsNeedingFetch.map(
+            (id) => ExerciseCatalog.resolveExercise(exerciseId: id, uid: userId),
       ));
-      for (final doc in snaps) {
-        final d = doc.data();
-        if (d == null) continue;
-        final id = doc.id;
-        final name = (d['name'] as String?) ?? '';
-        final category = (d['category'] as String?) ?? 'Other';
-        // bodyPart can be string or list
-        String bodyPart = '';
-        final bp = d['bodyPart'];
-        if (bp is List && bp.isNotEmpty) bodyPart = bp.first.toString();
-        if (bp is String) bodyPart = bp;
+      for (final ex in resolved) {
+        if (ex == null) continue;
+        final id = ex.id;
+        final name = ex.name;
+        final category = ex.category.isNotEmpty ? ex.category : 'Other';
+        final bodyPart = ex.bodyPart;
 
         _exerciseIdToName[id] = name; // keep your cache aligned
         metaById[id] = {'name': name, 'category': category, 'bodyPart': bodyPart};
@@ -752,18 +749,15 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         .map((e) => e.key)
         .toList();
     if (idsMissingCat.isNotEmpty) {
-      final snaps = await Future.wait(idsMissingCat.map(
-            (id) => FirebaseFirestore.instance.collection('exercises').doc(id).get(),
+      // Resolve global first, then this account's custom pool.
+      final resolved = await Future.wait(idsMissingCat.map(
+            (id) => ExerciseCatalog.resolveExercise(exerciseId: id, uid: userId),
       ));
-      for (final doc in snaps) {
-        final d = doc.data();
-        if (d == null) continue;
-        final id = doc.id;
-        final category = (d['category'] as String?) ?? 'Other';
-        String bodyPart = '';
-        final bp = d['bodyPart'];
-        if (bp is List && bp.isNotEmpty) bodyPart = bp.first.toString();
-        if (bp is String) bodyPart = bp;
+      for (final ex in resolved) {
+        if (ex == null) continue;
+        final id = ex.id;
+        final category = ex.category.isNotEmpty ? ex.category : 'Other';
+        final bodyPart = ex.bodyPart;
 
         final cur = metaById[id] ?? <String, String>{};
         cur['category'] = category;
@@ -862,18 +856,20 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
   Future<void> loadExercisesFromFirestore() async {
     print('🚀 Starting loadExercisesFromFirestore');
-    final snapshot =
-        await FirebaseFirestore.instance.collection('exercises').get();
+    // Combined pool = global /exercises + this account's custom exercises
+    // (userId = selected athlete in coach mode).
+    final combined =
+        await ExerciseCatalog.loadCombinedExercisesForUser(userId);
 
 // Clear previous
     _exerciseIdToName.clear();
     PeriodizationModelUtils.nameToId.clear(); // ✅ clear shared name → ID map
 
-    final exercises = snapshot.docs.map((doc) {
-      final id = doc.id; // 👈 New
-      final name = doc['name'] as String;
-      final category = doc['category'] as String;
-      final bodyPart = doc['bodyPart'] as String;
+    final exercises = combined.map((e) {
+      final id = e.id;
+      final name = e.name;
+      final category = e.category;
+      final bodyPart = e.bodyPart;
 
       _exerciseIdToName[id] = name;
       PeriodizationModelUtils.nameToId[name.trim()] =
@@ -1196,14 +1192,14 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    // 🔥 Fetch exercises from Firestore (including ID)
-    final snapshot =
-        await FirebaseFirestore.instance.collection('exercises').get();
-    final exercisesFromFirestore = snapshot.docs
-        .map((doc) => {
-              'id': doc.id,
-              'name': doc['name'] as String,
-              'category': doc['category'] as String,
+    // 🔥 Combined pool = global /exercises + this account's custom exercises.
+    final combined =
+        await ExerciseCatalog.loadCombinedExercisesForUser(userId);
+    final exercisesFromFirestore = combined
+        .map((e) => {
+              'id': e.id,
+              'name': e.name,
+              'category': e.category,
             })
         .toList();
 

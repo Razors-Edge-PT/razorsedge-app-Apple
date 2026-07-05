@@ -64,7 +64,8 @@
       "PowerShell($result = flutter analyze 2>&1; $errors = $result | Select-String \" error - \"; \"Error count: $\\($errors.Count\\)\"; if \\($errors.Count -gt 0\\) { $errors })",
       "PowerShell(adb *)",
       "PowerShell($result = flutter analyze 2>&1; $errors = $result | Select-String \" error - \"; \"Error count: $\\($errors.Count\\)\"; $result | Select-Object -Last 3)",
-      "PowerShell(node --check functions/repair_user_blocks.js; echo \"EXIT=$LASTEXITCODE\")"
+      "PowerShell(node --check functions/repair_user_blocks.js; echo \"EXIT=$LASTEXITCODE\")",
+      "Bash(grep -E \"exercise_catalog.dart|lib\\\\\\\\\\\\\\\\exercises.dart|WES2_exercise_picker|block_exercise_defaults|WES2_plan_service.dart|WES2_exercise_settings_dialog|lib\\\\\\\\\\\\\\\\templates.dart|bb3_week_planner|template_details|WES2_screen.dart\")"
     ]
   }
 }

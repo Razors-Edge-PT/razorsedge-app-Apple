@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'exercise_catalog.dart';
+import 'user_context.dart';
 // at the top
 
 
@@ -133,50 +133,18 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
 
   Future<void> _fetchExercises() async {
     try {
-      final qs = await FirebaseFirestore.instance.collection('exercises').get();
+      // Combined pool = global /exercises + this account's custom exercises.
+      // In coach mode currentUid is the selected athlete UID.
+      final ownerUid = UserContext.of(context, listen: false).currentUid;
+      final combined =
+          await ExerciseCatalog.loadCombinedExercisesForUser(ownerUid);
+      final data = combined.map((e) => e.toDisplayMap()).toList();
 
-      final data = qs.docs.map((doc) {
-        final m = doc.data();
-
-        // Normalize to ordered List<String>
-        List<String> parts;
-        final rawList = m['bodyParts'];
-        final rawString = m['bodyPart'];
-
-        if (rawList is List) {
-          parts = rawList.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).toList();
-        } else if (rawString is String) {
-          parts = rawString
-              .split(',')
-              .map((s) => s.trim())
-              .where((s) => s.isNotEmpty)
-              .toList();
-        } else {
-          parts = <String>[];
-        }
-
-        final firstPart = parts.isNotEmpty ? parts.first : '';
-
-        return <String, dynamic>{
-          'id'               : doc.id,
-          'name'             : (m['name'] ?? '').toString(),
-          'category'         : (m['category'] ?? '').toString(),
-          'bodyParts'        : parts,                 // full, ordered
-          'bodyPart'         : firstPart,             // legacy (primary)
-          'bodyPartsDisplay' : parts.join(', '),      // convenient for UI
-        };
-      }).toList();
-      for (final ex in data) {
-        print('✅ ${ex['name']} → ${ex['bodyParts']}');
-      }
-
-
+      if (!mounted) return;
       setState(() => exercises = data);
     } catch (e) {
       print('Error fetching exercises: $e');
     }
-
-
   }
 
 
@@ -523,21 +491,31 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
       String category, {
         String? type, // NEW optional named parameter
       }) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final data = <String, dynamic>{
-      'name': name.trim(),
-      'category': category,
-      'bodyParts': bodyParts, // ← ordered list (primary first)
-      // Legacy compatibility: keep first as 'bodyPart' if you still have code reading it
-      if (bodyParts.isNotEmpty) 'bodyPart': bodyParts.first,
-      // NEW: optional equipment type
-      if (type != null && type.isNotEmpty) 'type': type,
-    };
+    final uc = UserContext.of(context, listen: false);
+    final actorUid = uc.actorUid;   // who is performing the action
+    final ownerUid = uc.currentUid; // whose pool receives it (athlete in coach mode)
+    if (actorUid.isEmpty) return;
 
     try {
-      await FirebaseFirestore.instance.collection('exercises').add(data);
+      // Admin (Richard) → global /exercises. Everyone else → their account's
+      // custom pool at /users/{ownerUid}/customExercises.
+      final result = await ExerciseCatalog.addExercise(
+        ownerUid: ownerUid,
+        actorUid: actorUid,
+        name: name,
+        bodyParts: bodyParts,
+        category: category,
+        type: type,
+      );
+      if (!mounted) return;
+      if (result.isDuplicate) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('That exercise already exists in your list.'),
+          ),
+        );
+        return;
+      }
       _fetchExercises();
     } catch (e) {
       print('Error adding exercise: $e');

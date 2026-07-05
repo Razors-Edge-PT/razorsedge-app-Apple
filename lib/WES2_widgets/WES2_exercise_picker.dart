@@ -1,5 +1,5 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../exercise_catalog.dart';
 import '../planned_only_resolver.dart';
 
 /// WES2 exercise picker bottom sheet.
@@ -52,7 +52,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
   ];
 
   final TextEditingController _searchCtrl = TextEditingController();
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> _allDocs = [];
+  List<CatalogExercise> _allExercises = [];
   Set<String> _plannedIds = {};
   bool _loadingExercises = true;
   bool _loadingPlanned = true;
@@ -78,14 +78,13 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
 
   Future<void> _fetchExercises() async {
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('exercises')
-          .orderBy('name')
-          .limit(200)
-          .get();
+      // Combined pool = global /exercises + the acting account's custom
+      // exercises. actingUid is the selected athlete UID in coach mode.
+      final combined =
+          await ExerciseCatalog.loadCombinedExercisesForUser(widget.actingUid);
       if (!mounted) return;
       setState(() {
-        _allDocs = snap.docs;
+        _allExercises = combined;
         _loadingExercises = false;
       });
     } catch (_) {
@@ -120,31 +119,28 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
     }
   }
 
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _visible {
+  List<CatalogExercise> get _visible {
     var docs =
-        _allDocs.where((d) => !widget.excludedIds.contains(d.id)).toList();
+        _allExercises.where((d) => !widget.excludedIds.contains(d.id)).toList();
     if (_showPlannedOnly && _plannedIds.isNotEmpty) {
       docs = docs.where((d) => _plannedIds.contains(d.id)).toList();
     }
     if (_query.isNotEmpty) {
       final q = _query.toLowerCase();
-      docs = docs.where((d) {
-        final name = (d.data()['name'] as String? ?? '').toLowerCase();
-        return name.contains(q);
-      }).toList();
+      docs = docs.where((d) => d.name.toLowerCase().contains(q)).toList();
     }
     return docs;
   }
 
-  Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> _grouped() {
+  Map<String, List<CatalogExercise>> _grouped() {
     final docs = _visible;
-    final map = <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+    final map = <String, List<CatalogExercise>>{};
     for (final cat in _categoryOrder) {
       map[cat] = [];
     }
     map['Other'] = [];
     for (final doc in docs) {
-      final cat = (doc.data()['category'] as String?)?.trim() ?? '';
+      final cat = doc.category.trim();
       if (_categoryOrder.contains(cat)) {
         map[cat]!.add(doc);
       } else {
@@ -152,9 +148,8 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
       }
     }
     for (final list in map.values) {
-      list.sort((a, b) => ((a.data()['name'] as String?) ?? '')
-          .toLowerCase()
-          .compareTo(((b.data()['name'] as String?) ?? '').toLowerCase()));
+      list.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     }
     map.removeWhere((_, list) => list.isEmpty);
     return map;
@@ -324,9 +319,8 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
     }
     if (_query.isNotEmpty) {
       final sorted = List.of(docs)
-        ..sort((a, b) => ((a.data()['name'] as String?) ?? '')
-            .toLowerCase()
-            .compareTo(((b.data()['name'] as String?) ?? '').toLowerCase()));
+        ..sort(
+            (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       return ListView.builder(
         controller: scrollCtrl,
         itemCount: sorted.length,
@@ -386,8 +380,8 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
     );
   }
 
-  Widget _buildTile(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final name = (doc.data()['name'] as String?) ?? doc.id;
+  Widget _buildTile(CatalogExercise doc) {
+    final name = doc.name.isNotEmpty ? doc.name : doc.id;
     return ListTile(
       title: Text(
         name,

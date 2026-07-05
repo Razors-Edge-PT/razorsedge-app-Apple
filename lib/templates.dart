@@ -8,6 +8,7 @@ import 'onboarding/onboarding_cue_service.dart';
 import 'wp_demo_player.dart';
 import 'package:provider/provider.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'exercise_catalog.dart';
 import 'planned_only_resolver.dart';
 
 import 'block_repair_service.dart';
@@ -279,14 +280,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     // 2) load all exercises (cache per session — fetch once, reuse on repeat opens)
     if (_cachedAllExercises == null) {
-      final snapshot =
-          await FirebaseFirestore.instance.collection('exercises').get();
-      _cachedAllExercises = snapshot.docs.map((doc) {
-        final data = doc.data();
+      // Combined pool = global /exercises + this account's custom exercises.
+      final combined =
+          await ExerciseCatalog.loadCombinedExercisesForUser(userId);
+      _cachedAllExercises = combined.map((e) {
         return <String, String>{
-          'id': doc.id,
-          'name': (data['name'] ?? '').toString(),
-          'category': (data['category'] ?? 'Other').toString(),
+          'id': e.id,
+          'name': e.name,
+          'category': e.category.isNotEmpty ? e.category : 'Other',
         };
       }).toList();
     }
@@ -548,14 +549,14 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
 
     // ---- Load all exercises (reuse cached list if available)
     if (_cachedAllExercises == null) {
-      final snapshot =
-          await FirebaseFirestore.instance.collection('exercises').get();
-      _cachedAllExercises = snapshot.docs.map((doc) {
-        final data = doc.data();
+      // Combined pool = global /exercises + this account's custom exercises.
+      final combined =
+          await ExerciseCatalog.loadCombinedExercisesForUser(userId);
+      _cachedAllExercises = combined.map((e) {
         return <String, String>{
-          'id': doc.id,
-          'name': (data['name'] ?? '').toString(),
-          'category': (data['category'] ?? 'Other').toString(),
+          'id': e.id,
+          'name': e.name,
+          'category': e.category.isNotEmpty ? e.category : 'Other',
         };
       }).toList();
     }

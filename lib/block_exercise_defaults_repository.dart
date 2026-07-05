@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
+import 'exercise_catalog.dart';
+
 /// Shared defaults + seeding logic for Block Planner / WES.
 /// This is the "headless" version of BP's _seedDefaultsFor + getDefaultSettings,
 /// with no setState / BuildContext.
@@ -620,20 +622,18 @@ class BlockExerciseDefaultsRepository {
     final existingForId = existing[exerciseId];
     if (existingForId is Map<String, dynamic> && isSettingsUsable(existingForId)) return;
 
-    // 2. Fetch exercise metadata.
-    final exDoc = await FirebaseFirestore.instance
-        .collection('exercises')
-        .doc(exerciseId)
-        .get();
-    if (!exDoc.exists) return;
+    // 2. Fetch exercise metadata. Resolve global /exercises first, then fall
+    //    back to this account's custom pool (/users/{uid}/customExercises) so
+    //    custom exercise IDs get defaults just like global ones.
+    final ex = await ExerciseCatalog.resolveExercise(
+      exerciseId: exerciseId,
+      uid: uid,
+    );
+    if (ex == null) return;
 
-    final d = exDoc.data()!;
-    final name = (d['name'] as String?) ?? '';
-    final category = (d['category'] as String?) ?? 'Other';
-    String bodyPart = '';
-    final bp = d['bodyPart'];
-    if (bp is List && bp.isNotEmpty) bodyPart = bp.first.toString();
-    if (bp is String) bodyPart = bp;
+    final name = ex.name;
+    final category = ex.category.isNotEmpty ? ex.category : 'Other';
+    final bodyPart = ex.bodyPart;
 
     // 3. Compute defaults using the same logic as seedDefaultsForBlock.
     final defaults = getDefaultSettings(name, category, bodyPart);
