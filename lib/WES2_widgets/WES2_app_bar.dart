@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 /// Menu actions in the WES2 AppBar overflow menu.
-enum Wes2AppBarMenuAction { timer, templates, deleteAll }
+/// [hintDebug] is debug-instrumentation only — its item renders solely when
+/// the screen passes a non-null [Wes2AppBar.onHintDebugSnapshot] (kDebugMode).
+enum Wes2AppBarMenuAction { timer, templates, deleteAll, hintDebug }
 
 /// The WES2 screen AppBar, extracted from `Wes2Screen` so its navigation
 /// controls can be widget-tested against the real production widget without
@@ -48,6 +50,10 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
   /// Invoked by the overflow menu "Delete Day" item.
   final VoidCallback onDeleteAll;
 
+  /// Debug-only: shows the "Hint debug snapshot" item when non-null.
+  /// Production builds pass null, so the item never renders for customers.
+  final VoidCallback? onHintDebugSnapshot;
+
   const Wes2AppBar({
     super.key,
     required this.onBack,
@@ -60,6 +66,7 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.onToggleTimer,
     required this.onShowTemplates,
     required this.onDeleteAll,
+    this.onHintDebugSnapshot,
   });
 
   @override
@@ -168,6 +175,9 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
               case Wes2AppBarMenuAction.deleteAll:
                 onDeleteAll();
                 break;
+              case Wes2AppBarMenuAction.hintDebug:
+                onHintDebugSnapshot?.call();
+                break;
             }
           },
           itemBuilder: (_) => [
@@ -207,6 +217,21 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
                 ],
               ),
             ),
+            if (onHintDebugSnapshot != null)
+              const PopupMenuItem(
+                value: Wes2AppBarMenuAction.hintDebug,
+                height: 40,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.bug_report_outlined,
+                        size: 18, color: Colors.orangeAccent),
+                    SizedBox(width: 10),
+                    Text('Hint debug snapshot',
+                        style: TextStyle(color: Colors.orangeAccent)),
+                  ],
+                ),
+              ),
           ],
         ),
       ],

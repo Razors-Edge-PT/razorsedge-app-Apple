@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'onboarding_prefs.dart';
@@ -33,6 +34,7 @@ import 'app_check_ready.dart';
 import 'startup_route_service.dart';
 import 'startup_trace.dart';
 import 'wes2_exit_coordinator.dart';
+import 'wes2_hint_trace.dart';
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -408,6 +410,15 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   Future<void> _loadDay() async {
     final epoch = _controller.beginLoad();
     StartupTrace.wes2LoadStart();
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'loadDay',
+          'start epoch=$epoch actingUid=${_controller.actingUid} '
+          'actorUid=${_controller.actorUid} '
+          'date=${_controller.selectedDate.toIso8601String().substring(0, 10)} '
+          'blockId=${_controller.activeBlockId} '
+          'blockStart=${_controller.blockStartDate?.toIso8601String()}');
+    }
     try {
       // Sequence Firestore behind App Check activation (settles even on
       // failure/timeout, so this never deadlocks). WES2 shows its existing
@@ -446,12 +457,29 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         date: _controller.selectedDate,
       );
       if (!mounted) return;
-      _controller.setRows(
-        _hardened(_applyDraftActuals(
-            _mergeRows(completedRows, bb3Rows), draft?.rows)),
-        epoch,
-      );
+      final mergedRows = _hardened(_applyDraftActuals(
+          _mergeRows(completedRows, bb3Rows), draft?.rows));
+      _controller.setRows(mergedRows, epoch);
       StartupTrace.wes2LoadComplete();
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log(
+            'loadDay',
+            'rowsSet epoch=$epoch completedRows=${completedRows.length} '
+            'bb3Rows=${bb3Rows.length} merged=${mergedRows.length} '
+            'draftRows=${draft?.rows.length ?? 0} '
+            'controllerEpochNow=${_controller.loadEpoch}');
+        for (final r in mergedRows) {
+          Wes2HintTrace.log(
+              'loadDay',
+              'row src=${r.source.name} setCount=${r.setCount} '
+              'name="${r.name}" hasActuals=${Wes2HintTrace.rowHasActuals(r)}',
+              exerciseId: r.exerciseId);
+        }
+        // Rows are DISPLAYED from this point; the hint pass below is async —
+        // any user edit between here and 'hints.baselineCaptured' is cause A/F.
+        Wes2HintTrace.log('loadDay',
+            'scheduling _loadAndApplyHints (rows already displayed) epoch=$epoch');
+      }
       _workoutDurationMilliseconds = draft?.workoutDurationMs ?? 0;
       _workoutDurationSegmentStartedAt = null;
       // Phase 21B: apply Set 1 model/default hints after rows settle.
@@ -500,7 +528,34 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   Future<void> _loadAndApplyHints() async {
     final blockId = _controller.activeBlockId;
     final blockStart = _controller.blockStartDate;
-    if (blockId == null || blockId.isEmpty || blockStart == null) return;
+    if (blockId == null || blockId.isEmpty || blockStart == null) {
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log('hints',
+            'abort: no block context blockId=$blockId blockStart=$blockStart');
+      }
+      return;
+    }
+
+    // Identity snapshot: if any of these change while this async pass runs
+    // (athlete switch, date navigation, reload), applying its results to the
+    // now-visible rows would be a stale-pass bug (likely cause B).
+    final snapUid = _controller.actingUid;
+    final snapDate = _controller.selectedDate;
+    final snapBlockId = blockId;
+    final snapEpoch = _controller.loadEpoch;
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'hints',
+          'start uid=$snapUid '
+          'date=${snapDate.toIso8601String().substring(0, 10)} '
+          'blockId=$snapBlockId epoch=$snapEpoch');
+    }
+    // True when uid/date/blockId/epoch still match the snapshot taken above.
+    bool identityUnchanged() =>
+        _controller.actingUid == snapUid &&
+        _controller.selectedDate == snapDate &&
+        _controller.activeBlockId == snapBlockId &&
+        _controller.loadEpoch == snapEpoch;
 
     await _refreshHistoryForHints(_controller.selectedDate);
 
@@ -585,6 +640,17 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       final date = _controller.selectedDate;
       final rows = _controller.rows.toList();
 
+      if (Wes2HintTrace.enabled && !identityUnchanged()) {
+        Wes2HintTrace.log(
+            'hints',
+            '⚠️ STALE-PASS(B): identity changed before hint application! '
+            'snap=$snapUid/${snapDate.toIso8601String().substring(0, 10)}/'
+            '$snapBlockId/e$snapEpoch '
+            'now=${_controller.actingUid}/'
+            '${_controller.selectedDate.toIso8601String().substring(0, 10)}/'
+            '${_controller.activeBlockId}/e${_controller.loadEpoch}');
+      }
+
       for (final row in rows) {
         if (!mounted) return;
         try {
@@ -594,10 +660,28 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             uid: _controller.actingUid,
             date: date,
           );
+          if (Wes2HintTrace.enabled && !identityUnchanged()) {
+            Wes2HintTrace.log(
+                'hints',
+                '⚠️ STALE-PASS(B): applying hinted row "${row.name}" after '
+                'uid/date/block/epoch changed '
+                '(now=${_controller.actingUid}/'
+                '${_controller.selectedDate.toIso8601String().substring(0, 10)}/'
+                '${_controller.activeBlockId}/e${_controller.loadEpoch})',
+                exerciseId: row.exerciseId);
+          }
           _controller.applyModelHints(row.exerciseId, hinted);
+          if (Wes2HintTrace.enabled) {
+            Wes2HintTrace.log('hints', 'applied ${Wes2HintTrace.fmtRow(hinted)}',
+                exerciseId: row.exerciseId);
+          }
         } catch (e) {
           debugPrint(
               '[WES2] Hint failed for ${row.name} (${row.exerciseId}): $e');
+          if (Wes2HintTrace.enabled) {
+            Wes2HintTrace.log('hints', '❌ computeRowHints threw: $e',
+                exerciseId: row.exerciseId);
+          }
         }
       }
       // Snapshot hinted rows as baseline so same-set recalc can restore
@@ -605,6 +689,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (mounted) _controller.captureBaselineHintRows();
     } catch (e) {
       debugPrint('[WES2] Hint computation failed: $e');
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log('hints', '❌ hint pass failed: $e');
+      }
     }
   }
 
@@ -625,12 +712,31 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
     final key = '$uid|$blockId|${ymd(selectedDate)}';
-    if (_lastHistoryRefreshKey == key) return;
+    if (_lastHistoryRefreshKey == key) {
+      if (Wes2HintTrace.enabled) {
+        // Cause E probe: refresh skipped — history state is whatever a
+        // previous pass (possibly a FAILED one that never set the key —
+        // impossible — or WarmupService) left behind.
+        Wes2HintTrace.log(
+            'history',
+            'SKIP (key match) key=$key '
+            'savedList=${PeriodizationModelUtils.savedWorkoutsList.length} '
+            'topSetKeys=${PeriodizationModelUtils.topSetsByExercise.length}');
+        _traceHistoryAvailabilityForRows(uid);
+      }
+      return;
+    }
 
     final startKey =
         ymd(DateTime(blockStart.year, blockStart.month, blockStart.day));
     final endKey =
         ymd(DateTime(selectedDate.year, selectedDate.month, selectedDate.day));
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'history',
+          'fetch uid=$uid blockId=$blockId start=$startKey end=$endKey '
+          'savedListBefore=${PeriodizationModelUtils.savedWorkoutsList.length}');
+    }
 
     try {
       final snap = await FirebaseFirestore.instance
@@ -675,10 +781,192 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       PeriodizationModelUtils.savedWorkoutsList = merged;
       _rebuildTopSetsFromSavedWorkouts(uid);
       _lastHistoryRefreshKey = key;
-    } catch (_) {
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log(
+            'history',
+            'server OK docs=${snap.docs.length} '
+            'savedListAfter=${merged.length} '
+            'topSetKeys=${PeriodizationModelUtils.topSetsByExercise.length} '
+            'keys=[${PeriodizationModelUtils.topSetsByExercise.keys.take(30).join(', ')}'
+            '${PeriodizationModelUtils.topSetsByExercise.length > 30 ? ', …' : ''}]');
+        _traceHistoryAvailabilityForRows(uid);
+      }
+    } catch (e) {
       // Server fetch failed; savedWorkoutsList is unchanged.
       // Key is intentionally NOT set — next navigation will retry.
+      if (Wes2HintTrace.enabled) {
+        // Cause E probe: this failure was previously swallowed silently.
+        Wes2HintTrace.log(
+            'history',
+            '❌ server fetch FAILED (hints will use stale/empty history): $e '
+            'savedList=${PeriodizationModelUtils.savedWorkoutsList.length}');
+      }
     }
+  }
+
+  /// Debug-only (cause C probe): for every current row, report whether
+  /// topSetsByExercise can be found by exact exerciseId, exact name, and
+  /// normalized (lowercased/trimmed) name. A row that resolves by name but
+  /// NOT by id is the C-mismatch signature (Top Sets shows history, hints
+  /// fall back to defaults like 5 kg).
+  void _traceHistoryAvailabilityForRows(String uid) {
+    if (!Wes2HintTrace.enabled) return;
+    final tops = PeriodizationModelUtils.topSetsByExercise;
+    final normKeys = <String, String>{
+      for (final k in tops.keys) k.trim().toLowerCase(): k,
+    };
+    for (final row in _controller.rows) {
+      final byId = tops.containsKey(row.exerciseId);
+      final byName = tops.containsKey(row.name);
+      final normMatch = normKeys[row.name.trim().toLowerCase()];
+      final byNorm = normMatch != null;
+      final entries = byId
+          ? tops[row.exerciseId]!
+          : byName
+              ? tops[row.name]!
+              : byNorm
+                  ? tops[normMatch]!
+                  : const <Map<String, dynamic>>[];
+      final first = entries.isNotEmpty ? entries.first : null;
+      final flag = (!byId && (byName || byNorm)) ? ' ⚠️ NAME-ONLY(C)' : '';
+      Wes2HintTrace.log(
+          'history',
+          'avail "${row.name}" byId=$byId byName=$byName byNorm=$byNorm '
+          'entries=${entries.length} '
+          'latest=${first == null ? '-' : '${first['weight']}kg x${first['reps']} @rir${first['rir']} ${first['date']}'}'
+          '$flag',
+          exerciseId: row.exerciseId);
+    }
+  }
+
+  // ── Hint debug snapshot (debug builds only) ───────────────────────────────
+
+  /// Builds a copyable one-shot state dump for the intermittent hint bug.
+  /// Reachable only in debug builds (the app-bar item is null-gated on
+  /// [Wes2HintTrace.enabled]); reads state only — never mutates anything.
+  String _buildHintDebugSnapshot() {
+    final b = StringBuffer();
+    final tops = PeriodizationModelUtils.topSetsByExercise;
+    final normKeys = <String, String>{
+      for (final k in tops.keys) k.trim().toLowerCase(): k,
+    };
+    final baselines = _controller.debugBaselineHintRows;
+
+    b.writeln('===== WES2 HINT DEBUG SNAPSHOT =====');
+    b.writeln('capturedAt: ${DateTime.now().toIso8601String()}');
+    b.writeln('actingUid: ${_controller.actingUid}');
+    b.writeln('actorUid: ${_controller.actorUid}');
+    b.writeln('selectedDate: '
+        '${_controller.selectedDate.toIso8601String().substring(0, 10)}');
+    b.writeln('blockId: ${_controller.activeBlockId}');
+    b.writeln('blockStartDate: '
+        '${_controller.blockStartDate?.toIso8601String()}');
+    b.writeln('loadState: ${_controller.loadState.name} '
+        'epoch: ${_controller.loadEpoch}');
+    b.writeln('lastHistoryRefreshKey: $_lastHistoryRefreshKey');
+    b.writeln('cachedSettingsKey: $_cachedSettingsKey');
+    b.writeln('savedWorkoutsList: '
+        '${PeriodizationModelUtils.savedWorkoutsList.length} entries');
+    b.writeln('topSetsByExercise: ${tops.length} keys');
+    b.writeln('baselineHintRows: ${baselines.length} entries');
+    b.writeln('');
+
+    for (final row in _controller.rows) {
+      b.writeln('--- ROW "${row.name}" (${row.exerciseId}) ---');
+      b.writeln('current: ${Wes2HintTrace.fmtRow(row)}');
+
+      final baseline = baselines[row.exerciseId];
+      if (baseline == null) {
+        b.writeln('baseline: ⚠️ MISSING (edits recalc from current row — '
+            'race/no-baseline signature, causes A/F)');
+      } else {
+        final baselineHadActuals = Wes2HintTrace.rowHasActuals(baseline);
+        b.writeln('baseline: ${Wes2HintTrace.fmtRow(baseline)}');
+        b.writeln('baselineContainsUserActuals: $baselineHadActuals'
+            '${baselineHadActuals ? ' ⚠️ (F: user typed before baseline capture)' : ''}');
+      }
+
+      final s = _cachedExerciseSettings[row.exerciseId];
+      final usable = BlockExerciseDefaultsRepository.isSettingsUsable(
+          s is Map<String, dynamic> ? s : null);
+      b.writeln('exerciseSettings: present=${s != null} usable=$usable'
+          '${s is Map ? ' model=${s['periodizationModel']}' : ''}');
+
+      final byId = tops.containsKey(row.exerciseId);
+      final byName = tops.containsKey(row.name);
+      final normMatch = normKeys[row.name.trim().toLowerCase()];
+      b.writeln('topSets: byId=$byId byName=$byName byNorm=${normMatch != null}'
+          '${!byId && (byName || normMatch != null) ? ' ⚠️ NAME-ONLY(C)' : ''}');
+      final entries = byId
+          ? tops[row.exerciseId]!
+          : byName
+              ? tops[row.name]!
+              : normMatch != null
+                  ? tops[normMatch]!
+                  : const <Map<String, dynamic>>[];
+      for (final e in entries.take(3)) {
+        b.writeln('  topSet: ${e['weight']}kg x${e['reps']} @rir${e['rir']} '
+            '${e['date']}');
+      }
+
+      final rowTrace =
+          Wes2HintTrace.tail(n: 25, exerciseId: row.exerciseId);
+      b.writeln('trace (last ${rowTrace.length} events for this exercise):');
+      for (final line in rowTrace) {
+        b.writeln('  $line');
+      }
+      b.writeln('');
+    }
+
+    b.writeln('--- GLOBAL TRACE TAIL (${Wes2HintTrace.eventCount} total) ---');
+    for (final line in Wes2HintTrace.tail(n: 80)) {
+      b.writeln(line);
+    }
+    b.writeln('===== END SNAPSHOT =====');
+    return b.toString();
+  }
+
+  Future<void> _showHintDebugSnapshot() async {
+    final snapshot = _buildHintDebugSnapshot();
+    Wes2HintTrace.log('snapshot', 'captured (${snapshot.length} chars)');
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('WES2 hint debug snapshot',
+            style: TextStyle(fontSize: 15)),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 420,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              snapshot,
+              style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('Copy'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: snapshot));
+              if (ctx.mounted) Navigator.of(ctx).pop();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                      content: Text('Hint debug snapshot copied')),
+                );
+              }
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   /// Rebuilds PeriodizationModelUtils.topSetsByExercise from the current
@@ -1398,6 +1686,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 onToggleTimer: _toggleTimerVisible,
                 onShowTemplates: _showTemplatePicker,
                 onDeleteAll: _onDeleteAllExercisesForDay,
+                onHintDebugSnapshot: null,
               ),
               body: Stack(
                 children: [

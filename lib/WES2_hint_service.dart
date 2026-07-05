@@ -5,6 +5,7 @@ import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'periodization_model_utils.dart';
 import 'progression_engine.dart';
+import 'wes2_hint_trace.dart';
 
 abstract class Wes2HintService {
   /// Recompute hints for a single exercise row.
@@ -199,6 +200,47 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final constrainedReps = _constraintReps(set);
     final constrainedRir = _constraintRir(set);
 
+    if (Wes2HintTrace.enabled) {
+      // Cause C/D probe: count history rows matching by exact id vs by exact
+      // name BEFORE the engine runs. byNameOnly > 0 with byId == 0 means the
+      // history exists under the name key but not this exerciseId — Top Sets
+      // would show it while the id-keyed hint path can miss it.
+      int histById = 0, histByNameOnly = 0;
+      for (final w in PeriodizationModelUtils.savedWorkoutsList) {
+        final exs = w['exercises'];
+        if (exs is! List) continue;
+        for (final ex in exs) {
+          if (ex is! Map) continue;
+          final exId = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
+          final exName = (ex['name'] ?? '').toString().trim();
+          if (exId.isNotEmpty && exId == row.exerciseId) {
+            histById++;
+          } else if (exName.isNotEmpty && exName == row.name) {
+            histByNameOnly++;
+          }
+        }
+      }
+      final tops = PeriodizationModelUtils.topSetsByExercise;
+      Wes2HintTrace.log(
+          'set1',
+          'enter "${row.name}" wk=$weekIndex sess=$sessionIndex '
+          'savedList=${PeriodizationModelUtils.savedWorkoutsList.length} '
+          'settings=${exSettings != null} '
+          'cw=$constrainedWeight cr=$constrainedReps crir=$constrainedRir '
+          'histById=$histById histByNameOnly=$histByNameOnly'
+          '${histById == 0 && histByNameOnly > 0 ? ' ⚠️ NAME-ONLY(C)' : ''} '
+          'topsById=${tops.containsKey(row.exerciseId)} '
+          'topsByName=${tops.containsKey(row.name)}',
+          exerciseId: row.exerciseId);
+      if (PeriodizationModelUtils.savedWorkoutsList.isEmpty) {
+        Wes2HintTrace.log(
+            'set1',
+            '⚠️ savedWorkoutsList EMPTY(E?) → history path skipped entirely, '
+            'plan/default hints only',
+            exerciseId: row.exerciseId);
+      }
+    }
+
     final bool isTimed = PeriodizationModelUtils.isTimedExercise(
         id: row.exerciseId, name: row.name);
     final bool isWeightedTimed =
@@ -279,6 +321,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
         userRir: constrainedRir,
       );
 
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log(
+            'set1',
+            hint.isEmpty
+                ? '⚠️ BB3HintService EMPTY(D) → falling back to plan/default'
+                : 'BB3HintService → w="${hint.weightDisplay}" '
+                    'r="${hint.repsDisplay}" rir="${hint.rirDisplay}"',
+            exerciseId: row.exerciseId);
+      }
       bool weightFromHistory = false;
       if (!hint.isEmpty) {
         if (hint.weightDisplay.isNotEmpty) {
@@ -379,6 +430,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
         // Issue 5: PMU _defaultWeightForExercise returns 5 for Machine; override to 6.
         final type = exerciseTypes[row.exerciseId];
         weightHint = (defW == 5.0 && type == 'Machine') ? 6.0 : defW;
+        if (Wes2HintTrace.enabled) {
+          // The "~5 kg on an exercise with real history" symptom lands here:
+          // history produced no weight, so the plan/default path filled it.
+          Wes2HintTrace.log(
+              'set1',
+              '⚠️ DEFAULT-WEIGHT(D): plan/default fallback filled weight '
+              'defW=$defW type=$type → weightHint=$weightHint '
+              '(reps=$repsForWeight rir=$rirForWeight)',
+              exerciseId: row.exerciseId);
+        }
       }
     }
 
@@ -405,6 +466,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
       if (repsHint != null && repsHintFromPlan) repsHint = repsHint! * 5;
       rirHint = null;
       if (!isWeightedTimed) weightHint = null;
+    }
+
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'set1',
+          'final S0 weightHint=$weightHint repsHint=$repsHint '
+          'rirHint=$rirHint (planReps=$planReps planRir=$planRir '
+          'timed=$isTimed)',
+          exerciseId: row.exerciseId);
     }
 
     Wes2SetState result = _applyModelHintToSet(
@@ -650,7 +720,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }) {
     final prevWeight = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
     final prevReps = prevSet.reps.actualValue ?? prevSet.reps.hintValue;
-    if (prevWeight == null || prevReps == null) return set;
+    if (prevWeight == null || prevReps == null) {
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log(
+            'setN',
+            'S$setIdx skip: prev set unresolved '
+            '(prevW=$prevWeight prevR=$prevReps) — no cascade for this set',
+            exerciseId: row.exerciseId);
+      }
+      return set;
+    }
 
     final prevRir = prevSet.rir.actualValue ?? prevSet.rir.hintValue ?? 0.0;
 
@@ -710,12 +789,27 @@ class Wes2HintServiceImpl implements Wes2HintService {
       prevReps.toDouble(),
       prevRir,
     );
-    if (prevE1rm <= 0) return set;
+    if (prevE1rm <= 0) {
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log('setN', 'S$setIdx skip: prevE1rm=$prevE1rm ≤ 0',
+            exerciseId: row.exerciseId);
+      }
+      return set;
+    }
 
     final group = _dropGroup(row.name, exSettings);
     final rawDrop = _rawDropFor(group, setIdx);
     final drop = _gatedDrop(rawDrop, prevRir);
     final cascadeTarget = (prevE1rm - drop).clamp(1.0, 9999.0);
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'setN',
+          'S$setIdx prev(w=$prevWeight r=$prevReps rir=$prevRir '
+          'e1rm=${prevE1rm.toStringAsFixed(2)}) group=$group '
+          'rawDrop=$rawDrop gatedDrop=$drop '
+          'cascadeTarget=${cascadeTarget.toStringAsFixed(2)}',
+          exerciseId: row.exerciseId);
+    }
 
     // RIR precedence: actual > BB3 explicit > rirPlan > 0.0 fallback.
     final constrainedRir = _constraintRir(set);
@@ -742,11 +836,21 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final rirHint = constrainedRir == null ? effectivePlanRir : null;
 
     // BB3-implied target wins when BB3 has prescribed this set; cascade is fallback.
-    final targetE1rm =
-        _bb3ImpliedSetTargetE1rm(set, thisRir, row, date) ?? cascadeTarget;
+    final bb3ImpliedTarget = _bb3ImpliedSetTargetE1rm(set, thisRir, row, date);
+    final targetE1rm = bb3ImpliedTarget ?? cascadeTarget;
 
     final cwt = _constraintWeight(set);
     final creps = _constraintReps(set);
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'setN',
+          'S$setIdx targetE1rm=${targetE1rm.toStringAsFixed(2)} '
+          'source=${bb3ImpliedTarget != null ? 'bb3Implied' : 'cascade'} '
+          'constrainedWeight=$cwt constrainedReps=$creps '
+          'constrainedRir=$constrainedRir thisRir=$thisRir '
+          'planRir=$planRir extraSet=$isExtraSet',
+          exerciseId: row.exerciseId);
+    }
 
     double? weightHint;
     int? repsHint;
@@ -858,11 +962,20 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // calculation + increment snapping; weight-locked / BB3-locked branches keep
     // weightHint null so this is a no-op for them. A manually typed actual weight
     // lives in set.weight.actualValue and is never touched here.
+    final proposedWeightBeforeCap = weightHint;
     weightHint = _capWeightToPrevSet(
       proposed: weightHint,
       prevSet: prevSet,
       validWeights: _sNValidWeights,
     );
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'setN',
+          'S$setIdx proposed w=$proposedWeightBeforeCap r=$repsHint '
+          'rir=$rirHint → afterCap w=$weightHint'
+          '${proposedWeightBeforeCap != weightHint ? ' (CAP APPLIED, prevResolved=${prevSet.weight.actualValue ?? prevSet.weight.hintValue} prevActualRir=${prevSet.rir.actualValue})' : ''}',
+          exerciseId: row.exerciseId);
+    }
 
     Wes2SetState result = _applyModelHintToSet(
       existing: set,

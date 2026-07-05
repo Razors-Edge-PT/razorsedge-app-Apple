@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'WES2_hint_service.dart';
 import 'WES2_models.dart';
+import 'wes2_hint_trace.dart';
 
 enum Wes2LoadState { idle, loading, loaded, empty, error }
 
@@ -99,7 +100,26 @@ class Wes2SessionController extends ChangeNotifier {
   /// same-set recalculation can restore original hints when actuals are cleared.
   void captureBaselineHintRows() {
     _baselineHintRows = {for (final r in _rows) r.exerciseId: r};
+    if (Wes2HintTrace.enabled) {
+      // Cause F probe: a baseline that already contains user actuals means the
+      // user typed BEFORE the initial hint pass finished — same-set recalc will
+      // then treat those actuals as the "original hints" forever.
+      final withActuals = _rows
+          .where(Wes2HintTrace.rowHasActuals)
+          .map((r) => '"${r.name}"')
+          .toList();
+      Wes2HintTrace.log(
+          'baseline',
+          'captured rows=${_rows.length} '
+          'rowsWithUserActualsAtCapture=${withActuals.length}'
+          '${withActuals.isEmpty ? '' : ' ⚠️(F): ${withActuals.join(', ')}'}');
+    }
   }
+
+  /// Debug-only view of the baseline snapshot for the hint debug dump.
+  /// Read-only; production code paths never use this.
+  Map<String, Wes2ExerciseRow> get debugBaselineHintRows =>
+      Map.unmodifiable(_baselineHintRows);
 
   /// Returns the original planned/model RIR hint value for [setIndex] of
   /// [exerciseId] as captured at load time.  Used by Wes2SetRow to compute
@@ -235,6 +255,14 @@ class Wes2SessionController extends ChangeNotifier {
     final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
     if (rowIdx == -1) return;
     final row = _rows[rowIdx];
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'edit',
+          'updateSetField "${row.name}" set=$setIndex field=${fieldKey.name} '
+          'rawText="$rawText" hintServiceNull=${_hintService == null} '
+          'baselineExists=${_baselineHintRows.containsKey(exerciseId)}',
+          exerciseId: exerciseId);
+    }
     final sets = List<Wes2SetState>.from(row.sets);
     while (sets.length <= setIndex) {
       sets.add(Wes2SetState(setIndex: sets.length));
@@ -256,12 +284,45 @@ class Wes2SessionController extends ChangeNotifier {
   void _applyHintsForRow(int rowIdx) {
     final svc = _hintService;
     final blockId = _hintBlockId;
-    if (svc == null || blockId == null) return;
+    if (svc == null || blockId == null) {
+      if (Wes2HintTrace.enabled) {
+        // Cause A probe: edits made before setHintService() get NO same-set
+        // recalc at all — and no baseline protection when hints arrive later.
+        Wes2HintTrace.log(
+            'recalc',
+            '⚠️ SKIP(A): hint service not registered yet '
+            '(svcNull=${svc == null} blockIdNull=${blockId == null}) — '
+            'edit happened before the initial hint pass finished',
+            exerciseId: _rows[rowIdx].exerciseId);
+      }
+      return;
+    }
     final current = _rows[rowIdx];
     final baseline = _baselineHintRows[current.exerciseId];
+    if (Wes2HintTrace.enabled && baseline == null) {
+      // Cause A/F probe: recalc without a baseline uses the CURRENT row,
+      // whose model hints may already reflect earlier user edits.
+      Wes2HintTrace.log(
+          'recalc',
+          '⚠️ NO-BASELINE(A/F) for "${current.name}" — recalc input is the '
+          'current row, not the load-time hint snapshot',
+          exerciseId: current.exerciseId);
+    }
     final rowForRecalc = baseline != null
         ? _rowWithCurrentActualsOverBaseline(current, baseline)
         : current;
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log('recalc', 'current  ${Wes2HintTrace.fmtRow(current)}',
+          exerciseId: current.exerciseId);
+      if (baseline != null) {
+        Wes2HintTrace.log(
+            'recalc', 'baseline ${Wes2HintTrace.fmtRow(baseline)}',
+            exerciseId: current.exerciseId);
+      }
+      Wes2HintTrace.log(
+          'recalc', 'recalcIn ${Wes2HintTrace.fmtRow(rowForRecalc)}',
+          exerciseId: current.exerciseId);
+    }
     Wes2ExerciseRow hinted;
     try {
       hinted = svc.computeRowHints(
@@ -270,10 +331,21 @@ class Wes2SessionController extends ChangeNotifier {
         uid: _actingUid,
         date: _selectedDate,
       );
-    } catch (_) {
+    } catch (e) {
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log('recalc', '❌ computeRowHints threw: $e',
+            exerciseId: current.exerciseId);
+      }
       return; // hint failure is non-fatal; typed values are unaffected
     }
     _mergeHintsIntoRow(rowIdx, hinted);
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log('recalc', 'hinted   ${Wes2HintTrace.fmtRow(hinted)}',
+          exerciseId: current.exerciseId);
+      Wes2HintTrace.log(
+          'recalc', 'final    ${Wes2HintTrace.fmtRow(_rows[rowIdx])}',
+          exerciseId: current.exerciseId);
+    }
   }
 
   /// Returns true when [actual] equals [hint] within floating-point tolerance.
