@@ -273,7 +273,28 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
   static const String _checkoutFunctionUrl =
       'https://createcheckoutsession-eot2loyyrq-uc.a.run.app';
 
-  // IAP state — iOS only; fields are never set on Android.
+  /// App Store product ID (auto-renewable subscription).
+  static const String _iosProductId = 'goodlift.membership.monthly';
+
+  /// Google Play product ID (subscription). This is the *product* ID, not the
+  /// base plan ID (`monthly-basic`) — Play Billing queries by product ID and
+  /// resolves the base plan/offer via the returned offer token.
+  static const String _androidProductId = 'goodlift_monthly';
+
+  /// Both store IDs — a purchase update is ours if it matches either.
+  static const Set<String> _membershipProductIds = {
+    _iosProductId,
+    _androidProductId,
+  };
+
+  /// True on the two platforms that have a native store we can purchase from.
+  static bool get _iapSupported => Platform.isIOS || Platform.isAndroid;
+
+  /// Product ID to query/purchase on the current platform.
+  static String get _storeProductId =>
+      Platform.isAndroid ? _androidProductId : _iosProductId;
+
+  // IAP state — iOS + Android; fields are never set on desktop.
   ProductDetails? _productDetails;
   bool _iapAvailable = false;
   bool _iapLoading = false;
@@ -282,7 +303,7 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
   @override
   void initState() {
     super.initState();
-    if (Platform.isIOS) {
+    if (_iapSupported) {
       _iapLoading = true; // disable button from first frame until query completes
       _initIAP();
     }
@@ -295,20 +316,35 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
   }
 
   Future<void> _initIAP() async {
+    final platform = Platform.isAndroid ? 'android' : 'ios';
+    final productId = _storeProductId;
+    debugPrint('[IAP] init platform=$platform');
+
     try {
-      // Attach before any await so no StoreKit events are missed during setup.
+      // Attach before any await so no store events are missed during setup.
       _purchaseSubscription =
           InAppPurchase.instance.purchaseStream.listen(_onPurchaseUpdate);
 
       _iapAvailable = await InAppPurchase.instance.isAvailable();
+      debugPrint('[IAP] available=$_iapAvailable');
       if (!_iapAvailable || !mounted) return;
 
-      final response = await InAppPurchase.instance
-          .queryProductDetails({'goodlift.membership.monthly'});
+      debugPrint('[IAP] querying productId=$productId');
+      final response =
+          await InAppPurchase.instance.queryProductDetails({productId});
 
       if (response.notFoundIDs.isNotEmpty) {
-        debugPrint(
-            '[IAP] Product not found in App Store: ${response.notFoundIDs}');
+        debugPrint('[IAP] notFoundIDs=${response.notFoundIDs}');
+      }
+      if (response.error != null) {
+        debugPrint('[IAP] query error=${response.error}');
+      }
+
+      // On Android a subscription returns one ProductDetails per base
+      // plan/offer, all sharing the same product ID; the first carries the
+      // offer token that buyNonConsumable needs. On iOS there is exactly one.
+      for (final p in response.productDetails) {
+        debugPrint('[IAP] product found id=${p.id} price=${p.price}');
       }
 
       if (response.productDetails.isNotEmpty && mounted) {
@@ -321,12 +357,17 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
 
   Future<void> _onPurchaseUpdate(List<PurchaseDetails> purchases) async {
     for (final purchase in purchases) {
-      if (purchase.productID != 'goodlift.membership.monthly') continue;
+      if (!_membershipProductIds.contains(purchase.productID)) continue;
+
+      debugPrint('[IAP] purchase update productId=${purchase.productID} '
+          'status=${purchase.status} '
+          'pendingCompletePurchase=${purchase.pendingCompletePurchase}');
 
       if (purchase.status == PurchaseStatus.purchased ||
           purchase.status == PurchaseStatus.restored) {
-        // TODO: Production must validate the App Store receipt server-side via a
-        // Cloud Function before fully trusting this client-side membership activation.
+        // TODO: Production must validate the App Store / Play Billing receipt
+        // server-side via a Cloud Function before fully trusting this
+        // client-side membership activation.
         final uid = FirebaseAuth.instance.currentUser?.uid;
         try {
           if (uid != null) {
@@ -338,19 +379,25 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                 .set({
               'active': true,
               'status': 'active',
-              'source': 'apple_iap',
+              'source':
+                  Platform.isAndroid ? 'google_play_billing' : 'apple_iap',
               'productId': purchase.productID,
               'purchaseId': purchase.purchaseID,
               'updatedAt': FieldValue.serverTimestamp(),
             }, SetOptions(merge: true));
+            debugPrint('[IAP] membership write succeeded');
           }
         } catch (e) {
-          debugPrint('[IAP] Firestore membership write failed: $e');
+          debugPrint('[IAP] membership write failed: $e');
         } finally {
-          // Always acknowledge — StoreKit will refund if not completed,
+          // Always acknowledge. StoreKit and Play Billing both auto-refund a
+          // purchase that is never completed/acknowledged — so this must run
           // even when the Firestore write above failed.
           if (purchase.pendingCompletePurchase) {
             await InAppPurchase.instance.completePurchase(purchase);
+            debugPrint('[IAP] completePurchase called');
+          } else {
+            debugPrint('[IAP] completePurchase not needed');
           }
         }
         if (mounted) {
@@ -359,7 +406,19 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
             const SnackBar(content: Text('Membership activated.')),
           );
         }
+      } else if (purchase.status == PurchaseStatus.pending) {
+        // Play Billing can park a purchase here for days (e.g. cash/voucher
+        // payment). Release the CTA so it is never permanently disabled, and
+        // do NOT activate membership — activation only happens on
+        // purchased/restored above.
+        if (mounted) {
+          setState(() => _iapLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Waiting for payment confirmation…')),
+          );
+        }
       } else if (purchase.status == PurchaseStatus.error) {
+        debugPrint('[IAP] purchase error=${purchase.error}');
         if (mounted) {
           setState(() => _iapLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -374,11 +433,17 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
           );
         }
       }
-      // PurchaseStatus.pending: StoreKit handles natively; _iapLoading stays true.
     }
   }
 
-  Future<void> _startApplePurchase(BuildContext context) async {
+  /// Launches the native store purchase sheet for the current platform.
+  ///
+  /// iOS  → StoreKit sheet for [_iosProductId].
+  /// Android → Google Play Billing sheet for [_androidProductId].
+  ///
+  /// No browser, no Stripe, no intermediate confirmation screen: the only step
+  /// after this is the store's own payment/auth UI.
+  Future<void> _startMembershipPurchase(BuildContext context) async {
     if (!_iapAvailable || _productDetails == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -390,12 +455,18 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
     }
     setState(() => _iapLoading = true);
     try {
+      // A subscription is bought with buyNonConsumable on both platforms. On
+      // Android the ProductDetails returned by queryProductDetails is a
+      // GooglePlayProductDetails, and the plugin reads its offer token off it —
+      // so the plain PurchaseParam is correct for our backwards-compatible
+      // `monthly-basic` base plan; no GooglePlayPurchaseParam is needed.
       final purchaseParam = PurchaseParam(productDetails: _productDetails!);
       await InAppPurchase.instance
           .buyNonConsumable(purchaseParam: purchaseParam);
       // Result arrives via purchaseStream → _onPurchaseUpdate.
-    } catch (_) {
+    } catch (e) {
       // buyNonConsumable threw synchronously (e.g. already in a purchase flow).
+      debugPrint('[IAP] buyNonConsumable threw: $e');
       if (mounted) setState(() => _iapLoading = false);
     }
   }
@@ -595,8 +666,9 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                         // Value bullets
                         ..._buildBullets(),
                         const SizedBox(height: 24),
-                        // Price line — iOS only, shown when App Store product is loaded
-                        if (Platform.isIOS && _productDetails != null) ...[
+                        // Price line — store-localised price, shown on iOS and
+                        // Android once the store product has loaded.
+                        if (_productDetails != null) ...[
                           Text(
                             '${_productDetails!.price} / month',
                             style: const TextStyle(
@@ -608,16 +680,16 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                           const SizedBox(height: 16),
                         ],
                         // Primary CTA
-                        // iOS → Apple IAP via StoreKit
-                        // else → website / Stripe via _openWebsiteWithUid
-                        // _startCheckout kept as fallback for non-IAP testing (dev / v1.1)
+                        // iOS → StoreKit sheet, Android → Google Play sheet.
+                        // Unsupported platforms (desktop) fall back to the web
+                        // page; _startCheckout is kept for non-IAP dev testing.
                         _AnimatedMembershipCta(
                           onPressed: _iapLoading
                               ? null
-                              : Platform.isIOS
-                                  ? () => _startApplePurchase(context)
+                              : _iapSupported
+                                  ? () => _startMembershipPurchase(context)
                                   : _openWebsiteWithUid,
-                          showLoadingSpinner: _iapLoading && Platform.isIOS,
+                          showLoadingSpinner: _iapLoading,
                         ),
                         const SizedBox(height: 12),
                         // Trust copy
@@ -636,8 +708,9 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                     ),
                   ),
 
-                  // iOS-only: restore + second CTA + legal text
-                  if (Platform.isIOS) ...[
+                  // Restore — both stores support it (StoreKit / Play queryPurchases);
+                  // restored purchases arrive via purchaseStream.
+                  if (_iapSupported) ...[
                     const SizedBox(height: 16),
                     TextButton(
                       onPressed: _iapLoading
@@ -645,6 +718,10 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                           : () => InAppPurchase.instance.restorePurchases(),
                       child: const Text('Restore purchases'),
                     ),
+                  ],
+
+                  // iOS-only: Apple legal disclosure + links
+                  if (Platform.isIOS) ...[
                     const SizedBox(height: 16),
                     // Apple subscription legal disclosure (required by App Store guidelines)
                     const Text(
