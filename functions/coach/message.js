@@ -121,12 +121,13 @@ function trainingParagraph(praises, seed) {
   });
 
   let text = '';
+  const closer = (last) => (last.endsWith('!') ? '' : ', great stuff 👌');
   if (parts.length === 1) {
     text = parts[0];
   } else if (parts.length === 2) {
-    text = `${parts[0]} ${parts[1]}, great stuff 👌`;
+    text = `${parts[0]} ${parts[1]}${closer(parts[1])}`;
   } else if (parts.length >= 3) {
-    text = `${parts[0]} ${parts[1]}, and ${parts[2]}, great stuff 👌`;
+    text = `${parts[0]} ${parts[1]}, and ${parts[2]}${closer(parts[2])}`;
   }
 
   if (completion) {
@@ -238,7 +239,12 @@ function composeDraft({ praises, bodyweight, gender, firstName, variantSeed }) {
   const g = greeting(gender, firstName, variantSeed);
   const paragraphs = [];
   if (training) paragraphs.push(`${g}, ${training}`);
-  if (bw) paragraphs.push(training ? bw : `${g}, ${lowerFirst(bw)}`);
+  if (bw) {
+    // The celebratory bodyweight lines say "too", which only reads right
+    // after a training paragraph; drop it when bodyweight opens the message.
+    const standalone = training ? bw : bw.replace(' too,', ',').replace(' too ', ' ');
+    paragraphs.push(training ? bw : `${g}, ${lowerFirst(standalone)}`);
+  }
   return paragraphs.join('\n\n');
 }
 
