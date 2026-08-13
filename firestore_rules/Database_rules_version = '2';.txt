@@ -360,6 +360,58 @@ service cloud.firestore {
 
 
     // ======================================================
+    // COACH CHECK-INS — ANALYTICS (server-generated PB state)
+    // ======================================================
+    // All documents under coachAnalytics are written exclusively by Cloud
+    // Functions (Admin SDK bypasses rules). Clients may only read, and only
+    // through the existing training-access gate, so a revoked coach loses
+    // access immediately and analytics can never be forged from a client.
+    match /coachAnalytics/{athleteUid} {
+      allow read: if canAccessTraining(athleteUid);
+      allow write: if false;
+    }
+    match /coachAnalytics/{athleteUid}/{doc=**} {
+      allow read: if canAccessTraining(athleteUid);
+      allow write: if false;
+    }
+
+    // ======================================================
+    // COACH CHECK-INS — COACH WORKSPACE (settings + reports)
+    // ======================================================
+    match /coachCheckIns/{coachUid} {
+      // Coach-only settings doc (timezone, scheduler watermark).
+      allow read: if isSelf(coachUid) || isSuperAdmin();
+      // Coach may set their timezone; the scheduler watermark is server-set.
+      allow create, update: if (isSelf(coachUid) || isSuperAdmin())
+        && request.resource.data.diff(resource == null ? {} : resource.data)
+             .changedKeys().hasOnly(['timezone', 'updatedAt']);
+      allow delete: if isSuperAdmin();
+
+      // Per-athlete reporting settings. Coach controls the settings fields;
+      // praise/coverage bookkeeping is server-written only, and settings can
+      // only be created for an athlete the coach is actually assigned to.
+      match /athletes/{athleteUid} {
+        allow read: if isSelf(coachUid) || isSuperAdmin();
+        allow create, update: if (isSuperAdmin()
+          || (isSelf(coachUid) && isCoachFor(athleteUid)))
+          && request.resource.data.diff(resource == null ? {} : resource.data)
+               .changedKeys().hasOnly([
+                 'reportingEnabled', 'goal', 'messageExerciseMode',
+                 'customExerciseIds', 'displayName', 'updatedAt', 'enabledAt'
+               ]);
+        allow delete: if isSelf(coachUid) || isSuperAdmin();
+      }
+
+      // Generated checkpoint reports: read-only for the coach. All state
+      // transitions (copy / undo / skip) go through callable functions so
+      // coverage freezing and praise bookkeeping stay server-authoritative.
+      match /reports/{reportId} {
+        allow read: if isSelf(coachUid) || isSuperAdmin();
+        allow write: if false;
+      }
+    }
+
+    // ======================================================
     // EMAIL → UID LOOKUP
     // ======================================================
     match /user_lookup/{hash} {

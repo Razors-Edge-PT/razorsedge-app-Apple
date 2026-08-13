@@ -9,6 +9,7 @@ import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'app_check_ready.dart';
+import 'coach_weekly_review_screen.dart';
 
 String emailHash(String email) {
   final lower = email.trim().toLowerCase();
@@ -374,6 +375,20 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
           elevation: 0,
           actionsIconTheme: IconThemeData(color: Theme.of(context).colorScheme.secondary),
           actions: [
+            // Weekly Review / bi-weekly check-ins (coach-only screen)
+            IconButton(
+              tooltip: 'Weekly Review / Check-ins',
+              icon: const Icon(Icons.fact_check_outlined),
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                    value: context.read<UserContext>(),
+                    child: const CoachWeeklyReviewScreen(),
+                  ),
+                ));
+              },
+            ),
+
             // Coach path: add by email (will fail if rules block coach from writing 'athletes')
             IconButton(
               tooltip: 'Add athlete by email',
