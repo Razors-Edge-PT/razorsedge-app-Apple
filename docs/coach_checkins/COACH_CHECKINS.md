@@ -11,187 +11,274 @@ runtime LLM. Message text is produced from deterministic templates.
 ## Architecture
 
 ```
-workout write ──▶ coachAnalyticsOnWorkoutWrite ──▶ per-exercise history +
-                                                   deterministic PB events
-enable athlete ─▶ coachOnAthleteSettingsWritten ─▶ one-time bounded bootstrap
-hourly ─────────▶ coachCheckpointScheduler ──────▶ Mon/Thu report docs
-Copy button ────▶ coachPrepareCheckInCopy ───────▶ freeze coverage + live BW
-                                                   recheck + final text
+workout write ──▶ coachAnalyticsOnWorkoutWrite ──▶ bounded fast-path append
+                                                   or per-exercise rebuild
+enable athlete ─▶ coachOnAthleteSettingsWritten ─▶ atomic bootstrap claim
+assignment edit ▶ coachOnAthleteAssignmentsWritten / coachOnCoachAssignments-
+                  Written ─▶ immediate revocation cleanup
+hourly ─────────▶ coachCheckpointScheduler ──────▶ Mon/Thu reports + catch-up
+dashboard open ─▶ coachReviewContext (callable) ─▶ coach-local today/checkpoint
+                                                   + live weigh-in staleness
+Copy ───────────▶ coachPrepareCheckInCopy ───────▶ atomic freeze + finalText
 Undo ───────────▶ coachUndoCheckIn               Skip ─▶ coachSkipCheckIn
 ```
 
 Pure business logic lives in `functions/coach/{e1rm,pb_engine,coverage,
-bodyweight,praise,message}.js` (no Firebase imports, covered by
-`functions/test/*.test.js` via `npm test` → `node --test`). The Flutter
-mirror of the coverage/staleness rules is `lib/coach_checkins_logic.dart`
-(covered by `test/coach_checkins_logic_test.dart`).
+bodyweight,praise,message,draft,enrollment,authz,analytics_store,
+checkin_txns}.js` (unit-tested with `npm test` → `node --test`). The
+Firestore-bound layer is `functions/coach/index.js`. The Flutter mirror of
+display-only helpers is `lib/coach_checkins_logic.dart`.
 
-## Firestore schema (new collections)
+## Assignment / approval model (authoritative)
+
+A coach is authorised for an athlete when EITHER:
+
+1. **Admin-seeded**: `coachAssignments/{coachUid}.athletes[athleteUid]` is any
+   non-null entry (the app seeds `{email}` objects), OR
+2. **Athlete-approved**: `athleteAssignments/{athleteUid}
+   .coaches[coachUid].approved === true` — strictly boolean `true` on an
+   object entry. Pending requests, `approved: false`, malformed entries or
+   mere key presence grant **nothing**.
+
+Backend (`functions/coach/authz.js`) and rules (`firestore.rules
+isCoachFor()`) implement identical checks. Every athlete-specific callable
+revalidates the relationship at invocation time. There is exactly one
+hardcoded superadmin UID (unchanged from the existing app).
+
+**Immediate revocation**: triggers on both assignment collections re-evaluate
+every affected coach⇄athlete pair on write. When no valid source remains the
+server disables reporting (`disabledReason: 'assignment-revoked'`) and
+removes the coach from `coachAnalytics.enabledBy` immediately; if another
+valid source (or another enabled coach) remains, access/analytics are
+preserved. The scheduler repeats the check as defence in depth. Rules deny a
+revoked coach all reads instantly (settings via `isCoachFor(athleteUid)`,
+reports via `isCoachFor(resource.data.athleteUid)` — the report's embedded
+athlete identity, not the caller-supplied path).
+
+## Firestore schema (final)
 
 ### `coachAnalytics/{athleteUid}` — server-written only
 | field | meaning |
 |---|---|
 | `enabledBy.{coachUid}: true` | which coaches have reporting enabled |
-| `analyticsVersion` (2), `e1rmFormulaVersion` | engine/formula versioning |
-| `bootstrapStatus` | `running` / `complete` / `error` (+ `bootstrapAt`, `bootstrapAtMs`, `bootstrapError`) |
-| `dirtyDates: [dateKey]` | workout days written while a bootstrap runs (drained by the reconciliation loop) |
+| `analyticsVersion` (2), `e1rmFormulaVersion` (1) | storage/formula generations |
+| `bootstrapStatus` | `running` / `complete` / `error` |
+| `bootstrapRunId`, `bootstrapAt`, `bootstrapAtMs`, `bootstrapError` | run ownership + freshness |
+| `dirtyDates: [dateKey]` | workout days written while a bootstrap runs |
+| `e1rmRebaselinedAtKey` | E1RM praise floor set by a formula-change rebaseline |
 
 - `…/exerciseDays/{exerciseId}_{dateKey}`: `{exerciseId, dateKey, day:
   {name, bestByReps, bestE1rm, bestE1rmSet}}` — one small bounded doc per
-  exercise per trained day. This replaces the former per-exercise `history`
-  map, so **no analytics document grows with training history**. Both lookups
-  the engine needs are single-field equality queries: all days for an
-  exercise (`exerciseId ==`) and all exercises touched on a date
-  (`dateKey ==`).
-- `…/exercises/{exerciseId}`: bounded summary only — `name`,
-  `repBest: {reps: {weightKg, dateKey}}` (≤ one entry per distinct rep
-  count), `e1rmBest`, `formulaVersion`, `dayCount`, `updatedAt`.
-- `…/events/{eventId}`: deterministic ids `YYYY-MM-DD_exerciseId_repN` /
-  `YYYY-MM-DD_exerciseId_e1rm`, fields `type`, `dateKey`, `exerciseId`,
-  `exerciseName`, `reps`, `weightKg`, `prevWeightKg`, `e1rmKg`, `prevE1rmKg`,
-  `pctImprovement`, `formulaVersion`.
-
-Milestone facts are NOT stored athlete-globally: detection is computed from
-rolling averages at report/copy time and praise suppression is per-coach (see
-`praisedMilestones` below), so coaches never suppress each other.
+  exercise per trained day; **no document grows with history**. Lookups are
+  single-field queries: `exerciseId ==` (rebuild), `dateKey ==` (touched
+  detection), `dateKey <` + orderBy desc limit 1 (last-trained fallback).
+- `…/exercises/{exerciseId}`: bounded summary + provenance — `name`,
+  `repBest{reps→{weightKg,dateKey}}` (≤ one entry per distinct rep count),
+  `e1rmBest`, `latestDateKey` (fast-path watermark), `formulaVersion`,
+  `dayCount`, `updatedAt`.
+- `…/events/{YYYY-MM-DD_exerciseId_repN | _e1rm}`: deterministic ids;
+  `type`, `dateKey`, `exerciseId`, `exerciseName`, `reps`, `weightKg`,
+  `prevWeightKg`, `e1rmKg`, `prevE1rmKg`, `pctImprovement`, `formulaVersion`.
 
 ### `coachCheckIns/{coachUid}`
-- Root doc: `timezone` (IANA, coach-editable, default `Pacific/Auckland`),
-  `lastCheckpointKey` (scheduler watermark, server-written — also the
-  client's **authoritative checkpoint identity**: the Weekly Review screen
-  always prefers it over any device-derived date, so a device timezone
-  mismatch can never change which report is shown).
-- `…/athletes/{athleteUid}`: coach-editable `reportingEnabled`, `goal`
-  (`cut|bulk|maintain`), `goalSetAt` (epoch ms, stamped when the goal
-  changes — starts a new milestone praise phase), `messageExerciseMode`
-  (`automatic|custom`), `customExerciseIds[]`, `displayName`, `enabledAt`,
-  `updatedAt`; server-written `praisedWeeks: {weekStartKey: reportId}`,
-  `praisedMilestones: {"cut_110@<goalSetAt>": {reportId, dateKey}}`,
-  `lastFinalizedCoverageEnd`, `disabledReason`, `disabledAt`.
-- `…/reports/{athleteUid}_{checkpointKey}`: server-generated; `status`
-  (`draft|copied|skipped|expired`), `checkpointKey`, `weekday`,
-  `prevCheckpointKey`, `maxStartKey`, embedded `events[]` (max window),
-  `workoutDates[]`, `completion`, `fallbackWeek`, `bodyweight`,
-  `variantSeed`, `gender`, `firstName`, `draftIfPrevCopied`,
-  `draftIfPrevNotCopied`; after copy also `copiedAt`, `coverageStart/End`,
-  `finalText`, `liveBodyweight`, `praisedWeekKey`, `milestoneAwarded`,
-  `prevLastFinalizedCoverageEnd` (for undo).
+- Root doc: `timezone` (IANA, coach-editable, validated in rules AND
+  re-validated server-side with a `Pacific/Auckland` fallback so a malformed
+  value can never break the scheduler), `lastCheckpointKey` (server-only
+  scheduler watermark — bounds catch-up scanning; NOT the dashboard's
+  checkpoint identity).
+- `…/athletes/{athleteUid}` — coach-editable (whitelisted + value-validated
+  in rules, live assignment required): `reportingEnabled` (bool), `goal`
+  (`cut|bulk|maintain`), `messageExerciseMode` (`automatic|custom`),
+  `customExerciseIds[]` (≤100), `displayName`, `enabledAt`, `updatedAt`.
+  Server-only (unreachable from clients, doc undeletable by coaches):
+  `goalSetAt` (epoch ms — stamped by the settings trigger ONLY when the goal
+  value genuinely changes), `praisedWeeks{weekStartKey→reportId}` (pruned to
+  26 weeks at copy), `praisedMilestones{"cut_110@<goalSetAt>"→{reportId,
+  dateKey}}` (pruned to the current phase at copy), `lastFinalizedCoverageEnd`,
+  `disabledReason`, `disabledAt`.
+- `…/reports/{athleteUid_checkpointKey}` — server-generated, client
+  read-only: `athleteUid`, `checkpointKey`, `weekday`, `status`
+  (`draft|copied|skipped|expired`), `variantSeed`, `gender`, `firstName`,
+  `displayName`, `prevCheckpointKey`, `maxStartKey`, embedded `events[]`
+  (max window), `workoutDates[]`, `completion`, `fallbackWeek`,
+  `blockStartKey`, `bodyweight`, `e1rmPraiseFloorKey`, `draftIfPrevCopied`,
+  `draftIfPrevNotCopied`, versions; after copy: `copiedAtMs`,
+  `coverageStart/End`, `finalText`, `liveBodyweight`, `praisedWeekKey`,
+  `milestoneAwarded`, `prevLastFinalizedCoverageEnd` (undo support).
+  `copiedAtMs` is the stand-in for a future `sentAt`.
 
-## Key rules of the system
+## Analytics engine
 
-- **E1RM (coach analytics)**: `weight + reps` only, RIR always ignored.
-  Matches `PeriodizationModelUtils.calculateE1RM(w, r, 0)`: Brzycki
-  `w*36/(37-r)` for ≤25 reps, Epley `w*(1+0.0333r)` above. Versioned via
-  `E1RM_FORMULA_VERSION`; bumping the version and re-running the bootstrap
-  re-baselines history without creating "new PB today" events (events only
-  exist on historical days that strictly improved on prior history).
-- **Rep-target PB**: same athlete + exerciseId + exact rep count, strictly
-  more weight. First-ever result is a baseline, not a PB. Day-best collapse
-  prevents multi-set spam. Sets need weight>0 and reps>0.
-- **Edits/deletes**: the workout trigger recomputes each touched exercise's
-  full event stream from its per-day docs (deterministic ids), so PB state
-  self-heals rather than staying stale. Touched exercises are the union of
-  the current document's exercises and the exercises with an existing day doc
-  for that date, so removals are detected without a before-snapshot.
-- **Bootstrap concurrency**: while `bootstrapStatus == 'running'` the workout
-  trigger transactionally defers each written dateKey into `dirtyDates`
-  instead of applying it. After its bulk rebuild, the bootstrap drains
-  `dirtyDates` by replaying each day from its current workout doc, and the
-  completion transaction flips to `complete` only when `dirtyDates` is empty
-  — so a workout created/edited/deleted mid-bootstrap is reconciled before
-  the bootstrap reports complete, with no later write needed. A crashed
-  'running' state older than 15 minutes never acts as a lock.
-- **Coverage state machine**: reports always run Mon+Thu; the draft's window
-  start is the previous checkpoint if that message was *copied*, else the
-  same weekday 7 days back, clamped to the last finalised-copied coverage
-  end (no overlap/double praise). Drafts stay dynamic until copied; copy
-  freezes coverage; undo is allowed while no newer checkpoint is finalised;
-  drafts older than the previous checkpoint auto-expire.
-- **Weekly completion** is judged per block-anchored training week
-  (`weekIndex = daysSinceBlockStart ~/ 7`, planned = day docs with non-empty
-  `exercises`, completed = workout day docs with any weight>0 & reps>0 set —
-  identical to `HomeV2CalendarService`), independent of Mon/Thu windows, and
-  praised at most once per week (`praisedWeeks`).
-- **Bodyweight**: `users/{uid}/weights` docs collapsed to one value per day
-  (AM preferred, PM fallback; missing `tod` = AM per app back-compat).
-  Rolling 7-day average vs the preceding 7 days; a single weigh-in in a
-  window is enough. Maintain band = ±1 % of the previous average. Weigh-in
-  staleness: 3 days = due, 4+ = overdue, computed from the latest weigh-in at
-  read time. Bodyweight is re-checked **live** inside the copy callable;
-  training achievements stay frozen to the checkpoint.
-- **10 kg milestones**: detection (rolling-average decade crossing in the
-  goal's direction) is objective and recomputed at report/copy time; the
-  "already praised" state is coach-owned bookkeeping in that coach's
-  `praisedMilestones`, keyed per goal phase (`goalSetAt`). Two coaches never
-  suppress each other, undo removes only that coach's entry, oscillation
-  within a phase stays suppressed, and a later goal phase can legitimately
-  praise the same boundary again. Recorded only when a copy actually goes
-  out.
-- **Disable / revocation**: disabling removes the coach from `enabledBy`;
-  when no coach remains, the workout trigger stops all maintenance after a
-  single read. The scheduler auto-disables athletes whose assignment was
-  revoked (writes `reportingEnabled: false`, `disabledReason:
-  'assignment-revoked'`). Re-enabling after any maintenance gap always
-  re-runs the bounded bootstrap, so no future workout write is needed to
-  close the gap.
+- **Fast path (normal chronological append)** — bounded regardless of
+  history size: 1 summary read + 1 day-doc read + 1 day write + ≤(distinct
+  reps + 1) event writes + 1 summary write. Applies when the written day is
+  strictly later than `latestDateKey` and has no existing day doc. Proven
+  equivalent to a full chronological rebuild (property test) and proven
+  bounded by instrumented store counters.
+- **Rebuild fallback** — edit, delete, out-of-order insert, exercise
+  removal, retried delivery of an existing day: reads that ONE exercise's
+  day docs + event ids, patches the day in memory, rewrites summary/events
+  deterministically (deterministic event ids self-heal stale events).
+- **Concurrency**: each exercise reconciles inside `withExerciseLock` — a
+  Firestore transaction in production (reads before writes), an async mutex
+  in the memory-store tests — so simultaneous triggers for any mix of dates
+  and exercises serialise per exercise and converge to the clean-rebuild
+  result (emulator-verified). The workout trigger is deployed with
+  `retry: true`; every path is idempotent, so at-least-once delivery is safe.
 
-## Security
+## Bootstrap (atomic ownership)
 
-- `coachAnalytics/**`: read via existing `canAccessTraining()` (self,
-  assigned coach, super admin); client writes always denied — only Cloud
-  Functions (Admin SDK) write, so PB/report integrity can't be forged.
-- `coachCheckIns/{coachUid}/**`: readable only by that coach (+ super
-  admin). Settings writes are key-restricted; per-athlete settings can only
-  be created for athletes passing the existing `isCoachFor()` assignment
-  check. Reports are client-read-only; copy/undo/skip go through callables
-  which re-verify `coachAssignments` / `athleteAssignments` server-side.
-- Existing coach approval model (`athleteAssignments` / `coachAssignments` /
-  `accessRequests`) is reused untouched.
+1. **Claim** (transaction): decides `skip-fresh` (a live run exists) /
+   `skip-ready` (analytics already complete on current versions, unless the
+   registration follows a maintenance gap) / `claim` — writing
+   `bootstrapRunId`, `bootstrapAtMs`, `dirtyDates: []`. A formula-version
+   change also stamps `e1rmRebaselinedAtKey`.
+2. **Scan + wholesale rebuild**: paged chronological workout scan; the three
+   analytics collections are cleared and rebuilt (only the owning run may
+   destroy — ownership re-verified before deletion).
+3. **Drain**: while `running`, the workout trigger transactionally defers
+   written dateKeys into `dirtyDates`; the run drains them by replaying each
+   day from its CURRENT workout doc. The completion transaction flips to
+   `complete` only when `dirtyDates` is empty AND the run still owns the
+   state — so a mid-bootstrap create/edit/delete is reconciled before
+   completion, with no later write needed.
+4. **Takeover**: a `running` claim older than 15 minutes is stale; a new
+   claim replaces the runId. The zombie run's drain/complete/error writes
+   all verify ownership first and abort silently — it can never clear a
+   newer run's dirty dates, overwrite its status or mark it complete
+   (emulator-verified).
 
-## Cost profile
+## Reports & scheduling
 
-- Dashboard open: per enabled athlete = 2 report direct-gets + 1 latest
-  weigh-in read (+ settings listing). No workout scans.
-- Workout write: 1 state read; if not enrolled, that's all. If enrolled,
-  reads/writes only the touched exercises' docs + their event diffs.
-- Scheduler: 1 coach-doc read per coach per hour; full generation only twice
-  a week per coach (watermarked), with bounded per-athlete reads
-  (~30 docs/athlete/checkpoint).
-- Bootstrap: one paged scan of the athlete's workouts, only when a coach
-  enables reporting (or after a formula-version bump).
+- **Readiness gate**: `generateReport` throws unless
+  `bootstrapStatus == 'complete'` on the current `analyticsVersion` AND
+  `e1rmFormulaVersion` (after one self-heal attempt). No report is ever
+  fabricated from missing/failed/mid-bootstrap analytics; the slot stays
+  empty and retries. Other athletes generate normally (emulator-verified).
+- **Catch-up**: each hourly run computes `pendingCheckpoints(watermark,
+  coach-local today)` — the ascending Mon/Thu keys still unprocessed,
+  bounded to the 4 most recent. A missed Thursday is generated on Friday
+  with its training window still frozen to the Thursday cutoff. A new coach
+  (no watermark) gets exactly the most recent checkpoint (first-checkpoint
+  policy: enabling reporting retroactively generates the latest Mon/Thu
+  report, nothing older).
+- **Watermark ≠ identity**: the dashboard's checkpoint identity comes from
+  `coachReviewContext` (pure timezone computation), so one failing athlete
+  never hides other athletes' finished reports; the watermark advances
+  contiguously over fully-successful checkpoints purely to bound rescanning.
+- Timezones use `Intl` with IANA ids (DST-safe); values are validated and
+  fall back to `Pacific/Auckland`.
+
+## Copy / Undo / Skip (atomic)
+
+All decision inputs are re-read INSIDE the transaction: report status,
+previous + newer checkpoint statuses, `lastFinalizedCoverageEnd`, praise and
+milestone maps, goal phase. Consequences (emulator-verified):
+concurrent Copy+Copy is idempotent (identical frozen text; the response IS
+the committed `finalText`); Copy vs Skip — exactly one wins; an older draft
+cannot finalise after a newer checkpoint (and coverage clamps to the last
+finalised end, so overlap is impossible); praise is recorded once; Undo
+removes only entries pointing at that report's id, restores the previous
+coverage watermark only if unchanged, and is blocked once anything newer is
+finalised. Live bodyweight numbers are pre-fetched (athlete data, not state);
+the milestone award decision is made in-txn from transactional praise state.
+
+The Flutter copy flow: callable returns `finalText` → the card re-renders
+that exact string → the same string goes to the clipboard (failures show a
+dialog with the selectable text and a retry — the UI never claims success on
+a failed clipboard write; copied cards also offer "copy again").
+
+## E1RM formula & rebaseline
+
+Exact parity with `PeriodizationModelUtils.calculateE1RM(w, r, 0)`:
+Brzycki `w * (36 / (37 - r))` for ≤ 25 reps, Epley `w * (1 + 0.0333 * r)`
+above (the repository's exact expression; both suites pin identical
+constants). `E1RM_FORMULA_VERSION` is stamped everywhere. A version bump
+re-bootstraps and stamps `e1rmRebaselinedAtKey`; E1RM events dated before
+that floor stay visible to the coach but are NEVER praise-eligible, so a
+formula change alone cannot produce "new E1RM PB" praise; a genuine lift
+after the floor praises exactly once. Rep-target history is
+formula-independent and untouched.
+
+## Bodyweight
+
+`users/{uid}/weights/{autoId}` read-only, explicit `orderBy(timestamp)`;
+per-day collapse prefers AM over PM and resolves same-day/same-TOD
+duplicates to the latest timestamp (matches BodyWeightTracker). Rolling
+7-day `[D-7,D)` vs preceding `[D-14,D-7)`; one weigh-in per window suffices;
+maintain band ±1 %; cut/bulk directional. Staleness (3 days due, 4+ overdue)
+is computed in the coach timezone — for the dashboard via
+`coachReviewContext`, at copy time inside the callable. 10 kg milestones are
+detected from rolling averages; praise suppression is per-coach and
+per-goal-phase (`goalSetAt`, server-stamped only on genuine goal changes),
+so oscillation can't repeat praise, coaches can't suppress each other, undo
+un-awards, and a later legitimate phase can praise the same boundary again.
+
+## Cost profile (bounded everywhere)
+
+- Normal workout append: ~4 reads + ~4 writes per touched exercise,
+  independent of history length.
+- Edit/delete: one exercise's day docs + events (bounded by that exercise's
+  training days), only for touched exercises.
+- Bootstrap: one paged scan per athlete, only at enablement/formula change.
+- Dashboard: assignment lookups + 1 settings get + 2 report gets per
+  athlete + one context callable (1 weigh-in read per athlete). No workout
+  scans, no polling.
+- Scheduler: 1 coach-doc read per coach per hour when idle; bounded
+  generation (≈30 reads/athlete/checkpoint) at most 4 checkpoints deep.
+- Praise maps pruned at copy; `dirtyDates` drained by the owning run.
 
 ## Indexes
 
-No composite indexes are required. All queries are single-field
-(`isActive`, `timestamp`, `reportingEnabled`, `dateKey` range,
-`exerciseId` equality, documentId ordering), which Firestore auto-indexes.
+None required: every query is single-field (equality, or range+order on the
+same field), which Firestore auto-indexes. `firestore.rules` is the
+canonical rules file (the copy in `firestore_rules/` is kept in sync for the
+console-managed legacy workflow).
 
-## Deployment checklist (manual — nothing is deployed by this branch)
+## Testing
 
-1. **Rules**: apply the updated `firestore_rules/Database_rules_version =
-   '2';.txt` in the Firebase console (rules are console-managed in this
-   project; the file is the source of truth copy).
-2. **Functions**: `cd functions && npm install && npm test && npm run deploy`
-   (deploys the six new functions alongside the untouched existing ones).
-   The scheduler needs Cloud Scheduler enabled (v2 `onSchedule` provisions
-   the job automatically on deploy).
-3. **No data migration**: nothing runs until a coach enables an athlete;
-   enabling triggers that athlete's bounded bootstrap automatically.
-   Re-running a bootstrap is safe (idempotent rebuild).
-4. **Timezone**: defaults to `Pacific/Auckland`; coaches can change it from
-   the Weekly Review screen (clock icon).
+- `cd functions && npm test` — 127 pure unit tests (`node --test`).
+- `cd functions && npm run test:rules` — 27 emulator tests: full rules
+  matrix (19) + adapter/bootstrap/copy-concurrency integration (8).
+  Requires **Java 21+** (firebase-tools ≥ 15); e.g. on a dev machine:
+  `JAVA_HOME=<jdk21>` (Android Studio's `jbr` works).
+- `flutter test` — includes `test/coach_checkins_logic_test.dart`
+  (coverage mirror, checkpoint identity, copy UX, E1RM parity pins).
 
-## Known limitations
+## Deployment (in order — nothing is deployed by this branch)
 
-- Draft previews on the dashboard are the generation-time variants; the
-  authoritative text (live bodyweight, praise dedup) is produced at copy
-  time. On Copy the card immediately re-renders the exact server-returned
-  finalText, which is also the exact clipboard content.
-- The weigh-in staleness badge on the dashboard uses the device calendar
-  date for the "days since" count (day-level granularity; checkpoint
-  identity itself is always server/coach-timezone derived).
-- `copiedAt` is the stand-in for a future `sentAt`; an automated-send system
-  can replace the copy callable while keeping the same frozen-coverage state
-  machine.
-- There are no automated Firestore security-rules tests in this repository;
-  the rules were audited by inspection (see the rules file).
+1. **Rules**: `firebase deploy --only firestore:rules` (deploys
+   `firestore.rules`; identical content is mirrored in `firestore_rules/`
+   for the console workflow — verify in the console after deploy).
+2. **Functions**: `cd functions && npm install && npm test && firebase
+   deploy --only functions` — deploys the nine coach functions alongside the
+   untouched existing ones (`repointsMonthlyAggregator`, Stripe). The v2
+   `onSchedule` auto-provisions the hourly Cloud Scheduler job (enable the
+   Cloud Scheduler API once per project).
+3. **No migration / backfill**: nothing runs until a coach enables an
+   athlete (per-athlete bounded bootstrap on enablement, idempotent, safe to
+   retry). If any athlete was enabled on a pre-`analyticsVersion 2` build,
+   the readiness gate re-bootstraps them automatically at the next
+   checkpoint.
+4. **Rollback**: functions can be rolled back by redeploying the previous
+   revision; analytics collections are derived data and can be dropped +
+   re-bootstrapped at any time; reports/settings are additive and unused by
+   the rest of the app.
+5. **Monitoring**: watch Cloud Functions logs for `coach bootstrap failed`,
+   `report generation failed`, `checkpoint sweep failed`,
+   `auto-disabling revoked coach/athlete enrollment`, and Eventarc retry
+   volumes on `coachAnalyticsOnWorkoutWrite`.
+
+## Known (non-blocking) limitations
+
+- An extreme single-exercise rebuild (>~450 PB events for one exercise)
+  would exceed one transaction's write budget; realistic athletes are far
+  below this.
+- Continuous pathological writes during a bootstrap could exhaust the
+  20 drain rounds → `error` status, self-healed at the next enablement or
+  checkpoint; state is never silently wrong, only delayed.
+- A workout write racing a revocation may be maintained into the athlete's
+  (athlete-owned, objective) analytics once before `enabledBy` cleanup
+  lands; the revoked coach can read none of it.
+- The timezone picker offers a curated IANA list; other zones require
+  extending the list (server validates whatever is stored).

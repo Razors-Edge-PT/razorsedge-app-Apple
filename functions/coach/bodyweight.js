@@ -22,7 +22,11 @@ const GOALS = ['cut', 'bulk', 'maintain'];
 const MAINTAIN_BAND = 0.01;        // ±1 % of previous average counts as stable
 const TREND_EPSILON_KG = 0.05;     // below this |delta| treat as flat for cut/bulk
 
-/** Collapse raw entries to per-day values (AM preferred, else PM). */
+/** Collapse raw entries to per-day values (AM preferred, else PM).
+ *  Duplicate entries for the same day+TOD resolve deterministically to the
+ *  one with the LATEST timestamp (tsMillis), matching the app's
+ *  newest-first collapse in BodyWeightTracker; entries without a timestamp
+ *  sort before any timestamped entry. */
 function collapsePerDay(entries) {
   const byDay = {};
   for (const e of entries || []) {
@@ -30,14 +34,15 @@ function collapsePerDay(entries) {
     const w = Number(e.weightKg);
     if (!Number.isFinite(w) || w <= 0) continue;
     const tod = e.tod === 'pm' ? 'pm' : 'am';
+    const ts = Number.isFinite(e.tsMillis) ? e.tsMillis : -1;
     const cur = byDay[e.dateKey] || {};
-    // keep the last entry seen per tod (mirrors newest-first collapse in app)
-    if (!(tod in cur)) cur[tod] = w;
+    const prev = cur[tod];
+    if (!prev || ts >= prev.ts) cur[tod] = { w, ts };
     byDay[e.dateKey] = cur;
   }
   const out = {};
   for (const [dateKey, v] of Object.entries(byDay)) {
-    out[dateKey] = 'am' in v ? v.am : v.pm;
+    out[dateKey] = v.am ? v.am.w : v.pm.w;
   }
   return out;
 }
@@ -170,6 +175,42 @@ function awardedForPhase(praisedMilestones, goalPhase) {
   return out;
 }
 
+// ── Bounded praise bookkeeping ──────────────────────────────────────────────
+//
+// praisedWeeks / praisedMilestones live on the coach's per-athlete settings
+// doc. Both are pruned inside the copy transaction so neither map can grow
+// indefinitely:
+//   – praisedWeeks: message windows only look back days and completion
+//     candidates only cover recent training weeks, so entries older than
+//     ~26 weeks can never be consulted again.
+//   – praisedMilestones: awardedForPhase only ever consults the CURRENT goal
+//     phase, and a phase id is never reused (each goal change stamps a fresh
+//     goalSetAt), so entries from other phases are dead and safe to drop.
+
+const PRAISED_WEEKS_RETENTION_DAYS = 26 * 7;
+
+function prunePraisedWeeks(praisedWeeks, todayKey) {
+  const out = {};
+  if (!praisedWeeks) return out;
+  for (const [weekKey, v] of Object.entries(praisedWeeks)) {
+    if (typeof weekKey === 'string'
+        && daysBetween(weekKey, todayKey) <= PRAISED_WEEKS_RETENTION_DAYS) {
+      out[weekKey] = v;
+    }
+  }
+  return out;
+}
+
+function prunePraisedMilestones(praisedMilestones, goalPhase) {
+  const out = {};
+  if (!praisedMilestones) return out;
+  const suffix = `@${(goalPhase === null || goalPhase === undefined || goalPhase === '') ? 'p0' : String(goalPhase)}`;
+  for (const [key, v] of Object.entries(praisedMilestones)) {
+    if (key.endsWith(suffix)) out[key] = v;
+  }
+  return out;
+}
+
 /**
  * Weigh-in staleness from the most recent valid weigh-in date.
  * @returns {'ok'|'due'|'overdue'}  due at 3 calendar days, overdue at 4+.
@@ -202,6 +243,9 @@ module.exports = {
   detectMilestone,
   milestonePraiseKey,
   awardedForPhase,
+  prunePraisedWeeks,
+  prunePraisedMilestones,
+  PRAISED_WEEKS_RETENTION_DAYS,
   weighInStatus,
   daysBetween,
 };

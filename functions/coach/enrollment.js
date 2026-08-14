@@ -1,11 +1,15 @@
-// Enrollment / maintenance decision logic for coach analytics. Pure module.
+// Enrollment / maintenance / bootstrap-ownership decision logic for coach
+// analytics. Pure module.
 //
 // The athlete-level analytics state doc (coachAnalytics/{athleteUid}) carries:
-//   enabledBy:       { [coachUid]: true }   which coaches want reporting
-//   bootstrapStatus: 'running' | 'complete' | 'error'
-//   dirtyDates:      [dateKey]  workout days written while a bootstrap runs
+//   enabledBy:        { [coachUid]: true }   which coaches want reporting
+//   bootstrapStatus:  'running' | 'complete' | 'error'
+//   bootstrapRunId:   unique id of the run that owns the current bootstrap
+//   bootstrapAtMs:    claim time (freshness / crashed-owner takeover)
+//   dirtyDates:       [dateKey]  workout days written while a bootstrap runs
+//   analyticsVersion / e1rmFormulaVersion: schema + formula generations
 //
-// These pure functions define every decision the Firebase layer makes so the
+// Every decision the Firebase layer makes is defined here so the
 // concurrency/enrollment semantics are unit-testable without an emulator.
 
 'use strict';
@@ -14,10 +18,11 @@
  * What the workout-write trigger should do for a given analytics state.
  *   'skip'  – nobody has reporting enabled → no maintenance work at all
  *   'defer' – a bootstrap is running → record the dateKey in dirtyDates and
- *             let the bootstrap's reconciliation loop process it
+ *             let the owning run's reconciliation loop process it
  *   'apply' – maintain incrementally
  * The caller evaluates this INSIDE a transaction on the state doc, so the
- * decision is atomic with respect to the bootstrap's completion transaction.
+ * decision is atomic with respect to the bootstrap's claim/completion
+ * transactions.
  */
 function workoutTriggerDecision(stateData) {
   if (!stateData) return 'skip';
@@ -42,27 +47,34 @@ function settingsTransition(before, after) {
 }
 
 /**
+ * Whether analytics are fully ready to serve reports: bootstrap complete on
+ * the current storage schema and E1RM formula generation.
+ */
+function analyticsReady(stateData, { formulaVersion, analyticsVersion }) {
+  if (!stateData) return false;
+  if (stateData.bootstrapStatus !== 'complete') return false;
+  if (stateData.e1rmFormulaVersion !== formulaVersion) return false;
+  if (stateData.analyticsVersion !== analyticsVersion) return false;
+  return true;
+}
+
+/**
  * Whether (re-)registering must run the bounded per-athlete bootstrap.
  *
- * @param stateData        current analytics state (or null)
- * @param formulaVersion   the engine's current E1RM formula version
  * @param maintenanceWasOff true when enabledBy was empty before this
  *        registration: while nobody is enabled the workout trigger skips all
  *        maintenance, so any gap must be closed by a fresh bootstrap even if
  *        the previous one had completed.
  */
-function needsBootstrap(stateData, formulaVersion, maintenanceWasOff) {
+function needsBootstrap(stateData, versions, maintenanceWasOff) {
   if (maintenanceWasOff) return true;
-  if (!stateData) return true;
-  if (stateData.bootstrapStatus !== 'complete') return true;
-  if (stateData.e1rmFormulaVersion !== formulaVersion) return true;
-  return false;
+  return !analyticsReady(stateData, versions);
 }
 
 /**
- * A 'running' bootstrap only blocks a new one while it is plausibly still
- * alive. A crashed bootstrap (stale bootstrapAt) must never act as a
- * permanent lock.
+ * A 'running' bootstrap only blocks a new claim while it is plausibly still
+ * alive. A crashed owner (stale bootstrapAtMs) never acts as a permanent
+ * lock — a new run may take over its runId.
  */
 const BOOTSTRAP_FRESH_MS = 15 * 60 * 1000;
 
@@ -71,6 +83,36 @@ function bootstrapIsFreshlyRunning(stateData, nowMs) {
   const at = stateData.bootstrapAtMs;
   if (typeof at !== 'number') return false;
   return nowMs - at < BOOTSTRAP_FRESH_MS;
+}
+
+/**
+ * Atomic claim decision, evaluated INSIDE a transaction on the state doc.
+ *   'skip-fresh' – another live run owns the bootstrap
+ *   'skip-ready' – analytics already ready and no forced rebuild required
+ *   'claim'      – caller should claim ownership with a new runId
+ */
+function claimDecision(stateData, nowMs, versions, maintenanceWasOff) {
+  if (bootstrapIsFreshlyRunning(stateData, nowMs)) return 'skip-fresh';
+  if (!needsBootstrap(stateData, versions, maintenanceWasOff)) return 'skip-ready';
+  return 'claim';
+}
+
+/** Does runId still own the bootstrap recorded in state? Superseded runs
+ *  must never drain dirty dates, flip status, or write errors. */
+function ownsRun(stateData, runId) {
+  return !!(stateData && stateData.bootstrapRunId === runId
+    && stateData.bootstrapStatus === 'running');
+}
+
+/**
+ * Rebaseline detection at claim time: a formula-version change re-baselines
+ * E1RM praise (see index.js e1rmRebaselinedAtKey). Schema-only or first-ever
+ * bootstraps do not.
+ */
+function isFormulaRebaseline(stateData, formulaVersion) {
+  return !!(stateData
+    && typeof stateData.e1rmFormulaVersion === 'number'
+    && stateData.e1rmFormulaVersion !== formulaVersion);
 }
 
 /** enabledBy after removing one coach; used to decide CASE 1 vs CASE 2. */
@@ -83,8 +125,12 @@ function remainingEnabledBy(enabledBy, removedCoachUid) {
 module.exports = {
   workoutTriggerDecision,
   settingsTransition,
+  analyticsReady,
   needsBootstrap,
   bootstrapIsFreshlyRunning,
+  claimDecision,
+  ownsRun,
+  isFormulaRebaseline,
   remainingEnabledBy,
   BOOTSTRAP_FRESH_MS,
 };

@@ -786,7 +786,10 @@ async function handleInvoicePaymentFailed(event) {
 const coachCheckins = require('./coach');
 exports.coachAnalyticsOnWorkoutWrite = coachCheckins.coachAnalyticsOnWorkoutWrite;
 exports.coachOnAthleteSettingsWritten = coachCheckins.coachOnAthleteSettingsWritten;
+exports.coachOnAthleteAssignmentsWritten = coachCheckins.coachOnAthleteAssignmentsWritten;
+exports.coachOnCoachAssignmentsWritten = coachCheckins.coachOnCoachAssignmentsWritten;
 exports.coachCheckpointScheduler = coachCheckins.coachCheckpointScheduler;
+exports.coachReviewContext = coachCheckins.coachReviewContext;
 exports.coachPrepareCheckInCopy = coachCheckins.coachPrepareCheckInCopy;
 exports.coachUndoCheckIn = coachCheckins.coachUndoCheckIn;
 exports.coachSkipCheckIn = coachCheckins.coachSkipCheckIn;

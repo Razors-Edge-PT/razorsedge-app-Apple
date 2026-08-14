@@ -165,6 +165,41 @@ function keysToExpire(latestCheckpointKey, reports) {
 }
 
 /**
+ * Validates an IANA timezone string. Returns the timezone when usable, else
+ * null — a malformed client-written value must never break the scheduler.
+ */
+function safeTimezone(tz) {
+  if (typeof tz !== 'string' || !tz || tz.length > 64) return null;
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+    return tz;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Deterministic scheduler catch-up: the Mon/Thu checkpoints that still need
+ * processing, ascending, given the last fully-processed checkpoint and the
+ * coach-local today. Bounded to the most recent `max` checkpoints so a long
+ * outage can never trigger an unbounded historic sweep; a new coach (no
+ * watermark) starts at the most recent checkpoint only (first-checkpoint
+ * policy: enabling reporting retroactively generates the most recent Mon/Thu
+ * report, frozen to that checkpoint's cutoff, and nothing older).
+ */
+function pendingCheckpoints(lastProcessedKey, todayKey, max = 4) {
+  const current = checkpointOnOrBefore(todayKey);
+  if (!lastProcessedKey) return [current];
+  const out = [];
+  let k = current;
+  while (k > lastProcessedKey && out.length < max) {
+    out.unshift(k);
+    k = previousCheckpointKey(k);
+  }
+  return out;
+}
+
+/**
  * Block-anchored training-week resolution (matches HomeV2CalendarService:
  * weekIndex = daysSinceBlockStart ~/ 7).
  *
@@ -195,5 +230,7 @@ module.exports = {
   canCopy,
   canUndo,
   keysToExpire,
+  safeTimezone,
+  pendingCheckpoints,
   trainingWeekOf,
 };

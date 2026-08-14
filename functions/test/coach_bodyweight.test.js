@@ -11,6 +11,23 @@ function e(dateKey, weightKg, tod) {
 
 // ── Per-day collapse ────────────────────────────────────────────────────────
 
+test('collapse: duplicate same-TOD entries resolve to the latest timestamp', () => {
+  const perDay = bw.collapsePerDay([
+    { dateKey: '2026-08-10', weightKg: 100.0, tod: 'am', tsMillis: 1000 },
+    { dateKey: '2026-08-10', weightKg: 100.6, tod: 'am', tsMillis: 2000 }, // corrected later
+    { dateKey: '2026-08-10', weightKg: 99.0, tod: 'am', tsMillis: 500 },  // stale early entry
+  ]);
+  assert.deepEqual(perDay, { '2026-08-10': 100.6 });
+});
+
+test('collapse: entries without timestamps sort before timestamped ones', () => {
+  const perDay = bw.collapsePerDay([
+    { dateKey: '2026-08-10', weightKg: 99.0, tod: 'am' },              // legacy, no ts
+    { dateKey: '2026-08-10', weightKg: 100.2, tod: 'am', tsMillis: 1 },
+  ]);
+  assert.deepEqual(perDay, { '2026-08-10': 100.2 });
+});
+
 test('collapse: AM preferred; PM only when no AM; no double-weighting', () => {
   const perDay = bw.collapsePerDay([
     e('2026-08-10', 100, 'am'),
@@ -146,6 +163,24 @@ test('praise ownership: cut and bulk boundaries are distinct ids; maintain award
   // A bulking phase through the same number is a different milestone id.
   assert.equal(bw.detectMilestone('bulk', 109.6, 110.2, bw.awardedForPhase(praised, 1000)), 'bulk_110');
   assert.equal(bw.detectMilestone('maintain', 110.4, 109.8, {}), null);
+});
+
+test('praise ownership: pruning keeps maps bounded without losing live entries', () => {
+  // praisedWeeks: entries older than the retention horizon are dropped.
+  const weeks = {
+    '2026-08-03': 'r1',          // recent → kept
+    '2025-01-06': 'ancient',     // > 26 weeks old → pruned
+  };
+  assert.deepEqual(bw.prunePraisedWeeks(weeks, '2026-08-14'), { '2026-08-03': 'r1' });
+
+  // praisedMilestones: only the current goal phase's entries survive —
+  // other phases are never consulted again (phase ids are never reused).
+  const milestones = {
+    'cut_110@1000': { reportId: 'old' },
+    'cut_100@2000': { reportId: 'current' },
+  };
+  assert.deepEqual(bw.prunePraisedMilestones(milestones, 2000),
+    { 'cut_100@2000': { reportId: 'current' } });
 });
 
 test('praise ownership: absent goalSetAt falls back to a stable legacy phase', () => {

@@ -42,7 +42,8 @@ class _AthleteReview {
   final Map<String, dynamic> settings;
   Map<String, dynamic>? report; // current checkpoint report (may be null)
   Map<String, dynamic>? prevReport;
-  String? liveLastWeighInKey;
+  String? liveLastWeighInKey; // server-derived (coach timezone)
+  String? liveWeighInStatus; // 'ok' | 'due' | 'overdue' (server-derived)
 
   _AthleteReview({required this.uid, required this.settings});
 
@@ -87,33 +88,69 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     });
     try {
       final coachUid = _coachUid;
-      final coachDoc = await _db.collection('coachCheckIns').doc(coachUid).get();
-      _timezone = (coachDoc.data()?['timezone'] as String?) ?? 'Pacific/Auckland';
 
-      // Checkpoint identity comes from the server watermark, which the
-      // scheduler stamps in the coach's configured timezone — the device
-      // timezone never decides which report is shown.
-      _currentKey = CoachCheckinsLogic.resolveCurrentCheckpointKey(
-        serverLastCheckpointKey: coachDoc.data()?['lastCheckpointKey'] as String?,
-        deviceNow: DateTime.now(),
-      );
-      _prevKey = CoachCheckinsLogic.previousCheckpointKey(_currentKey);
-
-      final athletesSnap = await _db
-          .collection('coachCheckIns')
-          .doc(coachUid)
-          .collection('athletes')
+      // 1) Assigned athletes from the two authoritative assignment sources
+      //    (same model as CoachHomeScreen: seeded roster + approved==true).
+      final assignedUids = <String>{};
+      final q1 = await _db
+          .collection('athleteAssignments')
+          .where('coaches.$coachUid.approved', isEqualTo: true)
           .get();
+      for (final doc in q1.docs) {
+        assignedUids.add(doc.id);
+      }
+      final seededDoc =
+          await _db.collection('coachAssignments').doc(coachUid).get();
+      if (seededDoc.exists) {
+        assignedUids.addAll(
+            Map<String, dynamic>.from(seededDoc.data()?['athletes'] ?? {}).keys);
+      }
 
+      // 2) Per-athlete settings via direct gets (readable only while the
+      //    assignment is live — a revoked athlete drops out automatically).
       final enabled = <_AthleteReview>[];
-      for (final doc in athletesSnap.docs) {
-        final data = doc.data();
-        if (data['reportingEnabled'] == true) {
-          enabled.add(_AthleteReview(uid: doc.id, settings: data));
+      await Future.wait(assignedUids.map((uid) async {
+        try {
+          final s = await _db
+              .collection('coachCheckIns')
+              .doc(coachUid)
+              .collection('athletes')
+              .doc(uid)
+              .get();
+          final data = s.data();
+          if (data != null && data['reportingEnabled'] == true) {
+            enabled.add(_AthleteReview(uid: uid, settings: data));
+          }
+        } catch (e) {
+          debugPrint('⚠️ [WeeklyReview] settings read failed for $uid: $e');
+        }
+      }));
+
+      // 3) Server-derived coach-local context: today, checkpoint identity
+      //    and live weigh-in staleness — all computed in the coach's
+      //    configured timezone. The device timezone influences nothing.
+      final ctxRes = await _functions.httpsCallable('coachReviewContext').call({
+        'athleteUids': enabled.map((a) => a.uid).toList(),
+      });
+      final ctx = Map<String, dynamic>.from(ctxRes.data as Map);
+      _timezone = (ctx['timezone'] as String?) ?? 'Pacific/Auckland';
+      _todayKey = (ctx['todayKey'] as String?) ??
+          CoachCheckinsLogic.dateKey(DateTime.now());
+      _currentKey = (ctx['currentCheckpointKey'] as String?) ??
+          CoachCheckinsLogic.checkpointOnOrBefore(DateTime.now());
+      _prevKey = (ctx['prevCheckpointKey'] as String?) ??
+          CoachCheckinsLogic.previousCheckpointKey(_currentKey);
+      final ctxAthletes =
+          Map<String, dynamic>.from(ctx['athletes'] as Map? ?? {});
+      for (final a in enabled) {
+        final info = ctxAthletes[a.uid];
+        if (info is Map) {
+          a.liveLastWeighInKey = info['lastWeighInKey'] as String?;
+          a.liveWeighInStatus = info['weighInStatus'] as String?;
         }
       }
 
-      // Bounded reads: two report direct-gets + one latest weigh-in per athlete.
+      // 4) Bounded report reads: two direct gets per athlete.
       await Future.wait(enabled.map((a) async {
         final results = await Future.wait([
           _db
@@ -128,25 +165,9 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
               .collection('reports')
               .doc('${a.uid}_$_prevKey')
               .get(),
-          _db
-              .collection('users')
-              .doc(a.uid)
-              .collection('weights')
-              .orderBy('timestamp', descending: true)
-              .limit(1)
-              .get(),
         ]);
-        final cur = results[0] as DocumentSnapshot<Map<String, dynamic>>;
-        final prev = results[1] as DocumentSnapshot<Map<String, dynamic>>;
-        final w = results[2] as QuerySnapshot<Map<String, dynamic>>;
-        a.report = cur.data();
-        a.prevReport = prev.data();
-        if (w.docs.isNotEmpty) {
-          final ts = w.docs.first.data()['timestamp'];
-          if (ts is Timestamp) {
-            a.liveLastWeighInKey = CoachCheckinsLogic.dateKey(ts.toDate());
-          }
-        }
+        a.report = results[0].data();
+        a.prevReport = results[1].data();
       }));
 
       enabled.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
@@ -159,7 +180,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       debugPrint('❌ [WeeklyReview] load failed: $e');
       if (!mounted) return;
       setState(() {
-        _error = 'Failed to load check-ins: $e';
+        _error = 'Couldn\'t load the Weekly Review. '
+            'Check your connection and tap Refresh to try again.';
         _loading = false;
       });
     }
@@ -212,9 +234,12 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
         .length;
   }
 
-  String _liveWeighInStatus(_AthleteReview a) => CoachCheckinsLogic.weighInStatus(
-      a.liveLastWeighInKey ?? (a.report?['bodyweight']?['lastWeighInKey'] as String?),
-      _todayKey);
+  /// Server-derived (coach-timezone) staleness; falls back to the report's
+  /// generation-time status when the context omitted this athlete.
+  String _liveWeighInStatus(_AthleteReview a) =>
+      a.liveWeighInStatus ??
+      (a.report?['bodyweight']?['weighInStatus'] as String?) ??
+      'ok';
 
   String _draftPreview(_AthleteReview a) {
     final report = a.report;
@@ -270,20 +295,74 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
           if (data['coverageEnd'] != null) 'coverageEnd': data['coverageEnd'],
         };
       });
+      await _copyToClipboard(text, a.displayName);
+      await _load();
+    } on FirebaseFunctionsException catch (e) {
+      _showError(_friendlyFunctionsError('Copy', e));
+    } catch (e) {
+      debugPrint('❌ [WeeklyReview] copy failed: $e');
+      _showError('Copy didn\'t go through. Please try again.');
+    } finally {
+      if (mounted) setState(() => _busy.remove(a.uid));
+    }
+  }
+
+  /// Puts [text] on the clipboard. On failure the coach is told clearly and
+  /// offered the full text to copy manually — we never claim success when
+  /// the clipboard write failed.
+  Future<void> _copyToClipboard(String text, String athleteName) async {
+    try {
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(text.isEmpty
-            ? 'Nothing to send for ${a.displayName} — marked as copied.'
-            : 'Message copied for ${a.displayName}.'),
+            ? 'Nothing to send for $athleteName — marked as sent.'
+            : 'Message copied for $athleteName.'),
       ));
-      await _load();
-    } on FirebaseFunctionsException catch (e) {
-      _showError('Copy failed: ${e.message ?? e.code}');
     } catch (e) {
-      _showError('Copy failed: $e');
-    } finally {
-      if (mounted) setState(() => _busy.remove(a.uid));
+      debugPrint('❌ [WeeklyReview] clipboard write failed: $e');
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Copy to clipboard failed'),
+          content: SingleChildScrollView(
+            child: SelectableText(
+              text.isEmpty ? '(empty message)' : text,
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await _copyToClipboard(text, athleteName);
+              },
+              child: const Text('Try again'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  String _friendlyFunctionsError(String action, FirebaseFunctionsException e) {
+    debugPrint('❌ [WeeklyReview] $action failed: ${e.code} ${e.message}');
+    switch (e.code) {
+      case 'failed-precondition':
+        return e.message ?? '$action isn\'t possible for this check-in anymore.';
+      case 'permission-denied':
+        return 'You\'re no longer an assigned coach for this athlete.';
+      case 'not-found':
+        return 'This report isn\'t available yet — try Refresh.';
+      case 'unauthenticated':
+        return 'Please sign in again.';
+      default:
+        return '$action didn\'t go through. Please try again.';
     }
   }
 
@@ -300,9 +379,10 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
           SnackBar(content: Text('Marked not sent for ${a.displayName}.')));
       await _load();
     } on FirebaseFunctionsException catch (e) {
-      _showError('Undo failed: ${e.message ?? e.code}');
+      _showError(_friendlyFunctionsError('Undo', e));
     } catch (e) {
-      _showError('Undo failed: $e');
+      debugPrint('❌ [WeeklyReview] undo failed: $e');
+      _showError('Undo didn\'t go through. Please try again.');
     } finally {
       if (mounted) setState(() => _busy.remove(a.uid));
     }
@@ -321,9 +401,10 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
           SnackBar(content: Text('Check-in skipped for ${a.displayName}.')));
       await _load();
     } on FirebaseFunctionsException catch (e) {
-      _showError('Skip failed: ${e.message ?? e.code}');
+      _showError(_friendlyFunctionsError('Skip', e));
     } catch (e) {
-      _showError('Skip failed: $e');
+      debugPrint('❌ [WeeklyReview] skip failed: $e');
+      _showError('Skip didn\'t go through. Please try again.');
     } finally {
       if (mounted) setState(() => _busy.remove(a.uid));
     }
@@ -426,7 +507,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                         children: [
                           Expanded(
                             child: Text(
-                              'Checkpoint ${_weekdayLabel(_currentKey)} $_currentKey',
+                              'Checkpoint ${_weekdayLabel(_currentKey)} $_currentKey'
+                              ' · today $_todayKey',
                               style: const TextStyle(
                                   color: Colors.white70, fontSize: 13),
                             ),
@@ -637,7 +719,17 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                   const SizedBox(width: 6),
                   const Text('Copied',
                       style: TextStyle(color: Colors.white70, fontSize: 13)),
-                  const SizedBox(width: 12),
+                  IconButton(
+                    tooltip: 'Copy the sent message again',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.copy, size: 16, color: Colors.white70),
+                    onPressed: busy
+                        ? null
+                        : () => _copyToClipboard(
+                            (report['finalText'] as String?) ?? '',
+                            a.displayName),
+                  ),
+                  const SizedBox(width: 4),
                   TextButton(
                     onPressed: busy || !mutable ? null : () => _undo(a),
                     child: const Text('Undo / Mark Not Sent'),
@@ -986,16 +1078,11 @@ class _CoachCheckinAthletesScreenState
                                 ],
                                 onChanged: (v) {
                                   if (v == null || v == goal) return;
-                                  // A goal change starts a new milestone
-                                  // "phase": the server scopes milestone
-                                  // praise keys by goalSetAt so a later
-                                  // legitimate phase can praise the same
-                                  // boundary again.
-                                  _save(uid, {
-                                    'goal': v,
-                                    'goalSetAt':
-                                        DateTime.now().millisecondsSinceEpoch,
-                                  });
+                                  // The server stamps the milestone goal
+                                  // phase (goalSetAt) when it sees the goal
+                                  // change — clients cannot manufacture
+                                  // phases to repeat milestone praise.
+                                  _save(uid, {'goal': v});
                                 },
                               ),
                               const SizedBox(width: 16),

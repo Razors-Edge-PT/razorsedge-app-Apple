@@ -10,12 +10,15 @@ const assert = require('node:assert/strict');
 process.env.GCLOUD_PROJECT = process.env.GCLOUD_PROJECT || 'goodlift-us-storage';
 process.env.FUNCTIONS_EMULATOR = 'true';
 
-test('coach module exports the six cloud functions', () => {
+test('coach module exports the nine cloud functions', () => {
   const coach = require('../coach');
   for (const name of [
     'coachAnalyticsOnWorkoutWrite',
     'coachOnAthleteSettingsWritten',
+    'coachOnAthleteAssignmentsWritten',
+    'coachOnCoachAssignmentsWritten',
     'coachCheckpointScheduler',
+    'coachReviewContext',
     'coachPrepareCheckInCopy',
     'coachUndoCheckIn',
     'coachSkipCheckIn',

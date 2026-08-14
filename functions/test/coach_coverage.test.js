@@ -152,6 +152,55 @@ test('scenario: alternating copy behaviour matches the spec examples', () => {
     { start: '2026-08-13', end: '2026-08-20' });
 });
 
+// ── Timezone validation (item J) ────────────────────────────────────────────
+
+test('safeTimezone: valid IANA zones pass, garbage returns null', () => {
+  assert.equal(cov.safeTimezone('Pacific/Auckland'), 'Pacific/Auckland');
+  assert.equal(cov.safeTimezone('America/Los_Angeles'), 'America/Los_Angeles');
+  assert.equal(cov.safeTimezone('Not/AZone'), null);
+  assert.equal(cov.safeTimezone(''), null);
+  assert.equal(cov.safeTimezone(null), null);
+  assert.equal(cov.safeTimezone(12), null);
+  assert.equal(cov.safeTimezone('x'.repeat(100)), null);
+});
+
+// ── Scheduler catch-up (item L) ─────────────────────────────────────────────
+// 2026 calendar: Aug 3 Mon, Aug 6 Thu, Aug 10 Mon, Aug 13 Thu, Aug 17 Mon.
+
+test('catch-up: scheduler misses Thursday, resumes Friday → Thursday generated', () => {
+  // Watermark = Monday Aug 10; today is Friday Aug 14.
+  assert.deepEqual(cov.pendingCheckpoints('2026-08-10', '2026-08-14'), ['2026-08-13']);
+});
+
+test('catch-up: scheduler misses Monday, resumes Tuesday → Monday generated', () => {
+  assert.deepEqual(cov.pendingCheckpoints('2026-08-06', '2026-08-11'), ['2026-08-10']);
+});
+
+test('catch-up: duplicate hourly runs are no-ops once processed', () => {
+  assert.deepEqual(cov.pendingCheckpoints('2026-08-13', '2026-08-14'), []);
+  assert.deepEqual(cov.pendingCheckpoints('2026-08-13', '2026-08-13'), []);
+});
+
+test('catch-up: long outage stays bounded to the most recent checkpoints', () => {
+  // Watermark a month old; only the 4 most recent checkpoints are pending.
+  const pending = cov.pendingCheckpoints('2026-07-06', '2026-08-14');
+  assert.equal(pending.length, 4);
+  assert.deepEqual(pending, ['2026-08-03', '2026-08-06', '2026-08-10', '2026-08-13']);
+  // Ascending order (older first) so the watermark advances contiguously.
+});
+
+test('catch-up: new coach with no watermark gets only the most recent checkpoint', () => {
+  assert.deepEqual(cov.pendingCheckpoints(null, '2026-08-14'), ['2026-08-13']);
+  // On a checkpoint day itself, that day is the one generated.
+  assert.deepEqual(cov.pendingCheckpoints(null, '2026-08-13'), ['2026-08-13']);
+});
+
+test('catch-up: multi-checkpoint gap processes both missed days in order', () => {
+  // Watermark = Thu Aug 6, today = Friday Aug 14 → Mon 10 and Thu 13 missing.
+  assert.deepEqual(cov.pendingCheckpoints('2026-08-06', '2026-08-14'),
+    ['2026-08-10', '2026-08-13']);
+});
+
 // ── Training week resolution ────────────────────────────────────────────────
 
 test('training week: block-anchored 7-day slices', () => {

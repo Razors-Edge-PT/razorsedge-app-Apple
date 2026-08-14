@@ -1,39 +1,12 @@
 // Coach bi-weekly check-ins — Firebase-bound layer.
 //
 // Pure business logic lives in the sibling modules (e1rm, pb_engine,
-// coverage, bodyweight, praise, message, enrollment, analytics_store); this
-// file wires it to Firestore, triggers, the scheduler and callables. Style
-// follows the existing functions/index.js: CommonJS + firebase-functions v2.
+// coverage, bodyweight, praise, message, draft, enrollment, authz,
+// analytics_store, checkin_txns); this file wires it to Firestore, triggers,
+// the scheduler and callables. Style follows the existing functions/index.js:
+// CommonJS + firebase-functions v2 APIs.
 //
-// Firestore schema introduced by this feature
-// -------------------------------------------
-// coachAnalytics/{athleteUid}                       (server-written only)
-//   enabledBy: { [coachUid]: true }
-//   analyticsVersion, e1rmFormulaVersion
-//   bootstrapStatus: 'running'|'complete'|'error'
-//   bootstrapAt (server ts), bootstrapAtMs (freshness check), bootstrapError
-//   dirtyDates: [dateKey]  workout days written while a bootstrap runs
-// coachAnalytics/{athleteUid}/exerciseDays/{exerciseId}_{dateKey}
-//   { exerciseId, dateKey, day: {name, bestByReps, bestE1rm, bestE1rmSet} }
-//   one bounded doc per exercise per trained day (no unbounded history map)
-// coachAnalytics/{athleteUid}/exercises/{exerciseId}
-//   { name, repBest, e1rmBest, formulaVersion, dayCount, updatedAt }
-// coachAnalytics/{athleteUid}/events/{eventId}      deterministic ids
-//   (see pb_engine.deriveExerciseEvents)
-// coachCheckIns/{coachUid}                          coach settings
-//   timezone (IANA, default 'Pacific/Auckland'), lastCheckpointKey
-//   (server watermark — also the client's authoritative checkpoint identity)
-// coachCheckIns/{coachUid}/athletes/{athleteUid}    per-athlete coach settings
-//   coach-editable: reportingEnabled, goal: 'cut'|'bulk'|'maintain',
-//     goalSetAt (epoch ms, stamps a new milestone phase on goal change),
-//     messageExerciseMode: 'automatic'|'custom', customExerciseIds: [],
-//     displayName, enabledAt, updatedAt
-//   server-written: praisedWeeks: { [weekStartKey]: reportId },
-//     praisedMilestones: { [milestoneId@phase]: {reportId, dateKey} },
-//     lastFinalizedCoverageEnd: dateKey, disabledReason, disabledAt
-// coachCheckIns/{coachUid}/reports/{athleteUid_checkpointKey}
-//   generated checkpoint report + draft variants + copy workflow state
-//   (all mutations via server; clients read only)
+// See docs/coach_checkins/COACH_CHECKINS.md for the full schema and design.
 
 'use strict';
 
@@ -42,19 +15,26 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
+const crypto = require('crypto');
 
 const { E1RM_FORMULA_VERSION } = require('./e1rm');
 const cov = require('./coverage');
 const bwx = require('./bodyweight');
-const { selectPraise } = require('./praise');
-const { composeDraft } = require('./message');
+const { buildDraftText } = require('./draft');
 const enrollment = require('./enrollment');
-const { dayDocId, applyWorkoutDay, bulkRebuild } = require('./analytics_store');
+const authz = require('./authz');
+const {
+  dayDocId, applyWorkoutDay, bulkRebuild,
+} = require('./analytics_store');
+const {
+  TxnError, copyTransaction, undoTransaction, skipTransaction,
+} = require('./checkin_txns');
 
 try { admin.initializeApp(); } catch (_) {}
 const db = admin.firestore();
 
 const ANALYTICS_VERSION = 2; // v2: bounded exerciseDays storage shape
+const VERSIONS = { formulaVersion: E1RM_FORMULA_VERSION, analyticsVersion: ANALYTICS_VERSION };
 const DEFAULT_TZ = 'Pacific/Auckland';
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -67,23 +47,19 @@ const athleteSettingsRef = (coachUid, athleteUid) =>
 const reportRef = (coachUid, athleteUid, checkpointKey) =>
   coachRef(coachUid).collection('reports').doc(`${athleteUid}_${checkpointKey}`);
 
-function todayKeyIn(tz) {
-  return cov.localDateKey(new Date(), tz || DEFAULT_TZ);
+const isCoachFor = (coachUid, athleteUid) => authz.isCoachFor(db, coachUid, athleteUid);
+
+function safeTz(tz) {
+  return cov.safeTimezone(tz) || DEFAULT_TZ;
 }
 
-/** Is coachUid an approved/assigned coach for athleteUid? (mirrors rules) */
-async function isCoachFor(coachUid, athleteUid) {
-  const ca = await db.collection('coachAssignments').doc(coachUid).get();
-  if (ca.exists) {
-    const athletes = ca.data().athletes || {};
-    if (athletes[athleteUid] != null) return true;
-  }
-  const aa = await db.collection('athleteAssignments').doc(athleteUid).get();
-  if (aa.exists) {
-    const coaches = aa.data().coaches || {};
-    if (coaches[coachUid] != null) return true;
-  }
-  return false;
+function todayKeyIn(tz) {
+  return cov.localDateKey(new Date(), safeTz(tz));
+}
+
+async function coachTimezone(coachUid) {
+  const snap = await coachRef(coachUid).get();
+  return safeTz(snap.exists ? snap.data().timezone : null);
 }
 
 /** Resolve gender/first-name from users/{uid} (never inferred from a name). */
@@ -99,9 +75,7 @@ async function resolveAthleteIdentity(athleteUid) {
       ? data.profile.gender.toLowerCase() : null;
     if (pg === 'male' || pg === 'female') gender = pg;
   }
-  const nameSource = firstNonEmpty([
-    data.fullName, data.displayName, data.username,
-  ]);
+  const nameSource = firstNonEmpty([data.fullName, data.displayName, data.username]);
   const firstName = nameSource ? String(nameSource).trim().split(/\s+/)[0] : null;
   return { gender, firstName, displayName: nameSource || athleteUid };
 }
@@ -113,16 +87,18 @@ function firstNonEmpty(values) {
   return null;
 }
 
-/** Weigh-in entries from users/{uid}/weights since a cutoff dateKey.
- *  Weigh-ins are stamped at device-local noon; interpreting the instant in
- *  the coach's time zone recovers the intended calendar day (a plain UTC
- *  slice would land on the previous day under NZDT). */
+/** Weigh-in entries from users/{uid}/weights since a cutoff dateKey, with
+ *  explicit chronological ordering so same-day/same-TOD duplicates resolve
+ *  deterministically to the latest timestamp (matches BodyWeightTracker).
+ *  Weigh-ins are stamped at device-local noon; the coach timezone recovers
+ *  the intended calendar day. */
 async function loadWeightEntries(athleteUid, sinceKey, tz) {
   const [y, m, d] = sinceKey.split('-').map(Number);
   const cutoff = admin.firestore.Timestamp.fromDate(new Date(Date.UTC(y, m - 1, d - 1)));
   const snap = await db.collection('users').doc(athleteUid)
     .collection('weights')
     .where('timestamp', '>=', cutoff)
+    .orderBy('timestamp', 'asc')
     .get();
   const entries = [];
   for (const doc of snap.docs) {
@@ -132,9 +108,10 @@ async function loadWeightEntries(athleteUid, sinceKey, tz) {
     const weight = Number(w.weight);
     if (!Number.isFinite(weight) || weight <= 0) continue;
     entries.push({
-      dateKey: cov.localDateKey(ts.toDate(), tz || DEFAULT_TZ),
+      dateKey: cov.localDateKey(ts.toDate(), safeTz(tz)),
       weightKg: weight,
       tod: (typeof w.tod === 'string' && w.tod.toLowerCase() === 'pm') ? 'pm' : 'am',
+      tsMillis: ts.toMillis(),
     });
   }
   return entries;
@@ -150,15 +127,88 @@ async function latestWeighInKey(athleteUid, tz) {
   if (snap.empty) return null;
   const ts = snap.docs[0].data().timestamp;
   if (!ts || typeof ts.toDate !== 'function') return null;
-  return cov.localDateKey(ts.toDate(), tz || DEFAULT_TZ);
+  return cov.localDateKey(ts.toDate(), safeTz(tz));
+}
+
+/** Live bodyweight numbers as of coach-local today (goal/milestone are
+ *  attached later — milestone needs transactional praise state). */
+async function liveBodyweightBase(athleteUid, tz, goal) {
+  const todayKey = todayKeyIn(tz);
+  const entries = await loadWeightEntries(athleteUid, cov.addDaysKey(todayKey, -21), tz);
+  const rolling = bwx.rollingComparison(entries, todayKey);
+  const lastWeighKey = await latestWeighInKey(athleteUid, tz);
+  return {
+    currentAvg: rolling.currentAvg,
+    currentCount: rolling.currentCount,
+    previousAvg: rolling.previousAvg,
+    previousCount: rolling.previousCount,
+    trend: bwx.classifyTrend(goal, rolling.currentAvg, rolling.previousAvg),
+    lastWeighInKey: lastWeighKey,
+    weighInStatus: bwx.weighInStatus(lastWeighKey, todayKey),
+  };
 }
 
 // ── Firestore adapter for the analytics store interface ─────────────────────
 
+/** Transaction-bound store: reads via tx.get (docs and queries), writes via
+ *  tx.set/tx.delete. reconcileExercise performs all reads before writes,
+ *  satisfying the transaction contract. */
+function txStore(tx, base) {
+  return {
+    async getSummary(exerciseId) {
+      const s = await tx.get(base.collection('exercises').doc(exerciseId));
+      return s.exists ? s.data() : null;
+    },
+    async getDay(exerciseId, dateKey) {
+      const s = await tx.get(base.collection('exerciseDays').doc(dayDocId(exerciseId, dateKey)));
+      return s.exists ? s.data().day : null;
+    },
+    async listDaysForExercise(exerciseId) {
+      const s = await tx.get(base.collection('exerciseDays').where('exerciseId', '==', exerciseId));
+      return s.docs.map((d) => ({ dateKey: d.data().dateKey, day: d.data().day }));
+    },
+    async listExerciseIdsForDate(dateKey) {
+      const s = await tx.get(base.collection('exerciseDays').where('dateKey', '==', dateKey));
+      return [...new Set(s.docs.map((d) => d.data().exerciseId))];
+    },
+    async listEventIdsForExercise(exerciseId) {
+      const s = await tx.get(base.collection('events').where('exerciseId', '==', exerciseId));
+      return s.docs.map((d) => d.id);
+    },
+    async setDay(exerciseId, dateKey, day) {
+      tx.set(base.collection('exerciseDays').doc(dayDocId(exerciseId, dateKey)),
+        { exerciseId, dateKey, day });
+    },
+    async deleteDay(exerciseId, dateKey) {
+      tx.delete(base.collection('exerciseDays').doc(dayDocId(exerciseId, dateKey)));
+    },
+    async setSummary(exerciseId, data) {
+      tx.set(base.collection('exercises').doc(exerciseId), {
+        ...data,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    },
+    async deleteSummary(exerciseId) {
+      tx.delete(base.collection('exercises').doc(exerciseId));
+    },
+    async setEvent(ev) {
+      tx.set(base.collection('events').doc(ev.id), ev);
+    },
+    async deleteEvent(eventId) {
+      tx.delete(base.collection('events').doc(eventId));
+    },
+    async withExerciseLock() {
+      throw new Error('nested exercise locks are not supported');
+    },
+    async flush() {},
+  };
+}
+
 /**
  * Buffered-write store over coachAnalytics/{athleteUid}. Writes queue into a
- * batch (flushed at 400 ops and before every read, so reads always see prior
- * writes); both list operations are single-field equality queries.
+ * batch (flushed at 400 ops and before every read). withExerciseLock runs
+ * its body inside a Firestore transaction, serialising concurrent
+ * reconciliation per exercise (concurrent triggers retry and converge).
  */
 function firestoreStore(athleteUid) {
   const base = analyticsRef(athleteUid);
@@ -180,6 +230,16 @@ function firestoreStore(athleteUid) {
   }
 
   return {
+    async getSummary(exerciseId) {
+      await flush();
+      const s = await base.collection('exercises').doc(exerciseId).get();
+      return s.exists ? s.data() : null;
+    },
+    async getDay(exerciseId, dateKey) {
+      await flush();
+      const s = await base.collection('exerciseDays').doc(dayDocId(exerciseId, dateKey)).get();
+      return s.exists ? s.data().day : null;
+    },
     async listDaysForExercise(exerciseId) {
       await flush();
       const snap = await base.collection('exerciseDays')
@@ -222,6 +282,10 @@ function firestoreStore(athleteUid) {
     async deleteEvent(eventId) {
       await queue((b) => b.delete(base.collection('events').doc(eventId)));
     },
+    async withExerciseLock(exerciseId, fn) {
+      await flush(); // buffered writes must land before the txn reads
+      await db.runTransaction(async (tx) => fn(txStore(tx, base)));
+    },
     flush,
   };
 }
@@ -232,12 +296,14 @@ function firestoreStore(athleteUid) {
  * Trigger: keeps coach analytics in sync with workout writes (create, edit,
  * delete). The decision (skip / defer-to-bootstrap / apply) is taken inside
  * a transaction on the analytics state doc, so it serialises against the
- * bootstrap's completion transaction: a write can never fall between the
- * bootstrap's scan and its completion unrecorded.
+ * bootstrap's claim and completion transactions.
  * Runs alongside (never replaces) the existing repointsMonthlyAggregator.
  */
 const coachAnalyticsOnWorkoutWrite = onDocumentWritten(
-  'users/{uid}/workouts/{workoutId}',
+  // retry: analytics maintenance is idempotent (deterministic ids/content),
+  // and without retries a crashed invocation would silently lose this
+  // workout's PB analytics until the next edit of the same day.
+  { document: 'users/{uid}/workouts/{workoutId}', retry: true },
   async (event) => {
     const uid = event.params.uid;
     const workoutId = event.params.workoutId;
@@ -268,32 +334,51 @@ const coachAnalyticsOnWorkoutWrite = onDocumentWritten(
   }
 );
 
-// ── Historical bootstrap ────────────────────────────────────────────────────
+// ── Historical bootstrap (atomic ownership) ─────────────────────────────────
 
 /**
- * One-time, bounded, idempotent per-athlete backfill.
- *
- * Concurrency contract: while bootstrapStatus is 'running', the workout
- * trigger defers every write into dirtyDates (transactionally). After the
- * bulk rebuild, a reconciliation loop drains dirtyDates by replaying each
- * day from its CURRENT workout doc; completion is a transaction that only
- * flips to 'complete' when dirtyDates is empty. A write that lands after
- * that transaction sees status != 'running' and applies incrementally, so
- * no workout write is ever lost and no later write is needed to repair
- * state. A crashed run never sticks: 'running' older than 15 minutes is
- * ignored as a lock (enrollment.bootstrapIsFreshlyRunning).
+ * Atomically claims bootstrap ownership. Returns the new runId when this
+ * caller owns a fresh run, or null when a live run exists / analytics are
+ * already ready. A formula-version change additionally stamps
+ * e1rmRebaselinedAtKey (E1RM praise floor — see draft.js).
  */
-async function bootstrapAthlete(athleteUid) {
+async function claimBootstrap(athleteUid, { maintenanceWasOff }) {
   const stateRef = analyticsRef(athleteUid);
-  await stateRef.set({
-    bootstrapStatus: 'running',
-    dirtyDates: [],
-    analyticsVersion: ANALYTICS_VERSION,
-    e1rmFormulaVersion: E1RM_FORMULA_VERSION,
-    bootstrapAt: admin.firestore.FieldValue.serverTimestamp(),
-    bootstrapAtMs: Date.now(),
-  }, { merge: true });
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(stateRef);
+    const state = snap.exists ? snap.data() : null;
+    const decision = enrollment.claimDecision(state, Date.now(), VERSIONS, maintenanceWasOff);
+    if (decision !== 'claim') return null;
 
+    const runId = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+    const claim = {
+      bootstrapStatus: 'running',
+      bootstrapRunId: runId,
+      bootstrapAt: admin.firestore.FieldValue.serverTimestamp(),
+      bootstrapAtMs: Date.now(),
+      dirtyDates: [],
+    };
+    if (enrollment.isFormulaRebaseline(state, E1RM_FORMULA_VERSION)) {
+      claim.e1rmRebaselinedAtKey = todayKeyIn(DEFAULT_TZ);
+    }
+    tx.set(stateRef, claim, { merge: true });
+    return runId;
+  });
+}
+
+/**
+ * Bounded, idempotent per-athlete backfill, owned by runId.
+ *
+ * Concurrency contract: while this run owns bootstrapStatus 'running', the
+ * workout trigger defers every write into dirtyDates (transactionally).
+ * After the bulk rebuild, a reconciliation loop drains dirtyDates by
+ * replaying each day from its CURRENT workout doc; the completion
+ * transaction flips to 'complete' only when dirtyDates is empty AND this
+ * run still owns the state. A superseded run (stale owner replaced by a
+ * newer claim) aborts silently without touching the newer run's state.
+ */
+async function runBootstrap(athleteUid, runId) {
+  const stateRef = analyticsRef(athleteUid);
   try {
     // 1) Chronological scan (doc ids are YYYY-MM-DD), paged.
     const entries = []; // [dateKey, data]
@@ -313,7 +398,8 @@ async function bootstrapAthlete(athleteUid) {
       if (page.size < PAGE) break;
     }
 
-    // 2) Deterministic wholesale rebuild.
+    // 2) Deterministic wholesale rebuild (only the owner may destroy).
+    if (!(await stillOwns(stateRef, runId))) return;
     await deleteCollection(stateRef.collection('exerciseDays'));
     await deleteCollection(stateRef.collection('exercises'));
     await deleteCollection(stateRef.collection('events'));
@@ -327,10 +413,11 @@ async function bootstrapAthlete(athleteUid) {
       if (round >= MAX_ROUNDS) {
         throw new Error('bootstrap reconciliation did not settle');
       }
-      const dirty = await db.runTransaction(async (tx) => {
+      const outcome = await db.runTransaction(async (tx) => {
         const snap = await tx.get(stateRef);
-        const dd = (snap.exists && Array.isArray(snap.data().dirtyDates))
-          ? snap.data().dirtyDates : [];
+        const state = snap.exists ? snap.data() : null;
+        if (!enrollment.ownsRun(state, runId)) return { superseded: true };
+        const dd = Array.isArray(state.dirtyDates) ? state.dirtyDates : [];
         if (dd.length === 0) {
           tx.set(stateRef, {
             bootstrapStatus: 'complete',
@@ -338,14 +425,18 @@ async function bootstrapAthlete(athleteUid) {
             e1rmFormulaVersion: E1RM_FORMULA_VERSION,
             analyticsVersion: ANALYTICS_VERSION,
           }, { merge: true });
-          return null;
+          return { complete: true };
         }
         tx.set(stateRef, { dirtyDates: [] }, { merge: true });
-        return dd;
+        return { dirty: dd };
       });
-      if (dirty === null) break;
+      if (outcome.superseded) {
+        logger.warn('bootstrap superseded by a newer run', { athleteUid, runId });
+        return;
+      }
+      if (outcome.complete) break;
 
-      for (const dateKey of [...new Set(dirty)]) {
+      for (const dateKey of [...new Set(outcome.dirty)]) {
         if (!DATE_KEY_RE.test(dateKey)) continue;
         const snap = await db.collection('users').doc(athleteUid)
           .collection('workouts').doc(dateKey).get();
@@ -355,15 +446,26 @@ async function bootstrapAthlete(athleteUid) {
       }
     }
 
-    logger.info('coach bootstrap complete', { athleteUid, exercises: exerciseCount });
+    logger.info('coach bootstrap complete', { athleteUid, runId, exercises: exerciseCount });
   } catch (err) {
-    logger.error('coach bootstrap failed', { athleteUid, error: err });
-    await stateRef.set({
-      bootstrapStatus: 'error',
-      bootstrapError: String(err && err.message ? err.message : err),
-    }, { merge: true });
+    logger.error('coach bootstrap failed', { athleteUid, runId, error: err });
+    // Record the error only if this run still owns the state.
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(stateRef);
+      if (enrollment.ownsRun(snap.exists ? snap.data() : null, runId)) {
+        tx.set(stateRef, {
+          bootstrapStatus: 'error',
+          bootstrapError: String(err && err.message ? err.message : err),
+        }, { merge: true });
+      }
+    });
     throw err;
   }
+}
+
+async function stillOwns(stateRef, runId) {
+  const snap = await stateRef.get();
+  return enrollment.ownsRun(snap.exists ? snap.data() : null, runId);
 }
 
 async function deleteCollection(colRef) {
@@ -377,27 +479,23 @@ async function deleteCollection(colRef) {
   }
 }
 
-/** Runs the bootstrap when the state requires one, honouring the freshness
- *  guard so a crashed 'running' status never acts as a permanent lock. */
+/** Claims + runs a bootstrap when the state requires one. Returns true when
+ *  analytics are ready afterwards. */
 async function bootstrapIfNeeded(athleteUid, { maintenanceWasOff }) {
+  const runId = await claimBootstrap(athleteUid, { maintenanceWasOff });
+  if (runId) await runBootstrap(athleteUid, runId);
   const snap = await analyticsRef(athleteUid).get();
-  const state = snap.exists ? snap.data() : null;
-  if (enrollment.bootstrapIsFreshlyRunning(state, Date.now())) return false;
-  if (!enrollment.needsBootstrap(state, E1RM_FORMULA_VERSION, maintenanceWasOff)) {
-    return false;
-  }
-  await bootstrapAthlete(athleteUid);
-  return true;
+  return enrollment.analyticsReady(snap.exists ? snap.data() : null, VERSIONS);
 }
+
+// ── Enrollment / settings / assignment triggers ─────────────────────────────
 
 /**
  * Trigger: coach flips reporting on/off for an athlete (or the settings doc
- * is deleted). Enabling registers the coach in enabledBy and bootstraps when
- * needed — including whenever maintenance had stopped because nobody was
- * enabled, so re-enabling always closes any gap without waiting for a future
- * workout write. Disabling deregisters the coach; when no coach remains
- * enabled, incremental maintenance stops entirely (the workout trigger skips
- * after a single read).
+ * is deleted). Also stamps the server-authoritative goal phase: goalSetAt
+ * changes ONLY when the goal value genuinely changes (or was never stamped),
+ * so unrelated settings writes and same-goal resaves cannot reset milestone
+ * praise eligibility.
  */
 const coachOnAthleteSettingsWritten = onDocumentWritten(
   { document: 'coachCheckIns/{coachUid}/athletes/{athleteUid}', timeoutSeconds: 540, memory: '512MiB' },
@@ -405,6 +503,15 @@ const coachOnAthleteSettingsWritten = onDocumentWritten(
     const { coachUid, athleteUid } = event.params;
     const before = event.data.before.exists ? event.data.before.data() : null;
     const after = event.data.after.exists ? event.data.after.data() : null;
+
+    // Server-authoritative goal phase.
+    if (after && after.goal
+        && (!before || before.goal !== after.goal || after.goalSetAt == null)) {
+      await athleteSettingsRef(coachUid, athleteUid).set({
+        goalSetAt: Date.now(),
+      }, { merge: true });
+    }
+
     const action = enrollment.settingsTransition(before, after);
     if (action === 'none') return;
 
@@ -413,9 +520,7 @@ const coachOnAthleteSettingsWritten = onDocumentWritten(
         logger.warn('settings write for non-assigned athlete ignored', { coachUid, athleteUid });
         return;
       }
-      // Materialise the coach settings doc: subcollection writes alone leave
-      // the parent doc virtual, and virtual docs never appear in the
-      // scheduler's coachCheckIns collection scan.
+      // Materialise the coach doc so the scheduler's collection scan sees it.
       const coachSnap = await coachRef(coachUid).get();
       if (!coachSnap.exists) {
         await coachRef(coachUid).set({ timezone: DEFAULT_TZ }, { merge: true });
@@ -437,8 +542,68 @@ const coachOnAthleteSettingsWritten = onDocumentWritten(
       await analyticsRef(athleteUid).set({
         enabledBy: { [coachUid]: admin.firestore.FieldValue.delete() },
       }, { merge: true });
-      // Nothing else to do: with enabledBy empty the workout trigger skips,
-      // and any re-enable passes maintenanceWasOff=true → fresh bootstrap.
+    }
+  }
+);
+
+/**
+ * Re-evaluates one coach⇄athlete relationship and server-disables reporting
+ * when NO valid assignment source remains. Idempotent; preserves access when
+ * either source still authorises.
+ */
+async function reevaluateEnrollment(coachUid, athleteUid, reason) {
+  const settingsSnap = await athleteSettingsRef(coachUid, athleteUid).get();
+  const enabled = settingsSnap.exists && settingsSnap.data().reportingEnabled === true;
+  if (!enabled) return; // nothing to clean up (deregistration already handled)
+  if (await isCoachFor(coachUid, athleteUid)) return; // still authorised
+
+  logger.warn('auto-disabling revoked coach/athlete enrollment', { coachUid, athleteUid, reason });
+  await athleteSettingsRef(coachUid, athleteUid).set({
+    reportingEnabled: false,
+    disabledReason: reason,
+    disabledAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  // The settings trigger also deregisters, but remove enabledBy directly so
+  // analytics maintenance stops immediately even if trigger delivery lags.
+  await analyticsRef(athleteUid).set({
+    enabledBy: { [coachUid]: admin.firestore.FieldValue.delete() },
+  }, { merge: true });
+}
+
+/** Trigger: immediate cleanup when an athlete's assignment doc changes
+ *  (approval flipped/removed, coach entry deleted, document deleted). */
+const coachOnAthleteAssignmentsWritten = onDocumentWritten(
+  'athleteAssignments/{athleteUid}',
+  async (event) => {
+    const athleteUid = event.params.athleteUid;
+    const before = event.data.before.exists ? (event.data.before.data().coaches || {}) : {};
+    const after = event.data.after.exists ? (event.data.after.data().coaches || {}) : {};
+    const coachUids = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const coachUid of coachUids) {
+      try {
+        await reevaluateEnrollment(coachUid, athleteUid, 'assignment-revoked');
+      } catch (err) {
+        logger.error('athleteAssignments cleanup failed', { coachUid, athleteUid, error: err });
+      }
+    }
+  }
+);
+
+/** Trigger: immediate cleanup when a coach's seeded roster changes. */
+const coachOnCoachAssignmentsWritten = onDocumentWritten(
+  'coachAssignments/{coachUid}',
+  async (event) => {
+    const coachUid = event.params.coachUid;
+    const before = event.data.before.exists ? (event.data.before.data().athletes || {}) : {};
+    const after = event.data.after.exists ? (event.data.after.data().athletes || {}) : {};
+    // Only athletes REMOVED from the seeded roster can lose access here.
+    for (const athleteUid of Object.keys(before)) {
+      if (after[athleteUid] != null) continue;
+      try {
+        await reevaluateEnrollment(coachUid, athleteUid, 'assignment-revoked');
+      } catch (err) {
+        logger.error('coachAssignments cleanup failed', { coachUid, athleteUid, error: err });
+      }
     }
   }
 );
@@ -476,8 +641,7 @@ async function completedWorkoutDays(athleteUid, dateKeys) {
   return out;
 }
 
-/** Active block meta ({blockId, startKey, endKey}) or null. Timestamps are
- *  local-midnight stamps, so resolve the calendar day in the coach zone. */
+/** Active block meta ({blockId, startKey, endKey}) or null. */
 async function activeBlock(athleteUid, tz) {
   const q = await db.collection('planned_blocks').doc(athleteUid)
     .collection('blocks')
@@ -492,8 +656,8 @@ async function activeBlock(athleteUid, tz) {
   if (!start) return null;
   return {
     blockId: doc.id,
-    startKey: cov.localDateKey(start, tz || DEFAULT_TZ),
-    endKey: end ? cov.localDateKey(end, tz || DEFAULT_TZ) : null,
+    startKey: cov.localDateKey(start, safeTz(tz)),
+    endKey: end ? cov.localDateKey(end, safeTz(tz)) : null,
   };
 }
 
@@ -522,11 +686,8 @@ function rangeKeys(startKey, endKeyExclusive) {
   return out;
 }
 
-/**
- * Evaluates the weekly-completion candidate for a checkpoint: the training
- * week (block-anchored) that most recently finished on/before the
- * checkpoint, or the in-progress week when it is already fully completed.
- */
+/** Weekly-completion candidate (block-anchored week; never split by Mon/Thu
+ *  message windows; eligible at the first checkpoint after it is known). */
 async function completionCandidate(athleteUid, block, checkpointKey) {
   if (!block) return null;
   const current = cov.trainingWeekOf(block.startKey, cov.addDaysKey(checkpointKey, -1));
@@ -546,10 +707,6 @@ async function completionCandidate(athleteUid, block, checkpointKey) {
     };
   };
 
-  // Candidates: the in-progress week and the last fully-elapsed week. The
-  // weekly achievement is judged per block-anchored training week — never
-  // split by Mon/Thu message windows — and becomes eligible at the first
-  // checkpoint after it is known.
   const candidates = [await evaluate(current)];
   if (current.weekIndex > 0) {
     const prevWeek = cov.trainingWeekOf(block.startKey, cov.addDaysKey(current.weekStart, -1));
@@ -565,43 +722,50 @@ async function completionCandidate(athleteUid, block, checkpointKey) {
   return withActivity || null;
 }
 
-/** Most recent trained week (for the no-training coach fallback label). */
+/** Most recent trained week (for the no-training coach fallback label).
+ *  Derived from the bounded exerciseDays analytics (dateKey desc, limit 1) —
+ *  reports only generate on ready analytics, so this is authoritative and
+ *  avoids scanning raw workout history. */
 async function lastTrainedWeek(athleteUid, block, beforeKey) {
-  const q = await db.collection('users').doc(athleteUid).collection('workouts')
-    .orderBy(admin.firestore.FieldPath.documentId(), 'desc')
-    .startAfter(beforeKey)
-    .limit(14)
+  const q = await analyticsRef(athleteUid).collection('exerciseDays')
+    .where('dateKey', '<', beforeKey)
+    .orderBy('dateKey', 'desc')
+    .limit(1)
     .get();
-  for (const doc of q.docs) {
-    if (!DATE_KEY_RE.test(doc.id)) continue;
-    if (!hasCompletedSets(doc.data())) continue;
-    if (block) {
-      const wk = cov.trainingWeekOf(block.startKey, doc.id);
-      if (wk) {
-        const days = await completedWorkoutDays(athleteUid, rangeKeys(wk.weekStart, wk.weekEnd));
-        return { weekStart: wk.weekStart, weekEnd: wk.weekEnd, workoutDates: days };
-      }
+  if (q.empty) return null;
+  const lastKey = q.docs[0].data().dateKey;
+  if (block) {
+    const wk = cov.trainingWeekOf(block.startKey, lastKey);
+    if (wk) {
+      const days = await completedWorkoutDays(athleteUid, rangeKeys(wk.weekStart, wk.weekEnd));
+      return { weekStart: wk.weekStart, weekEnd: wk.weekEnd, workoutDates: days };
     }
-    return { weekStart: doc.id, weekEnd: cov.addDaysKey(doc.id, 1), workoutDates: [doc.id] };
   }
-  return null;
+  return { weekStart: lastKey, weekEnd: cov.addDaysKey(lastKey, 1), workoutDates: [lastKey] };
 }
 
 /**
- * Generates one athlete's checkpoint report document. Idempotent: refuses to
- * overwrite an existing report for the same checkpoint.
+ * Generates one athlete's checkpoint report document. Idempotent (create-
+ * only). THROWS when analytics are not verifiably ready — a report is never
+ * fabricated from missing, failed, mid-bootstrap or wrong-generation
+ * analytics; the scheduler leaves the slot empty and retries.
  */
 async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
   const ref = reportRef(coachUid, athleteUid, checkpointKey);
   if ((await ref.get()).exists) return false;
 
-  // Self-heal analytics that never completed (crashed/errored bootstrap).
-  try {
-    await bootstrapIfNeeded(athleteUid, { maintenanceWasOff: false });
-  } catch (err) {
-    logger.error('pre-report bootstrap repair failed; report proceeds with existing analytics',
-      { coachUid, athleteUid, error: err });
+  // Readiness gate (may self-heal an errored/never-run bootstrap).
+  let stateSnap = await analyticsRef(athleteUid).get();
+  let state = stateSnap.exists ? stateSnap.data() : null;
+  if (!enrollment.analyticsReady(state, VERSIONS)) {
+    const ready = await bootstrapIfNeeded(athleteUid, { maintenanceWasOff: false });
+    if (!ready) {
+      throw new Error(`analytics not ready for ${athleteUid} (status=${state && state.bootstrapStatus})`);
+    }
+    stateSnap = await analyticsRef(athleteUid).get();
+    state = stateSnap.data();
   }
+  const e1rmPraiseFloorKey = (state && state.e1rmRebaselinedAtKey) || null;
 
   const settingsSnap = await athleteSettingsRef(coachUid, athleteUid).get();
   const settings = settingsSnap.exists ? settingsSnap.data() : {};
@@ -617,7 +781,6 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     .get();
   const events = eventsSnap.docs.map((d) => d.data());
 
-  // Completed workout days across the max window.
   const workoutDates = await completedWorkoutDays(
     athleteUid, rangeKeys(maxStartKey, checkpointKey));
 
@@ -627,8 +790,8 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     ? await lastTrainedWeek(athleteUid, block, checkpointKey)
     : null;
 
-  // Bodyweight state at the checkpoint. Milestone praise suppression is
-  // per-coach and per-goal-phase (settings.praisedMilestones/goalSetAt).
+  // Bodyweight state at the checkpoint. Milestone suppression is per-coach
+  // and per-goal-phase (settings.praisedMilestones / goalSetAt).
   const weightEntries = await loadWeightEntries(athleteUid, cov.addDaysKey(checkpointKey, -21), tz);
   const rolling = bwx.rollingComparison(weightEntries, checkpointKey);
   const trend = bwx.classifyTrend(goal, rolling.currentAvg, rolling.previousAvg);
@@ -652,11 +815,10 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     weighInStatus,
   };
 
-  // Draft previews for both candidate windows. The authoritative final text
-  // is recomposed at copy time (live bodyweight recheck + praise dedup).
   const draftFor = (startKey) => buildDraftText({
     events, completion, settings, identity, bodyweight,
     coverageStart: startKey, coverageEnd: checkpointKey, variantSeed,
+    e1rmPraiseFloorKey,
   });
 
   await ref.create({
@@ -677,6 +839,7 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     fallbackWeek: fallbackWeek || null,
     blockStartKey: block ? block.startKey : null,
     bodyweight,
+    e1rmPraiseFloorKey,
     draftIfPrevCopied: draftFor(prevKey),
     draftIfPrevNotCopied: draftFor(maxStartKey),
     analyticsVersion: ANALYTICS_VERSION,
@@ -696,52 +859,15 @@ function seedFrom(s) {
 }
 
 /**
- * Composes a client draft for a given coverage window from report inputs.
- * Praise rules: events filtered to window; already-praised weeks excluded;
- * custom exercise mode filters the client draft (never the coach summary).
- * Exported for the copy-time recomposition test.
- */
-function buildDraftText({
-  events, completion, settings, identity, bodyweight,
-  coverageStart, coverageEnd, variantSeed,
-}) {
-  const inWindow = (e) => e.dateKey >= coverageStart && e.dateKey < coverageEnd;
-  const repEvents = events.filter((e) => e.type === 'repPB' && inWindow(e));
-  const e1rmEvents = events.filter((e) => e.type === 'e1rmPB' && inWindow(e));
-
-  const praisedWeeks = (settings && settings.praisedWeeks) || {};
-  const completionInput = completion ? {
-    completedAll: !!completion.completedAll,
-    count: completion.completedCount,
-    planned: completion.plannedCount,
-    weekAlreadyPraised: Object.prototype.hasOwnProperty.call(praisedWeeks, completion.weekKey),
-  } : null;
-
-  const allowed = (settings && settings.messageExerciseMode === 'custom')
-    ? (Array.isArray(settings.customExerciseIds) ? settings.customExerciseIds : [])
-    : null;
-
-  const { praises } = selectPraise({
-    repEvents, e1rmEvents, completion: completionInput, allowedExerciseIds: allowed,
-  });
-
-  return composeDraft({
-    praises,
-    bodyweight,
-    gender: identity.gender,
-    firstName: identity.firstName,
-    variantSeed,
-  }) || '';
-}
-
-/**
- * Scheduler: hourly sweep. For every coach whose local calendar is currently
- * on a Monday or Thursday and whose checkpoint has not been generated yet,
- * generates reports for all reporting-enabled, still-assigned athletes,
- * auto-disables athletes whose assignment was revoked, and expires over-aged
- * drafts. Watermark (lastCheckpointKey) keeps re-runs to a single document
- * read per coach per hour — and doubles as the client's authoritative
- * checkpoint identity (always coach-timezone-correct).
+ * Scheduler: hourly sweep with deterministic catch-up. For every coach,
+ * computes the bounded list of Mon/Thu checkpoints still unprocessed in
+ * their (validated) timezone — so an outage over a whole checkpoint day is
+ * recovered on the next run — and generates any missing per-athlete reports.
+ *
+ * Checkpoint IDENTITY is not derived from the watermark (the dashboard gets
+ * it from coachReviewContext), so one failing athlete never hides other
+ * athletes' finished reports; the watermark only bounds re-scanning and
+ * advances contiguously over fully-successful checkpoints.
  */
 const coachCheckpointScheduler = onSchedule(
   { schedule: 'every 60 minutes', timeoutSeconds: 540, memory: '512MiB' },
@@ -752,42 +878,42 @@ const coachCheckpointScheduler = onSchedule(
     for (const coachDoc of coaches.docs) {
       const coachUid = coachDoc.id;
       const data = coachDoc.data() || {};
-      const tz = data.timezone || DEFAULT_TZ;
-      const checkpointKey = cov.currentCheckpointKey(now, tz);
-      if (!checkpointKey) continue;
-      if (data.lastCheckpointKey === checkpointKey) continue;
+      const tz = safeTz(data.timezone);
+      const todayKey = cov.localDateKey(now, tz);
+      const pending = cov.pendingCheckpoints(data.lastCheckpointKey || null, todayKey);
+      if (pending.length === 0) continue;
 
       try {
         const athletes = await coachRef(coachUid).collection('athletes')
           .where('reportingEnabled', '==', true)
           .get();
 
-        let allOk = true;
-        for (const aDoc of athletes.docs) {
-          const athleteUid = aDoc.id;
-          try {
-            if (!(await isCoachFor(coachUid, athleteUid))) {
-              // Assignment revoked: server-side auto-disable so stale
-              // enabledBy state cannot keep analytics maintenance alive
-              // or keep producing reports for a revoked coach.
-              logger.warn('auto-disabling revoked athlete assignment', { coachUid, athleteUid });
-              await athleteSettingsRef(coachUid, athleteUid).set({
-                reportingEnabled: false,
-                disabledReason: 'assignment-revoked',
-                disabledAt: admin.firestore.FieldValue.serverTimestamp(),
-              }, { merge: true });
-              continue;
+        let watermark = data.lastCheckpointKey || null;
+        for (const checkpointKey of pending) {
+          let allOk = true;
+          for (const aDoc of athletes.docs) {
+            const athleteUid = aDoc.id;
+            try {
+              if (!(await isCoachFor(coachUid, athleteUid))) {
+                // Defence in depth — assignment triggers normally handle this.
+                await reevaluateEnrollment(coachUid, athleteUid, 'assignment-revoked');
+                continue;
+              }
+              await generateReport(coachUid, athleteUid, checkpointKey, tz);
+              await expireStaleDraft(coachUid, athleteUid, checkpointKey);
+            } catch (err) {
+              allOk = false;
+              logger.error('report generation failed', { coachUid, athleteUid, checkpointKey, error: err });
             }
-            await generateReport(coachUid, athleteUid, checkpointKey, tz);
-            await expireStaleDraft(coachUid, athleteUid, checkpointKey);
-          } catch (err) {
-            allOk = false;
-            logger.error('report generation failed', { coachUid, athleteUid, checkpointKey, error: err });
+          }
+          if (allOk) {
+            watermark = checkpointKey; // contiguous advance only
+          } else {
+            break; // retry this checkpoint (and later ones) next run
           }
         }
-
-        if (allOk) {
-          await coachRef(coachUid).set({ lastCheckpointKey: checkpointKey }, { merge: true });
+        if (watermark && watermark !== (data.lastCheckpointKey || null)) {
+          await coachRef(coachUid).set({ lastCheckpointKey: watermark }, { merge: true });
         }
       } catch (err) {
         logger.error('checkpoint sweep failed for coach', { coachUid, error: err });
@@ -807,7 +933,7 @@ async function expireStaleDraft(coachUid, athleteUid, checkpointKey) {
   }
 }
 
-// ── Copy / undo / skip callables ────────────────────────────────────────────
+// ── Callables ───────────────────────────────────────────────────────────────
 
 function requireAuth(request) {
   if (!request.auth || !request.auth.uid) {
@@ -816,263 +942,129 @@ function requireAuth(request) {
   return request.auth.uid;
 }
 
-async function coachTimezone(coachUid) {
-  const snap = await coachRef(coachUid).get();
-  return (snap.exists && snap.data().timezone) || DEFAULT_TZ;
-}
-
-/** Loads report + neighbour statuses needed by the state machine guards. */
-async function loadReportContext(coachUid, athleteUid, checkpointKey, tz) {
-  const ref = reportRef(coachUid, athleteUid, checkpointKey);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpsError('not-found', 'Report not found.');
-
-  // Enumerate potentially newer checkpoints up to the coach-local today
-  // (drafts older than the previous checkpoint are expired, so this stays
-  // tiny in practice).
-  const reports = { [checkpointKey]: snap.data() };
-  let k = checkpointKey;
-  const today = todayKeyIn(tz);
-  for (let i = 0; i < 8; i++) {
-    k = nextCheckpointKey(k);
-    if (k > today) break;
-    const s = await reportRef(coachUid, athleteUid, k).get();
-    if (s.exists) reports[k] = s.data();
-  }
-  return { ref, report: snap.data(), reports };
-}
-
-function nextCheckpointKey(checkpointKey) {
-  const wd = cov.weekdayOfKey(checkpointKey);
-  if (wd === 'Mon') return cov.addDaysKey(checkpointKey, 3);
-  if (wd === 'Thu') return cov.addDaysKey(checkpointKey, 4);
-  throw new Error(`not a checkpoint key: ${checkpointKey}`);
-}
-
-/**
- * Copy-time preparation: recomputes the effective coverage from the previous
- * checkpoint's LIVE copy state, re-checks bodyweight/weigh-in status live,
- * composes the authoritative message, freezes everything, and records praise
- * bookkeeping. Returns { text, coverageStart, coverageEnd } — the client
- * copies exactly this text to the clipboard and re-renders it.
- */
-const coachPrepareCheckInCopy = onCall(async (request) => {
-  const coachUid = requireAuth(request);
+function requireArgs(request) {
   const { athleteUid, checkpointKey } = request.data || {};
   if (typeof athleteUid !== 'string' || !DATE_KEY_RE.test(String(checkpointKey || ''))) {
     throw new HttpsError('invalid-argument', 'athleteUid and checkpointKey required.');
   }
+  return { athleteUid, checkpointKey };
+}
+
+/** Every athlete-specific callable revalidates the approved relationship at
+ *  invocation time — a revoked coach cannot copy, undo or skip. */
+async function requireAssignment(coachUid, athleteUid) {
   if (!(await isCoachFor(coachUid, athleteUid))) {
     throw new HttpsError('permission-denied', 'Not an assigned coach for this athlete.');
   }
-
-  const tz = await coachTimezone(coachUid);
-  const { ref, report, reports } = await loadReportContext(coachUid, athleteUid, checkpointKey, tz);
-  if (report.status === 'copied') {
-    // Re-copy of an already-copied report returns the frozen text unchanged.
-    return { text: report.finalText || '', coverageStart: report.coverageStart, coverageEnd: report.coverageEnd, alreadyCopied: true };
-  }
-  if (report.status === 'expired' || report.status === 'skipped') {
-    throw new HttpsError('failed-precondition', `Check-in is ${report.status}.`);
-  }
-  if (!cov.canCopy(checkpointKey, reports)) {
-    throw new HttpsError('failed-precondition', 'A newer check-in was already finalised.');
-  }
-
-  const settingsRef = athleteSettingsRef(coachUid, athleteUid);
-  const settingsSnap = await settingsRef.get();
-  const settings = settingsSnap.exists ? settingsSnap.data() : {};
-
-  // Effective coverage from the previous checkpoint's live status.
-  const prevSnap = await reportRef(coachUid, athleteUid, report.prevCheckpointKey).get();
-  const prevCopied = prevSnap.exists && prevSnap.data().status === 'copied';
-  const coverage = cov.effectiveCoverage(
-    checkpointKey, prevCopied, settings.lastFinalizedCoverageEnd || null);
-
-  // LIVE bodyweight recheck (training achievements stay frozen to the
-  // checkpoint cutoff; only the bodyweight portion refreshes).
-  const todayKey = todayKeyIn(tz);
-  const goal = (report.bodyweight && report.bodyweight.goal) || 'maintain';
-  const entries = await loadWeightEntries(athleteUid, cov.addDaysKey(todayKey, -21), tz);
-  const rolling = bwx.rollingComparison(entries, todayKey);
-  const trend = bwx.classifyTrend(goal, rolling.currentAvg, rolling.previousAvg);
-  const awarded = bwx.awardedForPhase(settings.praisedMilestones, settings.goalSetAt);
-  const newMilestoneId = bwx.detectMilestone(goal, rolling.previousAvg, rolling.currentAvg, awarded);
-  const lastWeighKey = await latestWeighInKey(athleteUid, tz);
-  const liveBodyweight = {
-    goal,
-    currentAvg: rolling.currentAvg,
-    currentCount: rolling.currentCount,
-    previousAvg: rolling.previousAvg,
-    previousCount: rolling.previousCount,
-    trend,
-    newMilestoneId: newMilestoneId || null,
-    lastWeighInKey: lastWeighKey,
-    weighInStatus: bwx.weighInStatus(lastWeighKey, todayKey),
-  };
-
-  const identity = { gender: report.gender, firstName: report.firstName };
-  const text = buildDraftText({
-    events: report.events || [],
-    completion: report.completion || null,
-    settings,
-    identity,
-    bodyweight: liveBodyweight,
-    coverageStart: coverage.start,
-    coverageEnd: coverage.end,
-    variantSeed: report.variantSeed,
-  });
-
-  // Freeze + bookkeeping in one transaction.
-  const praisedWeekKey = computePraisedWeekKey(report, settings, coverage);
-  const milestonePraise = newMilestoneId
-    ? bwx.milestonePraiseKey(newMilestoneId, settings.goalSetAt)
-    : null;
-  await db.runTransaction(async (tx) => {
-    const fresh = await tx.get(ref);
-    if (!fresh.exists || fresh.data().status !== 'draft') {
-      throw new HttpsError('aborted', 'Report changed underneath the copy.');
-    }
-    tx.update(ref, {
-      status: 'copied',
-      copiedAt: admin.firestore.FieldValue.serverTimestamp(),
-      coverageStart: coverage.start,
-      coverageEnd: coverage.end,
-      finalText: text,
-      liveBodyweight,
-      praisedWeekKey: praisedWeekKey || null,
-      milestoneAwarded: milestonePraise || null,
-      prevLastFinalizedCoverageEnd: settings.lastFinalizedCoverageEnd || null,
-    });
-    const settingsUpdate = { lastFinalizedCoverageEnd: coverage.end };
-    if (praisedWeekKey) {
-      settingsUpdate.praisedWeeks = { [praisedWeekKey]: ref.id };
-    }
-    if (milestonePraise) {
-      settingsUpdate.praisedMilestones = {
-        [milestonePraise]: { reportId: ref.id, dateKey: todayKey },
-      };
-    }
-    tx.set(settingsRef, settingsUpdate, { merge: true });
-  });
-
-  return { text, coverageStart: coverage.start, coverageEnd: coverage.end };
-});
-
-/** Which training week gets its completion praise recorded by this copy. */
-function computePraisedWeekKey(report, settings, coverage) {
-  const completion = report.completion;
-  if (!completion) return null;
-  const praisedWeeks = settings.praisedWeeks || {};
-  if (Object.prototype.hasOwnProperty.call(praisedWeeks, completion.weekKey)) return null;
-  const qualifies = completion.completedAll || completion.completedCount >= 3;
-  if (!qualifies) return null;
-  // Only record when the draft could actually praise it (some PB-heavy drafts
-  // fill all three slots; praising later would then be wrong — the selection
-  // is deterministic, so re-derive it the same way buildDraftText does).
-  const inWindow = (e) => e.dateKey >= coverage.start && e.dateKey < coverage.end;
-  const repEvents = (report.events || []).filter((e) => e.type === 'repPB' && inWindow(e));
-  const e1rmEvents = (report.events || []).filter((e) => e.type === 'e1rmPB' && inWindow(e));
-  const allowed = settings.messageExerciseMode === 'custom'
-    ? (Array.isArray(settings.customExerciseIds) ? settings.customExerciseIds : [])
-    : null;
-  const { usedCompletion } = selectPraise({
-    repEvents,
-    e1rmEvents,
-    completion: {
-      completedAll: !!completion.completedAll,
-      count: completion.completedCount,
-      planned: completion.plannedCount,
-      weekAlreadyPraised: false,
-    },
-    allowedExerciseIds: allowed,
-  });
-  return usedCompletion ? completion.weekKey : null;
 }
 
-/** Undo / Mark-Not-Sent: reverts a copy while it is still safe to do so.
- *  Only this coach's bookkeeping (praise week, milestone praise, coverage
- *  watermark) is touched — never athlete-level analytics. */
-const coachUndoCheckIn = onCall(async (request) => {
+function mapTxnError(err) {
+  if (err instanceof TxnError) return new HttpsError(err.codeName, err.message);
+  return err;
+}
+
+/**
+ * Server-derived Weekly Review context: coach-local today, checkpoint
+ * identity (pure timezone computation — independent of scheduler success)
+ * and per-athlete live weigh-in staleness. The device timezone never
+ * influences any of these.
+ */
+const coachReviewContext = onCall(async (request) => {
   const coachUid = requireAuth(request);
-  const { athleteUid, checkpointKey } = request.data || {};
-  if (typeof athleteUid !== 'string' || !DATE_KEY_RE.test(String(checkpointKey || ''))) {
-    throw new HttpsError('invalid-argument', 'athleteUid and checkpointKey required.');
-  }
+  const athleteUids = Array.isArray(request.data && request.data.athleteUids)
+    ? request.data.athleteUids.filter((u) => typeof u === 'string').slice(0, 100)
+    : [];
 
   const tz = await coachTimezone(coachUid);
-  const { ref, report, reports } = await loadReportContext(coachUid, athleteUid, checkpointKey, tz);
-  if (report.status !== 'copied') {
-    throw new HttpsError('failed-precondition', 'Only a copied check-in can be undone.');
-  }
-  if (!cov.canUndo(checkpointKey, reports)) {
-    throw new HttpsError('failed-precondition', 'A newer check-in was finalised; undo is no longer safe.');
-  }
+  const todayKey = todayKeyIn(tz);
+  const currentCheckpointKey = cov.checkpointOnOrBefore(todayKey);
+  const prevCheckpointKey = cov.previousCheckpointKey(currentCheckpointKey);
 
-  const settingsRef = athleteSettingsRef(coachUid, athleteUid);
-  await db.runTransaction(async (tx) => {
-    const fresh = await tx.get(ref);
-    if (!fresh.exists || fresh.data().status !== 'copied') {
-      throw new HttpsError('aborted', 'Report changed underneath the undo.');
-    }
-    const data = fresh.data();
-    tx.update(ref, {
-      status: 'draft',
-      copiedAt: admin.firestore.FieldValue.delete(),
-      coverageStart: admin.firestore.FieldValue.delete(),
-      coverageEnd: admin.firestore.FieldValue.delete(),
-      finalText: admin.firestore.FieldValue.delete(),
-      liveBodyweight: admin.firestore.FieldValue.delete(),
-      praisedWeekKey: admin.firestore.FieldValue.delete(),
-      milestoneAwarded: admin.firestore.FieldValue.delete(),
-      prevLastFinalizedCoverageEnd: admin.firestore.FieldValue.delete(),
-    });
-    const settingsUpdate = {
-      lastFinalizedCoverageEnd: data.prevLastFinalizedCoverageEnd || admin.firestore.FieldValue.delete(),
+  const athletes = {};
+  await Promise.all(athleteUids.map(async (athleteUid) => {
+    if (!(await isCoachFor(coachUid, athleteUid))) return; // silently omit
+    const lastWeighInKey = await latestWeighInKey(athleteUid, tz);
+    athletes[athleteUid] = {
+      lastWeighInKey,
+      weighInStatus: bwx.weighInStatus(lastWeighInKey, todayKey),
     };
-    if (data.praisedWeekKey) {
-      settingsUpdate.praisedWeeks = {
-        [data.praisedWeekKey]: admin.firestore.FieldValue.delete(),
-      };
-    }
-    if (data.milestoneAwarded) {
-      settingsUpdate.praisedMilestones = {
-        [data.milestoneAwarded]: admin.firestore.FieldValue.delete(),
-      };
-    }
-    tx.set(settingsRef, settingsUpdate, { merge: true });
-  });
+  }));
 
-  return { ok: true };
+  return { timezone: tz, todayKey, currentCheckpointKey, prevCheckpointKey, athletes };
 });
 
-/** Skip: deliberately closes an unused opportunity (counts as NOT copied for
- *  the next window, but blocks late copies of this checkpoint). */
+/** Copy: live bodyweight recheck + atomic freeze; returns the exact frozen
+ *  finalText the client must display and put on the clipboard. */
+const coachPrepareCheckInCopy = onCall(async (request) => {
+  const coachUid = requireAuth(request);
+  const { athleteUid, checkpointKey } = requireArgs(request);
+  await requireAssignment(coachUid, athleteUid);
+
+  const tz = await coachTimezone(coachUid);
+  const todayKey = todayKeyIn(tz);
+
+  // Live (non-state) prefetch; the goal/milestone/praise parts are resolved
+  // inside the transaction from transactional state.
+  const reportSnap = await reportRef(coachUid, athleteUid, checkpointKey).get();
+  if (!reportSnap.exists) throw new HttpsError('not-found', 'Report not found.');
+  const goal = (reportSnap.data().bodyweight && reportSnap.data().bodyweight.goal) || 'maintain';
+  const liveBodyweight = await liveBodyweightBase(athleteUid, tz, goal);
+
+  try {
+    return await copyTransaction(db, {
+      coachUid, athleteUid, checkpointKey, todayKey, liveBodyweight,
+    });
+  } catch (err) {
+    throw mapTxnError(err);
+  }
+});
+
+/** Undo / Mark-Not-Sent. */
+const coachUndoCheckIn = onCall(async (request) => {
+  const coachUid = requireAuth(request);
+  const { athleteUid, checkpointKey } = requireArgs(request);
+  await requireAssignment(coachUid, athleteUid);
+  const tz = await coachTimezone(coachUid);
+  try {
+    return await undoTransaction(db, {
+      coachUid, athleteUid, checkpointKey, todayKey: todayKeyIn(tz),
+    });
+  } catch (err) {
+    throw mapTxnError(err);
+  }
+});
+
+/** Skip check-in. */
 const coachSkipCheckIn = onCall(async (request) => {
   const coachUid = requireAuth(request);
-  const { athleteUid, checkpointKey } = request.data || {};
-  if (typeof athleteUid !== 'string' || !DATE_KEY_RE.test(String(checkpointKey || ''))) {
-    throw new HttpsError('invalid-argument', 'athleteUid and checkpointKey required.');
+  const { athleteUid, checkpointKey } = requireArgs(request);
+  await requireAssignment(coachUid, athleteUid);
+  try {
+    return await skipTransaction(db, { coachUid, athleteUid, checkpointKey });
+  } catch (err) {
+    throw mapTxnError(err);
   }
-  const tz = await coachTimezone(coachUid);
-  const { ref, report } = await loadReportContext(coachUid, athleteUid, checkpointKey, tz);
-  if (report.status !== 'draft') {
-    throw new HttpsError('failed-precondition', 'Only a draft can be skipped.');
-  }
-  await ref.update({
-    status: 'skipped',
-    skippedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-  return { ok: true };
 });
 
 module.exports = {
   coachAnalyticsOnWorkoutWrite,
   coachOnAthleteSettingsWritten,
+  coachOnAthleteAssignmentsWritten,
+  coachOnCoachAssignmentsWritten,
   coachCheckpointScheduler,
+  coachReviewContext,
   coachPrepareCheckInCopy,
   coachUndoCheckIn,
   coachSkipCheckIn,
-  // Exported for tests only (not deployed as functions):
-  buildDraftText,
+  // Exported for emulator integration tests (not deployed as functions):
+  _internals: {
+    firestoreStore,
+    claimBootstrap,
+    runBootstrap,
+    bootstrapIfNeeded,
+    generateReport,
+    reevaluateEnrollment,
+    liveBodyweightBase,
+    loadWeightEntries,
+  },
 };
