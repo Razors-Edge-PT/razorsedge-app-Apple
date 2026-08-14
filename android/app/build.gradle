@@ -6,8 +6,8 @@ plugins {
     id "com.google.gms.google-services"
 }
 
-def flutterVersionCode = project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "69"
-def flutterVersionName = project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.6.9"
+def flutterVersionCode = project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "70"
+def flutterVersionName = project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.7.0"
 
 android {
     namespace = "com.goodlift.razorsedge"
