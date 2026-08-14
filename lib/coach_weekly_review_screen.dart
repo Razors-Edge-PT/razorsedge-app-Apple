@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import 'coach_checkins_logic.dart';
+import 'coach_roster.dart';
 import 'user_context.dart';
 
 const List<String> kCoachTimezones = [
@@ -40,17 +41,24 @@ enum _ReviewFilter { all, ready, needsWeighIn, pbs, noTraining }
 class _AthleteReview {
   final String uid;
   final Map<String, dynamic> settings;
+  final String? rosterName;
   Map<String, dynamic>? report; // current checkpoint report (may be null)
   Map<String, dynamic>? prevReport;
   String? liveLastWeighInKey; // server-derived (coach timezone)
   String? liveWeighInStatus; // 'ok' | 'due' | 'overdue' (server-derived)
 
-  _AthleteReview({required this.uid, required this.settings});
+  _AthleteReview({required this.uid, required this.settings, this.rosterName});
 
-  String get displayName =>
-      (report?['displayName'] as String?) ??
-      (settings['displayName'] as String?) ??
-      uid;
+  String get displayName {
+    for (final v in [
+      report?['displayName'] as String?,
+      settings['displayName'] as String?,
+      rosterName,
+    ]) {
+      if (v != null && v.trim().isNotEmpty) return v.trim();
+    }
+    return uid;
+  }
 }
 
 class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
@@ -66,6 +74,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
   List<_AthleteReview> _athletes = [];
   _ReviewFilter _filter = _ReviewFilter.all;
   final Set<String> _busy = {};
+  int _rosterSize = 0;
+  bool _contextDegraded = false;
 
   String get _coachUid => UserContext.of(context, listen: false).actorUid;
 
@@ -88,66 +98,71 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     });
     try {
       final coachUid = _coachUid;
+      final userCtx = UserContext.of(context, listen: false);
 
-      // 1) Assigned athletes from the two authoritative assignment sources
-      //    (same model as CoachHomeScreen: seeded roster + approved==true).
-      final assignedUids = <String>{};
-      final q1 = await _db
-          .collection('athleteAssignments')
-          .where('coaches.$coachUid.approved', isEqualTo: true)
-          .get();
-      for (final doc in q1.docs) {
-        assignedUids.add(doc.id);
-      }
-      final seededDoc =
-          await _db.collection('coachAssignments').doc(coachUid).get();
-      if (seededDoc.exists) {
-        assignedUids.addAll(
-            Map<String, dynamic>.from(seededDoc.data()?['athletes'] ?? {}).keys);
-      }
+      // 1) Shared roster — super-admin gets every athlete, ordinary coaches
+      //    only their approved/seeded assignments. Identical source to the
+      //    Coach Dashboard and Check-in Athletes screens.
+      final roster = await CoachRosterService().loadRoster(userCtx);
 
-      // 2) Per-athlete settings via direct gets (readable only while the
-      //    assignment is live — a revoked athlete drops out automatically).
+      // 2) Per-athlete settings; only reporting-enabled athletes appear here.
+      //    Reporting stays off until a coach toggles it on.
       final enabled = <_AthleteReview>[];
-      await Future.wait(assignedUids.map((uid) async {
+      await Future.wait(roster.map((athlete) async {
         try {
           final s = await _db
               .collection('coachCheckIns')
               .doc(coachUid)
               .collection('athletes')
-              .doc(uid)
+              .doc(athlete.uid)
               .get();
           final data = s.data();
           if (data != null && data['reportingEnabled'] == true) {
-            enabled.add(_AthleteReview(uid: uid, settings: data));
+            enabled.add(_AthleteReview(
+              uid: athlete.uid,
+              settings: data,
+              rosterName: athlete.label,
+            ));
           }
         } catch (e) {
-          debugPrint('⚠️ [WeeklyReview] settings read failed for $uid: $e');
+          debugPrint('⚠️ [WeeklyReview] settings read failed for ${athlete.uid}: $e');
         }
       }));
+      _rosterSize = roster.length;
 
-      // 3) Server-derived coach-local context: today, checkpoint identity
-      //    and live weigh-in staleness — all computed in the coach's
-      //    configured timezone. The device timezone influences nothing.
-      final ctxRes = await _functions.httpsCallable('coachReviewContext').call({
-        'athleteUids': enabled.map((a) => a.uid).toList(),
-      });
-      final ctx = Map<String, dynamic>.from(ctxRes.data as Map);
-      _timezone = (ctx['timezone'] as String?) ?? 'Pacific/Auckland';
-      _todayKey = (ctx['todayKey'] as String?) ??
-          CoachCheckinsLogic.dateKey(DateTime.now());
-      _currentKey = (ctx['currentCheckpointKey'] as String?) ??
-          CoachCheckinsLogic.checkpointOnOrBefore(DateTime.now());
-      _prevKey = (ctx['prevCheckpointKey'] as String?) ??
-          CoachCheckinsLogic.previousCheckpointKey(_currentKey);
-      final ctxAthletes =
-          Map<String, dynamic>.from(ctx['athletes'] as Map? ?? {});
-      for (final a in enabled) {
-        final info = ctxAthletes[a.uid];
-        if (info is Map) {
-          a.liveLastWeighInKey = info['lastWeighInKey'] as String?;
-          a.liveWeighInStatus = info['weighInStatus'] as String?;
+      // 3) Server-derived coach-local context: today, checkpoint identity and
+      //    live weigh-in staleness, all in the coach's configured timezone.
+      //    Non-fatal: if it fails the screen still opens (with a banner) using
+      //    device-derived dates, rather than dying with a generic error.
+      _contextDegraded = false;
+      try {
+        final ctxRes = await _functions.httpsCallable('coachReviewContext').call({
+          'athleteUids': enabled.map((a) => a.uid).toList(),
+        });
+        final ctx = Map<String, dynamic>.from(ctxRes.data as Map);
+        _timezone = (ctx['timezone'] as String?) ?? _timezone;
+        _todayKey = (ctx['todayKey'] as String?) ??
+            CoachCheckinsLogic.dateKey(DateTime.now());
+        _currentKey = (ctx['currentCheckpointKey'] as String?) ??
+            CoachCheckinsLogic.checkpointOnOrBefore(DateTime.now());
+        _prevKey = (ctx['prevCheckpointKey'] as String?) ??
+            CoachCheckinsLogic.previousCheckpointKey(_currentKey);
+        final ctxAthletes =
+            Map<String, dynamic>.from(ctx['athletes'] as Map? ?? {});
+        for (final a in enabled) {
+          final info = ctxAthletes[a.uid];
+          if (info is Map) {
+            a.liveLastWeighInKey = info['lastWeighInKey'] as String?;
+            a.liveWeighInStatus = info['weighInStatus'] as String?;
+          }
         }
+      } catch (e) {
+        debugPrint('⚠️ [WeeklyReview] coachReviewContext unavailable: $e');
+        _contextDegraded = true;
+        final now = DateTime.now();
+        _todayKey = CoachCheckinsLogic.dateKey(now);
+        _currentKey = CoachCheckinsLogic.checkpointOnOrBefore(now);
+        _prevKey = CoachCheckinsLogic.previousCheckpointKey(_currentKey);
       }
 
       // 4) Bounded report reads: two direct gets per athlete.
@@ -533,17 +548,72 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                         ],
                       ),
                     ),
+                    if (_contextDegraded)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: Colors.amber.withValues(alpha: 0.5)),
+                        ),
+                        child: Text(
+                          'Live coach-timezone context is unavailable, so dates below '
+                          'come from this device. Tap Refresh to retry.',
+                          style: TextStyle(
+                              color: Colors.amber[200], fontSize: 12),
+                        ),
+                      ),
                     Expanded(
                       child: _athletes.isEmpty
-                          ? const Center(
+                          ? Center(
                               child: Padding(
-                                padding: EdgeInsets.all(24),
-                                child: Text(
-                                  'No athletes enabled for check-ins yet.\n'
-                                  'Use the settings icon (top right) to enable reporting '
-                                  'for the athletes you are actively coaching.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: Colors.white70),
+                                padding: const EdgeInsets.all(24),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.fact_check_outlined,
+                                        size: 40, color: Colors.white38),
+                                    const SizedBox(height: 12),
+                                    const Text(
+                                      'No athletes enabled for check-ins yet',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _rosterSize == 0
+                                          ? 'No athletes are assigned to you yet. '
+                                              'Add athletes from the Coach Dashboard first.'
+                                          : 'Reporting is off for all $_rosterSize of your athletes. '
+                                              'Open Check-in Athletes to enable the ones you are '
+                                              'actively coaching — reports then run every Monday '
+                                              'and Thursday.',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                          color: Colors.white70, fontSize: 13),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    ElevatedButton.icon(
+                                      icon: const Icon(Icons.tune, size: 16),
+                                      label: const Text('Open Check-in Athletes'),
+                                      onPressed: () async {
+                                        await Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                          builder: (_) =>
+                                              ChangeNotifierProvider<UserContext>.value(
+                                            value: context.read<UserContext>(),
+                                            child:
+                                                const CoachCheckinAthletesScreen(),
+                                          ),
+                                        ));
+                                        _load();
+                                      },
+                                    ),
+                                  ],
                                 ),
                               ),
                             )
@@ -842,8 +912,9 @@ class _CoachCheckinAthletesScreenState
     extends State<CoachCheckinAthletesScreen> {
   final _db = FirebaseFirestore.instance;
   bool _loading = true;
-  // uid -> {name, email}
-  final Map<String, Map<String, String>> _assigned = {};
+  String? _error;
+  // Shared roster (super-admin: all users; coach: approved + seeded).
+  final List<CoachAthlete> _roster = [];
   // uid -> settings doc data
   final Map<String, Map<String, dynamic>> _settings = {};
 
@@ -859,57 +930,48 @@ class _CoachCheckinAthletesScreenState
     setState(() => _loading = true);
     try {
       final coachUid = _coachUid;
+      final ctx = UserContext.of(context, listen: false);
 
-      // Same two assignment sources CoachHomeScreen uses.
-      final q1 = await _db
-          .collection('athleteAssignments')
-          .where('coaches.$coachUid.approved', isEqualTo: true)
-          .get();
-      for (final doc in q1.docs) {
-        _assigned[doc.id] = {};
-      }
-      final doc2 = await _db.collection('coachAssignments').doc(coachUid).get();
-      if (doc2.exists) {
-        final seeded = Map<String, dynamic>.from(doc2.data()?['athletes'] ?? {});
-        for (final e in seeded.entries) {
-          _assigned.putIfAbsent(e.key, () => {
-                'email': (e.value is Map ? e.value['email'] ?? '' : '').toString(),
-              });
-        }
-      }
+      // Shared roster: super-admin gets the full user roster (same as Coach
+      // Dashboard); ordinary coaches get only their approved/seeded athletes.
+      final roster = await CoachRosterService().loadRoster(ctx);
+      _roster
+        ..clear()
+        ..addAll(roster);
 
-      // Hydrate names + existing settings.
-      await Future.wait(_assigned.keys.map((uid) async {
-        final results = await Future.wait([
-          _db.collection('users').doc(uid).get(),
-          _db
+      // Existing per-athlete settings (absent = reporting off, the default).
+      await Future.wait(roster.map((a) async {
+        try {
+          final s = await _db
               .collection('coachCheckIns')
               .doc(coachUid)
               .collection('athletes')
-              .doc(uid)
-              .get(),
-        ]);
-        final u = results[0].data() ?? {};
-        final name = (u['username'] ?? u['displayName'] ?? u['fullName'] ?? '')
-            .toString()
-            .trim();
-        _assigned[uid] = {
-          'name': name,
-          'email': (u['email'] ?? _assigned[uid]?['email'] ?? '').toString(),
-        };
-        final s = results[1].data();
-        if (s != null) _settings[uid] = Map<String, dynamic>.from(s);
+              .doc(a.uid)
+              .get();
+          final data = s.data();
+          if (data != null) _settings[a.uid] = Map<String, dynamic>.from(data);
+        } catch (e) {
+          debugPrint('⚠️ [CheckinAthletes] settings read failed for ${a.uid}: $e');
+        }
       }));
 
       if (mounted) setState(() => _loading = false);
     } catch (e) {
       debugPrint('❌ [CheckinAthletes] load failed: $e');
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Couldn\'t load your athlete list. Tap refresh to try again.';
+        });
+      }
     }
   }
 
   Future<void> _save(String uid, Map<String, dynamic> patch) async {
-    final name = _assigned[uid]?['name'] ?? '';
+    final name = _roster
+        .firstWhere((a) => a.uid == uid,
+            orElse: () => CoachAthlete(uid: uid))
+        .label;
     try {
       await _db
           .collection('coachCheckIns')
@@ -1001,26 +1063,47 @@ class _CoachCheckinAthletesScreenState
 
   @override
   Widget build(BuildContext context) {
-    final uids = _assigned.keys.toList()
-      ..sort((a, b) => (_assigned[a]?['name'] ?? '')
-          .toLowerCase()
-          .compareTo((_assigned[b]?['name'] ?? '').toLowerCase()));
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Check-in Athletes'),
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh),
+            onPressed: _loading ? null : _load,
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.separated(
+          : _error != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(_error!, textAlign: TextAlign.center),
+                  ),
+                )
+              : _roster.isEmpty
+                  ? const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text(
+                          'No athletes are assigned to you yet.\n'
+                          'Add athletes from the Coach Dashboard first.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
-              itemCount: uids.length,
+              itemCount: _roster.length,
               separatorBuilder: (_, __) => const SizedBox(height: 4),
               itemBuilder: (context, i) {
-                final uid = uids[i];
-                final info = _assigned[uid] ?? {};
+                final athlete = _roster[i];
+                final uid = athlete.uid;
                 final s = _settings[uid] ?? {};
                 final enabled = s['reportingEnabled'] == true;
                 final goal = (s['goal'] as String?) ?? 'maintain';
@@ -1041,14 +1124,16 @@ class _CoachCheckinAthletesScreenState
                           contentPadding: EdgeInsets.zero,
                           dense: true,
                           title: Text(
-                            (info['name']?.isNotEmpty ?? false)
-                                ? info['name']!
-                                : (info['email'] ?? uid),
+                            athlete.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.w600),
                           ),
-                          subtitle: Text(info['email'] ?? '',
+                          subtitle: Text(athlete.email,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                   color: Colors.white54, fontSize: 12)),
                           value: enabled,

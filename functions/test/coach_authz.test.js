@@ -47,6 +47,42 @@ test('authz: malformed relationships do NOT grant access', () => {
   assert.equal(evaluate({ athletes: { ath1: null } }, null), false);         // explicit null seeded
 });
 
+// ── Super-admin (regression: super-admin had no backend authorisation path) ──
+
+test('authz: super-admin is authorised for any athlete with no assignment doc', () => {
+  const superUid = authz.SUPER_ADMIN_UIDS[0];
+  assert.equal(authz.isSuperAdmin(superUid), true);
+  assert.equal(authz.evaluateAssignment({
+    coachAssignData: null, athleteAssignData: null,
+    coachUid: superUid, athleteUid: 'anyAthlete',
+  }), true);
+});
+
+test('authz: super-admin stays authorised even when explicitly unapproved', () => {
+  const superUid = authz.SUPER_ADMIN_UIDS[0];
+  assert.equal(authz.evaluateAssignment({
+    coachAssignData: { athletes: {} },
+    athleteAssignData: { coaches: { [superUid]: { approved: false } } },
+    coachUid: superUid, athleteUid: 'ath1',
+  }), true);
+});
+
+test('authz: super-admin status is exact — no near-miss uid is elevated', () => {
+  const superUid = authz.SUPER_ADMIN_UIDS[0];
+  assert.equal(authz.isSuperAdmin(`${superUid}x`), false);
+  assert.equal(authz.isSuperAdmin(superUid.toLowerCase()), false);
+  assert.equal(authz.isSuperAdmin(''), false);
+  assert.equal(authz.isSuperAdmin(null), false);
+  assert.equal(authz.isSuperAdmin(undefined), false);
+  // An ordinary coach with no assignment is still denied.
+  assert.equal(evaluate(null, null), false);
+});
+
+test('authz: super-admin uid matches the one used by rules and the client', () => {
+  // firestore.rules isSuperAdmin() and UserContext.isSuperAdmin must agree.
+  assert.deepEqual(authz.SUPER_ADMIN_UIDS, ['yoVAqScwLMQLAgNHh8v9IK49fBw2']);
+});
+
 test('authz: removed relationship revokes; one remaining valid source preserves', () => {
   // Both sources present → authorised.
   assert.equal(evaluate(

@@ -211,6 +211,35 @@ test('rules: coach timezone writes validated; watermark unreachable', async () =
 
 // ── Superadmin (intentional, consistent with the app) ───────────────────────
 
+test('rules: superadmin reaches an athlete with NO assignment document at all', async () => {
+  // Regression: super-admin is effectively coach for every athlete and must
+  // not need a seeded or approved assignment. athOrphan has no entry in
+  // either assignment collection.
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.doc('coachAnalytics/athOrphan').set({ enabledBy: {} });
+    await db.doc('coachAnalytics/athOrphan/events/e1').set({ exerciseId: 'bench' });
+    await db.doc(`coachCheckIns/${SUPER}/athletes/athOrphan`).set({ reportingEnabled: false });
+    await db.doc(`coachCheckIns/${SUPER}/reports/athOrphan_2026-08-10`).set({
+      athleteUid: 'athOrphan', status: 'draft',
+    });
+  });
+
+  await assertSucceeds(as(SUPER).doc('coachAnalytics/athOrphan').get());
+  await assertSucceeds(as(SUPER).doc('coachAnalytics/athOrphan/events/e1').get());
+  await assertSucceeds(as(SUPER).doc(`coachCheckIns/${SUPER}/athletes/athOrphan`).get());
+  await assertSucceeds(as(SUPER).doc(`coachCheckIns/${SUPER}/reports/athOrphan_2026-08-10`).get());
+  // Super-admin may configure reporting for that athlete.
+  await assertSucceeds(as(SUPER).doc(`coachCheckIns/${SUPER}/athletes/athOrphan`)
+    .update({ reportingEnabled: true, goal: 'cut' }));
+
+  // An ordinary coach with no assignment to athOrphan remains denied.
+  await assertFails(as('coachSeeded').doc('coachAnalytics/athOrphan').get());
+  await assertFails(as('coachOk').doc('coachAnalytics/athOrphan').get());
+  await assertFails(as('coachSeeded').doc('coachCheckIns/coachSeeded/athletes/athOrphan')
+    .set({ reportingEnabled: true }));
+});
+
 test('rules: superadmin retains read/manage access', async () => {
   await assertSucceeds(as(SUPER).doc('coachAnalytics/ath1').get());
   await assertSucceeds(as(SUPER).doc('coachCheckIns/coachSeeded/reports/ath1_2026-08-10').get());
