@@ -777,3 +777,19 @@ async function handleInvoicePaymentFailed(event) {
     stripeSubscriptionId: subscriptionId || null,
   });
 }
+
+// ====================================
+// Coach bi-weekly check-ins
+// ====================================
+// Additive module: triggers, scheduler and callables for the coach
+// Monday+Thursday athlete review system. Everything above is untouched.
+const coachCheckins = require('./coach');
+exports.coachAnalyticsOnWorkoutWrite = coachCheckins.coachAnalyticsOnWorkoutWrite;
+exports.coachOnAthleteSettingsWritten = coachCheckins.coachOnAthleteSettingsWritten;
+exports.coachOnAthleteAssignmentsWritten = coachCheckins.coachOnAthleteAssignmentsWritten;
+exports.coachOnCoachAssignmentsWritten = coachCheckins.coachOnCoachAssignmentsWritten;
+exports.coachCheckpointScheduler = coachCheckins.coachCheckpointScheduler;
+exports.coachReviewContext = coachCheckins.coachReviewContext;
+exports.coachPrepareCheckInCopy = coachCheckins.coachPrepareCheckInCopy;
+exports.coachUndoCheckIn = coachCheckins.coachUndoCheckIn;
+exports.coachSkipCheckIn = coachCheckins.coachSkipCheckIn;
