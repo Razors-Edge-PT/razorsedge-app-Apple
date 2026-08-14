@@ -31,6 +31,44 @@ class TxnError extends Error {
   }
 }
 
+// ── Transient-contention retry ──────────────────────────────────────────────
+//
+// Two coaches (or one double-tapping coach) can drive concurrent Copy/Undo/
+// Skip calls at the same report. Firestore aborts the losing transaction, and
+// under contention the SDK can also surface INVALID_ARGUMENT "Transaction is
+// invalid or closed" once its own retry machinery loses the transaction id.
+// Every transaction here is idempotent — a re-run re-reads current state and
+// either returns the already-frozen result or rejects on a business rule — so
+// re-running the whole transaction is safe and turns a spurious error into the
+// correct answer. Business-rule rejections (TxnError) are never retried.
+
+const TRANSIENT_GRPC_CODES = new Set([
+  4,  // DEADLINE_EXCEEDED
+  10, // ABORTED (contention)
+  14, // UNAVAILABLE
+]);
+
+function isTransientTxnError(err) {
+  if (!err) return false;
+  if (TRANSIENT_GRPC_CODES.has(err.code)) return true;
+  return err.code === 3 && /Transaction is invalid or closed/i.test(err.message || '');
+}
+
+async function withTxnRetry(fn, attempts = 5) {
+  let lastErr;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof TxnError) throw err; // deterministic rejection
+      if (!isTransientTxnError(err)) throw err;
+      lastErr = err;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 function refs(db, coachUid, athleteUid) {
   const coach = db.collection('coachCheckIns').doc(coachUid);
   return {
@@ -74,7 +112,7 @@ async function copyTransaction(db, {
   const r = refs(db, coachUid, athleteUid);
   const newerKeys = newerCheckpointKeys(checkpointKey, todayKey);
 
-  return db.runTransaction(async (tx) => {
+  return withTxnRetry(() => db.runTransaction(async (tx) => {
     const reportSnap = await tx.get(r.report(checkpointKey));
     if (!reportSnap.exists) throw new TxnError('not-found', 'Report not found.');
     const report = reportSnap.data();
@@ -159,7 +197,7 @@ async function copyTransaction(db, {
     }, { merge: true });
 
     return { text, coverageStart: coverage.start, coverageEnd: coverage.end };
-  });
+  }));
 }
 
 /** Undo / Mark-Not-Sent. Reverts only what this report's copy created. */
@@ -167,7 +205,7 @@ async function undoTransaction(db, { coachUid, athleteUid, checkpointKey, todayK
   const r = refs(db, coachUid, athleteUid);
   const newerKeys = newerCheckpointKeys(checkpointKey, todayKey);
 
-  return db.runTransaction(async (tx) => {
+  return withTxnRetry(() => db.runTransaction(async (tx) => {
     const reportSnap = await tx.get(r.report(checkpointKey));
     if (!reportSnap.exists) throw new TxnError('not-found', 'Report not found.');
     const report = reportSnap.data();
@@ -220,14 +258,14 @@ async function undoTransaction(db, { coachUid, athleteUid, checkpointKey, todayK
       tx.set(r.settings, settingsUpdate, { merge: true });
     }
     return { ok: true };
-  });
+  }));
 }
 
 /** Skip: deliberately closes an unused draft. Counts as NOT copied for the
  *  next window, but (as a finalised state) blocks late copies of itself. */
 async function skipTransaction(db, { coachUid, athleteUid, checkpointKey }) {
   const r = refs(db, coachUid, athleteUid);
-  return db.runTransaction(async (tx) => {
+  return withTxnRetry(() => db.runTransaction(async (tx) => {
     const reportSnap = await tx.get(r.report(checkpointKey));
     if (!reportSnap.exists) throw new TxnError('not-found', 'Report not found.');
     if (reportSnap.data().status !== 'draft') {
@@ -235,7 +273,7 @@ async function skipTransaction(db, { coachUid, athleteUid, checkpointKey }) {
     }
     tx.update(reportSnap.ref, { status: 'skipped', skippedAtMs: Date.now() });
     return { ok: true };
-  });
+  }));
 }
 
 module.exports = {
@@ -244,4 +282,6 @@ module.exports = {
   undoTransaction,
   skipTransaction,
   newerCheckpointKeys,
+  isTransientTxnError,
+  withTxnRetry,
 };
