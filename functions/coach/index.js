@@ -969,7 +969,30 @@ function mapTxnError(err) {
  * and per-athlete live weigh-in staleness. The device timezone never
  * influences any of these.
  */
-const coachReviewContext = onCall(async (request) => {
+// Declares the intended posture for Firebase callables: requests may REACH
+// the handler, and all real authorisation happens inside it (requireAuth,
+// App Check, requireAssignment).
+//
+// ⚠️ OPERATIONAL NOTE — this option alone is NOT sufficient in this project.
+// The organisation enforces Domain Restricted Sharing
+// (constraints/iam.allowedPolicyMemberDomains), so granting `allUsers` the
+// roles/run.invoker binding is rejected:
+//     FAILED_PRECONDITION: One or more users named in the policy do not
+//     belong to a permitted customer, perhaps due to an organization policy.
+// That is why the first deploy logged "Unable to set the invoker for the IAM
+// policy" and every request then hit a Cloud Run 403 before reaching our code.
+//
+// This project's public functions (e.g. stripeWebhook) instead run with the
+// Cloud Run invoker IAM check disabled. Any NEWLY CREATED callable therefore
+// needs, once, out-of-band:
+//   gcloud run services update <lowercased-function-name> \
+//     --no-invoker-iam-check --region=us-central1 --project=goodlift-us-storage
+// Verify with: the service annotation run.googleapis.com/invoker-iam-disabled
+// is "true", and an unauthenticated POST returns 401 (application layer)
+// rather than 403 (infrastructure block).
+const CALLABLE_OPTS = { invoker: 'public' };
+
+const coachReviewContext = onCall(CALLABLE_OPTS, async (request) => {
   const coachUid = requireAuth(request);
   const athleteUids = Array.isArray(request.data && request.data.athleteUids)
     ? request.data.athleteUids.filter((u) => typeof u === 'string').slice(0, 100)
@@ -995,7 +1018,7 @@ const coachReviewContext = onCall(async (request) => {
 
 /** Copy: live bodyweight recheck + atomic freeze; returns the exact frozen
  *  finalText the client must display and put on the clipboard. */
-const coachPrepareCheckInCopy = onCall(async (request) => {
+const coachPrepareCheckInCopy = onCall(CALLABLE_OPTS, async (request) => {
   const coachUid = requireAuth(request);
   const { athleteUid, checkpointKey } = requireArgs(request);
   await requireAssignment(coachUid, athleteUid);
@@ -1020,7 +1043,7 @@ const coachPrepareCheckInCopy = onCall(async (request) => {
 });
 
 /** Undo / Mark-Not-Sent. */
-const coachUndoCheckIn = onCall(async (request) => {
+const coachUndoCheckIn = onCall(CALLABLE_OPTS, async (request) => {
   const coachUid = requireAuth(request);
   const { athleteUid, checkpointKey } = requireArgs(request);
   await requireAssignment(coachUid, athleteUid);
@@ -1035,7 +1058,7 @@ const coachUndoCheckIn = onCall(async (request) => {
 });
 
 /** Skip check-in. */
-const coachSkipCheckIn = onCall(async (request) => {
+const coachSkipCheckIn = onCall(CALLABLE_OPTS, async (request) => {
   const coachUid = requireAuth(request);
   const { athleteUid, checkpointKey } = requireArgs(request);
   await requireAssignment(coachUid, athleteUid);

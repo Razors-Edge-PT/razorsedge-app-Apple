@@ -9,6 +9,7 @@ import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'app_check_ready.dart';
+import 'coach_roster.dart';
 import 'coach_weekly_review_screen.dart';
 
 String emailHash(String email) {
@@ -75,101 +76,18 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
 
 
   Future<void> _loadAthletes(UserContext userContext) async {
+    // Roster loading lives in CoachRosterService so this screen and the Coach
+    // Check-ins screens always resolve the same athletes (super-admin => all
+    // users; ordinary coach => approved + admin-seeded assignments).
     try {
-      if (userContext.isSuperAdmin) {
-        final query = await FirebaseFirestore.instance.collection('users').get();
-        setState(() {
-          _athletes = {
-            for (var doc in query.docs)
-              doc.id: {
-                'username'    : (doc.data()['username'] ?? '') as String,
-                'displayName' : (doc.data()['displayName'] ?? '') as String,
-                'fullName'    : (doc.data()['fullName'] ?? '') as String,
-                'email'       : (doc.data()['email'] ?? '') as String,
-              }
-          };
-        });
-        return;
-      }
-
-      final coachUid = userContext.actorUid;
-      debugPrint('👤 Coach branch hit for $coachUid');
-
-      final Map<String, dynamic> athletes = {};
-
-      // 1) athleteAssignments
-      final q1 = await FirebaseFirestore.instance
-          .collection('athleteAssignments')
-          .where('coaches.$coachUid.approved', isEqualTo: true)
-          .get();
-
-      for (final doc in q1.docs) {
-        final athleteUid = doc.id;
-        final u = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(athleteUid)
-            .get();
-        final data = u.data() ?? {};
-        athletes[athleteUid] = {
-          'username'    : (data['username'] ?? '') as String,
-          'displayName' : (data['displayName'] ?? '') as String,
-          'fullName'    : (data['fullName'] ?? '') as String,
-          'email'       : (data['email'] ?? '') as String,
+      final roster = await CoachRosterService().loadRoster(userContext);
+      if (!mounted) return;
+      setState(() {
+        _athletes = {
+          for (final a in roster) a.uid: a.toLegacyMap(),
         };
-      }
-
-      // 2) coachAssignments (seeded)
-      final doc2 = await FirebaseFirestore.instance
-          .collection('coachAssignments')
-          .doc(coachUid)
-          .get();
-
-      if (doc2.exists) {
-        final seeded = Map<String, dynamic>.from(doc2.data()?['athletes'] ?? {});
-        for (final entry in seeded.entries) {
-          final athleteUid = entry.key;
-          athletes.putIfAbsent(athleteUid, () => {
-            'username'    : (entry.value['username'] ?? '') as String,
-            'displayName' : (entry.value['displayName'] ?? '') as String,
-            'email'       : (entry.value['email'] ?? '') as String,
-          });
-        }
-        // ✅ Hydrate missing name fields from /users/{uid} (seeded entries often only have email)
-        final missingNameUids = athletes.entries
-            .where((e) {
-          final v = (e.value as Map<String, dynamic>);
-          final u = (v['username'] ?? '').toString().trim();
-          final d = (v['displayName'] ?? '').toString().trim();
-          final f = (v['fullName'] ?? '').toString().trim();
-          return u.isEmpty && d.isEmpty && f.isEmpty;
-        })
-            .map((e) => e.key)
-            .toList();
-
-        if (missingNameUids.isNotEmpty) {
-          final snaps = await Future.wait(
-            missingNameUids.map((uid) => FirebaseFirestore.instance.collection('users').doc(uid).get()),
-          );
-
-          for (final s in snaps) {
-            if (!s.exists) continue;
-            final data = s.data() ?? {};
-            final uid = s.id;
-
-            final existing = (athletes[uid] as Map<String, dynamic>? ?? {});
-            athletes[uid] = {
-              ...existing,
-              'username'    : (data['username'] ?? existing['username'] ?? '') as String,
-              'displayName' : (data['displayName'] ?? existing['displayName'] ?? '') as String,
-              'fullName'    : (data['fullName'] ?? existing['fullName'] ?? '') as String,
-              'email'       : (data['email'] ?? existing['email'] ?? '') as String,
-            };
-          }
-        }
-      }
-
-      setState(() => _athletes = athletes);
-      debugPrint('✅ Loaded ${athletes.length} athletes for coach $coachUid');
+      });
+      debugPrint('✅ Loaded ${roster.length} athletes for ${userContext.actorUid}');
     } catch (e) {
       debugPrint("❌ Error loading athletes: $e");
     }

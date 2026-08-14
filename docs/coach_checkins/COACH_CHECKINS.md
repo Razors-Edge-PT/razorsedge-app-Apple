@@ -245,6 +245,47 @@ console-managed legacy workflow).
 - `flutter test` — includes `test/coach_checkins_logic_test.dart`
   (coverage mirror, checkpoint identity, copy UX, E1RM parity pins).
 
+## ⚠️ Callable functions: required one-time Cloud Run setting
+
+This organisation enforces **Domain Restricted Sharing**
+(`constraints/iam.allowedPolicyMemberDomains`), which **rejects granting
+`allUsers` the `roles/run.invoker` binding**:
+
+```
+FAILED_PRECONDITION: One or more users named in the policy do not belong to a
+permitted customer, perhaps due to an organization policy.
+```
+
+Firebase callables are normally made reachable via exactly that binding, so a
+newly created callable in this project is unreachable — every request is
+rejected by Cloud Run with **403 before any application code runs** (observed
+in production as `The request was not authorized to invoke this service`).
+`firebase deploy` only attempts the binding on function *create*, so a
+redeploy does **not** repair it.
+
+The project's existing public functions (e.g. `stripeWebhook`) instead run
+with the Cloud Run invoker IAM check disabled. After creating any new
+callable, apply once:
+
+```
+gcloud run services update <lowercased-function-name> \
+  --no-invoker-iam-check --region=us-central1 --project=goodlift-us-storage
+```
+
+Applied to: `coachreviewcontext`, `coachpreparecheckincopy`,
+`coachundocheckin`, `coachskipcheckin`.
+
+**Verify** (do not trust the CLI exit code):
+- `gcloud run services describe <svc> --region=us-central1 --format=json`
+  contains `"run.googleapis.com/invoker-iam-disabled": "true"`
+- An unauthenticated `POST` to the function URL returns **401** (application
+  layer rejecting an anonymous caller) and **not 403** (infrastructure block).
+
+This does not weaken security: it only moves the auth decision from Cloud
+Run's IAM layer to the application layer, which is how Firebase callables are
+designed. Every handler still enforces `requireAuth`, App Check, and
+`requireAssignment` (approved coach or super-admin).
+
 ## Deployment (in order — nothing is deployed by this branch)
 
 1. **Rules**: `firebase deploy --only firestore:rules` (deploys

@@ -16,6 +16,19 @@
 
 'use strict';
 
+// Super-admin: the same single hardcoded UID used by firestore.rules
+// (isSuperAdmin()) and the Flutter client (UserContext.isSuperAdmin). The
+// super-admin is effectively coach for every athlete and therefore does not
+// need an ordinary assignment document. Keeping the list here — rather than
+// inventing a second authorisation source — means all three layers agree.
+const SUPER_ADMIN_UIDS = Object.freeze([
+  'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
+]);
+
+function isSuperAdmin(uid) {
+  return typeof uid === 'string' && SUPER_ADMIN_UIDS.includes(uid);
+}
+
 /** Pure: does a coachAssignments athletes-map entry authorise? */
 function seededEntryAuthorises(entry) {
   return entry !== null && entry !== undefined;
@@ -32,6 +45,7 @@ function approvedEntryAuthorises(entry) {
  * Used by the db-backed check below and directly by unit tests.
  */
 function evaluateAssignment({ coachAssignData, athleteAssignData, coachUid, athleteUid }) {
+  if (isSuperAdmin(coachUid)) return true;
   const seeded = coachAssignData && coachAssignData.athletes
     ? coachAssignData.athletes[athleteUid] : undefined;
   if (seededEntryAuthorises(seeded)) return true;
@@ -43,6 +57,7 @@ function evaluateAssignment({ coachAssignData, athleteAssignData, coachUid, athl
 /** Db-backed check used by triggers, scheduler and every athlete-specific
  *  callable at invocation time. */
 async function isCoachFor(db, coachUid, athleteUid) {
+  if (isSuperAdmin(coachUid)) return true; // no assignment reads needed
   const [ca, aa] = await Promise.all([
     db.collection('coachAssignments').doc(coachUid).get(),
     db.collection('athleteAssignments').doc(athleteUid).get(),
@@ -56,6 +71,8 @@ async function isCoachFor(db, coachUid, athleteUid) {
 }
 
 module.exports = {
+  SUPER_ADMIN_UIDS,
+  isSuperAdmin,
   seededEntryAuthorises,
   approvedEntryAuthorises,
   evaluateAssignment,
