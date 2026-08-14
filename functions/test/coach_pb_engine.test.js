@@ -15,6 +15,8 @@ test('e1rm: 1 rep returns the weight itself', () => {
 test('e1rm: <=25 reps uses Brzycki', () => {
   // 100 x 5 → 100 * 36 / 32 = 112.5
   assert.ok(Math.abs(coachE1rm(100, 5) - 112.5) < 1e-9);
+  // 100 x 10 → 100 * 36 / 27 = 133.333… (pinned identically in the Dart suite)
+  assert.ok(Math.abs(coachE1rm(100, 10) - 100 * 36 / 27) < 1e-9);
   // boundary: 25 reps still Brzycki → 100 * 36 / 12 = 300
   assert.ok(Math.abs(coachE1rm(100, 25) - 300) < 1e-9);
 });

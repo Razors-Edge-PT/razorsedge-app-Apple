@@ -107,4 +107,44 @@ class CoachCheckinsLogic {
     final text = previousWasCopied ? draftIfPrevCopied : draftIfPrevNotCopied;
     return text ?? '';
   }
+
+  static final RegExp _dateKeyRe = RegExp(r'^\d{4}-\d{2}-\d{2}$');
+
+  /// The checkpoint identity shown by the Weekly Review screen.
+  ///
+  /// The COACH'S CONFIGURED TIMEZONE is authoritative: the scheduler stamps
+  /// coachCheckIns/{coachUid}.lastCheckpointKey using that timezone, and this
+  /// resolver always prefers it, so the device timezone can never change
+  /// which report is shown or fetched. The device-derived fallback is used
+  /// only before the very first server checkpoint exists (no reports exist
+  /// yet either, so it can only affect an empty-state label).
+  static String resolveCurrentCheckpointKey({
+    required String? serverLastCheckpointKey,
+    required DateTime deviceNow,
+  }) {
+    final server = serverLastCheckpointKey;
+    if (server != null && _dateKeyRe.hasMatch(server)) {
+      final wd = parseKey(server).weekday;
+      if (_checkpointWeekdays.contains(wd)) return server;
+    }
+    return checkpointOnOrBefore(deviceNow);
+  }
+
+  /// The message text the card must display. When a report is copied this is
+  /// the server-frozen finalText — the exact string the callable returned and
+  /// the client put on the clipboard — otherwise the live draft preview.
+  static String visibleMessageText({
+    required String? status,
+    required String? finalText,
+    required bool previousWasCopied,
+    required String? draftIfPrevCopied,
+    required String? draftIfPrevNotCopied,
+  }) {
+    if (status == CheckInStatus.copied) return finalText ?? '';
+    return pickDraftPreview(
+      previousWasCopied: previousWasCopied,
+      draftIfPrevCopied: draftIfPrevCopied,
+      draftIfPrevNotCopied: draftIfPrevNotCopied,
+    );
+  }
 }

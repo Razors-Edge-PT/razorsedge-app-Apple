@@ -73,6 +73,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     super.initState();
     final now = DateTime.now();
     _todayKey = CoachCheckinsLogic.dateKey(now);
+    // Seed only; _load() replaces this with the server's coach-timezone
+    // checkpoint key before anything is fetched or rendered.
     _currentKey = CoachCheckinsLogic.checkpointOnOrBefore(now);
     _prevKey = CoachCheckinsLogic.previousCheckpointKey(_currentKey);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
@@ -87,6 +89,15 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       final coachUid = _coachUid;
       final coachDoc = await _db.collection('coachCheckIns').doc(coachUid).get();
       _timezone = (coachDoc.data()?['timezone'] as String?) ?? 'Pacific/Auckland';
+
+      // Checkpoint identity comes from the server watermark, which the
+      // scheduler stamps in the coach's configured timezone — the device
+      // timezone never decides which report is shown.
+      _currentKey = CoachCheckinsLogic.resolveCurrentCheckpointKey(
+        serverLastCheckpointKey: coachDoc.data()?['lastCheckpointKey'] as String?,
+        deviceNow: DateTime.now(),
+      );
+      _prevKey = CoachCheckinsLogic.previousCheckpointKey(_currentKey);
 
       final athletesSnap = await _db
           .collection('coachCheckIns')
@@ -208,10 +219,9 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
   String _draftPreview(_AthleteReview a) {
     final report = a.report;
     if (report == null) return '';
-    if (report['status'] == CheckInStatus.copied) {
-      return (report['finalText'] as String?) ?? '';
-    }
-    return CoachCheckinsLogic.pickDraftPreview(
+    return CoachCheckinsLogic.visibleMessageText(
+      status: report['status'] as String?,
+      finalText: report['finalText'] as String?,
       previousWasCopied: _prevWasCopied(a),
       draftIfPrevCopied: report['draftIfPrevCopied'] as String?,
       draftIfPrevNotCopied: report['draftIfPrevNotCopied'] as String?,
@@ -248,6 +258,18 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       });
       final data = Map<String, dynamic>.from(res.data as Map);
       final text = (data['text'] as String?) ?? '';
+      // The server's finalText is the single source: it is what gets frozen
+      // on the report, what goes on the clipboard, and what the card shows —
+      // update the visible card to this exact string before anything else.
+      setState(() {
+        a.report = {
+          ...?a.report,
+          'status': CheckInStatus.copied,
+          'finalText': text,
+          if (data['coverageStart'] != null) 'coverageStart': data['coverageStart'],
+          if (data['coverageEnd'] != null) 'coverageEnd': data['coverageEnd'],
+        };
+      });
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -540,8 +562,11 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                       '7d avg ${bodyweight!['currentAvg']} kg · ${_trendLabel(bodyweight)}'),
                 if (bodyweight?['newMilestoneId'] != null ||
                     report?['milestoneAwarded'] != null)
-                  _fact(Icons.celebration,
-                      'Milestone ${(report?['milestoneAwarded'] ?? bodyweight?['newMilestoneId'])}'),
+                  // milestoneAwarded is phase-scoped ('cut_110@<phase>');
+                  // show only the objective boundary part.
+                  _fact(
+                      Icons.celebration,
+                      'Milestone ${(report?['milestoneAwarded'] ?? bodyweight?['newMilestoneId']).toString().split('@').first}'),
                 if (weighStatus != 'ok')
                   _warn(weighStatus == 'due' ? 'Weigh-in due' : 'Weigh-in overdue'),
               ],
@@ -586,7 +611,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.25),
+                  color: Colors.black.withValues(alpha: 0.25),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.white12),
                 ),
@@ -676,9 +701,9 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.18),
+        color: color.withValues(alpha: 0.18),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withOpacity(0.6)),
+        border: Border.all(color: color.withValues(alpha: 0.6)),
       ),
       child: Text(label, style: TextStyle(color: color, fontSize: 11)),
     );
@@ -699,9 +724,9 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.18),
+        color: Colors.red.withValues(alpha: 0.18),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.redAccent.withOpacity(0.6)),
+        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.6)),
       ),
       child: Text(text,
           style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
@@ -959,8 +984,19 @@ class _CoachCheckinAthletesScreenState
                                       value: 'maintain',
                                       child: Text('Maintaining')),
                                 ],
-                                onChanged: (v) =>
-                                    v == null ? null : _save(uid, {'goal': v}),
+                                onChanged: (v) {
+                                  if (v == null || v == goal) return;
+                                  // A goal change starts a new milestone
+                                  // "phase": the server scopes milestone
+                                  // praise keys by goalSetAt so a later
+                                  // legitimate phase can praise the same
+                                  // boundary again.
+                                  _save(uid, {
+                                    'goal': v,
+                                    'goalSetAt':
+                                        DateTime.now().millisecondsSinceEpoch,
+                                  });
+                                },
                               ),
                               const SizedBox(width: 16),
                               DropdownButton<String>(

@@ -130,6 +130,46 @@ function detectMilestone(goal, previousAvg, currentAvg, awarded) {
   return null;
 }
 
+// ── Milestone praise ownership ──────────────────────────────────────────────
+//
+// Milestone DETECTION (detectMilestone above) is an objective computation
+// from the athlete's rolling averages and the coach's configured goal.
+// Milestone PRAISE is coach-owned bookkeeping: each coach records which
+// milestones THEY have praised, scoped to their current goal phase, in their
+// own coachCheckIns/{coachUid}/athletes/{athleteUid}.praisedMilestones map.
+// Consequences:
+//   – two coaches never suppress each other (separate settings docs)
+//   – undo removes only that coach's praise entry
+//   – oscillation around a threshold stays suppressed within a phase because
+//     the praise key is stable for that phase
+//   – a later legitimate coaching phase (the coach re-sets the goal, which
+//     stamps a new goalSetAt) produces a new phase key, so the same boundary
+//     can be praised again years later
+//   – cut_N and bulk_N are distinct ids and detection is goal-gated, so
+//     directions never conflict and maintaining athletes get nothing.
+
+/** Stable praise key for a milestone within a coach's current goal phase.
+ *  goalPhase is the settings doc's goalSetAt (epoch ms, stamped whenever the
+ *  coach changes the goal); absent → legacy single-phase key. */
+function milestonePraiseKey(milestoneId, goalPhase) {
+  const phase = (goalPhase === null || goalPhase === undefined || goalPhase === '')
+    ? 'p0'
+    : String(goalPhase);
+  return `${milestoneId}@${phase}`;
+}
+
+/** Filters a praisedMilestones map down to { milestoneId: true } for one
+ *  goal phase — the shape detectMilestone expects as its `awarded` set. */
+function awardedForPhase(praisedMilestones, goalPhase) {
+  const out = {};
+  if (!praisedMilestones) return out;
+  const suffix = `@${(goalPhase === null || goalPhase === undefined || goalPhase === '') ? 'p0' : String(goalPhase)}`;
+  for (const key of Object.keys(praisedMilestones)) {
+    if (key.endsWith(suffix)) out[key.slice(0, key.length - suffix.length)] = true;
+  }
+  return out;
+}
+
 /**
  * Weigh-in staleness from the most recent valid weigh-in date.
  * @returns {'ok'|'due'|'overdue'}  due at 3 calendar days, overdue at 4+.
@@ -160,6 +200,8 @@ module.exports = {
   rollingComparison,
   classifyTrend,
   detectMilestone,
+  milestonePraiseKey,
+  awardedForPhase,
   weighInStatus,
   daysBetween,
 };

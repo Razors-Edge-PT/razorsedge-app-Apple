@@ -396,7 +396,7 @@ service cloud.firestore {
           || (isSelf(coachUid) && isCoachFor(athleteUid)))
           && request.resource.data.diff(resource == null ? {} : resource.data)
                .changedKeys().hasOnly([
-                 'reportingEnabled', 'goal', 'messageExerciseMode',
+                 'reportingEnabled', 'goal', 'goalSetAt', 'messageExerciseMode',
                  'customExerciseIds', 'displayName', 'updatedAt', 'enabledAt'
                ]);
         allow delete: if isSelf(coachUid) || isSuperAdmin();

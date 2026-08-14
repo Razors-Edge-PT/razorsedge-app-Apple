@@ -88,6 +88,97 @@ void main() {
     });
   });
 
+  group('authoritative checkpoint identity (coach timezone, not device)', () {
+    test('server watermark key wins regardless of the device clock/timezone', () {
+      // Coach timezone = Pacific/Auckland: the scheduler stamped Monday
+      // 2026-08-10 as lastCheckpointKey. A device in e.g. America/Los_Angeles
+      // still shows Sunday 2026-08-09 locally — the resolver must ignore that.
+      const serverKey = '2026-08-10';
+      final deviceStillSunday = DateTime(2026, 8, 9, 22, 30); // device-local
+      expect(
+        CoachCheckinsLogic.resolveCurrentCheckpointKey(
+          serverLastCheckpointKey: serverKey,
+          deviceNow: deviceStillSunday,
+        ),
+        serverKey,
+      );
+
+      // Reverse skew: a device already on Tuesday must not jump ahead of the
+      // coach-timezone checkpoint either.
+      final deviceAlreadyTuesday = DateTime(2026, 8, 11, 1, 0);
+      expect(
+        CoachCheckinsLogic.resolveCurrentCheckpointKey(
+          serverLastCheckpointKey: serverKey,
+          deviceNow: deviceAlreadyTuesday,
+        ),
+        serverKey,
+      );
+    });
+
+    test('device fallback is used only when no server checkpoint exists yet', () {
+      expect(
+        CoachCheckinsLogic.resolveCurrentCheckpointKey(
+          serverLastCheckpointKey: null,
+          deviceNow: DateTime(2026, 8, 12),
+        ),
+        '2026-08-10',
+      );
+      // Malformed/non-checkpoint server values are rejected too.
+      expect(
+        CoachCheckinsLogic.resolveCurrentCheckpointKey(
+          serverLastCheckpointKey: '2026-08-11', // a Tuesday — not a checkpoint
+          deviceNow: DateTime(2026, 8, 12),
+        ),
+        '2026-08-10',
+      );
+      expect(
+        CoachCheckinsLogic.resolveCurrentCheckpointKey(
+          serverLastCheckpointKey: 'garbage',
+          deviceNow: DateTime(2026, 8, 12),
+        ),
+        '2026-08-10',
+      );
+    });
+  });
+
+  group('copy UX: visible text is the frozen finalText once copied', () {
+    test('copied report shows finalText — the exact string the server returned', () {
+      expect(
+        CoachCheckinsLogic.visibleMessageText(
+          status: CheckInStatus.copied,
+          finalText: 'Hey bro, final message 👍',
+          previousWasCopied: false,
+          draftIfPrevCopied: 'stale preview A',
+          draftIfPrevNotCopied: 'stale preview B',
+        ),
+        'Hey bro, final message 👍',
+      );
+    });
+
+    test('draft report shows the preview matching the live coverage state', () {
+      expect(
+        CoachCheckinsLogic.visibleMessageText(
+          status: CheckInStatus.draft,
+          finalText: null,
+          previousWasCopied: true,
+          draftIfPrevCopied: 'short-window draft',
+          draftIfPrevNotCopied: 'long-window draft',
+        ),
+        'short-window draft',
+      );
+      expect(
+        CoachCheckinsLogic.visibleMessageText(
+          status: CheckInStatus.draft,
+          finalText: null,
+          previousWasCopied: false,
+          draftIfPrevCopied: 'short-window draft',
+          draftIfPrevNotCopied: 'long-window draft',
+        ),
+        'long-window draft',
+      );
+    });
+  });
+
   group('weigh-in staleness', () {
     test('<3 days ok, 3 due, 4+ overdue, never overdue', () {
       expect(CoachCheckinsLogic.weighInStatus('2026-08-12', '2026-08-14'), 'ok');
@@ -105,6 +196,8 @@ void main() {
     test('Brzycki region matches backend constants (rir = 0)', () {
       expect(PeriodizationModelUtils.calculateE1RM(100, 5, 0), closeTo(112.5, 1e-9));
       expect(PeriodizationModelUtils.calculateE1RM(100, 1, 0), closeTo(100, 1e-9));
+      expect(PeriodizationModelUtils.calculateE1RM(100, 10, 0),
+          closeTo(100 * 36 / 27, 1e-9));
       expect(PeriodizationModelUtils.calculateE1RM(100, 25, 0), closeTo(300, 1e-9));
     });
 

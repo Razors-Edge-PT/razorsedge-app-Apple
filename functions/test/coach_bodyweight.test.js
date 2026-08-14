@@ -99,6 +99,62 @@ test('milestone: uses rolling averages, no award without both windows', () => {
   assert.equal(bw.detectMilestone('cut', null, 109.8, {}), null);
 });
 
+// ── Milestone praise ownership (coach- and phase-scoped) ────────────────────
+
+test('praise ownership: two coaches never suppress each other', () => {
+  // Each coach's praisedMilestones map lives in their own settings doc.
+  const coachAPraised = { [bw.milestonePraiseKey('cut_110', 1000)]: { reportId: 'r1' } };
+  const coachBPraised = {}; // coach B has praised nothing
+
+  const awardedA = bw.awardedForPhase(coachAPraised, 1000);
+  const awardedB = bw.awardedForPhase(coachBPraised, 2000);
+
+  // Coach A: suppressed. Coach B: still awardable for the same objective fact.
+  assert.equal(bw.detectMilestone('cut', 110.4, 109.8, awardedA), null);
+  assert.equal(bw.detectMilestone('cut', 110.4, 109.8, awardedB), 'cut_110');
+});
+
+test('praise ownership: undo removes only that coach\'s entry and re-enables praise', () => {
+  const key = bw.milestonePraiseKey('cut_110', 1000);
+  const praised = { [key]: { reportId: 'r1' } };
+  assert.equal(bw.detectMilestone('cut', 110.4, 109.8, bw.awardedForPhase(praised, 1000)), null);
+  delete praised[key]; // what coachUndoCheckIn does in the settings doc
+  assert.equal(bw.detectMilestone('cut', 110.4, 109.8, bw.awardedForPhase(praised, 1000)), 'cut_110');
+});
+
+test('praise ownership: oscillation around the threshold stays suppressed within a phase', () => {
+  const phase = 1000;
+  const praised = {};
+  const first = bw.detectMilestone('cut', 110.4, 109.8, bw.awardedForPhase(praised, phase));
+  assert.equal(first, 'cut_110');
+  praised[bw.milestonePraiseKey(first, phase)] = { reportId: 'r1' };
+  // Weight bobs above and re-crosses the boundary — same phase, no re-award.
+  assert.equal(bw.detectMilestone('cut', 110.2, 109.9, bw.awardedForPhase(praised, phase)), null);
+  assert.equal(bw.detectMilestone('cut', 110.6, 109.7, bw.awardedForPhase(praised, phase)), null);
+});
+
+test('praise ownership: a later legitimate goal phase can praise the same boundary again', () => {
+  // Praised during a cut in 2024 (phase 1000); athlete later bulked back up;
+  // the coach re-sets the goal for a new cut in 2026 (phase 2000).
+  const praised = { [bw.milestonePraiseKey('cut_110', 1000)]: { reportId: 'old' } };
+  assert.equal(bw.detectMilestone('cut', 110.4, 109.8, bw.awardedForPhase(praised, 1000)), null);
+  assert.equal(bw.detectMilestone('cut', 110.4, 109.8, bw.awardedForPhase(praised, 2000)), 'cut_110');
+});
+
+test('praise ownership: cut and bulk boundaries are distinct ids; maintain awards nothing', () => {
+  const praised = { [bw.milestonePraiseKey('cut_110', 1000)]: {} };
+  // A bulking phase through the same number is a different milestone id.
+  assert.equal(bw.detectMilestone('bulk', 109.6, 110.2, bw.awardedForPhase(praised, 1000)), 'bulk_110');
+  assert.equal(bw.detectMilestone('maintain', 110.4, 109.8, {}), null);
+});
+
+test('praise ownership: absent goalSetAt falls back to a stable legacy phase', () => {
+  assert.equal(bw.milestonePraiseKey('cut_110', undefined), 'cut_110@p0');
+  assert.equal(bw.milestonePraiseKey('cut_110', null), 'cut_110@p0');
+  const praised = { 'cut_110@p0': {} };
+  assert.deepEqual(bw.awardedForPhase(praised, undefined), { cut_110: true });
+});
+
 // ── Weigh-in staleness ──────────────────────────────────────────────────────
 
 test('staleness: <3 days ok, 3 days due, 4+ days overdue', () => {
