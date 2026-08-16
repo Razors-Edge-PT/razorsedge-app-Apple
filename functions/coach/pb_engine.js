@@ -43,12 +43,20 @@
 // E1RM PB. Strict improvement over the complete prior lifetime E1RM maximum
 // for the exercise. RIR is excluded from the E1RM entirely (see e1rm.js).
 //
-// PB MATCH AT LOWER RIR. The ONLY place RIR participates. Emitted when a set
+// PB MATCH AT HIGHER RIR. The ONLY place RIR participates. Emitted when a set
 // exactly equals the standing PB (same exercise, weight and reps), is NOT a
 // new rep-target PB, and both the standing PB and the current set carry a
-// valid numeric RIR with the current one strictly lower. The stored RIR
-// baseline moves down with each such event, so the same improvement can never
-// be praised twice. RIR never leaks into any other calculation.
+// valid numeric RIR with the current one strictly HIGHER.
+//
+// Direction matters: RIR is reps-in-reserve, so a HIGHER value at the same
+// weight and reps means the athlete finished the identical performance with
+// more left in the tank — the set was easier, which is evidence of improved
+// strength. A LOWER RIR only means they worked closer to failure and is NOT
+// praise-worthy here. The stored RIR baseline moves UP with each such event,
+// so the same improvement can never be praised twice, and a later equal or
+// lower RIR cannot re-fire it.
+//
+// RIR never leaks into any other calculation.
 //
 // All comparisons go through strictlyGreater/strictlyLess, which apply a
 // relative epsilon: float noise (e.g. two mathematically equal E1RMs that
@@ -132,8 +140,9 @@ function hasUpperCase(id) {
  *       name,                            // last seen display name
  *       catalogExerciseId,               // best-known original casing
  *       bestByReps:    { [reps]: weight },  // heaviest that day per exact rep count
- *       bestRirByReps: { [reps]: rir },     // LOWEST valid RIR logged at that
- *                                           // rep count's heaviest weight; the
+ *       bestRirByReps: { [reps]: rir },     // HIGHEST valid RIR logged at that
+ *                                           // rep count's heaviest weight (the
+ *                                           // easiest matching effort); the
  *                                           // key is absent when no set there
  *                                           // carried a numeric RIR
  *       bestWeight: number,              // heaviest weight that day, any reps
@@ -165,7 +174,7 @@ function summarizeWorkoutDay(workoutData) {
       if (!(weight > 0) || !(reps > 0)) continue;
       const repsInt = Math.round(reps);
       const repKey = String(repsInt);
-      // RIR is read here for the lower-RIR PB-match achievement ONLY. It is
+      // RIR is read here for the higher-RIR PB-match achievement ONLY. It is
       // deliberately not passed to coachE1rm and takes no part in any weight
       // or E1RM comparison.
       const rir = rirOrNull(s.rir != null ? s.rir : s.actualRir);
@@ -197,8 +206,10 @@ function summarizeWorkoutDay(workoutData) {
         if (rir != null) entry.bestRirByReps[repKey] = rir;
         else delete entry.bestRirByReps[repKey];
       } else if (approxEqual(weight, priorAtReps) && rir != null) {
+        // Keep the day's EASIEST matching effort: the highest reps-in-reserve
+        // recorded at this rep count's heaviest weight.
         const knownRir = entry.bestRirByReps[repKey];
-        if (knownRir == null || strictlyLess(rir, knownRir)) {
+        if (knownRir == null || strictlyGreater(rir, knownRir)) {
           entry.bestRirByReps[repKey] = rir;
         }
       }
@@ -310,7 +321,7 @@ function applyDayToState(state, exerciseId, dateKey, day) {
     });
   }
 
-  // ── 3. PB match at strictly lower logged RIR (the only RIR consumer) ──────
+  // ── 3. PB match at strictly HIGHER logged RIR (the only RIR consumer) ─────
   for (const repKey of repKeys) {
     if (repPBReps.has(repKey)) continue; // a genuine rep PB, not a match
     const weight = toNum(bestByReps[repKey]);
@@ -330,7 +341,9 @@ function applyDayToState(state, exerciseId, dateKey, day) {
     const priorRir = rirOrNull(priorRirEntry.rir);
     const currentRir = rirOrNull(bestRirByReps[repKey]);
     if (priorRir == null || currentRir == null) continue;   // null never qualifies
-    if (!strictlyLess(currentRir, priorRir)) continue;      // equal/higher never qualifies
+    // Strictly MORE reps in reserve for the identical performance. Equal or
+    // lower never qualifies (tolerance rejects ties).
+    if (!strictlyGreater(currentRir, priorRir)) continue;
 
     events.push({
       id: `${dateKey}_${exerciseId}_rirmatch${repKey}`,
@@ -385,8 +398,9 @@ function applyDayToState(state, exerciseId, dateKey, day) {
       const existingRir = existing && approxEqual(toNum(existing.weightKg), weight)
         ? rirOrNull(existing.rir)
         : null;
-      if (existingRir == null || strictlyLess(dayRir, existingRir)) {
-        // Monotonically decreasing → the same improvement cannot re-fire.
+      if (existingRir == null || strictlyGreater(dayRir, existingRir)) {
+        // Monotonically INCREASING → the same improvement cannot re-fire, and
+        // a later equal or lower RIR cannot fire at all.
         nextRepRir[repKey] = { weightKg: weight, rir: dayRir, dateKey };
       }
     }

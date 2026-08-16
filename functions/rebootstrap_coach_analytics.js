@@ -48,7 +48,7 @@ const { bulkRebuild } = require('./coach/analytics_store');
 const { E1RM_FORMULA_VERSION } = require('./coach/e1rm');
 
 // Keep in step with ANALYTICS_VERSION in functions/coach/index.js.
-const ANALYTICS_VERSION = 3;
+const ANALYTICS_VERSION = 4;
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const args = process.argv.slice(2);

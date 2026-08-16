@@ -43,7 +43,13 @@ const db = admin.firestore();
 //     events from the untouched raw workout docs — which DELETES the events
 //     the old algorithm wrongly created rather than merely ceasing to create
 //     new ones. Idempotent: rerunning converges on the same documents.
-const ANALYTICS_VERSION = 3;
+// v4: rirMatchPB direction corrected. v3 fired on a LOWER logged RIR, which is
+//     backwards — RIR is reps-in-reserve, so at the same weight and reps a
+//     HIGHER value means the set was easier (evidence of improved strength),
+//     while a lower one only means the athlete went closer to failure. The v4
+//     re-bootstrap deletes every v3 lower-RIR event and rebuilds the baseline
+//     as a monotonically increasing best-RIR.
+const ANALYTICS_VERSION = 4;
 const VERSIONS = { formulaVersion: E1RM_FORMULA_VERSION, analyticsVersion: ANALYTICS_VERSION };
 const DEFAULT_TZ = 'Pacific/Auckland';
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;

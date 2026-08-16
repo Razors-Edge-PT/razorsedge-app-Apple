@@ -4,7 +4,8 @@
 //   1. maxWeightPB   – new all-time heaviest weight on the exercise
 //   2. repPB         – new rep-target PB (dominance-aware, see pb_engine.js)
 //   3. e1rmPB        – new lifetime E1RM PB
-//   4. rirMatchPB    – matched a standing PB at a strictly lower logged RIR
+//   4. rirMatchPB    – matched a standing PB at a strictly HIGHER logged RIR
+//                      (same weight and reps, more reps in reserve)
 //   5. completedAll  – completed every planned workout
 //   6. threePlus     – completed at least three workouts
 //
@@ -128,10 +129,11 @@ function byImprovementDesc(a, b) {
   return byRecency(a, b);
 }
 
-/** RIR-match ranking: biggest RIR drop first, then the same tiebreakers. */
+/** RIR-match ranking: biggest GAIN in reps-in-reserve first (the performance
+ *  that got easiest), then the same tiebreakers. */
 function byRirGainDesc(a, b) {
-  const ga = (a.prevRir || 0) - (a.rir || 0);
-  const gb = (b.prevRir || 0) - (b.rir || 0);
+  const ga = (a.rir || 0) - (a.prevRir || 0);
+  const gb = (b.rir || 0) - (b.prevRir || 0);
   if (ga !== gb) return gb - ga;
   return byRecency(a, b);
 }
