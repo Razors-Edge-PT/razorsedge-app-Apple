@@ -247,6 +247,24 @@ Two casings inside one document (production had this on 2026-04-23) merge.
 > Raw workout documents are never modified. Regression fixtures for the
 > incident live in `functions/test/coach_pb_regression.test.js`.
 
+### Forcing the rebuild early
+
+The self-heal above happens at the next Mon/Thu checkpoint. To retract wrong
+events from the coach dashboard sooner, run the operator script — it mirrors
+`runBootstrap()` step for step and reuses the identical pure engine, so it
+cannot produce a different result from the backend's own rebuild:
+
+```
+cd functions
+node rebootstrap_coach_analytics.js                # dry-run, all enrolled
+node rebootstrap_coach_analytics.js --apply        # rebuild all enrolled
+node rebootstrap_coach_analytics.js <uid> --apply  # one athlete
+```
+
+It writes only under `coachAnalytics/{uid}/` (asserted before every commit),
+never to `users/**` or `coachCheckIns/**` — so workouts, finalised/copied
+reports, drafts, reporting toggles and praise bookkeeping are all untouched.
+
 ## E1RM formula & rebaseline
 
 Exact parity with `PeriodizationModelUtils.calculateE1RM(w, r, 0)`:
