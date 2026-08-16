@@ -46,6 +46,9 @@ class _AthleteReview {
   Map<String, dynamic>? prevReport;
   String? liveLastWeighInKey; // server-derived (coach timezone)
   String? liveWeighInStatus; // 'ok' | 'due' | 'overdue' (server-derived)
+  /// Set when this athlete's report documents could not be read. The card
+  /// still renders (saying so) instead of the whole screen failing.
+  String? reportLoadError;
 
   _AthleteReview({required this.uid, required this.settings, this.rosterName});
 
@@ -166,23 +169,38 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       }
 
       // 4) Bounded report reads: two direct gets per athlete.
+      //    Isolated per athlete, like steps 2 and 3. A transient Firestore
+      //    'unavailable' on ONE athlete used to propagate out of Future.wait
+      //    and hit the outer catch, discarding an otherwise fully-loaded
+      //    screen and showing a generic "check your connection" message even
+      //    though the backend was healthy — the 2026-08-14T21:28Z incident,
+      //    where coachReviewContext had just returned HTTP 200 in 134ms and
+      //    no Cloud Run service logged a single non-2xx all hour. These are
+      //    direct client reads, so such a failure leaves no server-side trace
+      //    at all. Failing softly here preserves the diagnosis: the affected
+      //    card says so, and the real error is logged rather than relabelled.
       await Future.wait(enabled.map((a) async {
-        final results = await Future.wait([
-          _db
-              .collection('coachCheckIns')
-              .doc(coachUid)
-              .collection('reports')
-              .doc('${a.uid}_$_currentKey')
-              .get(),
-          _db
-              .collection('coachCheckIns')
-              .doc(coachUid)
-              .collection('reports')
-              .doc('${a.uid}_$_prevKey')
-              .get(),
-        ]);
-        a.report = results[0].data();
-        a.prevReport = results[1].data();
+        try {
+          final results = await Future.wait([
+            _db
+                .collection('coachCheckIns')
+                .doc(coachUid)
+                .collection('reports')
+                .doc('${a.uid}_$_currentKey')
+                .get(),
+            _db
+                .collection('coachCheckIns')
+                .doc(coachUid)
+                .collection('reports')
+                .doc('${a.uid}_$_prevKey')
+                .get(),
+          ]);
+          a.report = results[0].data();
+          a.prevReport = results[1].data();
+        } catch (e) {
+          debugPrint('⚠️ [WeeklyReview] report read failed for ${a.uid}: $e');
+          a.reportLoadError = e is FirebaseException ? (e.code) : e.runtimeType.toString();
+        }
       }));
 
       enabled.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
@@ -192,11 +210,15 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
         _loading = false;
       });
     } catch (e) {
+      // Reaching here now means the ROSTER itself failed (step 1) — the only
+      // genuinely fatal step. Name the real cause instead of always blaming
+      // the network, so a recurring backend/permission fault stays visible.
       debugPrint('❌ [WeeklyReview] load failed: $e');
       if (!mounted) return;
+      final code = e is FirebaseException ? e.code : e.runtimeType.toString();
       setState(() {
-        _error = 'Couldn\'t load the Weekly Review. '
-            'Check your connection and tap Refresh to try again.';
+        _error = 'Couldn\'t load the Weekly Review ($code). '
+            'Tap Refresh to try again.';
         _loading = false;
       });
     }
@@ -782,7 +804,13 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                 ),
             ],
             const SizedBox(height: 8),
-            if (report == null)
+            if (a.reportLoadError != null)
+              Text(
+                'Could not load this athlete\'s report (${a.reportLoadError}). '
+                'Tap Refresh to retry — other athletes are unaffected.',
+                style: TextStyle(color: Colors.amber[200], fontSize: 12),
+              )
+            else if (report == null)
               const Text(
                 'Report not generated yet — reports run on Monday and Thursday.',
                 style: TextStyle(color: Colors.white38, fontSize: 12),

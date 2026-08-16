@@ -45,7 +45,9 @@ function selectPraise({
   maxWeightEvents, repEvents, e1rmEvents, rirMatchEvents, completion, allowedExerciseIds,
 }) {
   const allowed = normalizeAllowed(allowedExerciseIds);
-  const keep = (e) => allowed === null || allowed.has(e.exerciseId);
+  const keep = (e) => allowed === null
+    || allowed.has(String(e.exerciseId || '').toLowerCase())
+    || allowed.has(String(e.catalogExerciseId || '').toLowerCase());
 
   const maxWeights = (maxWeightEvents || []).filter(keep).slice().sort(byImprovementDesc);
   const reps = (repEvents || []).filter(keep).slice().sort(byImprovementDesc);
@@ -105,10 +107,17 @@ function selectPraise({
   return { praises, usedCompletion };
 }
 
+/** Case-folded allow-set. Event.exerciseId is the folded stream key, while the
+ *  coach's saved customExerciseIds are catalog ids in their original casing —
+ *  fold both sides so a custom selection still matches after the identity
+ *  canonicalisation (see pb_engine.canonicalExerciseId). */
 function normalizeAllowed(allowedExerciseIds) {
   if (allowedExerciseIds == null) return null;
-  if (allowedExerciseIds instanceof Set) return allowedExerciseIds;
-  return new Set(allowedExerciseIds);
+  const out = new Set();
+  for (const id of allowedExerciseIds) {
+    if (typeof id === 'string' && id.trim()) out.add(id.trim().toLowerCase());
+  }
+  return out;
 }
 
 /** Deterministic ranking: pct improvement desc, then dateKey desc (newer

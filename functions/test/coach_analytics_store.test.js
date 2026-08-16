@@ -227,8 +227,8 @@ test('storage: summaries stay bounded — history lives in per-day docs', async 
   // repRir and maxWeight are single bounded records, not history: repRir holds
   // at most one entry per distinct rep count, maxWeight exactly one entry.
   assert.deepEqual(Object.keys(summary).sort(),
-    ['dayCount', 'e1rmBest', 'formulaVersion', 'latestDateKey', 'maxWeight',
-      'name', 'repBest', 'repRir']);
+    ['catalogExerciseId', 'dayCount', 'e1rmBest', 'formulaVersion',
+      'latestDateKey', 'maxWeight', 'name', 'repBest', 'repRir']);
   assert.equal(live.days.size, 200);
 });
 

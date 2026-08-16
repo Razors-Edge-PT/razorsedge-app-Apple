@@ -57,6 +57,7 @@ function dayDocId(exerciseId, dateKey) {
 function summaryDocFrom(state, formulaVersion) {
   return {
     name: state.name,
+    catalogExerciseId: state.catalogExerciseId,
     repBest: state.repBest,
     repRir: state.repRir,
     maxWeight: state.maxWeight,
@@ -73,6 +74,7 @@ function stateFromSummary(exerciseId, summary) {
   const state = emptyState(exerciseId);
   if (!summary) return state;
   state.name = summary.name || exerciseId;
+  state.catalogExerciseId = summary.catalogExerciseId || exerciseId;
   state.repBest = summary.repBest || {};
   state.repRir = summary.repRir || {};
   state.maxWeight = summary.maxWeight || null;
@@ -87,6 +89,7 @@ function summaryFrom(exerciseId, history) {
   return {
     summary: {
       name: derived.name,
+      catalogExerciseId: derived.catalogExerciseId,
       repBest: derived.repBest,
       repRir: derived.repRir,
       maxWeight: derived.maxWeight,

@@ -114,6 +114,86 @@ test('regression 4: 27x15 after 28x15 is neither a rep PB nor an E1RM PB', () =>
   assert.ok(Math.abs(coachE1rm(27, 15) - 44.2) < 0.05);
 });
 
+// ── 4b. Exercise-identity case split (the ACTUAL Face Pull cause) ───────────
+//
+// Production workout documents written 2026-03-03..2026-05-07 persisted
+// lowercased copies of the catalog id. The 28kg x 15 on 2026-05-04 was stored
+// under "eeexnmsxv90q0ruggecq" while every later session used
+// "eeEXnmSXv90q0rUgGECq", so the two casings formed independent lifetime
+// streams and the heavier history was invisible to the comparison. That is why
+// the lighter 27kg x 15 on 2026-08-06 published as a new rep PB (prev 25) and
+// a new E1RM PB (44.2 vs a stream-local 40.9) despite the real lifetime bests
+// being 28kg and 45.8.
+
+test('regression 4b: case-split exercise ids resolve to one lifetime stream', () => {
+  const MIXED = 'eeEXnmSXv90q0rUgGECq';
+  const LOWER = 'eeexnmsxv90q0ruggecq';
+  assert.equal(MIXED.toLowerCase(), LOWER, 'fixture must be a pure case split');
+
+  // Aja's real sequence, abbreviated to the decisive days.
+  const history = {};
+  const add = (dateKey, id, sets) => {
+    const summary = summarizeWorkoutDay(workout(id, 'KP Face Pull', sets));
+    const keys = Object.keys(summary);
+    assert.equal(keys.length, 1);
+    assert.equal(keys[0], LOWER, 'both casings must fold to the same stream key');
+    history[dateKey] = summary[keys[0]];
+  };
+  add('2026-04-23', LOWER, [{ weight: 32, reps: 10 }]);
+  add('2026-05-04', LOWER, [{ weight: 28, reps: 15 }]);       // E1RM 45.8
+  add('2026-05-21', MIXED, [{ weight: 25, reps: 15, rir: 1.5 }]);
+  add('2026-08-06', MIXED, [{ weight: 27, reps: 15 }]);       // the false PB
+
+  const { events, repBest, e1rmBest, catalogExerciseId } =
+    deriveExerciseEvents(LOWER, history);
+
+  // Nothing at all on 2026-08-06: 27 < 28 at 15 reps, 44.2 < 45.8 E1RM.
+  assert.deepEqual(events.filter((e) => e.dateKey === '2026-08-06'), []);
+  assert.equal(repBest['15'].weightKg, 28);
+  assert.equal(repBest['15'].dateKey, '2026-05-04');
+  assert.ok(Math.abs(e1rmBest.e1rmKg - 45.818) < 0.01);
+  assert.equal(e1rmBest.dateKey, '2026-05-04');
+
+  // The catalog casing is preserved for display/reference.
+  assert.equal(catalogExerciseId, MIXED);
+});
+
+test('regression 4b2: both casings inside ONE day merge (production 2026-04-23)', () => {
+  const summary = summarizeWorkoutDay({
+    exercises: [
+      { exerciseId: 'eeexnmsxv90q0ruggecq', name: 'KP Face Pull', sets: [{ weight: 32, reps: 10 }] },
+      { exerciseId: 'eeEXnmSXv90q0rUgGECq', name: 'KP Face Pull', sets: [{ weight: 30, reps: 12 }] },
+    ],
+  });
+  assert.deepEqual(Object.keys(summary), ['eeexnmsxv90q0ruggecq']);
+  const day = summary.eeexnmsxv90q0ruggecq;
+  assert.equal(day.bestByReps['10'], 32);
+  assert.equal(day.bestByReps['12'], 30);
+  assert.equal(day.catalogExerciseId, 'eeEXnmSXv90q0rUgGECq');
+});
+
+test('regression 4c: the coach custom-exercise filter survives folding', () => {
+  const ev = {
+    type: 'repPB', exerciseId: 'eeexnmsxv90q0ruggecq',
+    catalogExerciseId: 'eeEXnmSXv90q0rUgGECq',
+    dateKey: '2026-08-06', exerciseName: 'KP Face Pull',
+    reps: 15, weightKg: 30, prevWeightKg: 28, pctImprovement: 0.07,
+  };
+  // The coach picked the catalog id in its original casing.
+  const picked = selectPraise({
+    maxWeightEvents: [], repEvents: [ev], e1rmEvents: [], rirMatchEvents: [],
+    completion: null, allowedExerciseIds: ['eeEXnmSXv90q0rUgGECq'],
+  });
+  assert.equal(picked.praises.length, 1);
+
+  // An unrelated selection still excludes it.
+  const excluded = selectPraise({
+    maxWeightEvents: [], repEvents: [ev], e1rmEvents: [], rirMatchEvents: [],
+    completion: null, allowedExerciseIds: ['someOtherExerciseId'],
+  });
+  assert.equal(excluded.praises.length, 0);
+});
+
 // ── 5. Previous 100x5 @ RIR 2, later exact 100x5 @ RIR 1 ────────────────────
 
 test('regression 5: matching a PB at a strictly lower RIR praises effort only', () => {

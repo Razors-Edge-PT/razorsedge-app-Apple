@@ -6,7 +6,17 @@
 // Identity rules:
 //   - exercise identity = stable exercise id ("exerciseId" on WES2 rows,
 //     legacy "id" on older rows). Rows with no id are ignored.
-//   - every PB stream is keyed on that exercise id; rep counts are TARGETS,
+//   - that id is CASE-FOLDED to form the stream key. Production workout
+//     documents written between 2026-03-03 and 2026-05-07 persisted
+//     lowercased copies of the catalog id, which split eight of one athlete's
+//     exercises into two independent lifetime streams and hid the heavier
+//     history from the PB comparison (a 28kg x 15 KP Face Pull on 2026-05-04
+//     lived under "eeexnmsxv90q0ruggecq" while later sessions used
+//     "eeEXnmSXv90q0rUgGECq", so a lighter 27kg x 15 published as a new PB).
+//     Folding reunites them without touching a single workout record. The
+//     best-known original casing is preserved as catalogExerciseId for
+//     display/reference.
+//   - every PB stream is keyed on that folded id; rep counts are TARGETS,
 //     not independent streams (see below).
 //
 // A set participates only when weight > 0 AND reps > 0 (matches the app's
@@ -99,10 +109,28 @@ function bestWeightAtOrAboveReps(repBest, minReps) {
 }
 
 /**
+ * Stream key for an exercise id: trimmed and case-folded.
+ *
+ * Firestore auto-ids are 20 chars of [A-Za-z0-9], so two genuinely distinct
+ * exercises colliding under case-folding is not a practical concern; the
+ * collisions this resolves are the same exercise written in two casings.
+ */
+function canonicalExerciseId(rawId) {
+  return String(rawId == null ? '' : rawId).trim().toLowerCase();
+}
+
+/** True when an id retains its original catalog casing (has an upper-case
+ *  letter), i.e. it is a better display/reference value than a folded copy. */
+function hasUpperCase(id) {
+  return typeof id === 'string' && /[A-Z]/.test(id);
+}
+
+/**
  * Extracts a compact per-exercise day summary from one workout document's
- * data. Returns a plain object:
- *   { [exerciseId]: {
+ * data. Keys are CASE-FOLDED exercise ids. Returns a plain object:
+ *   { [canonicalExerciseId]: {
  *       name,                            // last seen display name
+ *       catalogExerciseId,               // best-known original casing
  *       bestByReps:    { [reps]: weight },  // heaviest that day per exact rep count
  *       bestRirByReps: { [reps]: rir },     // LOWEST valid RIR logged at that
  *                                           // rep count's heaviest weight; the
@@ -123,9 +151,11 @@ function summarizeWorkoutDay(workoutData) {
     : [];
   for (const ex of exercises) {
     if (!ex || typeof ex !== 'object') continue;
-    const exerciseId = typeof ex.exerciseId === 'string' && ex.exerciseId
+    const rawExerciseId = typeof ex.exerciseId === 'string' && ex.exerciseId
       ? ex.exerciseId
       : (typeof ex.id === 'string' && ex.id ? ex.id : null);
+    if (!rawExerciseId) continue;
+    const exerciseId = canonicalExerciseId(rawExerciseId);
     if (!exerciseId) continue;
     const sets = Array.isArray(ex.sets) ? ex.sets : [];
     for (const s of sets) {
@@ -143,7 +173,8 @@ function summarizeWorkoutDay(workoutData) {
       let entry = out[exerciseId];
       if (!entry) {
         entry = {
-          name: strOr(ex.name, exerciseId),
+          name: strOr(ex.name, rawExerciseId),
+          catalogExerciseId: rawExerciseId,
           bestByReps: {},
           bestRirByReps: {},
           bestWeight: 0,
@@ -152,6 +183,11 @@ function summarizeWorkoutDay(workoutData) {
           bestE1rmSet: null,
         };
         out[exerciseId] = entry;
+      }
+      // Two casings can appear in the same document (production did on
+      // 2026-04-23); keep the one that still carries the catalog casing.
+      if (hasUpperCase(rawExerciseId) && !hasUpperCase(entry.catalogExerciseId)) {
+        entry.catalogExerciseId = rawExerciseId;
       }
 
       const priorAtReps = entry.bestByReps[repKey];
@@ -188,6 +224,7 @@ function summarizeWorkoutDay(workoutData) {
 function emptyState(exerciseId) {
   return {
     name: exerciseId,
+    catalogExerciseId: exerciseId, // upgraded as soon as a cased id is seen
     repBest: {},    // reps -> { weightKg, dateKey }
     repRir: {},     // reps -> { weightKg, rir, dateKey }  (RIR at the record weight)
     maxWeight: null, // { weightKg, reps, dateKey }
@@ -213,6 +250,12 @@ function applyDayToState(state, exerciseId, dateKey, day) {
   const events = [];
   if (!day) return events;
   if (day.name) state.name = day.name;
+  // Keep the catalog casing once any day supplies it; a later folded-only day
+  // must not downgrade it back to the lowercase form.
+  if (day.catalogExerciseId
+      && (hasUpperCase(day.catalogExerciseId) || !hasUpperCase(state.catalogExerciseId))) {
+    state.catalogExerciseId = day.catalogExerciseId;
+  }
 
   const priorRepBest = state.repBest;
   const priorRepRir = state.repRir;
@@ -374,6 +417,11 @@ function applyDayToState(state, exerciseId, dateKey, day) {
 
   state.dayCount += 1;
   state.latestDateKey = dateKey;
+
+  // exerciseId on an event is the folded stream key (what dedupe and storage
+  // use); catalogExerciseId carries the real catalog id for display and for
+  // the coach's custom-exercise selection.
+  for (const ev of events) ev.catalogExerciseId = state.catalogExerciseId;
   return events;
 }
 
@@ -403,6 +451,7 @@ function deriveExerciseEvents(exerciseId, history) {
     maxWeight: state.maxWeight,
     e1rmBest: state.e1rmBest,
     name: state.name,
+    catalogExerciseId: state.catalogExerciseId,
     dayCount: state.dayCount,
     latestDateKey: state.latestDateKey,
   };
@@ -454,6 +503,7 @@ module.exports = {
   deriveExerciseEvents,
   applyDayToState,
   emptyState,
+  canonicalExerciseId,
   bestWeightAtOrAboveReps,
   strictlyGreater,
   strictlyLess,
