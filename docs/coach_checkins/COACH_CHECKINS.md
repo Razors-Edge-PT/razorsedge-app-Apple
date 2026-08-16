@@ -188,6 +188,83 @@ that exact string → the same string goes to the clipboard (failures show a
 dialog with the selectable text and a retry — the UI never claims success on
 a failed clipboard write; copied cards also offer "copy again").
 
+## PB semantics (analyticsVersion 3)
+
+All PB streams are keyed on the stable exercise id and walked in ascending
+`dateKey` order. Comparisons go through `strictlyGreater` / `strictlyLess`
+(relative epsilon `1e-9`): float noise is absorbed, exact equality is NEVER an
+improvement.
+
+| Achievement | Rule | Rank |
+|---|---|---|
+| `maxWeightPB` | weight strictly greater than every prior weight on that exercise, any reps | 1 |
+| `repPB` | weight strictly greater than the heaviest prior set with **reps ≥ R** | 2 |
+| `e1rmPB` | strict improvement on the complete prior lifetime E1RM max | 3 |
+| `rirMatchPB` | exact match of the standing PB (same weight and reps) at a strictly lower logged RIR | 4 |
+
+Rep targets are **dominance-aware**: a higher-rep set establishes every lower
+rep target at that weight. A previous 25 kg × 15 therefore makes a later
+25 kg × 14 dominated, and a previous 28 kg × 15 makes a later 27 kg × 15 not a
+PB. `repBest` stores the heaviest weight per *exact* rep count, which makes
+the "≥ R" query (`bestWeightAtOrAboveReps`) exact from a bounded structure —
+no history scan.
+
+**RIR is excluded from every calculation except `rirMatchPB`**, which is
+framed as effort, not strength (the weight and reps did not change). Its RIR
+baseline moves down with each event, so one improvement cannot be praised
+twice; null, equal or higher RIR never qualifies.
+
+A set that is both a `maxWeightPB` and a `repPB` is one achievement: praise.js
+presents it once, top-ranked, and the coach dashboard suppresses the duplicate
+rep-PB row.
+
+`pb_engine.applyDayToState` is the single step function used by BOTH the bulk
+bootstrap walk and the incremental fast-path append, so the two paths cannot
+drift; a regression test also asserts they produce identical stores.
+
+### Exercise identity is case-folded
+
+The stream key is `exerciseId.trim().toLowerCase()`. Workout documents written
+between **2026-03-03 and 2026-05-07** persisted lowercased copies of the
+catalog id, splitting exercises into two independent lifetime streams. Folding
+collapses the duplicates for every enrolled athlete: Aja 26 → 19 streams,
+Ruby 46 → 26, Richard 59 → 47. A split hides the heavier half of the history
+from the PB comparison, which is what published Aja's 27 kg × 15 Face Pull
+(2026-08-06) as a new rep and E1RM PB when the real lifetime bests were
+28 kg × 15 and E1RM 45.818 (2026-05-04) on the other stream.
+
+Folding reunites them **without modifying any workout record**. The original
+casing is kept as `catalogExerciseId` for display/reference, and `praise.js`
+folds the coach's `customExerciseIds` so custom-mode selection still matches.
+Two casings inside one document (production had this on 2026-04-23) merge.
+
+> **v2 → v3 (2026-08-16).** v2 keyed rep PBs on the *exact* rep count, so each
+> rep count was an isolated bucket and a dominated set could publish as a "new
+> N rep target PB". Bumping `ANALYTICS_VERSION` is the re-bootstrap mechanism:
+> `analyticsReady()` goes false, `generateReport()` self-heals, and
+> `runBootstrap()` wholesale-rebuilds from the untouched raw workout docs —
+> which *deletes* wrong events rather than merely ceasing to create them.
+> Raw workout documents are never modified. Regression fixtures for the
+> incident live in `functions/test/coach_pb_regression.test.js`.
+
+### Forcing the rebuild early
+
+The self-heal above happens at the next Mon/Thu checkpoint. To retract wrong
+events from the coach dashboard sooner, run the operator script — it mirrors
+`runBootstrap()` step for step and reuses the identical pure engine, so it
+cannot produce a different result from the backend's own rebuild:
+
+```
+cd functions
+node rebootstrap_coach_analytics.js                # dry-run, all enrolled
+node rebootstrap_coach_analytics.js --apply        # rebuild all enrolled
+node rebootstrap_coach_analytics.js <uid> --apply  # one athlete
+```
+
+It writes only under `coachAnalytics/{uid}/` (asserted before every commit),
+never to `users/**` or `coachCheckIns/**` — so workouts, finalised/copied
+reports, drafts, reporting toggles and praise bookkeeping are all untouched.
+
 ## E1RM formula & rebaseline
 
 Exact parity with `PeriodizationModelUtils.calculateE1RM(w, r, 0)`:

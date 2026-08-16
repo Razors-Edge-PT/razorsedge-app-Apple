@@ -7,87 +7,9 @@ const {
   applyWorkoutDay, bulkRebuild, fastAppendCompute,
 } = require('../coach/analytics_store');
 
-// In-memory implementation of the store interface — the production Firestore
-// adapter (functions/coach/index.js) implements the same contract, including
-// withExerciseLock (a transaction there, an async mutex here), so these
-// tests exercise the exact reconciliation code that runs in production.
-// Instrumented: counts per operation prove the bounded fast path.
-function memoryStore() {
-  const days = new Map();      // `${exerciseId}_${dateKey}` -> {exerciseId, dateKey, day}
-  const summaries = new Map(); // exerciseId -> summary
-  const events = new Map();    // eventId -> event
-  const counts = {
-    getSummary: 0, getDay: 0, listDaysForExercise: 0,
-    listExerciseIdsForDate: 0, listEventIdsForExercise: 0,
-    setDay: 0, setEvent: 0, setSummary: 0,
-  };
-  const locks = new Map(); // exerciseId -> Promise chain (real serialisation)
-
-  const store = {
-    async getSummary(exerciseId) {
-      counts.getSummary++;
-      return summaries.has(exerciseId) ? clone(summaries.get(exerciseId)) : null;
-    },
-    async getDay(exerciseId, dateKey) {
-      counts.getDay++;
-      const d = days.get(`${exerciseId}_${dateKey}`);
-      return d ? clone(d.day) : null;
-    },
-    async listDaysForExercise(exerciseId) {
-      counts.listDaysForExercise++;
-      return [...days.values()]
-        .filter((d) => d.exerciseId === exerciseId)
-        .map((d) => ({ dateKey: d.dateKey, day: clone(d.day) }));
-    },
-    async listExerciseIdsForDate(dateKey) {
-      counts.listExerciseIdsForDate++;
-      return [...new Set([...days.values()]
-        .filter((d) => d.dateKey === dateKey)
-        .map((d) => d.exerciseId))];
-    },
-    async listEventIdsForExercise(exerciseId) {
-      counts.listEventIdsForExercise++;
-      return [...events.values()]
-        .filter((e) => e.exerciseId === exerciseId)
-        .map((e) => e.id);
-    },
-    async setDay(exerciseId, dateKey, day) {
-      counts.setDay++;
-      days.set(`${exerciseId}_${dateKey}`, { exerciseId, dateKey, day: clone(day) });
-    },
-    async deleteDay(exerciseId, dateKey) { days.delete(`${exerciseId}_${dateKey}`); },
-    async setSummary(exerciseId, data) { counts.setSummary++; summaries.set(exerciseId, clone(data)); },
-    async deleteSummary(exerciseId) { summaries.delete(exerciseId); },
-    async setEvent(ev) { counts.setEvent++; events.set(ev.id, clone(ev)); },
-    async deleteEvent(id) { events.delete(id); },
-    async withExerciseLock(exerciseId, fn) {
-      // Genuine async mutex per exercise: concurrent callers serialise.
-      const prev = locks.get(exerciseId) || Promise.resolve();
-      let release;
-      const next = new Promise((res) => { release = res; });
-      locks.set(exerciseId, prev.then(() => next));
-      await prev;
-      try {
-        await fn(store);
-      } finally {
-        release();
-      }
-    },
-    async flush() {},
-  };
-  return { store, days, summaries, events, counts };
-}
-
-function clone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
-
-function snapshotOf(s) {
-  const sortEntries = (m) => [...m.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
-  return JSON.stringify({
-    days: sortEntries(s.days),
-    summaries: sortEntries(s.summaries),
-    events: sortEntries(s.events),
-  });
-}
+// The in-memory store lives in ../test-helpers/memory_store.js so the PB
+// regression suite exercises the identical store contract.
+const { memoryStore, snapshotOf } = require('../test-helpers/memory_store');
 
 const bench = (w, reps = 5) => ({
   exercises: [{
@@ -302,29 +224,42 @@ test('storage: summaries stay bounded — history lives in per-day docs', async 
   const summary = live.summaries.get('bench');
   assert.equal(summary.dayCount, 200);
   assert.equal(summary.history, undefined);
+  // repRir and maxWeight are single bounded records, not history: repRir holds
+  // at most one entry per distinct rep count, maxWeight exactly one entry.
   assert.deepEqual(Object.keys(summary).sort(),
-    ['dayCount', 'e1rmBest', 'formulaVersion', 'latestDateKey', 'name', 'repBest']);
+    ['catalogExerciseId', 'dayCount', 'e1rmBest', 'formulaVersion',
+      'latestDateKey', 'maxWeight', 'name', 'repBest', 'repRir']);
   assert.equal(live.days.size, 200);
 });
 
 // ── fastAppendCompute unit sanity ───────────────────────────────────────────
 
-test('fastAppendCompute: strict improvement only; baselines extend silently', () => {
+test('fastAppendCompute: strict improvement only, dominance-aware', () => {
   const summary = {
     name: 'Bench Press, Barbell',
     repBest: { 5: { weightKg: 100, dateKey: '2026-01-05' } },
+    repRir: {},
+    maxWeight: { weightKg: 100, reps: 5, dateKey: '2026-01-05' },
     e1rmBest: { e1rmKg: 112.5, dateKey: '2026-01-05', weightKg: 100, reps: 5 },
     latestDateKey: '2026-01-05', formulaVersion: 1, dayCount: 1,
   };
   const day = {
     name: 'Bench Press, Barbell',
-    bestByReps: { 5: 100, 3: 110 }, // equal 5-rep (no PB), first-ever 3-rep (baseline)
+    bestByReps: { 5: 100, 3: 110 }, // equal 5-rep (no PB); 110x3 beats the 100x5
+    bestWeight: 110,
+    bestWeightReps: 3,
     bestE1rm: 116.47, bestE1rmSet: { weight: 110, reps: 3 },
   };
   const { events, summary: next } = fastAppendCompute('bench', '2026-01-12', day, summary);
-  assert.equal(events.filter((e) => e.type === 'repPB').length, 0);
-  assert.equal(events.filter((e) => e.type === 'e1rmPB').length, 1); // e1rm improved
-  assert.equal(next.repBest['3'].weightKg, 110); // baseline established, no event
+
+  const reps = events.filter((e) => e.type === 'repPB');
+  assert.equal(reps.length, 1);            // the equal 5-rep set produces nothing
+  assert.equal(reps[0].reps, 3);
+  assert.equal(reps[0].prevWeightKg, 100); // judged against the 100 done for 5
+  assert.equal(events.filter((e) => e.type === 'maxWeightPB').length, 1);
+  assert.equal(events.filter((e) => e.type === 'e1rmPB').length, 1);
+  assert.equal(next.repBest['3'].weightKg, 110);
+  assert.equal(next.maxWeight.weightKg, 110);
   assert.equal(next.latestDateKey, '2026-01-12');
   assert.equal(next.dayCount, 2);
 });

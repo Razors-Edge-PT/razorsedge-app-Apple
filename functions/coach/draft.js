@@ -18,10 +18,13 @@ const { composeDraft } = require('./message');
 /** Praise-eligible event split for a coverage window. */
 function eligibleEvents({ events, coverageStart, coverageEnd, e1rmPraiseFloorKey }) {
   const inWindow = (e) => e.dateKey >= coverageStart && e.dateKey < coverageEnd;
-  const repEvents = (events || []).filter((e) => e.type === 'repPB' && inWindow(e));
-  const e1rmEvents = (events || []).filter((e) => e.type === 'e1rmPB' && inWindow(e)
+  const all = events || [];
+  const maxWeightEvents = all.filter((e) => e.type === 'maxWeightPB' && inWindow(e));
+  const repEvents = all.filter((e) => e.type === 'repPB' && inWindow(e));
+  const rirMatchEvents = all.filter((e) => e.type === 'rirMatchPB' && inWindow(e));
+  const e1rmEvents = all.filter((e) => e.type === 'e1rmPB' && inWindow(e)
     && (!e1rmPraiseFloorKey || e.dateKey >= e1rmPraiseFloorKey));
-  return { repEvents, e1rmEvents };
+  return { maxWeightEvents, repEvents, e1rmEvents, rirMatchEvents };
 }
 
 function completionInputFrom(completion, settings) {
@@ -49,12 +52,14 @@ function buildDraftText({
   events, completion, settings, identity, bodyweight,
   coverageStart, coverageEnd, variantSeed, e1rmPraiseFloorKey,
 }) {
-  const { repEvents, e1rmEvents } = eligibleEvents({
+  const { maxWeightEvents, repEvents, e1rmEvents, rirMatchEvents } = eligibleEvents({
     events, coverageStart, coverageEnd, e1rmPraiseFloorKey,
   });
   const { praises } = selectPraise({
+    maxWeightEvents,
     repEvents,
     e1rmEvents,
+    rirMatchEvents,
     completion: completionInputFrom(completion, settings),
     allowedExerciseIds: allowedExercisesFrom(settings),
   });
@@ -80,15 +85,17 @@ function computePraisedWeekKey(report, settings, coverage) {
   const qualifies = completion.completedAll || completion.completedCount >= 3;
   if (!qualifies) return null;
 
-  const { repEvents, e1rmEvents } = eligibleEvents({
+  const { maxWeightEvents, repEvents, e1rmEvents, rirMatchEvents } = eligibleEvents({
     events: report.events || [],
     coverageStart: coverage.start,
     coverageEnd: coverage.end,
     e1rmPraiseFloorKey: report.e1rmPraiseFloorKey || null,
   });
   const { usedCompletion } = selectPraise({
+    maxWeightEvents,
     repEvents,
     e1rmEvents,
+    rirMatchEvents,
     completion: {
       completedAll: !!completion.completedAll,
       count: completion.completedCount,

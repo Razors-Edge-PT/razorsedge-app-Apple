@@ -6,11 +6,16 @@
 // Bounded storage shape (no document grows with training history):
 //
 //   coachAnalytics/{athleteUid}/exerciseDays/{exerciseId}_{dateKey}
-//     { exerciseId, dateKey, day: { name, bestByReps, bestE1rm, bestE1rmSet } }
+//     { exerciseId, dateKey, day: { name, bestByReps, bestRirByReps,
+//       bestWeight, bestWeightReps, bestE1rm, bestE1rmSet } }
 //   coachAnalytics/{athleteUid}/exercises/{exerciseId}
-//     { name, repBest, e1rmBest, latestDateKey, formulaVersion, dayCount }
-//     – bounded summary + provenance: repBest has at most one entry per
-//       distinct rep count; latestDateKey enables the append fast path
+//     { name, repBest, repRir, maxWeight, e1rmBest, latestDateKey,
+//       formulaVersion, dayCount }
+//     – bounded summary + provenance: repBest/repRir have at most one entry
+//       per distinct rep count, maxWeight is a single record; latestDateKey
+//       enables the append fast path. repBest holds the heaviest weight per
+//       EXACT rep count, which is what makes the dominance query
+//       (bestWeightAtOrAboveReps) exact without scanning history.
 //   coachAnalytics/{athleteUid}/events/{eventId}
 //     – one small doc per PB event, deterministic ids
 //
@@ -40,23 +45,58 @@
 'use strict';
 
 const { E1RM_FORMULA_VERSION } = require('./e1rm');
-const { summarizeWorkoutDay, deriveExerciseEvents } = require('./pb_engine');
+const {
+  summarizeWorkoutDay, deriveExerciseEvents, applyDayToState, emptyState,
+} = require('./pb_engine');
 
 function dayDocId(exerciseId, dateKey) {
   return `${exerciseId}_${dateKey}`;
 }
 
+/** Lifetime state → persisted summary document. */
+function summaryDocFrom(state, formulaVersion) {
+  return {
+    name: state.name,
+    catalogExerciseId: state.catalogExerciseId,
+    repBest: state.repBest,
+    repRir: state.repRir,
+    maxWeight: state.maxWeight,
+    e1rmBest: state.e1rmBest,
+    latestDateKey: state.latestDateKey,
+    formulaVersion: formulaVersion || E1RM_FORMULA_VERSION,
+    dayCount: state.dayCount,
+  };
+}
+
+/** Persisted summary document → lifetime state (tolerates pre-v3 documents,
+ *  which carried no repRir/maxWeight; a version bump rebuilds them anyway). */
+function stateFromSummary(exerciseId, summary) {
+  const state = emptyState(exerciseId);
+  if (!summary) return state;
+  state.name = summary.name || exerciseId;
+  state.catalogExerciseId = summary.catalogExerciseId || exerciseId;
+  state.repBest = summary.repBest || {};
+  state.repRir = summary.repRir || {};
+  state.maxWeight = summary.maxWeight || null;
+  state.e1rmBest = summary.e1rmBest || null;
+  state.dayCount = summary.dayCount || 0;
+  state.latestDateKey = summary.latestDateKey || null;
+  return state;
+}
+
 function summaryFrom(exerciseId, history) {
   const derived = deriveExerciseEvents(exerciseId, history);
-  const dateKeys = Object.keys(history);
   return {
     summary: {
       name: derived.name,
+      catalogExerciseId: derived.catalogExerciseId,
       repBest: derived.repBest,
+      repRir: derived.repRir,
+      maxWeight: derived.maxWeight,
       e1rmBest: derived.e1rmBest,
-      latestDateKey: dateKeys.length ? dateKeys.sort()[dateKeys.length - 1] : null,
+      latestDateKey: derived.latestDateKey,
       formulaVersion: E1RM_FORMULA_VERSION,
-      dayCount: dateKeys.length,
+      dayCount: derived.dayCount,
     },
     events: derived.events,
   };
@@ -64,76 +104,17 @@ function summaryFrom(exerciseId, history) {
 
 /**
  * PURE fast-path computation: appending a strictly-later day to an existing
- * summary. Produces exactly the events a full chronological rebuild would —
- * the append is the final step of the walk, so comparing against the current
- * bests is sufficient (verified by the equivalence property test).
+ * summary. It calls the SAME step function as the full chronological rebuild
+ * (pb_engine.applyDayToState) with the state the rebuild would have reached,
+ * so the fast path cannot drift from the bootstrap by construction — the
+ * append is simply the final step of the walk.
  */
 function fastAppendCompute(exerciseId, dateKey, day, summary) {
-  const events = [];
-  const repBest = { ...(summary.repBest || {}) };
-  const name = day.name || summary.name || exerciseId;
-
-  for (const repKey of Object.keys(day.bestByReps || {})) {
-    const weight = Number(day.bestByReps[repKey]);
-    if (!(weight > 0)) continue;
-    const prior = repBest[repKey];
-    if (!prior) {
-      repBest[repKey] = { weightKg: weight, dateKey };
-    } else if (weight > prior.weightKg) {
-      events.push({
-        id: `${dateKey}_${exerciseId}_rep${repKey}`,
-        type: 'repPB',
-        dateKey,
-        exerciseId,
-        exerciseName: name,
-        reps: Number(repKey),
-        weightKg: weight,
-        prevWeightKg: prior.weightKg,
-        pctImprovement: (weight - prior.weightKg) / prior.weightKg,
-      });
-      repBest[repKey] = { weightKg: weight, dateKey };
-    }
-  }
-
-  let e1rmBest = summary.e1rmBest || null;
-  const e1 = Number(day.bestE1rm) || 0;
-  if (e1 > 0 && day.bestE1rmSet) {
-    if (!e1rmBest) {
-      e1rmBest = {
-        e1rmKg: e1, dateKey,
-        weightKg: day.bestE1rmSet.weight, reps: day.bestE1rmSet.reps,
-      };
-    } else if (e1 > e1rmBest.e1rmKg) {
-      events.push({
-        id: `${dateKey}_${exerciseId}_e1rm`,
-        type: 'e1rmPB',
-        dateKey,
-        exerciseId,
-        exerciseName: name,
-        e1rmKg: e1,
-        prevE1rmKg: e1rmBest.e1rmKg,
-        pctImprovement: (e1 - e1rmBest.e1rmKg) / e1rmBest.e1rmKg,
-        weightKg: day.bestE1rmSet.weight,
-        reps: day.bestE1rmSet.reps,
-        formulaVersion: E1RM_FORMULA_VERSION,
-      });
-      e1rmBest = {
-        e1rmKg: e1, dateKey,
-        weightKg: day.bestE1rmSet.weight, reps: day.bestE1rmSet.reps,
-      };
-    }
-  }
-
+  const state = stateFromSummary(exerciseId, summary);
+  const events = applyDayToState(state, exerciseId, dateKey, day);
   return {
     events,
-    summary: {
-      name,
-      repBest,
-      e1rmBest,
-      latestDateKey: dateKey,
-      formulaVersion: summary.formulaVersion || E1RM_FORMULA_VERSION,
-      dayCount: (summary.dayCount || 0) + 1,
-    },
+    summary: summaryDocFrom(state, summary && summary.formulaVersion),
   };
 }
 

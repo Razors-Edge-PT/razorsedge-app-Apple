@@ -46,6 +46,9 @@ class _AthleteReview {
   Map<String, dynamic>? prevReport;
   String? liveLastWeighInKey; // server-derived (coach timezone)
   String? liveWeighInStatus; // 'ok' | 'due' | 'overdue' (server-derived)
+  /// Set when this athlete's report documents could not be read. The card
+  /// still renders (saying so) instead of the whole screen failing.
+  String? reportLoadError;
 
   _AthleteReview({required this.uid, required this.settings, this.rosterName});
 
@@ -166,23 +169,38 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       }
 
       // 4) Bounded report reads: two direct gets per athlete.
+      //    Isolated per athlete, like steps 2 and 3. A transient Firestore
+      //    'unavailable' on ONE athlete used to propagate out of Future.wait
+      //    and hit the outer catch, discarding an otherwise fully-loaded
+      //    screen and showing a generic "check your connection" message even
+      //    though the backend was healthy — the 2026-08-14T21:28Z incident,
+      //    where coachReviewContext had just returned HTTP 200 in 134ms and
+      //    no Cloud Run service logged a single non-2xx all hour. These are
+      //    direct client reads, so such a failure leaves no server-side trace
+      //    at all. Failing softly here preserves the diagnosis: the affected
+      //    card says so, and the real error is logged rather than relabelled.
       await Future.wait(enabled.map((a) async {
-        final results = await Future.wait([
-          _db
-              .collection('coachCheckIns')
-              .doc(coachUid)
-              .collection('reports')
-              .doc('${a.uid}_$_currentKey')
-              .get(),
-          _db
-              .collection('coachCheckIns')
-              .doc(coachUid)
-              .collection('reports')
-              .doc('${a.uid}_$_prevKey')
-              .get(),
-        ]);
-        a.report = results[0].data();
-        a.prevReport = results[1].data();
+        try {
+          final results = await Future.wait([
+            _db
+                .collection('coachCheckIns')
+                .doc(coachUid)
+                .collection('reports')
+                .doc('${a.uid}_$_currentKey')
+                .get(),
+            _db
+                .collection('coachCheckIns')
+                .doc(coachUid)
+                .collection('reports')
+                .doc('${a.uid}_$_prevKey')
+                .get(),
+          ]);
+          a.report = results[0].data();
+          a.prevReport = results[1].data();
+        } catch (e) {
+          debugPrint('⚠️ [WeeklyReview] report read failed for ${a.uid}: $e');
+          a.reportLoadError = e is FirebaseException ? (e.code) : e.runtimeType.toString();
+        }
       }));
 
       enabled.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
@@ -192,11 +210,15 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
         _loading = false;
       });
     } catch (e) {
+      // Reaching here now means the ROSTER itself failed (step 1) — the only
+      // genuinely fatal step. Name the real cause instead of always blaming
+      // the network, so a recurring backend/permission fault stays visible.
       debugPrint('❌ [WeeklyReview] load failed: $e');
       if (!mounted) return;
+      final code = e is FirebaseException ? e.code : e.runtimeType.toString();
       setState(() {
-        _error = 'Couldn\'t load the Weekly Review. '
-            'Check your connection and tap Refresh to try again.';
+        _error = 'Couldn\'t load the Weekly Review ($code). '
+            'Tap Refresh to try again.';
         _loading = false;
       });
     }
@@ -279,8 +301,10 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       case _ReviewFilter.needsWeighIn:
         return _liveWeighInStatus(a) != 'ok';
       case _ReviewFilter.pbs:
-        return _eventsInWindow(a, 'repPB').isNotEmpty ||
-            _eventsInWindow(a, 'e1rmPB').isNotEmpty;
+        return _eventsInWindow(a, 'maxWeightPB').isNotEmpty ||
+            _eventsInWindow(a, 'repPB').isNotEmpty ||
+            _eventsInWindow(a, 'e1rmPB').isNotEmpty ||
+            _eventsInWindow(a, 'rirMatchPB').isNotEmpty;
       case _ReviewFilter.noTraining:
         return a.report != null && _workoutsInWindow(a) == 0;
     }
@@ -651,8 +675,19 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     final report = a.report;
     final status = report?['status'] as String? ?? 'pending';
     final coverage = _coverage(a);
+    final maxWeightPBs = _eventsInWindow(a, 'maxWeightPB');
     final repPBs = _eventsInWindow(a, 'repPB');
     final e1rmPBs = _eventsInWindow(a, 'e1rmPB');
+    final rirMatchPBs = _eventsInWindow(a, 'rirMatchPB');
+    // A set that is both an all-time heaviest lift and a rep-target PB is ONE
+    // achievement (the backend praises it once, as the heaviest lift), so the
+    // rep-PB evidence list hides the duplicate rather than showing it twice.
+    final maxWeightKeys = maxWeightPBs
+        .map((e) => '${e['exerciseId']}_${e['dateKey']}')
+        .toSet();
+    final repOnlyPBs = repPBs
+        .where((e) => !maxWeightKeys.contains('${e['exerciseId']}_${e['dateKey']}'))
+        .toList();
     final workouts = _workoutsInWindow(a);
     final completion = report?['completion'] as Map<String, dynamic>?;
     final bodyweight = report?['bodyweight'] as Map<String, dynamic>?;
@@ -701,8 +736,15 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
               spacing: 10,
               runSpacing: 4,
               children: [
-                _fact(Icons.emoji_events, '${repPBs.length} rep PB${repPBs.length == 1 ? '' : 's'}'),
+                if (maxWeightPBs.isNotEmpty)
+                  _fact(Icons.military_tech,
+                      '${maxWeightPBs.length} all-time heaviest'),
+                _fact(Icons.emoji_events,
+                    '${repOnlyPBs.length} rep PB${repOnlyPBs.length == 1 ? '' : 's'}'),
                 _fact(Icons.trending_up, '${e1rmPBs.length} E1RM PB${e1rmPBs.length == 1 ? '' : 's'}'),
+                if (rirMatchPBs.isNotEmpty)
+                  _fact(Icons.bolt,
+                      '${rirMatchPBs.length} PB match at lower RIR'),
                 _fact(
                   Icons.fitness_center,
                   completion != null
@@ -731,12 +773,21 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                 style: TextStyle(color: Colors.amber[200], fontSize: 12),
               ),
             ],
-            if (repPBs.isNotEmpty || e1rmPBs.isNotEmpty) ...[
+            if (maxWeightPBs.isNotEmpty ||
+                repOnlyPBs.isNotEmpty ||
+                e1rmPBs.isNotEmpty ||
+                rirMatchPBs.isNotEmpty) ...[
               const SizedBox(height: 6),
-              for (final e in repPBs)
+              for (final e in maxWeightPBs)
+                Text(
+                  '• ${e['exerciseName']}: all-time heaviest ${e['weightKg']}kg × ${e['reps']} '
+                  '(prev ${e['prevWeightKg']}kg)',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              for (final e in repOnlyPBs)
                 Text(
                   '• ${e['exerciseName']}: ${e['weightKg']}kg × ${e['reps']} '
-                  '(prev ${e['prevWeightKg']}kg)',
+                  '(prev ${e['prevWeightKg']}kg at ≥ ${e['reps']} reps)',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               for (final e in e1rmPBs)
@@ -745,9 +796,21 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                   '(prev ${(e['prevE1rmKg'] as num).toStringAsFixed(1)}kg, no RIR)',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
+              for (final e in rirMatchPBs)
+                Text(
+                  '• ${e['exerciseName']}: matched ${e['weightKg']}kg × ${e['reps']} '
+                  'at RIR ${e['rir']} (prev RIR ${e['prevRir']}) — effort, not a new PB',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
             ],
             const SizedBox(height: 8),
-            if (report == null)
+            if (a.reportLoadError != null)
+              Text(
+                'Could not load this athlete\'s report (${a.reportLoadError}). '
+                'Tap Refresh to retry — other athletes are unaffected.',
+                style: TextStyle(color: Colors.amber[200], fontSize: 12),
+              )
+            else if (report == null)
               const Text(
                 'Report not generated yet — reports run on Monday and Thursday.',
                 style: TextStyle(color: Colors.white38, fontSize: 12),

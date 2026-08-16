@@ -20,13 +20,18 @@ const { copyTransaction, undoTransaction, skipTransaction, TxnError } = require(
 const enrollment = require('../coach/enrollment');
 const { E1RM_FORMULA_VERSION } = require('../coach/e1rm');
 
-const { firestoreStore, claimBootstrap, runBootstrap, generateReport } = coach._internals;
+const {
+  firestoreStore, claimBootstrap, runBootstrap, generateReport, VERSIONS,
+} = coach._internals;
 const db = admin.firestore();
 
 assert.ok(process.env.FIRESTORE_EMULATOR_HOST,
   'integration.spec.js must run under firebase emulators:exec');
 
-const VERSIONS = { formulaVersion: E1RM_FORMULA_VERSION, analyticsVersion: 2 };
+// VERSIONS comes from the production module rather than being restated here,
+// so an analyticsVersion bump (the re-bootstrap mechanism) can never leave
+// this suite asserting against a stale generation.
+assert.equal(VERSIONS.formulaVersion, E1RM_FORMULA_VERSION);
 
 let seq = 0;
 function freshUid(prefix) {

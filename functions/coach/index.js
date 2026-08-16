@@ -33,7 +33,17 @@ const {
 try { admin.initializeApp(); } catch (_) {}
 const db = admin.firestore();
 
-const ANALYTICS_VERSION = 2; // v2: bounded exerciseDays storage shape
+// v2: bounded exerciseDays storage shape
+// v3: dominance-aware lifetime rep-target PBs (a higher-rep set establishes
+//     every lower rep target at that weight), strict-improvement E1RM with
+//     numeric tolerance, all-time-heaviest and lower-RIR-PB-match streams.
+//     Bumping this is the versioned re-bootstrap mechanism: analyticsReady()
+//     goes false for every athlete, generateReport() self-heals by claiming a
+//     bootstrap, and runBootstrap() wholesale-rebuilds exerciseDays/exercises/
+//     events from the untouched raw workout docs — which DELETES the events
+//     the old algorithm wrongly created rather than merely ceasing to create
+//     new ones. Idempotent: rerunning converges on the same documents.
+const ANALYTICS_VERSION = 3;
 const VERSIONS = { formulaVersion: E1RM_FORMULA_VERSION, analyticsVersion: ANALYTICS_VERSION };
 const DEFAULT_TZ = 'Pacific/Auckland';
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -1081,6 +1091,8 @@ module.exports = {
   coachSkipCheckIn,
   // Exported for emulator integration tests (not deployed as functions):
   _internals: {
+    ANALYTICS_VERSION,
+    VERSIONS,
     firestoreStore,
     claimBootstrap,
     runBootstrap,
