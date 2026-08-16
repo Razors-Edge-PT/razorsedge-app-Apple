@@ -222,6 +222,22 @@ rep-PB row.
 bootstrap walk and the incremental fast-path append, so the two paths cannot
 drift; a regression test also asserts they produce identical stores.
 
+### Exercise identity is case-folded
+
+The stream key is `exerciseId.trim().toLowerCase()`. Workout documents written
+between **2026-03-03 and 2026-05-07** persisted lowercased copies of the
+catalog id, splitting exercises into two independent lifetime streams. Folding
+collapses the duplicates for every enrolled athlete: Aja 26 → 19 streams,
+Ruby 46 → 26, Richard 59 → 47. A split hides the heavier half of the history
+from the PB comparison, which is what published Aja's 27 kg × 15 Face Pull
+(2026-08-06) as a new rep and E1RM PB when the real lifetime bests were
+28 kg × 15 and E1RM 45.818 (2026-05-04) on the other stream.
+
+Folding reunites them **without modifying any workout record**. The original
+casing is kept as `catalogExerciseId` for display/reference, and `praise.js`
+folds the coach's `customExerciseIds` so custom-mode selection still matches.
+Two casings inside one document (production had this on 2026-04-23) merge.
+
 > **v2 → v3 (2026-08-16).** v2 keyed rep PBs on the *exact* rep count, so each
 > rep count was an isolated bucket and a dominated set could publish as a "new
 > N rep target PB". Bumping `ANALYTICS_VERSION` is the re-bootstrap mechanism:
