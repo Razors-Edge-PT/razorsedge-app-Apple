@@ -95,6 +95,37 @@ function repPBSentence(praise, seed, { lead }) {
   return s;
 }
 
+/** All-time heaviest weight on the exercise — the top-ranked achievement.
+ *  Deliberately factual: weight, reps, exercise, no inferred claim. */
+function maxWeightPBSentence(praise, seed, { lead }) {
+  const ev = praise.event;
+  const alias = exerciseAlias(ev.exerciseName, seed);
+  let s;
+  if (lead) {
+    s = `new all-time heaviest lift on the ${alias}: ${fmtKg(ev.weightKg)} for ${ev.reps} — huge work 💪`;
+  } else {
+    s = `${fmtKg(ev.weightKg)} for ${ev.reps} on the ${alias} is a new all-time heaviest lift too`;
+  }
+  if (praise.alsoE1rm) {
+    s += lead
+      ? ` (that's a new E1RM PB too, ${fmtKg(praise.alsoE1rm.e1rmKg)} excluding RIR)`
+      : ` — new E1RM PB as well, ${fmtKg(praise.alsoE1rm.e1rmKg)} excluding RIR`;
+  }
+  return s;
+}
+
+/** Matched an existing PB at a strictly lower logged RIR. Framed as EFFORT —
+ *  the athlete took the same performance closer to failure — never as a
+ *  strength improvement, because the weight and reps did not change. */
+function rirMatchPBSentence(praise, seed, { lead }) {
+  const ev = praise.event;
+  const alias = exerciseAlias(ev.exerciseName, seed);
+  if (lead) {
+    return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} at a lower logged RIR — strong effort 💪`;
+  }
+  return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} at a lower logged RIR too — strong effort`;
+}
+
 function e1rmPBSentence(praise, seed, { lead }) {
   const ev = praise.event;
   const alias = exerciseAlias(ev.exerciseName, seed);
@@ -111,13 +142,18 @@ function e1rmPBSentence(praise, seed, { lead }) {
 function trainingParagraph(praises, seed) {
   if (!praises || praises.length === 0) return null;
 
-  const pbPraises = praises.filter((p) => p.kind === 'repPB' || p.kind === 'e1rmPB');
+  const SENTENCES = {
+    maxWeightPB: maxWeightPBSentence,
+    repPB: repPBSentence,
+    e1rmPB: e1rmPBSentence,
+    rirMatchPB: rirMatchPBSentence,
+  };
+  const pbPraises = praises.filter((p) => SENTENCES[p.kind]);
   const completion = praises.find((p) => p.kind === 'completedAll' || p.kind === 'threePlus');
 
   const parts = [];
   pbPraises.forEach((p, i) => {
-    const lead = i === 0;
-    parts.push(p.kind === 'repPB' ? repPBSentence(p, seed, { lead }) : e1rmPBSentence(p, seed, { lead }));
+    parts.push(SENTENCES[p.kind](p, seed, { lead: i === 0 }));
   });
 
   let text = '';

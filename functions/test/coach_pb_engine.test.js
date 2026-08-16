@@ -139,15 +139,20 @@ test('events: strictly higher weight at same reps is a PB; equal or lower is not
   assert.equal(repEvents[0].prevWeightKg, 100);
 });
 
-test('events: different rep counts are independent streams', () => {
+// Rep counts are NOT independent streams: a rep target is judged against every
+// prior set that reached AT LEAST that many reps. (The pre-v3 engine bucketed
+// each exact rep count separately, which is what published Aja's dominated
+// 25kg x 14 as a "new 14 rep target PB" on 2026-08-13.)
+test('events: a rep target is judged against all prior sets at >= that many reps', () => {
   const { events, repBest } = deriveExerciseEvents('bench', {
     '2026-01-05': day({ 6: 100 }),
-    '2026-01-12': day({ 5: 105 }),     // first-ever 5-rep → baseline only
-    '2026-01-19': day({ 6: 102.5 }),   // 6-rep PB
+    '2026-01-12': day({ 5: 105 }),     // 105 beats the 100 done for 6 → 5-rep PB
+    '2026-01-19': day({ 6: 102.5 }),   // 102.5 beats the 100 done for 6 → 6-rep PB
   });
   const repEvents = events.filter((e) => e.type === 'repPB');
-  assert.equal(repEvents.length, 1);
-  assert.equal(repEvents[0].reps, 6);
+  assert.equal(repEvents.length, 2);
+  assert.deepEqual(repEvents.map((e) => e.reps), [5, 6]);
+  assert.equal(repEvents[0].prevWeightKg, 100); // compared against the 6-rep set
   assert.equal(repBest['5'].weightKg, 105);
 });
 
@@ -182,7 +187,14 @@ test('events: deterministic ids and full recompute reproduce identical stream', 
   const a = deriveExerciseEvents('bench', history);
   const b = deriveExerciseEvents('bench', history);
   assert.deepEqual(a, b);
-  assert.equal(a.events[0].id, '2026-01-12_bench_rep5');
+  // 102.5 beats every prior weight, so it is both an all-time heaviest lift
+  // and a 5-rep-target PB. Both events exist (praise.js merges them into one
+  // message item); ids are deterministic.
+  assert.deepEqual(a.events.map((e) => e.id).sort(), [
+    '2026-01-12_bench_e1rm',
+    '2026-01-12_bench_maxweight',
+    '2026-01-12_bench_rep5',
+  ]);
 });
 
 test('events: editing history (delete a day) removes dependent events on recompute', () => {
@@ -192,14 +204,21 @@ test('events: editing history (delete a day) removes dependent events on recompu
     '2026-01-19': day({ 5: 105 }),
   };
   const before = deriveExerciseEvents('bench', full);
-  assert.equal(before.events.length, 2);
+  // Each improvement is both an all-time heaviest and a 5-rep-target PB.
+  assert.deepEqual(before.events.map((e) => e.id).sort(), [
+    '2026-01-12_bench_maxweight', '2026-01-12_bench_rep5',
+    '2026-01-19_bench_maxweight', '2026-01-19_bench_rep5',
+  ]);
 
-  // Athlete's Jan 12 workout is deleted/corrected: recompute drops its event
+  // Athlete's Jan 12 workout is deleted/corrected: recompute drops its events
+  // and re-bases Jan 19 on the surviving history.
   const { '2026-01-12': _gone, ...rest } = full;
   const after = deriveExerciseEvents('bench', rest);
-  assert.equal(after.events.length, 1);
-  assert.equal(after.events[0].id, '2026-01-19_bench_rep5');
-  assert.equal(after.events[0].prevWeightKg, 100);
+  assert.deepEqual(after.events.map((e) => e.id).sort(), [
+    '2026-01-19_bench_maxweight', '2026-01-19_bench_rep5',
+  ]);
+  const rep = after.events.find((e) => e.type === 'repPB');
+  assert.equal(rep.prevWeightKg, 100);
 });
 
 test('events: formula-version rebaseline does not invent a new PB event dated today', () => {

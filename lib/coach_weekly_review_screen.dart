@@ -279,8 +279,10 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       case _ReviewFilter.needsWeighIn:
         return _liveWeighInStatus(a) != 'ok';
       case _ReviewFilter.pbs:
-        return _eventsInWindow(a, 'repPB').isNotEmpty ||
-            _eventsInWindow(a, 'e1rmPB').isNotEmpty;
+        return _eventsInWindow(a, 'maxWeightPB').isNotEmpty ||
+            _eventsInWindow(a, 'repPB').isNotEmpty ||
+            _eventsInWindow(a, 'e1rmPB').isNotEmpty ||
+            _eventsInWindow(a, 'rirMatchPB').isNotEmpty;
       case _ReviewFilter.noTraining:
         return a.report != null && _workoutsInWindow(a) == 0;
     }
@@ -651,8 +653,19 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     final report = a.report;
     final status = report?['status'] as String? ?? 'pending';
     final coverage = _coverage(a);
+    final maxWeightPBs = _eventsInWindow(a, 'maxWeightPB');
     final repPBs = _eventsInWindow(a, 'repPB');
     final e1rmPBs = _eventsInWindow(a, 'e1rmPB');
+    final rirMatchPBs = _eventsInWindow(a, 'rirMatchPB');
+    // A set that is both an all-time heaviest lift and a rep-target PB is ONE
+    // achievement (the backend praises it once, as the heaviest lift), so the
+    // rep-PB evidence list hides the duplicate rather than showing it twice.
+    final maxWeightKeys = maxWeightPBs
+        .map((e) => '${e['exerciseId']}_${e['dateKey']}')
+        .toSet();
+    final repOnlyPBs = repPBs
+        .where((e) => !maxWeightKeys.contains('${e['exerciseId']}_${e['dateKey']}'))
+        .toList();
     final workouts = _workoutsInWindow(a);
     final completion = report?['completion'] as Map<String, dynamic>?;
     final bodyweight = report?['bodyweight'] as Map<String, dynamic>?;
@@ -701,8 +714,15 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
               spacing: 10,
               runSpacing: 4,
               children: [
-                _fact(Icons.emoji_events, '${repPBs.length} rep PB${repPBs.length == 1 ? '' : 's'}'),
+                if (maxWeightPBs.isNotEmpty)
+                  _fact(Icons.military_tech,
+                      '${maxWeightPBs.length} all-time heaviest'),
+                _fact(Icons.emoji_events,
+                    '${repOnlyPBs.length} rep PB${repOnlyPBs.length == 1 ? '' : 's'}'),
                 _fact(Icons.trending_up, '${e1rmPBs.length} E1RM PB${e1rmPBs.length == 1 ? '' : 's'}'),
+                if (rirMatchPBs.isNotEmpty)
+                  _fact(Icons.bolt,
+                      '${rirMatchPBs.length} PB match at lower RIR'),
                 _fact(
                   Icons.fitness_center,
                   completion != null
@@ -731,18 +751,33 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                 style: TextStyle(color: Colors.amber[200], fontSize: 12),
               ),
             ],
-            if (repPBs.isNotEmpty || e1rmPBs.isNotEmpty) ...[
+            if (maxWeightPBs.isNotEmpty ||
+                repOnlyPBs.isNotEmpty ||
+                e1rmPBs.isNotEmpty ||
+                rirMatchPBs.isNotEmpty) ...[
               const SizedBox(height: 6),
-              for (final e in repPBs)
+              for (final e in maxWeightPBs)
+                Text(
+                  '• ${e['exerciseName']}: all-time heaviest ${e['weightKg']}kg × ${e['reps']} '
+                  '(prev ${e['prevWeightKg']}kg)',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              for (final e in repOnlyPBs)
                 Text(
                   '• ${e['exerciseName']}: ${e['weightKg']}kg × ${e['reps']} '
-                  '(prev ${e['prevWeightKg']}kg)',
+                  '(prev ${e['prevWeightKg']}kg at ≥ ${e['reps']} reps)',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               for (final e in e1rmPBs)
                 Text(
                   '• ${e['exerciseName']}: E1RM ${(e['e1rmKg'] as num).toStringAsFixed(1)}kg '
                   '(prev ${(e['prevE1rmKg'] as num).toStringAsFixed(1)}kg, no RIR)',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              for (final e in rirMatchPBs)
+                Text(
+                  '• ${e['exerciseName']}: matched ${e['weightKg']}kg × ${e['reps']} '
+                  'at RIR ${e['rir']} (prev RIR ${e['prevRir']}) — effort, not a new PB',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
             ],

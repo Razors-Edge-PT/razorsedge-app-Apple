@@ -1,11 +1,24 @@
 // Training-praise selection for the client draft message. Pure module.
 //
-// Priority: rep-target PBs > E1RM PBs > all-planned-completed > 3+ workouts.
-// Up to three slots; nothing is fabricated when no achievement qualifies.
+// Priority (highest first):
+//   1. maxWeightPB   – new all-time heaviest weight on the exercise
+//   2. repPB         – new rep-target PB (dominance-aware, see pb_engine.js)
+//   3. e1rmPB        – new lifetime E1RM PB
+//   4. rirMatchPB    – matched a standing PB at a strictly lower logged RIR
+//   5. completedAll  – completed every planned workout
+//   6. threePlus     – completed at least three workouts
 //
-// Deduplication: when one lift produced both a rep PB and an E1RM PB on the
-// same exercise+day, the rep PB wins the slot and the E1RM fact is attached
-// to it (`alsoE1rm`) so the same achievement never consumes two slots.
+// Up to three slots; nothing is fabricated when no achievement qualifies.
+// Bodyweight commentary and weigh-in prompts are composed separately and are
+// NOT subject to this cap (see message.js).
+//
+// Deduplication: one performance never consumes two slots. A set that is both
+// a new all-time heaviest weight AND a rep-target PB (which is the normal
+// case — beating every prior weight necessarily beats every prior weight at
+// reps >= R) is presented once, as the top-ranked all-time-heaviest item, with
+// any same-day E1RM PB on that exercise attached as `alsoE1rm` rather than
+// taking its own slot. Dedupe granularity is exerciseId+dateKey, so a single
+// session's work on one lift reads as one achievement.
 
 'use strict';
 
@@ -13,48 +26,69 @@ const MAX_SLOTS = 3;
 
 /**
  * @param {Object} opts
- *   repEvents    Array of repPB events inside the effective window.
- *   e1rmEvents   Array of e1rmPB events inside the effective window.
- *   completion   { completedAll: bool, count: number, planned: number,
- *                  weekAlreadyPraised: bool } | null
+ *   maxWeightEvents Array of maxWeightPB events inside the effective window.
+ *   repEvents       Array of repPB events inside the effective window.
+ *   e1rmEvents      Array of e1rmPB events inside the effective window.
+ *   rirMatchEvents  Array of rirMatchPB events inside the effective window.
+ *   completion      { completedAll, count, planned, weekAlreadyPraised } | null
  *   allowedExerciseIds  null (automatic mode) or Set/Array of exerciseIds
  *                       eligible for the client message (custom mode).
  * @returns {{ praises: Array, usedCompletion: 'all'|'threePlus'|null }}
  *   praises items:
- *     { kind:'repPB', event, alsoE1rm?: event }
- *     { kind:'e1rmPB', event }
+ *     { kind:'maxWeightPB', event, alsoE1rm?: event }
+ *     { kind:'repPB',       event, alsoE1rm?: event }
+ *     { kind:'e1rmPB',      event }
+ *     { kind:'rirMatchPB',  event }
  *     { kind:'completedAll' } | { kind:'threePlus', count }
  */
-function selectPraise({ repEvents, e1rmEvents, completion, allowedExerciseIds }) {
+function selectPraise({
+  maxWeightEvents, repEvents, e1rmEvents, rirMatchEvents, completion, allowedExerciseIds,
+}) {
   const allowed = normalizeAllowed(allowedExerciseIds);
-  const reps = (repEvents || [])
-    .filter((e) => allowed === null || allowed.has(e.exerciseId))
-    .slice()
-    .sort(byImprovementDesc);
-  const e1rms = (e1rmEvents || [])
-    .filter((e) => allowed === null || allowed.has(e.exerciseId))
-    .slice()
-    .sort(byImprovementDesc);
+  const keep = (e) => allowed === null || allowed.has(e.exerciseId);
+
+  const maxWeights = (maxWeightEvents || []).filter(keep).slice().sort(byImprovementDesc);
+  const reps = (repEvents || []).filter(keep).slice().sort(byImprovementDesc);
+  const e1rms = (e1rmEvents || []).filter(keep).slice().sort(byImprovementDesc);
+  const rirMatches = (rirMatchEvents || []).filter(keep).slice().sort(byRirGainDesc);
 
   const praises = [];
   const usedExerciseDay = new Set();
+  const dayKeyOf = (e) => `${e.exerciseId}_${e.dateKey}`;
+
+  // Attaches a same-exercise, same-day E1RM PB to a weight-based praise so it
+  // never consumes a second slot.
+  const withTwin = (kind, ev) => {
+    const twin = e1rms.find((x) => x.exerciseId === ev.exerciseId && x.dateKey === ev.dateKey);
+    return twin ? { kind, event: ev, alsoE1rm: twin } : { kind, event: ev };
+  };
+
+  for (const ev of maxWeights) {
+    if (praises.length >= MAX_SLOTS) break;
+    if (usedExerciseDay.has(dayKeyOf(ev))) continue;
+    usedExerciseDay.add(dayKeyOf(ev));
+    praises.push(withTwin('maxWeightPB', ev));
+  }
 
   for (const ev of reps) {
     if (praises.length >= MAX_SLOTS) break;
-    const dayKey = `${ev.exerciseId}_${ev.dateKey}`;
-    usedExerciseDay.add(dayKey);
-    // Attach a same-exercise E1RM PB from the same day instead of letting it
-    // occupy its own slot later.
-    const twin = e1rms.find(
-      (x) => x.exerciseId === ev.exerciseId && x.dateKey === ev.dateKey
-    );
-    praises.push(twin ? { kind: 'repPB', event: ev, alsoE1rm: twin } : { kind: 'repPB', event: ev });
+    if (usedExerciseDay.has(dayKeyOf(ev))) continue; // already told as all-time heaviest
+    usedExerciseDay.add(dayKeyOf(ev));
+    praises.push(withTwin('repPB', ev));
   }
 
   for (const ev of e1rms) {
     if (praises.length >= MAX_SLOTS) break;
-    if (usedExerciseDay.has(`${ev.exerciseId}_${ev.dateKey}`)) continue; // already covered
+    if (usedExerciseDay.has(dayKeyOf(ev))) continue; // already covered
+    usedExerciseDay.add(dayKeyOf(ev));
     praises.push({ kind: 'e1rmPB', event: ev });
+  }
+
+  for (const ev of rirMatches) {
+    if (praises.length >= MAX_SLOTS) break;
+    if (usedExerciseDay.has(dayKeyOf(ev))) continue;
+    usedExerciseDay.add(dayKeyOf(ev));
+    praises.push({ kind: 'rirMatchPB', event: ev });
   }
 
   let usedCompletion = null;
@@ -82,6 +116,18 @@ function normalizeAllowed(allowedExerciseIds) {
 function byImprovementDesc(a, b) {
   const p = (b.pctImprovement || 0) - (a.pctImprovement || 0);
   if (p !== 0) return p;
+  return byRecency(a, b);
+}
+
+/** RIR-match ranking: biggest RIR drop first, then the same tiebreakers. */
+function byRirGainDesc(a, b) {
+  const ga = (a.prevRir || 0) - (a.rir || 0);
+  const gb = (b.prevRir || 0) - (b.rir || 0);
+  if (ga !== gb) return gb - ga;
+  return byRecency(a, b);
+}
+
+function byRecency(a, b) {
   if (a.dateKey !== b.dateKey) return a.dateKey < b.dateKey ? 1 : -1;
   if (a.exerciseId !== b.exerciseId) return a.exerciseId < b.exerciseId ? -1 : 1;
   return (a.reps || 0) - (b.reps || 0);

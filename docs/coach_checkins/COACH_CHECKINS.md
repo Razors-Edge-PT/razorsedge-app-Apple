@@ -188,6 +188,49 @@ that exact string → the same string goes to the clipboard (failures show a
 dialog with the selectable text and a retry — the UI never claims success on
 a failed clipboard write; copied cards also offer "copy again").
 
+## PB semantics (analyticsVersion 3)
+
+All PB streams are keyed on the stable exercise id and walked in ascending
+`dateKey` order. Comparisons go through `strictlyGreater` / `strictlyLess`
+(relative epsilon `1e-9`): float noise is absorbed, exact equality is NEVER an
+improvement.
+
+| Achievement | Rule | Rank |
+|---|---|---|
+| `maxWeightPB` | weight strictly greater than every prior weight on that exercise, any reps | 1 |
+| `repPB` | weight strictly greater than the heaviest prior set with **reps ≥ R** | 2 |
+| `e1rmPB` | strict improvement on the complete prior lifetime E1RM max | 3 |
+| `rirMatchPB` | exact match of the standing PB (same weight and reps) at a strictly lower logged RIR | 4 |
+
+Rep targets are **dominance-aware**: a higher-rep set establishes every lower
+rep target at that weight. A previous 25 kg × 15 therefore makes a later
+25 kg × 14 dominated, and a previous 28 kg × 15 makes a later 27 kg × 15 not a
+PB. `repBest` stores the heaviest weight per *exact* rep count, which makes
+the "≥ R" query (`bestWeightAtOrAboveReps`) exact from a bounded structure —
+no history scan.
+
+**RIR is excluded from every calculation except `rirMatchPB`**, which is
+framed as effort, not strength (the weight and reps did not change). Its RIR
+baseline moves down with each event, so one improvement cannot be praised
+twice; null, equal or higher RIR never qualifies.
+
+A set that is both a `maxWeightPB` and a `repPB` is one achievement: praise.js
+presents it once, top-ranked, and the coach dashboard suppresses the duplicate
+rep-PB row.
+
+`pb_engine.applyDayToState` is the single step function used by BOTH the bulk
+bootstrap walk and the incremental fast-path append, so the two paths cannot
+drift; a regression test also asserts they produce identical stores.
+
+> **v2 → v3 (2026-08-16).** v2 keyed rep PBs on the *exact* rep count, so each
+> rep count was an isolated bucket and a dominated set could publish as a "new
+> N rep target PB". Bumping `ANALYTICS_VERSION` is the re-bootstrap mechanism:
+> `analyticsReady()` goes false, `generateReport()` self-heals, and
+> `runBootstrap()` wholesale-rebuilds from the untouched raw workout docs —
+> which *deletes* wrong events rather than merely ceasing to create them.
+> Raw workout documents are never modified. Regression fixtures for the
+> incident live in `functions/test/coach_pb_regression.test.js`.
+
 ## E1RM formula & rebaseline
 
 Exact parity with `PeriodizationModelUtils.calculateE1RM(w, r, 0)`:
