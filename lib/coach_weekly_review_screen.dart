@@ -744,7 +744,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                 _fact(Icons.trending_up, '${e1rmPBs.length} E1RM PB${e1rmPBs.length == 1 ? '' : 's'}'),
                 if (rirMatchPBs.isNotEmpty)
                   _fact(Icons.bolt,
-                      '${rirMatchPBs.length} PB match at lower RIR'),
+                      '${rirMatchPBs.length} PB match, more in reserve'),
                 _fact(
                   Icons.fitness_center,
                   completion != null
@@ -799,7 +799,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
               for (final e in rirMatchPBs)
                 Text(
                   '• ${e['exerciseName']}: matched ${e['weightKg']}kg × ${e['reps']} '
-                  'at RIR ${e['rir']} (prev RIR ${e['prevRir']}) — effort, not a new PB',
+                  'at RIR ${e['rir']} (prev RIR ${e['prevRir']}) — more in reserve, '
+                  'not a new PB',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
             ],

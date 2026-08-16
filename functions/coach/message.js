@@ -114,16 +114,17 @@ function maxWeightPBSentence(praise, seed, { lead }) {
   return s;
 }
 
-/** Matched an existing PB at a strictly lower logged RIR. Framed as EFFORT —
- *  the athlete took the same performance closer to failure — never as a
- *  strength improvement, because the weight and reps did not change. */
+/** Matched an existing PB at a strictly HIGHER logged RIR — the same weight
+ *  and reps with more left in reserve, i.e. the performance got easier. Framed
+ *  as an easier matched performance, never as a new PB, because the weight and
+ *  reps themselves did not improve. */
 function rirMatchPBSentence(praise, seed, { lead }) {
   const ev = praise.event;
   const alias = exerciseAlias(ev.exerciseName, seed);
   if (lead) {
-    return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} at a lower logged RIR — strong effort 💪`;
+    return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} with more reps in reserve — that is getting easier 💪`;
   }
-  return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} at a lower logged RIR too — strong effort`;
+  return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} with more in reserve too`;
 }
 
 function e1rmPBSentence(praise, seed, { lead }) {

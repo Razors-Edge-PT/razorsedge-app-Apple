@@ -200,7 +200,7 @@ improvement.
 | `maxWeightPB` | weight strictly greater than every prior weight on that exercise, any reps | 1 |
 | `repPB` | weight strictly greater than the heaviest prior set with **reps ≥ R** | 2 |
 | `e1rmPB` | strict improvement on the complete prior lifetime E1RM max | 3 |
-| `rirMatchPB` | exact match of the standing PB (same weight and reps) at a strictly lower logged RIR | 4 |
+| `rirMatchPB` | exact match of the standing PB (same weight and reps) at a strictly **higher** logged RIR | 4 |
 
 Rep targets are **dominance-aware**: a higher-rep set establishes every lower
 rep target at that weight. A previous 25 kg × 15 therefore makes a later
@@ -209,10 +209,19 @@ PB. `repBest` stores the heaviest weight per *exact* rep count, which makes
 the "≥ R" query (`bestWeightAtOrAboveReps`) exact from a bounded structure —
 no history scan.
 
-**RIR is excluded from every calculation except `rirMatchPB`**, which is
-framed as effort, not strength (the weight and reps did not change). Its RIR
-baseline moves down with each event, so one improvement cannot be praised
-twice; null, equal or higher RIR never qualifies.
+**RIR is excluded from every calculation except `rirMatchPB`.** RIR is
+reps-in-reserve, so at the same weight and reps a **higher** value means the
+athlete finished the identical performance with more left in the tank — the
+set got easier, which is evidence of improved strength. A **lower** RIR only
+means they worked closer to failure and never qualifies. The baseline moves
+**up** with each event, so one improvement cannot be praised twice; null,
+invalid, equal or lower RIR never qualifies. It is presented as an easier
+matched performance, never as a new PB.
+
+> **v3 → v4 (2026-08-16).** v3 had this direction inverted and fired on a
+> *lower* RIR. Every one of the 34 `rirMatchPB` events it produced across the
+> three enrolled athletes was a lower-RIR event; the v4 re-bootstrap deletes
+> them and rebuilds the baseline as a monotonically increasing best-RIR.
 
 A set that is both a `maxWeightPB` and a `repPB` is one achievement: praise.js
 presents it once, top-ranked, and the coach dashboard suppresses the duplicate

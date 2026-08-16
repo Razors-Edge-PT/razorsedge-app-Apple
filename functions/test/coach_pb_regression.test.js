@@ -194,55 +194,102 @@ test('regression 4c: the coach custom-exercise filter survives folding', () => {
   assert.equal(excluded.praises.length, 0);
 });
 
-// ── 5. Previous 100x5 @ RIR 2, later exact 100x5 @ RIR 1 ────────────────────
+// ── 5. RIR direction: HIGHER at the same weight and reps is the improvement ─
+//
+// RIR is reps-in-reserve. Matching a PB with MORE left in the tank means the
+// performance got easier — evidence of improved strength. A LOWER RIR only
+// means the athlete worked closer to failure and must never fire this event.
+// (v3 had this backwards and published 34 lower-RIR events across the three
+// enrolled athletes; v4 inverts it and rebuilds.)
 
-test('regression 5: matching a PB at a strictly lower RIR praises effort only', () => {
-  const { events } = eventsFor('ex_squat', 'Back Squat, Barbell', {
-    '2026-01-05': [{ weight: 100, reps: 5, rir: 2 }],
-    '2026-02-05': [{ weight: 100, reps: 5, rir: 1 }],
+test('regression 5: prior 25x15 @ RIR 1.5, current 25x15 @ RIR 2 fires once', () => {
+  const { events } = eventsFor(MCP, 'Machine Chest Press', {
+    '2026-07-23': [{ weight: 25, reps: 15, rir: 1.5 }],
+    '2026-08-13': [{ weight: 25, reps: 15, rir: 2 }],
   });
   assert.equal(events.length, 1);
   const ev = events[0];
   assert.equal(ev.type, 'rirMatchPB');
-  assert.equal(ev.id, '2026-02-05_ex_squat_rirmatch5');
-  assert.equal(ev.weightKg, 100);
-  assert.equal(ev.reps, 5);
-  assert.equal(ev.rir, 1);
-  assert.equal(ev.prevRir, 2);
-  // Explicitly NOT presented as a strength improvement.
+  assert.equal(ev.id, `2026-08-13_${MCP}_rirmatch15`);
+  assert.equal(ev.weightKg, 25);
+  assert.equal(ev.reps, 15);
+  assert.equal(ev.rir, 2);
+  assert.equal(ev.prevRir, 1.5);
+  // Never presented as a new PB of any kind.
   assert.equal(events.filter((e) => e.type === 'repPB').length, 0);
   assert.equal(events.filter((e) => e.type === 'e1rmPB').length, 0);
   assert.equal(events.filter((e) => e.type === 'maxWeightPB').length, 0);
 });
 
-test('regression 5b: the same RIR improvement cannot be praised twice', () => {
-  const { events } = eventsFor('ex_squat', 'Back Squat, Barbell', {
-    '2026-01-05': [{ weight: 100, reps: 5, rir: 2 }],
-    '2026-02-05': [{ weight: 100, reps: 5, rir: 1 }], // qualifies
-    '2026-03-05': [{ weight: 100, reps: 5, rir: 1 }], // equal to the new baseline
-    '2026-04-05': [{ weight: 100, reps: 5, rir: 2 }], // higher again
-  });
-  assert.equal(events.filter((e) => e.type === 'rirMatchPB').length, 1);
-  assert.equal(events[0].dateKey, '2026-02-05');
-});
-
-// ── 6. Same / higher / null RIR → no PB-match praise ────────────────────────
-
-for (const [label, priorRir, currentRir] of [
-  ['equal RIR', 2, 2],
-  ['higher RIR', 2, 3],
-  ['null current RIR', 2, null],
-  ['null prior RIR', null, 1],
-  ['both null', null, null],
+for (const [label, currentRir] of [
+  ['equal RIR 1.5', 1.5],
+  ['lower RIR 1', 1],
+  ['lower RIR 0', 0],
 ]) {
-  test(`regression 6: ${label} produces no PB-match praise`, () => {
-    const { events } = eventsFor('ex_squat', 'Back Squat, Barbell', {
-      '2026-01-05': [{ weight: 100, reps: 5, rir: priorRir }],
-      '2026-02-05': [{ weight: 100, reps: 5, rir: currentRir }],
+  test(`regression 5: current ${label} produces no event`, () => {
+    const { events } = eventsFor(MCP, 'Machine Chest Press', {
+      '2026-07-23': [{ weight: 25, reps: 15, rir: 1.5 }],
+      '2026-08-13': [{ weight: 25, reps: 15, rir: currentRir }],
     });
     assert.deepEqual(events, []);
   });
 }
+
+for (const [label, priorRir, currentRir] of [
+  ['missing current RIR', 1.5, null],
+  ['missing prior RIR', null, 2],
+  ['both missing', null, null],
+  ['invalid current RIR', 1.5, 'abc'],
+  ['negative current RIR', 1.5, -1],
+]) {
+  test(`regression 5: ${label} produces no event`, () => {
+    const { events } = eventsFor(MCP, 'Machine Chest Press', {
+      '2026-07-23': [{ weight: 25, reps: 15, rir: priorRir }],
+      '2026-08-13': [{ weight: 25, reps: 15, rir: currentRir }],
+    });
+    assert.deepEqual(events, []);
+  });
+}
+
+test('regression 5: baseline rises monotonically — repeat at RIR 2 does not re-fire', () => {
+  const { events, repRir } = eventsFor(MCP, 'Machine Chest Press', {
+    '2026-07-23': [{ weight: 25, reps: 15, rir: 1.5 }],
+    '2026-08-13': [{ weight: 25, reps: 15, rir: 2 }],   // fires
+    '2026-08-20': [{ weight: 25, reps: 15, rir: 2 }],   // equal to new baseline
+    '2026-08-27': [{ weight: 25, reps: 15, rir: 1 }],   // lower again
+  });
+  const rir = events.filter((e) => e.type === 'rirMatchPB');
+  assert.equal(rir.length, 1);
+  assert.equal(rir[0].dateKey, '2026-08-13');
+  assert.equal(repRir['15'].rir, 2, 'baseline must not fall back to 1');
+});
+
+test('regression 5: a later match at RIR 2.5 fires once more', () => {
+  const { events } = eventsFor(MCP, 'Machine Chest Press', {
+    '2026-07-23': [{ weight: 25, reps: 15, rir: 1.5 }],
+    '2026-08-13': [{ weight: 25, reps: 15, rir: 2 }],   // fires (1.5 -> 2)
+    '2026-08-20': [{ weight: 25, reps: 15, rir: 2 }],   // equal, no event
+    '2026-08-27': [{ weight: 25, reps: 15, rir: 2.5 }], // fires (2 -> 2.5)
+  });
+  const rir = events.filter((e) => e.type === 'rirMatchPB');
+  assert.deepEqual(rir.map((e) => `${e.dateKey}:${e.prevRir}->${e.rir}`), [
+    '2026-08-13:1.5->2',
+    '2026-08-27:2->2.5',
+  ]);
+});
+
+// Aja's REAL production sequence: 2026-07-23 logged 25x15 @ RIR 1.5, then
+// 2026-08-13 logged 25x15 @ RIR 1. v3 praised that as an achievement; it is a
+// LOWER RIR and must produce nothing.
+test('regression 5: Aja 25x15 RIR 1.5 -> RIR 1 must NOT fire', () => {
+  const { events } = eventsFor(MCP, 'Machine Chest Press', {
+    '2026-07-23': [{ weight: 23, reps: 15, rir: 3 }, { weight: 25, reps: 15, rir: 1.5 },
+      { weight: 25, reps: 15, rir: null }],
+    '2026-08-13': [{ weight: 25, reps: 15, rir: 1.5 }, { weight: 25, reps: 15, rir: 1 },
+      { weight: 25, reps: 13, rir: null }],
+  });
+  assert.deepEqual(events.filter((e) => e.type === 'rirMatchPB'), []);
+});
 
 // ── 7. Previous 170x2, later 180x1 → all-time heaviest, ranked first ────────
 
@@ -336,7 +383,8 @@ test('regression 9: lifetime bootstrap and incremental appends agree exactly', a
     ['2026-01-05', workout(MCP, 'Machine Chest Press', [{ weight: 22.5, reps: 14, rir: 2 }])],
     ['2026-02-05', workout(MCP, 'Machine Chest Press', [{ weight: 25, reps: 15, rir: 1.5 }])],
     ['2026-03-05', workout(MCP, 'Machine Chest Press', [{ weight: 25, reps: 14, rir: 1.5 }])],
-    ['2026-04-05', workout(MCP, 'Machine Chest Press', [{ weight: 25, reps: 15, rir: 0.5 }])],
+    // same 25x15, but with MORE reps in reserve than 2026-02-05 → rirMatchPB
+    ['2026-04-05', workout(MCP, 'Machine Chest Press', [{ weight: 25, reps: 15, rir: 2.5 }])],
     ['2026-05-05', workout(MCP, 'Machine Chest Press', [{ weight: 30, reps: 8, rir: 1 }])],
     ['2026-06-05', workout(MCP, 'Machine Chest Press', [{ weight: 30, reps: 8, rir: 1 }])],
   ];
@@ -361,7 +409,7 @@ test('regression 9: lifetime bootstrap and incremental appends agree exactly', a
     // reached 15 reps, so there is no comparable weight to improve on.
     '2026-02-05_ex_machine_chest_press_e1rm',
     '2026-02-05_ex_machine_chest_press_maxweight',
-    // Same 25x15, logged at RIR 0.5 instead of 1.5 → effort praise only.
+    // Same 25x15, logged at RIR 2.5 instead of 1.5 → easier, so it praises.
     '2026-04-05_ex_machine_chest_press_rirmatch15',
     // 30kg is a new all-time heaviest and beats the 25kg standing at >= 8 reps.
     // Its E1RM (37.2) is BELOW the 25x15 E1RM (40.9), so no E1RM event.
