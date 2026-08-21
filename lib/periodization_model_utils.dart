@@ -1498,11 +1498,12 @@ class PeriodizationModelUtils {
 
     final double baseE1RM = baseE1RMNullable;
 
-    // Top-set history (prefer param; else cache); sort desc by date
-    List<Map<String, dynamic>> recentSets =
-    (topSetHistory != null && topSetHistory.isNotEmpty)
+    // Top-set history — router-supplied history ONLY.
+    // Identity (exerciseId → legacy name) is resolved upstream in
+    // progression_engine.dart. Models must never re-resolve it here.
+    final List<Map<String, dynamic>> recentSets = topSetHistory != null
         ? List<Map<String, dynamic>>.from(topSetHistory)
-        : (PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? []);
+        : <Map<String, dynamic>>[];
     recentSets.sort((a, b) {
       final aDate = a['date'] is DateTime
           ? a['date'] as DateTime
@@ -1987,9 +1988,12 @@ class PeriodizationModelUtils {
       savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
     );
 
-    // 🧾 Most recent performance
-    final recentSets =
-        PeriodizationModelUtils.topSetsByExercise[exerciseName] ?? [];
+    // 🧾 Most recent performance — router-supplied history ONLY.
+    // Identity (exerciseId → legacy name) is resolved upstream in
+    // progression_engine.dart. Models must never re-resolve it here.
+    final recentSets = topSetHistory != null
+        ? List<Map<String, dynamic>>.from(topSetHistory)
+        : <Map<String, dynamic>>[];
     if (recentSets.isEmpty) {
       print('🚫 No top-set history found → using default');
       return {'weight': defaultWeight, 'reps': repTarget};
@@ -2184,6 +2188,14 @@ class PeriodizationModelUtils {
 // (Optional) add an origin tag; see step 2 below
     final _origin = (const bool.hasEnvironment('pmu_origin')) ? const String.fromEnvironment('pmu_origin') : 'unknown';
 
+    // ✅ Single identity-resolution boundary: history has ALREADY been resolved
+    // upstream (exerciseId first, legacy name fallback) in progression_engine.dart.
+    // Normalise it once here and hand the same list to every progression model.
+    // Do NOT add a name lookup at this layer or inside any model.
+    final List<Map<String, dynamic>> routedTopSetHistory = topSetHistory == null
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(topSetHistory);
+
 
 
     switch (model) {
@@ -2195,7 +2207,7 @@ class PeriodizationModelUtils {
             defaultWeight: defaultWeight,
             increments: increments,
             maxWeightByReps: maxWeightByReps,
-            topSetHistory: topSetHistory,
+            topSetHistory: routedTopSetHistory,
             weekIndex: weekIndex,
           ),
           'reps': repTarget, // preserve original repTarget for now
@@ -2223,7 +2235,7 @@ class PeriodizationModelUtils {
           defaultWeight: defaultWeight,
           increments: increments,
           maxWeightByReps: maxWeightByReps,
-          topSetHistory: topSetHistory,
+          topSetHistory: routedTopSetHistory,
           weekIndex: weekIndex,
           rirValue: rirValue,
         );
@@ -2249,7 +2261,7 @@ class PeriodizationModelUtils {
           defaultWeight: defaultWeight,
           increments: increments,
           maxWeightByReps: maxWeightByReps,
-          topSetHistory: topSetHistory,
+          topSetHistory: routedTopSetHistory,
           weekIndex: weekIndex,
           rirValue: rirValue,
         );
