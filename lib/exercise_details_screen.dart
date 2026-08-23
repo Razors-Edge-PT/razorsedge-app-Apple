@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -10,6 +12,153 @@ import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
 import 'periodization_model_utils.dart';
 
 enum TrendRange { d14, m1, m6, y1, y2 }
+
+/// Inclusive local-time window deciding WHICH observations a chart shows.
+///
+/// It never affects horizontal spacing: X positions stay index-based, so two
+/// sessions a day apart sit exactly as far apart as two sessions a month apart.
+@immutable
+class ChartWindow {
+  final DateTime start;
+  final DateTime end;
+  const ChartWindow(this.start, this.end);
+
+  bool contains(DateTime d) => !d.isBefore(start) && !d.isAfter(end);
+}
+
+/// Shared Y-axis scaling for both analytics charts.
+///
+/// Scales to the VISIBLE data instead of forcing the old 100 kg floor, so a
+/// real 54.0 → 55.0 progression uses the chart height instead of looking flat.
+@immutable
+class ChartAxisScale {
+  final double minY;
+  final double maxY;
+  final double interval;
+
+  /// Decimal places the labels need for this [interval] (0 for whole numbers,
+  /// 1 for 0.5 steps, 2 for 0.25 steps).
+  final int decimals;
+
+  const ChartAxisScale({
+    required this.minY,
+    required this.maxY,
+    required this.interval,
+    required this.decimals,
+  });
+
+  /// Used when a chart has nothing to draw.
+  static const ChartAxisScale empty =
+      ChartAxisScale(minY: 0, maxY: 20, interval: 5, decimals: 0);
+
+  /// "Nice" step ladder — keeps grid lines on values a lifter recognises.
+  static const List<double> steps = <double>[
+    0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250,
+    500, 1000,
+  ];
+
+  /// Grid density band: the ladder is walked until the tick count fits.
+  static const int _maxTicks = 7;
+
+  /// Builds an axis around [values] (the currently visible points of EVERY
+  /// series on the chart).
+  factory ChartAxisScale.fromValues(Iterable<double> values,
+      {int targetTicks = 5}) {
+    double? lo, hi;
+    for (final v in values) {
+      if (!v.isFinite) continue;
+      lo = (lo == null) ? v : math.min(lo, v);
+      hi = (hi == null) ? v : math.max(hi, v);
+    }
+    if (lo == null || hi == null) return empty;
+
+    final double span = hi - lo;
+    final double pad;
+    if (span <= 1e-9) {
+      // One point, or several identical ones: invent a readable window so the
+      // chart can never collapse to zero height.
+      pad = hi.abs() > 0 ? (hi.abs() * 0.05).clamp(0.5, 5.0) : 1.0;
+    } else {
+      // Breathing room above and below, with a floor for sub-kilo spreads.
+      pad = math.max(span * 0.12, 0.05);
+    }
+
+    double rawMin = lo - pad;
+    final double rawMax = hi + pad;
+    if (lo >= 0 && rawMin < 0) rawMin = 0; // E1RM never goes negative
+
+    int stepIndex = _stepIndexFor((rawMax - rawMin) / targetTicks);
+    double interval = steps[stepIndex];
+    double axisMin = _snapDown(rawMin, interval);
+    double axisMax = _snapUp(rawMax, interval);
+    int ticks = ((axisMax - axisMin) / interval).round();
+
+    // Too dense → coarser steps.
+    while (ticks > _maxTicks && stepIndex < steps.length - 1) {
+      stepIndex++;
+      interval = steps[stepIndex];
+      axisMin = _snapDown(rawMin, interval);
+      axisMax = _snapUp(rawMax, interval);
+      ticks = ((axisMax - axisMin) / interval).round();
+    }
+
+    // Then take the finest step that still fits: it tightens the window around
+    // the data (so small trends fill the height) without crowding the grid.
+    while (stepIndex > 0) {
+      final double candidate = steps[stepIndex - 1];
+      final double cMin = _snapDown(rawMin, candidate);
+      final double cMax = _snapUp(rawMax, candidate);
+      final int cTicks = ((cMax - cMin) / candidate).round();
+      if (cTicks > _maxTicks) break;
+      stepIndex--;
+      interval = candidate;
+      axisMin = cMin;
+      axisMax = cMax;
+      ticks = cTicks;
+    }
+
+    // minY == maxY would make fl_chart draw nothing.
+    if (axisMax - axisMin < interval * 0.5) axisMax = axisMin + interval;
+
+    return ChartAxisScale(
+      minY: axisMin,
+      maxY: axisMax,
+      interval: interval,
+      decimals: decimalsFor(interval),
+    );
+  }
+
+  /// Label text: whole steps lose the ".0", finer steps keep their precision.
+  String format(double value) {
+    final double v = value.abs() < 1e-9 ? 0.0 : value;
+    return v.toStringAsFixed(decimals);
+  }
+
+  static int _stepIndexFor(double raw) {
+    if (!raw.isFinite || raw <= 0) return 0;
+    for (int i = 0; i < steps.length; i++) {
+      if (steps[i] >= raw) return i;
+    }
+    return steps.length - 1;
+  }
+
+  static int decimalsFor(double interval) {
+    for (int d = 0; d <= 2; d++) {
+      final double scaled = interval * math.pow(10, d);
+      if ((scaled - scaled.roundToDouble()).abs() < 1e-9) return d;
+    }
+    return 2;
+  }
+
+  static double _snapDown(double v, double interval) =>
+      _clean((v / interval).floorToDouble() * interval);
+
+  static double _snapUp(double v, double interval) =>
+      _clean((v / interval).ceilToDouble() * interval);
+
+  /// Strips floating-point noise like 53.750000000000004.
+  static double _clean(double v) => double.parse(v.toStringAsFixed(4));
+}
 
 // Simple date/value pair for the series
 class E1RMPoint {
@@ -47,6 +196,57 @@ class _PointMeta {
   const _PointMeta(this.weight, this.reps, this.rir);
 }
 
+/// Which X positions get a printed label. Positions themselves stay
+/// index-based — this only thins the labels so they cannot overcrowd.
+Set<int> computeXTickIndices(int n) {
+  if (n <= 0) return <int>{};
+  final last = n - 1;
+  const maxLabels = 6;
+
+  // Few observations → label them all.
+  if (n <= maxLabels) return {for (int i = 0; i < n; i++) i};
+
+  final ticks = <int>{0, last}; // always keep first/last date context
+  final step = last / (maxLabels - 1);
+  for (int k = 1; k < maxLabels - 1; k++) {
+    ticks.add((k * step).round().clamp(0, last));
+  }
+  return ticks;
+}
+
+/// Labels for every observation, using the coarsest date format that still
+/// keeps the *printed* ticks distinguishable (no three identical "May 26").
+List<String> buildXAxisLabels(List<DateTime> dates, Set<int> tickIdx) {
+  if (dates.isEmpty) return const <String>[];
+
+  final spanDays = dates.last.difference(dates.first).inDays;
+  final multiYear = dates.first.year != dates.last.year;
+
+  final patterns = <String>[];
+  if (spanDays > 400) {
+    patterns.add('MMM yy');
+  } else if (spanDays > 60) {
+    patterns.add(multiYear ? 'MMM yy' : 'MMM');
+  }
+  patterns.add(multiYear ? 'd MMM yy' : 'd MMM');
+  patterns.add('d MMM yy');
+
+  final seen = <String>{};
+  for (final pattern in patterns) {
+    if (!seen.add(pattern)) continue;
+    final fmt = DateFormat(pattern);
+    final labels = [for (final d in dates) fmt.format(d)];
+    final shown = [
+      for (final i in tickIdx)
+        if (i >= 0 && i < labels.length) labels[i]
+    ];
+    if (shown.toSet().length == shown.length) return labels;
+  }
+
+  final finest = DateFormat('d MMM yy');
+  return [for (final d in dates) finest.format(d)];
+}
+
 class ExerciseDetailsScreen extends StatefulWidget {
   final String exerciseId;              // 👈 required for querying
   final String? exerciseName;           // 👈 optional, only for display
@@ -64,7 +264,22 @@ class ExerciseDetailsScreen extends StatefulWidget {
 }
 
 class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
+  /// History pulled when the screen opens. Custom ranges reaching further back
+  /// top this up on demand (see [_ensureHistoryLoadedFrom]).
+  static const int _defaultLookbackDays = 730;
+
   TrendRange _trend = TrendRange.d14; // 👈 our new toggle state
+
+  // --- Custom date range state (independent per chart) ---
+  DateTimeRange? _customTrend; // E1RM Trend chart
+  DateTimeRange? _customTarget; // Rep Target chart
+
+  /// Oldest date currently held in [_workouts].
+  DateTime _loadedSince =
+      DateTime.now().subtract(const Duration(days: _defaultLookbackDays));
+
+  /// True while a deeper history fetch triggered by a custom range is running.
+  bool _loadingMore = false;
   String get userId => UserContext.of(context, listen: false).currentUid;
 
   List<DailyBestE1RM> _dailyBests = [];
@@ -94,40 +309,45 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     }
   }
 
-  String _labelForDate(DateTime d, TrendRange t) {
-    switch (t) {
-      case TrendRange.d14:
-      case TrendRange.m1:
-        return DateFormat('d MMM').format(d);
-      case TrendRange.m6:
-      case TrendRange.y1:
-        return DateFormat('MMM yy').format(d);
-      case TrendRange.y2:
-        return DateFormat('yy-MM').format(d);
+  /// Visible window for a chart: its custom range when one is active,
+  /// otherwise the preset's existing "last N days → now" behaviour.
+  ChartWindow _windowFor(TrendRange preset, DateTimeRange? custom) {
+    if (custom != null) {
+      final start =
+          DateTime(custom.start.year, custom.start.month, custom.start.day);
+      final end = DateTime(
+          custom.end.year, custom.end.month, custom.end.day, 23, 59, 59, 999);
+      return ChartWindow(start, end);
     }
+    return ChartWindow(_cutoffFor(preset), DateTime(9999));
   }
 
-  int _tickStepForCount(int n) {
-    if (n <= 14) return 1;
-    if (n <= 30) return 2;
-    if (n <= 90) return 5;
-    if (n <= 180) return 10;
-    if (n <= 365) return 20;
-    return 30;
+  ChartWindow get _windowTrend => _windowFor(_trend, _customTrend);
+  ChartWindow get _windowTarget => _windowFor(_trendTarget, _customTarget);
+
+  /// Dense-view rule for dot/line styling, extended to custom ranges by span so
+  /// presets keep exactly the look they had before.
+  bool _isShortView(TrendRange preset, DateTimeRange? custom) {
+    if (custom != null) {
+      return custom.end.difference(custom.start).inDays <= 45;
+    }
+    return preset == TrendRange.d14 || preset == TrendRange.m1;
   }
 
-  Future<List<Workout>> _fetchTwoYearHistoryForExercise({
+  Future<List<Workout>> _fetchHistoryForExercise({
     required String exerciseId,
     String? exerciseName,  // optional fallback
     String? uidOverride,
-    int lookbackDays = 730,
+    int lookbackDays = _defaultLookbackDays,
+    DateTime? since,
     int batchSize = 50,
   }) async {
     // Prefer selected user if provided; fallback to logged-in only if needed
     String? userId = uidOverride ?? FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) return [];
 
-    final cutoff = DateTime.now().subtract(Duration(days: lookbackDays));
+    final cutoff =
+        since ?? DateTime.now().subtract(Duration(days: lookbackDays));
 
     // Keep only ONE workout per local day: the one with the best top-set E1RM (incl RIR)
     final Map<String, double> bestScoreByDay = {};
@@ -392,6 +612,140 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     final i = values.indexOf(_trend);
     setState(() {
       _trend = values[(i + 1) % values.length];
+      _customTrend = null; // picking a preset leaves custom mode
+    });
+  }
+
+  /// Compact custom-range label, e.g. "1 Mar – 21 Aug".
+  String _customRangeLabel(DateTimeRange r) {
+    final now = DateTime.now();
+    final sameYearAsNow = r.start.year == now.year && r.end.year == now.year;
+    final fmt = DateFormat(sameYearAsNow ? 'd MMM' : 'd MMM yy');
+    return '${fmt.format(r.start)} – ${fmt.format(r.end)}';
+  }
+
+  String _rangeLabelFor(TrendRange preset, DateTimeRange? custom) =>
+      custom != null ? _customRangeLabel(custom) : _rangeLabel(preset);
+
+  /// Compact calendar button opening the native range picker for one chart.
+  /// Highlighted while that chart is on a custom range; shows a spinner while
+  /// older history is being fetched.
+  Widget _rangePickerButton({required bool forRepTarget}) {
+    final accent = Theme.of(context).colorScheme.tertiary;
+    final bool active = (forRepTarget ? _customTarget : _customTrend) != null;
+
+    return Tooltip(
+      message: 'Custom date range',
+      child: SizedBox(
+        width: 34,
+        height: 32,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: _loadingMore
+              ? null
+              : () => _pickCustomRange(forRepTarget: forRepTarget),
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              border: Border.all(color: accent),
+              borderRadius: BorderRadius.circular(8),
+              color: accent.withOpacity(active ? 0.28 : 0.08),
+            ),
+            child: _loadingMore
+                ? SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      color: accent,
+                    ),
+                  )
+                : Icon(Icons.date_range, size: 16, color: accent),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Native Material range picker, wired independently per chart.
+  Future<void> _pickCustomRange({required bool forRepTarget}) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final firstDate = DateTime(today.year - 10, 1, 1);
+
+    final existing = forRepTarget ? _customTarget : _customTrend;
+    final presetStart =
+        _windowFor(forRepTarget ? _trendTarget : _trend, null).start;
+
+    DateTime initStart = existing?.start ?? presetStart;
+    if (initStart.isBefore(firstDate)) initStart = firstDate;
+    if (initStart.isAfter(today)) initStart = today;
+    DateTime initEnd = existing?.end ?? today;
+    if (initEnd.isAfter(today)) initEnd = today;
+    if (initEnd.isBefore(initStart)) initEnd = initStart;
+
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: firstDate,
+      lastDate: today,
+      initialDateRange: DateTimeRange(start: initStart, end: initEnd),
+      helpText: forRepTarget ? 'Rep target range' : 'E1RM trend range',
+      saveText: 'Apply',
+      builder: (ctx, child) {
+        final accent = Theme.of(ctx).colorScheme.tertiary;
+        return Theme(
+          data: ThemeData.dark().copyWith(
+            colorScheme: ColorScheme.dark(
+              primary: accent,
+              onPrimary: Colors.black,
+              surface: Colors.grey.shade900,
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      if (forRepTarget) {
+        _customTarget = picked;
+      } else {
+        _customTrend = picked;
+      }
+    });
+
+    await _ensureHistoryLoadedFrom(picked.start);
+  }
+
+  /// A custom range may reach past the history loaded on open. Fetch the extra
+  /// span (once) rather than silently omitting those observations.
+  Future<void> _ensureHistoryLoadedFrom(DateTime start) async {
+    final needed = DateTime(start.year, start.month, start.day);
+    if (_loadingMore || !needed.isBefore(_loadedSince)) return;
+
+    final uid = UserContext.of(context, listen: false).currentUid;
+    // Small buffer so a nearby second pick is served from what we already have.
+    final since = needed.subtract(const Duration(days: 7));
+
+    setState(() => _loadingMore = true);
+
+    final list = await _fetchHistoryForExercise(
+      exerciseId: widget.exerciseId,
+      exerciseName: widget.exerciseName,
+      uidOverride: uid,
+      since: since,
+    );
+    if (!mounted) return;
+
+    setState(() {
+      // The deeper query is a superset of what we hold; only accept it as one.
+      if (list.length >= _workouts.length) {
+        _workouts = list..sort((a, b) => a.date.compareTo(b.date));
+        _loadedSince = since;
+      }
+      _loadingMore = false;
     });
   }
 
@@ -420,7 +774,10 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   void _cycleTrendTarget() {
     final vals = TrendRange.values;
     final i = vals.indexOf(_trendTarget);
-    setState(() => _trendTarget = vals[(i + 1) % vals.length]);
+    setState(() {
+      _trendTarget = vals[(i + 1) % vals.length];
+      _customTarget = null; // picking a preset leaves custom mode
+    });
   }
 
   String _repTargetLabel() => _multiRepLabel();
@@ -485,18 +842,18 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
 // Friendly label for the title button
   String _multiRepLabel() {
-    if (_repGroups.isEmpty) return 'Rep Target • ${_rangeLabel(_trendTarget)}';
+    if (_repGroups.isEmpty) return 'Rep Target • ${_rangeLabelFor(_trendTarget, _customTarget)}';
     if (_repGroups.length == 1) {
       final g = _repGroups.first.toList()..sort();
-      if (g.length == 1) return '${g.first} Rep Target • ${_rangeLabel(_trendTarget)}';
+      if (g.length == 1) return '${g.first} Rep Target • ${_rangeLabelFor(_trendTarget, _customTarget)}';
       final minR = g.first, maxR = g.last;
       final isRange = (maxR - minR + 1) == g.length;
       return isRange
-          ? 'Reps $minR–$maxR • ${_rangeLabel(_trendTarget)}'
-          : 'Reps ${g.join(",")} • ${_rangeLabel(_trendTarget)}';
+          ? 'Reps $minR–$maxR • ${_rangeLabelFor(_trendTarget, _customTarget)}'
+          : 'Reps ${g.join(",")} • ${_rangeLabelFor(_trendTarget, _customTarget)}';
     }
     // multiple groups → mirror the input shape: per-group labels joined by " | "
-    return '${_repGroupLabels.join(" | ")} • ${_rangeLabel(_trendTarget)}';
+    return '${_repGroupLabels.join(" | ")} • ${_rangeLabelFor(_trendTarget, _customTarget)}';
   }
 
 // Deterministic colors per group
@@ -512,41 +869,6 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       Colors.redAccent,
     ];
     return palette[i % palette.length];
-  }
-
-
-  Set<int> _computeXTicks(int n, TrendRange t) {
-    if (n <= 0) return {};
-    final last = n - 1;
-
-    // target label counts per range
-    final target = switch (t) {
-      TrendRange.d14 => 4,
-      TrendRange.m1  => 5,
-      TrendRange.m6  => 6,
-      TrendRange.y1  => 7,
-      TrendRange.y2  => 7,
-    };
-
-    List<int> ticks;
-    if (n <= target) {
-      ticks = List<int>.generate(n, (i) => i); // small sets: show all
-    } else {
-      final raw = <int>[];
-      final step = last / (target - 1);
-      for (var k = 0; k < target; k++) {
-        raw.add((k * step).round().clamp(0, last));
-      }
-      // de-dupe preserving order
-      final seen = <int>{};
-      ticks = [for (final i in raw) if (seen.add(i)) i];
-    }
-
-    // ✅ ALWAYS include the first and last
-    if (!ticks.contains(0)) ticks.insert(0, 0);
-    if (!ticks.contains(last)) ticks.add(last);
-
-    return ticks.toSet();
   }
 
 
@@ -594,8 +916,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       if (mounted && _workouts.isNotEmpty) setState(() {});
     });
 
-    // …then fetch full 2y history and replace
-    _fetchTwoYearHistoryForExercise(
+    // …then fetch the default history window and replace
+    _fetchHistoryForExercise(
       exerciseId: widget.exerciseId,
       exerciseName: widget.exerciseName, // nullable ok
       uidOverride: selectedUid, // 👈 pass selected user id
@@ -722,7 +1044,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     final List<Set<int>> effectiveGroups =
     parsedGroups.isNotEmpty ? parsedGroups : (_repTarget != null ? [ {_repTarget!.toInt()} ] : []);
 
-    final cutoff2 = _cutoffFor(_trendTarget);
+    final ChartWindow window2 = _windowTarget;
 
 // Build per-group points and collect all dates for a master x-axis
     final List<List<E1RMPoint>> groupPoints = [];
@@ -774,7 +1096,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         final rirForY = _includeRIRForTarget ? (topSetInc!.rir ?? 0.0) : 0.0;
         final y = calculateE1RM(w, r, rirForY);
 
-        if (!workout.date.isBefore(cutoff2)) {
+        if (window2.contains(workout.date)) {
           pts.add(E1RMPoint(workout.date, y));
           metaForGroup[workout.date] = _PointMeta(w, r.toInt(), (topSetInc!.rir ?? 0.0));
           allDates.add(workout.date);
@@ -792,25 +1114,26 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       for (int i = 0; i < masterDates2.length; i++) masterDates2[i]: i.toDouble()
     };
 
-// Labels (shared) and ticks
-    final labels2 = [
-      for (final d in masterDates2) _labelForDate(d, _trendTarget)
-    ];
-    final xTickSet2 = _computeXTicks(labels2.length, _trendTarget);
+// Ticks first, then labels: the label format depends on which ticks print.
+    final xTickSet2 = computeXTickIndices(masterDates2.length);
+    final labels2 = buildXAxisLabels(masterDates2, xTickSet2);
 
-// Build FlSpots per group and compute Y max
+// Build FlSpots per group. X stays the index on the shared master timeline,
+// so observations remain equally spaced regardless of elapsed calendar time.
     final List<List<FlSpot>> spotsByGroup = [];
-    double maxY2 = 0.0;
 
     for (final pts in groupPoints) {
       final spots = <FlSpot>[];
       for (final p in pts) {
         final x = dateToX2[p.date]!;
         spots.add(FlSpot(x, p.value));
-        if (p.value > maxY2) maxY2 = p.value;
       }
       spotsByGroup.add(spots);
     }
+
+// Y axis spans EVERY visible series, not just the first line.
+    final ChartAxisScale scaleY2 =
+        ChartAxisScale.fromValues(spotsByGroup.expand((g) => g).map((s) => s.y));
 
 // Back-compat placeholders so existing single-line code compiles until you switch to lineBarsData2:
 // - filtered2 = the first group's raw points (or empty if multiple groups)
@@ -818,14 +1141,10 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     final List<E1RMPoint> filtered2 = groupPoints.length == 1 ? groupPoints.first : <E1RMPoint>[];
     final List<FlSpot> spots2 = spotsByGroup.length == 1 ? spotsByGroup.first : <FlSpot>[];
 
-    final bool short2 = _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1;
+    final bool short2 = _isShortView(_trendTarget, _customTarget);
 // asym padding so first point is closer to Y axis but right edge has room
     final double leftPadX2  = short2 ? 0.10 : 0.20;
     final double rightPadX2 = short2 ? 0.20 : 0.15;
-
-    final adjustedMaxY2 = spotsByGroup.expand((e) => e).isEmpty
-        ? 100.0
-        : (maxY2 * 1.018).clamp(100.0, double.infinity) as double;
 
 // New multi-line dataset for the chart (use in your LineChart):
     final List<LineChartBarData> lineBarsData2 = (() {
@@ -850,12 +1169,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             spots: spots,
             isCurved: true,
             color: color,
-            dotData: FlDotData(
-              show: _trendTarget == TrendRange.d14 || _trendTarget == TrendRange.m1,
-            ),
-            barWidth: (_trendTarget == TrendRange.m6 ||
-                _trendTarget == TrendRange.y1 ||
-                _trendTarget == TrendRange.y2) ? 2.0 : 1.0,
+            dotData: FlDotData(show: short2),
+            barWidth: short2 ? 1.0 : 2.0,
             belowBarData: BarAreaData(
               show: true,
               color: color.withOpacity(0.10),
@@ -868,37 +1183,25 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
 
 
-// Filter to selected window & project to chart data
-    final cutoff = _cutoffFor(_trend);
-    final filtered = series.where((p) => !p.date.isBefore(cutoff)).toList();
+// Filter to the selected window (preset or custom) & project to chart data.
+// X is the observation's INDEX, never elapsed time: equal spacing is intended.
+    final ChartWindow window = _windowTrend;
+    final filtered = series.where((p) => window.contains(p.date)).toList();
 
-    final List<FlSpot> spots = [];
-    final List<String> labels = [];
-    double maxY = 0;
+    final List<FlSpot> spots = [
+      for (var i = 0; i < filtered.length; i++)
+        FlSpot(i.toDouble(), filtered[i].value)
+    ];
 
-    for (var i = 0; i < filtered.length; i++) {
-      spots.add(FlSpot(i.toDouble(), filtered[i].value));
-      labels.add(_labelForDate(filtered[i].date, _trend));
-      if (filtered[i].value > maxY) maxY = filtered[i].value;
-    }
+    final xTickSet = computeXTickIndices(filtered.length);
+    final List<String> labels =
+        buildXAxisLabels([for (final p in filtered) p.date], xTickSet);
 
-    final double adjustedMaxY = spots.isEmpty
-        ? 100.0
-        : (maxY * 1.018).clamp(100.0, double.infinity) as double;
+// Y axis scaled to the points visible in this window.
+    final ChartAxisScale scaleY =
+        ChartAxisScale.fromValues(spots.map((s) => s.y));
 
-    final int labelStep = _tickStepForCount(labels.length);
-
-// Labels for chips
-    final rangeLabel = {
-      TrendRange.d14: '14d',
-      TrendRange.m1:  '1m',
-      TrendRange.m6:  '6m',
-      TrendRange.y1:  '1y',
-      TrendRange.y2:  '2y',
-    };
-
-    final xTickSet = _computeXTicks(labels.length, _trend);
-    final bool shortRange = _trend == TrendRange.d14 || _trend == TrendRange.m1;
+    final bool shortRange = _isShortView(_trend, _customTrend);
     final double leftPadX  = shortRange ? 0.10 : 0.20;
     final double rightPadX = shortRange ? 0.10 : 0.15;
     final double controlHeight = 40;
@@ -952,7 +1255,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                     label: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        'E1RM Trend • ${_rangeLabel(_trend)}',
+                        'E1RM Trend • ${_rangeLabelFor(_trend, _customTrend)}',
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.tertiary,
                           fontWeight: FontWeight.w600,
@@ -969,7 +1272,9 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
+                _rangePickerButton(forRepTarget: false),
+                const SizedBox(width: 6),
                 ConstrainedBox(
                   constraints: const BoxConstraints.tightFor(height: 32),
                   child: InkWell(
@@ -1011,10 +1316,12 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                 LineChartData(
                   minX: -leftPadX,
                   maxX: spots.isEmpty ? rightPadX : (spots.length - 1 + rightPadX),
-                  maxY: adjustedMaxY,
+                  minY: scaleY.minY,
+                  maxY: scaleY.maxY,
 
                   gridData: FlGridData(
                     show: true,
+                    horizontalInterval: scaleY.interval,
                     getDrawingHorizontalLine: (_) => FlLine(color: Colors.white10),
                     getDrawingVerticalLine: (_) => FlLine(color: Colors.white10),
                   ),
@@ -1023,7 +1330,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
-                        reservedSize: 36,
+                        interval: scaleY.interval,
+                        reservedSize: scaleY.decimals > 0 ? 44 : 36,
                         getTitlesWidget: (value, meta) {
                           // Hide the very top label (use epsilon for float safety)
                           const eps = 1e-6;
@@ -1031,7 +1339,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                             return const SizedBox.shrink();
                           }
                           return Text(
-                            value.toInt().toString(),
+                            scaleY.format(value),
                             style: const TextStyle(color: Colors.white, fontSize: 10),
                           );
                         },
@@ -1056,8 +1364,6 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
                           // 4) Respect your evenly-spaced tick set
                           if (!xTickSet.contains(i)) return const SizedBox.shrink();
-
-                          final bool shortRange = _trend == TrendRange.d14 || _trend == TrendRange.m1;
 
                           return SideTitleWidget(
                             axisSide: meta.axisSide,
@@ -1084,12 +1390,10 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                       spots: spots,
                       isCurved: true,
                       color: Theme.of(context).colorScheme.tertiary,
-                      // 👇 Hide circles for 6m+; show for 14d/1m
-                      dotData: FlDotData(
-                        show: _trend == TrendRange.d14 || _trend == TrendRange.m1,
-                      ),
+                      // 👇 Hide circles on long/wide views; show on short ones
+                      dotData: FlDotData(show: shortRange),
                       // (Optional) slightly thicker line on long ranges
-                      barWidth: (_trend == TrendRange.m6 || _trend == TrendRange.y1 || _trend == TrendRange.y2) ? 2.0 : 1.0,
+                      barWidth: shortRange ? 1.0 : 2.0,
                       belowBarData: BarAreaData(
                         show: true,
                         color: Theme.of(context).colorScheme.tertiary.withOpacity(0.1),
@@ -1235,6 +1539,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                         ),
                       ),
                       const SizedBox(width: 4),
+                      _rangePickerButton(forRepTarget: true),
+                      const SizedBox(width: 4),
                       // ── Include RIR (right, compact)
                       ConstrainedBox(
                         constraints: const BoxConstraints.tightFor(height: 32),
@@ -1280,10 +1586,12 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                 LineChartData(
                   minX: -leftPadX2,
                   maxX: masterDates2.isEmpty ? rightPadX2 : (masterDates2.length - 1 + rightPadX2),
-                  maxY: adjustedMaxY2,
+                  minY: scaleY2.minY,
+                  maxY: scaleY2.maxY,
 
                   gridData: FlGridData(
                     show: true,
+                    horizontalInterval: scaleY2.interval,
                     getDrawingHorizontalLine: (_) => FlLine(color: Colors.white10),
                     getDrawingVerticalLine: (_) => FlLine(color: Colors.white10),
                   ),
@@ -1292,12 +1600,13 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
                     leftTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
-                        reservedSize: 36,
+                        interval: scaleY2.interval,
+                        reservedSize: scaleY2.decimals > 0 ? 44 : 36,
                         getTitlesWidget: (value, meta) {
                           const eps = 1e-6;
                           if ((meta.max - value).abs() < eps) return const SizedBox.shrink();
                           return Text(
-                            value.toInt().toString(),
+                            scaleY2.format(value),
                             style: const TextStyle(color: Colors.white, fontSize: 10),
                           );
                         },
