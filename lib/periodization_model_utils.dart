@@ -60,6 +60,389 @@ class PeriodizationModelUtils {
 
   static Map<String, dynamic> get exerciseSettings => _exerciseSettings;
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // CANONICAL PROGRESSION-HISTORY INDEX
+  //
+  // One athlete history snapshot ([savedWorkoutsList]) → ONE identity
+  // resolution boundary ([resolveTopSetHistory]) → the SAME routed history for
+  // every consumer (default/baseline weight, computeBaseE1RMFromHistory, Smart
+  // Progression, Add Reps, Linear, used-combo detection, DUP exposure counts).
+  //
+  // The index is derived lazily from [savedWorkoutsList] and rebuilt only when
+  // that list is replaced (identity or length change) or when
+  // [applyHistorySnapshot] publishes a new snapshot. No progression code path
+  // may perform Firestore I/O; everything below is pure in-memory work.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /// UID the current index belongs to. Set by [applyHistorySnapshot].
+  /// Entries stamped with a different `_uid` are excluded from the index.
+  static String? historyUid;
+
+  /// Bumped every time the index is (re)built. Tests and diagnostics use this
+  /// to prove that repeated hint passes reuse a single build.
+  static int historyIndexBuilds = 0;
+
+  static List<Map<String, dynamic>>? _indexedList;
+  static int _indexedLength = -1;
+  static String? _indexedUid;
+  // The exposure index folds nameToId at build time, so a catalog that loads
+  // after the snapshot must trigger a rebuild.
+  static int _indexedNameToIdLength = -1;
+
+  /// exerciseId → newest-first top sets (one sample per exercise/date).
+  static final Map<String, List<Map<String, dynamic>>> _topSetsById = {};
+
+  /// Exact display name → newest-first top sets. Populated ONLY from legacy
+  /// workout rows that genuinely carry no exerciseId.
+  static final Map<String, List<Map<String, dynamic>>> _topSetsByLegacyName = {};
+
+  /// Canonicalised legacy name → bucket key in [_topSetsById].
+  static final Map<String, String> _canonNameToKey = {};
+
+  /// Routing key → used weight×reps×RIR combo keys, with the date they were
+  /// used, so a combo can be filtered as-of the workout being edited.
+  static final Map<String, List<MapEntry<DateTime, String>>> _usedCombosByKey =
+      {};
+
+  /// Routing key → set of yyyy-MM-dd strings on which the exercise was
+  /// performed with at least one usable set (DUP exposure counting).
+  static final Map<String, Set<String>> _exposureDatesByKey = {};
+
+  /// Memoised as-of slices: "<bucketKey>|<yyyy-MM-dd>" → filtered samples.
+  static final Map<String, List<Map<String, dynamic>>> _asOfSliceCache = {};
+
+  /// Memoised as-of used-combo sets: "<key>|<yyyy-MM-dd>" → combos.
+  static final Map<String, Set<String>> _asOfComboCache = {};
+
+  /// Canonical form of an exercise display name. Mirrors the normalisation the
+  /// DUP exposure matcher has always used so legacy name matching is unchanged.
+  static String canonicalExerciseKey(String s) {
+    var t = s.toLowerCase().trim();
+    t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
+    t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
+    t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+    t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
+    t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
+    return t;
+  }
+
+  /// Publishes an athlete history snapshot and rebuilds every derived index.
+  ///
+  /// [workouts] must be the athlete's workout documents (each with a `date`).
+  /// Callers own network/cache policy; this method never performs I/O.
+  static void applyHistorySnapshot({
+    required String uid,
+    required List<Map<String, dynamic>> workouts,
+  }) {
+    historyUid = uid;
+    savedWorkoutsList = workouts;
+    _rebuildHistoryIndex();
+  }
+
+  /// Drops the snapshot and every derived index (athlete switch / sign-out).
+  static void clearHistorySnapshot() {
+    historyUid = null;
+    savedWorkoutsList = <Map<String, dynamic>>[];
+    _rebuildHistoryIndex();
+  }
+
+  static double _histNum(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString().trim()) ?? 0.0;
+  }
+
+  static DateTime? _histDate(dynamic v) {
+    if (v is DateTime) return DateTime(v.year, v.month, v.day);
+    // Legacy workout documents stored `date` as a Firestore Timestamp. Both of
+    // the previous top-set builders parsed strings only, so those sessions were
+    // invisible to every progression model — a silent way to lose real history.
+    if (v is Timestamp) {
+      final d = v.toDate();
+      return DateTime(d.year, d.month, d.day);
+    }
+    final s = v?.toString() ?? '';
+    if (s.length < 10) return null;
+    final d = DateTime.tryParse(s.substring(0, 10));
+    return d == null ? null : DateTime(d.year, d.month, d.day);
+  }
+
+  static String _ymdKey(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  /// Rebuilds the index when [savedWorkoutsList] has been replaced underneath
+  /// us (legacy loaders assign it directly) or the acting athlete changed.
+  static void _ensureHistoryIndex() {
+    if (identical(_indexedList, savedWorkoutsList) &&
+        _indexedLength == savedWorkoutsList.length &&
+        _indexedUid == historyUid &&
+        _indexedNameToIdLength == nameToId.length) {
+      return;
+    }
+    _rebuildHistoryIndex();
+  }
+
+  static void _rebuildHistoryIndex() {
+    _topSetsById.clear();
+    _topSetsByLegacyName.clear();
+    _canonNameToKey.clear();
+    _usedCombosByKey.clear();
+    _exposureDatesByKey.clear();
+    _asOfSliceCache.clear();
+    _asOfComboCache.clear();
+
+    final String? activeUid = historyUid;
+
+    // bucketKey → (ymd → best-e1RM sample for that day)
+    final Map<String, Map<String, Map<String, dynamic>>> bestByKeyDay = {};
+    // Bucket keys that came from rows genuinely lacking an exerciseId.
+    final Set<String> legacyNameKeys = <String>{};
+    final Map<String, String> displayNameForKey = <String, String>{};
+
+    for (final w in savedWorkoutsList) {
+      // Skip entries explicitly stamped for another athlete. Unstamped entries
+      // (legacy loaders) are kept so pre-existing history is never dropped.
+      final entryUid = w['_uid'];
+      if (activeUid != null && entryUid is String && entryUid != activeUid) {
+        continue;
+      }
+
+      final wDate = _histDate(w['date']);
+      if (wDate == null) continue;
+      final ymd = _ymdKey(wDate);
+
+      final exs = w['exercises'];
+      if (exs is! List) continue;
+
+      for (final ex in exs) {
+        if (ex is! Map) continue;
+
+        final exId = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '')
+            .toString()
+            .trim();
+        final exName =
+            (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString().trim();
+        if (exId.isEmpty && exName.isEmpty) continue;
+
+        // exerciseId-first keying: two exercises that merely share a display
+        // name keep separate history buckets.
+        final String key = exId.isNotEmpty ? exId : exName;
+        if (exId.isEmpty) legacyNameKeys.add(key);
+        if (exName.isNotEmpty) displayNameForKey[key] = exName;
+
+        final sets = ex['sets'];
+        if (sets is! List || sets.isEmpty) continue;
+
+        // ── Top set for this exercise/day (highest e1RM) ──
+        double bestE1rm = 0.0;
+        Map<String, dynamic>? best;
+        // Exposure validity mirrors the historical DUP matcher exactly:
+        // a set counts when the raw `weight` and `reps` fields are both
+        // non-empty (a logged 0 kg bodyweight set still counts as performed).
+        bool anyUsableSet = false;
+        for (final s in sets) {
+          if (s is! Map) continue;
+          if (!anyUsableSet) {
+            final wRaw = (s['weight']?.toString() ?? '').trim();
+            final rRaw = (s['reps']?.toString() ?? '').trim();
+            if (wRaw.isNotEmpty && rRaw.isNotEmpty) anyUsableSet = true;
+          }
+          final wKg = _histNum(s['weight'] ?? s['actualWeight']);
+          final r = _histNum(s['reps'] ?? s['actualReps']);
+          final rir = _histNum(s['rir'] ?? s['actualRir']);
+          if (wKg <= 0 || r <= 0) continue;
+          final e1 = calculateE1RM(wKg, r, rir);
+          if (best == null || e1 > bestE1rm) {
+            bestE1rm = e1;
+            best = <String, dynamic>{
+              'weight': wKg,
+              'reps': r,
+              'rir': rir,
+              'date': wDate,
+            };
+          }
+        }
+
+        if (best != null) {
+          final dayMap =
+              bestByKeyDay.putIfAbsent(key, () => <String, Map<String, dynamic>>{});
+          final existing = dayMap[ymd];
+          if (existing == null ||
+              calculateE1RM(_histNum(existing['weight']),
+                      _histNum(existing['reps']), _histNum(existing['rir'])) <
+                  bestE1rm) {
+            dayMap[ymd] = best;
+          }
+        }
+
+        // ── Used combos: FIRST set only (unchanged "top set" scope) ──
+        final first = sets.first;
+        if (first is Map) {
+          final fw = first['weight'] ?? first['actualWeight'];
+          final fr = first['reps'] ?? first['actualReps'];
+          final frir = first['rir'] ?? first['actualRir'];
+          if (fw != null && fr != null && frir != null) {
+            final combo = '${_histNum(fw).toStringAsFixed(1)}_'
+                '${_histNum(fr).toInt()}_'
+                '${_histNum(frir).toStringAsFixed(1)}';
+            _usedCombosByKey
+                .putIfAbsent(key, () => <MapEntry<DateTime, String>>[])
+                .add(MapEntry(wDate, combo));
+          }
+        }
+
+        // ── DUP exposure dates ──
+        // Historic matching was: exerciseId match OR normalised-name match OR
+        // nameToId[name] match. Indexing under all three keys and querying the
+        // union of (targetId, canonical(targetName)) reproduces it exactly.
+        if (anyUsableSet) {
+          void addExposure(String k) {
+            if (k.isEmpty) return;
+            _exposureDatesByKey.putIfAbsent(k, () => <String>{}).add(ymd);
+          }
+
+          addExposure(exId);
+          if (exName.isNotEmpty) {
+            addExposure(canonicalExerciseKey(exName));
+            addExposure((nameToId[exName] ?? '').toString().trim());
+          }
+        }
+      }
+    }
+
+    bestByKeyDay.forEach((key, dayMap) {
+      final samples = dayMap.values.toList()
+        ..sort((a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
+      _topSetsById[key] = samples;
+      if (legacyNameKeys.contains(key)) {
+        final display = displayNameForKey[key] ?? key;
+        _topSetsByLegacyName[display] = samples;
+        _canonNameToKey[canonicalExerciseKey(display)] = key;
+      }
+    });
+
+    for (final entry in _usedCombosByKey.values) {
+      entry.sort((a, b) => b.key.compareTo(a.key));
+    }
+
+    // Keep the long-standing public map in sync: exerciseId keys for rows that
+    // carry an id, display-name keys only for genuinely legacy rows.
+    topSetsByExercise
+      ..clear()
+      ..addAll(_topSetsById);
+
+    _indexedList = savedWorkoutsList;
+    _indexedLength = savedWorkoutsList.length;
+    _indexedUid = historyUid;
+    _indexedNameToIdLength = nameToId.length;
+    historyIndexBuilds++;
+  }
+
+  /// Picks the single history bucket for this exercise identity.
+  /// exerciseId first; legacy display name (exact, then canonical) only for
+  /// rows that were written without an id. Returns the bucket key, or null.
+  static String? _historyBucketKey({
+    required String exerciseId,
+    required String exerciseName,
+  }) {
+    _ensureHistoryIndex();
+    final id = exerciseId.trim();
+    if (id.isNotEmpty && _topSetsById.containsKey(id)) return id;
+    final name = exerciseName.trim();
+    if (name.isNotEmpty) {
+      if (_topSetsByLegacyName.containsKey(name)) return name;
+      final canonKey = _canonNameToKey[canonicalExerciseKey(name)];
+      if (canonKey != null) return canonKey;
+    }
+    return null;
+  }
+
+  /// THE single exercise-identity resolution boundary for progression history.
+  ///
+  /// Returns the routed top-set history (newest-first, one sample per day),
+  /// optionally sliced as-of [asOfDate] so a workout being edited never sees
+  /// samples recorded after it. Pure in-memory; never performs Firestore I/O.
+  static List<Map<String, dynamic>> resolveTopSetHistory({
+    required String exerciseId,
+    required String exerciseName,
+    DateTime? asOfDate,
+  }) {
+    final key =
+        _historyBucketKey(exerciseId: exerciseId, exerciseName: exerciseName);
+    if (key == null) return const <Map<String, dynamic>>[];
+    final all = _topSetsById[key] ?? const <Map<String, dynamic>>[];
+    if (asOfDate == null || all.isEmpty) return all;
+
+    final cutoff = DateTime(asOfDate.year, asOfDate.month, asOfDate.day);
+    final cacheKey = '$key|${_ymdKey(cutoff)}';
+    final cached = _asOfSliceCache[cacheKey];
+    if (cached != null) return cached;
+
+    // Samples are newest-first, so everything after the first in-range entry
+    // is in range too.
+    final sliced = all.where((s) {
+      final d = s['date'];
+      if (d is! DateTime) return true;
+      return !d.isAfter(cutoff);
+    }).toList(growable: false);
+    _asOfSliceCache[cacheKey] = sliced;
+    return sliced;
+  }
+
+  /// Used weight×reps×RIR combos for this exercise identity, as-of [asOfDate].
+  /// Backed by the prebuilt index — no per-call scan of the workout list.
+  static Set<String> usedCombosFor({
+    required String exerciseId,
+    required String exerciseName,
+    DateTime? asOfDate,
+  }) {
+    final key =
+        _historyBucketKey(exerciseId: exerciseId, exerciseName: exerciseName);
+    if (key == null) return const <String>{};
+    final all = _usedCombosByKey[key];
+    if (all == null || all.isEmpty) return const <String>{};
+
+    final cutoff = asOfDate == null
+        ? null
+        : DateTime(asOfDate.year, asOfDate.month, asOfDate.day);
+    final cacheKey = '$key|${cutoff == null ? 'all' : _ymdKey(cutoff)}';
+    final cached = _asOfComboCache[cacheKey];
+    if (cached != null) return cached;
+
+    final out = <String>{};
+    for (final e in all) {
+      if (cutoff != null && e.key.isAfter(cutoff)) continue;
+      out.add(e.value);
+    }
+    _asOfComboCache[cacheKey] = out;
+    return out;
+  }
+
+  /// yyyy-MM-dd dates on which this exercise identity was performed.
+  /// Union of the exerciseId bucket and the canonical-name bucket, which
+  /// reproduces the legacy id-OR-name-OR-mapped-id exposure matcher.
+  static Set<String> exposureDatesFor({
+    required String exerciseId,
+    required String exerciseName,
+  }) {
+    _ensureHistoryIndex();
+    final byId = _exposureDatesByKey[exerciseId.trim()];
+    final byName =
+        _exposureDatesByKey[canonicalExerciseKey(exerciseName)];
+    if (byId == null && byName == null) return const <String>{};
+    if (byName == null) return byId!;
+    if (byId == null) return byName;
+    return <String>{...byId, ...byName};
+  }
+
+  /// True once a snapshot has been indexed (used by callers that still have a
+  /// legacy full-scan fallback for un-indexed state).
+  static bool get historyIndexReady {
+    _ensureHistoryIndex();
+    return _indexedLength >= 0;
+  }
+
 
 
   static double calculateE1RM(double? weight, double? reps, double? rir) {
@@ -139,23 +522,38 @@ class PeriodizationModelUtils {
 
 
 
+  /// Selects the baseline E1RM for a plan from routed top-set history.
+  ///
+  /// [asOfDate] is the workout date the hint is being computed for — NOT the
+  /// wall clock. The 28-day / 14-day recency windows are measured from it, and
+  /// samples recorded after it are ignored, so editing a past or future day
+  /// never leaks later results into that day's baseline.
+  ///
+  /// [topSetHistory] must already be identity-resolved (see
+  /// [resolveTopSetHistory]). Passing null is a legacy path only.
   static Map<String, dynamic> computeBaseE1RMFromHistory({
     required String exerciseName,
     required int repTarget,
     required double plannedRIR,
     List<Map<String, dynamic>>? topSetHistory,
     Map<String, dynamic>? maxWeightByReps,
-    DateTime? now,
+    DateTime? asOfDate,
   }) {
-    final DateTime _now = now ?? DateTime.now();
-    final List<Map<String, dynamic>> raw =
-        topSetHistory ?? topSetsByExercise[exerciseName] ?? const [];
+    final DateTime _now = asOfDate ?? DateTime.now();
+    final DateTime _asOfDay = DateTime(_now.year, _now.month, _now.day);
+    final List<Map<String, dynamic>> raw = topSetHistory ??
+        resolveTopSetHistory(
+          exerciseId: nameToId[exerciseName] ?? exerciseName,
+          exerciseName: exerciseName,
+          asOfDate: asOfDate,
+        );
 
     if (raw.isEmpty) {
       return {
         'baseE1RM': null,
         'baseSource': 'no_history',
         'nUsed': 0,
+        'usedSamples': const <Map<String, dynamic>>[],
       };
     }
 
@@ -175,6 +573,13 @@ class PeriodizationModelUtils {
         'effectiveReps': r + rir,
         'date': d,
       };
+    })
+        // Defensive as-of guard: even if a caller hands us an unsliced list,
+        // a sample recorded AFTER the workout being planned can never inform
+        // that workout's baseline.
+        .where((e) {
+      final DateTime? d = e['date'] as DateTime?;
+      return d == null || !DateTime(d.year, d.month, d.day).isAfter(_asOfDay);
     }).toList()
       ..sort((a, b) {
         final ad = a['date'] as DateTime?;
@@ -1106,12 +1511,40 @@ class PeriodizationModelUtils {
   }
 
 
-  static double getSuggestedWeightFromRep(String exerciseName, int reps, double rir) {
+  /// Baseline ("default") working weight for a plan, derived from the SAME
+  /// routed history the progression models receive.
+  ///
+  /// [topSetHistory] must be the already-routed history when the caller has
+  /// resolved identity (ProgressionEngine does). When it is null the single
+  /// identity boundary [resolveTopSetHistory] is used — never a bare
+  /// `topSetsByExercise[exerciseName]` lookup.
+  ///
+  /// This is the value every progression model treats as the week-1 baseline,
+  /// so it MUST reflect history whenever history exists; the generic
+  /// exercise-type default is reachable only with genuinely zero history.
+  static double getSuggestedWeightFromRep(
+    String exerciseName,
+    int reps,
+    double rir, {
+    String? exerciseId,
+    List<Map<String, dynamic>>? topSetHistory,
+    List<double>? increments,
+    DateTime? asOfDate,
+  }) {
+    final List<Map<String, dynamic>> routed = topSetHistory ??
+        resolveTopSetHistory(
+          exerciseId: (exerciseId ?? nameToId[exerciseName] ?? exerciseName),
+          exerciseName: exerciseName,
+          asOfDate: asOfDate,
+        );
+
     // 1) Pull a unified base E1RM from history (no week-1 logic here)
     final info = computeBaseE1RMFromHistory(
       exerciseName: exerciseName,
       repTarget: reps,
       plannedRIR: rir,
+      topSetHistory: routed,
+      asOfDate: asOfDate,
     );
     final double? baseE1RM = info['baseE1RM'] as double?;
 
@@ -1130,11 +1563,16 @@ class PeriodizationModelUtils {
       rir: rir,
     );
 
-    // 3) Snap to valid increment for this exercise
-    final double rounded = roundToNearestValidIncrement(
-      targetWeight: suggestedWeight,
-      exerciseName: exerciseName,
-    );
+    // 3) Snap to valid increment for this exercise. Prefer the grid the caller
+    //    already built from exerciseId-keyed settings; the name-keyed lookup
+    //    inside roundToNearestValidIncrement is the legacy fallback only.
+    final double rounded = (increments != null && increments.isNotEmpty)
+        ? increments.reduce((a, b) =>
+            (a - suggestedWeight).abs() < (b - suggestedWeight).abs() ? a : b)
+        : roundToNearestValidIncrement(
+            targetWeight: suggestedWeight,
+            exerciseName: exerciseName,
+          );
 
     print('🧪 [BB2] Base E1RM for $exerciseName → ${baseE1RM.toStringAsFixed(2)} '
         '(source=${info['baseSource']})');
@@ -1447,6 +1885,8 @@ class PeriodizationModelUtils {
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory, // optional
     int weekIndex = 0,
+    String exerciseId = '',
+    DateTime? asOfDate,
   }) {
     // tiny helper so we ALWAYS return a number even if history has strings
     double _asDouble(dynamic x, {double fallback = 0.0}) {
@@ -1474,7 +1914,7 @@ class PeriodizationModelUtils {
       plannedRIR: rirValue,
       topSetHistory: topSetHistory,     // prefer router-provided history
       maxWeightByReps: maxWeightByReps,
-      now: DateTime.now(),
+      asOfDate: asOfDate,
     );
 
     final double? baseE1RMNullable = baseInfo['baseE1RM'] as double?;
@@ -1535,11 +1975,13 @@ class PeriodizationModelUtils {
         : [0.0, 2.5, 5.0, 7.5, 10.0])
       ..sort();
 
-    // Optional: used-combo guard (weight×repTarget×rir)
-    final usedCombos =
-    PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
+    // Optional: used-combo guard (weight×repTarget×rir).
+    // Served from the prebuilt index using the identity the router resolved --
+    // no per-call rescan of every saved workout, no second name lookup.
+    final usedCombos = PeriodizationModelUtils.usedCombosFor(
+      exerciseId: exerciseId,
       exerciseName: exerciseName,
-      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      asOfDate: asOfDate,
     );
 
     // Last weight actually used at target reps (if any)
@@ -1554,22 +1996,14 @@ class PeriodizationModelUtils {
       weightUsed = _asDouble(atTarget['weight'], fallback: defaultWeight);
     }
 
-    // Your summarized previous reps at target
-    final previousReps = PeriodizationModelUtils.exercisePreviousTopSetReps[exerciseName];
-
-// Try summary list first; if missing, fall back to the actual recent set we already found.
+    // Previous reps at target come from the SAME routed history as everything
+    // else. The old `exercisePreviousTopSetReps[exerciseName]` summary map was
+    // a second, name-keyed history universe filled by an unrelated 12-document
+    // loader, so it could contradict the routed history for this exercise id.
     int? matchedReps;
-    if (previousReps != null && previousReps.isNotEmpty) {
-      final idx = previousReps.indexWhere((r) => r == repTarget);
-      if (idx >= 0) {
-        matchedReps = previousReps[idx];
-      }
-    }
-
-// Fallback: if summary list didn’t have the rep, but history does at this target, use it.
-    if (matchedReps == null && atTarget.isNotEmpty) {
+    if (atTarget.isNotEmpty) {
       matchedReps = (atTarget['reps'] as num?)?.toInt();
-      print('🧷 [LinearAdded] Fallback matchedReps from history entry → $matchedReps');
+      print('🧷 [LinearAdded] matchedReps from routed history -> $matchedReps');
     }
 
 // If still nothing, keep legacy fallback behavior
@@ -1675,10 +2109,16 @@ class PeriodizationModelUtils {
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
+    String exerciseId = '',
+    DateTime? asOfDate,
   }) {
     print('🧠 [SmartProgression] Entered smartProgressionModel for $exerciseName (week $weekIndex, repTarget: $repTarget)');
 
     if (weekIndex == 0) {
+      // Week 1 means "do not progress above baseline" -- NOT "ignore history".
+      // defaultWeight is the historical baseline computed by
+      // getSuggestedWeightFromRep from this same routed history; the generic
+      // exercise-type default is reachable only with zero history.
       print('🧭 [SmartProgression] Base source = week1_short_circuit');
       print('🕓 Week 1 detected → progression disabled, using base weight: $defaultWeight');
       return {
@@ -1698,14 +2138,14 @@ class PeriodizationModelUtils {
       plannedRIR: rirValue,
       topSetHistory: topSetHistory,          // use what was passed in
       maxWeightByReps: maxWeightByReps,      // preserve your fallback
-      now: DateTime.now(),
+      asOfDate: asOfDate,
     );
 
 // 👇 Define once
     final double? baseE1RMNullable = baseInfo['baseE1RM'] as double?;
     final String baseSource = (baseInfo['baseSource'] as String?) ?? 'no_history';
     final List<Map<String, dynamic>>? baseSamples =
-    (baseInfo['samples'] as List?)?.cast<Map<String, dynamic>>();
+    (baseInfo['usedSamples'] as List?)?.cast<Map<String, dynamic>>();
 
 // 👇 Then print
     print('🧭 [SP Base] source=$baseSource baseE1RM=${baseE1RMNullable?.toStringAsFixed(2)} '
@@ -1786,9 +2226,12 @@ class PeriodizationModelUtils {
 
 
 
-    final usedCombos = PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
+    // Used combos come from the prebuilt index under the identity the router
+    // resolved -- one indexed lookup instead of a full workout-list rescan.
+    final usedCombos = PeriodizationModelUtils.usedCombosFor(
+      exerciseId: exerciseId,
       exerciseName: exerciseName,
-      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      asOfDate: asOfDate,
     );
 
     double bestWeight = defaultWeight;
@@ -1932,11 +2375,15 @@ class PeriodizationModelUtils {
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
+    String exerciseId = '',
+    DateTime? asOfDate,
   }) {
     print('🧠 [AddRepsProgression] Entered for $exerciseName '
         '(week $weekIndex, repTarget=$repTarget, baseWt=$defaultWeight)');
 
-    // 🕓 Week 1 short-circuit (base week)
+    // 🕓 Week 1 short-circuit (base week).
+    // defaultWeight is the historical baseline from the same routed history --
+    // week 1 withholds the progression increase, it does not discard history.
     if (weekIndex == 0) {
       print('🕓 Week 1 detected → using base weight/reps');
       return {
@@ -1952,7 +2399,7 @@ class PeriodizationModelUtils {
       plannedRIR: rirValue,
       topSetHistory: topSetHistory,
       maxWeightByReps: maxWeightByReps,
-      now: DateTime.now(),
+      asOfDate: asOfDate,
     );
 
     final double? baseE1RMNullable = baseInfo['baseE1RM'] as double?;
@@ -1981,11 +2428,12 @@ class PeriodizationModelUtils {
         : [0.0, 2.5, 5.0, 7.5, 10.0])
       ..sort();
 
-    // 🔍 Avoid repeating identical combos
-    final usedCombos =
-    PeriodizationModelUtils.getUsedWeightRepsRirTripletsForExercise(
+    // 🔍 Avoid repeating identical combos -- indexed lookup on the routed
+    // identity (no rescan, no second name-based history universe).
+    final usedCombos = PeriodizationModelUtils.usedCombosFor(
+      exerciseId: exerciseId,
       exerciseName: exerciseName,
-      savedWorkouts: PeriodizationModelUtils.savedWorkoutsList,
+      asOfDate: asOfDate,
     );
 
     // 🧾 Most recent performance — router-supplied history ONLY.
@@ -2166,6 +2614,11 @@ class PeriodizationModelUtils {
     // 👇 You need to add this:
     double rirValue = 0,
     String debugOrigin = 'unknown', // 👈 add thi
+    // Resolved identity + the workout date the hint is for. Both are passed
+    // straight through so models can look up used combos and recency windows
+    // against the SAME identity and the SAME as-of date as the baseline.
+    String exerciseId = '',
+    DateTime? asOfDate,
   })
   {
 // 🔎 Input snapshot (common to WES + Engine)
@@ -2209,6 +2662,8 @@ class PeriodizationModelUtils {
             maxWeightByReps: maxWeightByReps,
             topSetHistory: routedTopSetHistory,
             weekIndex: weekIndex,
+            exerciseId: exerciseId,
+            asOfDate: asOfDate,
           ),
           'reps': repTarget, // preserve original repTarget for now
         };
@@ -2238,6 +2693,8 @@ class PeriodizationModelUtils {
           topSetHistory: routedTopSetHistory,
           weekIndex: weekIndex,
           rirValue: rirValue,
+          exerciseId: exerciseId,
+          asOfDate: asOfDate,
         );
 
         print('📦 [PMU Router] pre-overlay (smart) ${result['weight']} × ${result['reps']}');
@@ -2264,6 +2721,8 @@ class PeriodizationModelUtils {
           topSetHistory: routedTopSetHistory,
           weekIndex: weekIndex,
           rirValue: rirValue,
+          exerciseId: exerciseId,
+          asOfDate: asOfDate,
         );
 
         print('📦 [PMU Router] pre-overlay (addReps) ${result['weight']} × ${result['reps']}');
@@ -2639,80 +3098,13 @@ class PeriodizationModelUtils {
   }
 
   // PeriodizationModelUtils.dart (or wherever it currently lives)
-  static Future<void> fetchFullTopSetHistory({String? uid}) async {
-    final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
-    print('🧠 [SmartProgression] Fetching full top set history for $resolvedUid...');
+  // NOTE: fetchFullTopSetHistory() used to live here. It re-fetched 20 workout
+  // documents and rebuilt topSetsByExercise keyed by exercise NAME, which is a
+  // second, competing index over the canonical one built by
+  // _rebuildHistoryIndex() from the published athlete snapshot. It had no
+  // callers, so it was removed rather than left as a way to silently clobber
+  // exerciseId-keyed history. Use ProgressionHistoryStore.ensureHydrated().
 
-    final snapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(resolvedUid)
-        .collection('workouts')
-        .orderBy('date', descending: true)
-        .limit(20)
-        .get();
-
-
-
-    topSetsByExercise.clear();
-
-    for (var doc in snapshot.docs) {
-      final workout = Workout.fromFirestore(doc);
-
-      // pick ONE best set per exercise for this workout
-      final Map<String, Map<String, dynamic>> bestByExercise = {};
-
-      for (var ex in workout.exercises) {
-        final String name = ex.name;
-
-        for (var set in ex.sets) {
-          final double weight = _parseToDouble(set.weight);
-          final double reps   = _parseToDouble(set.reps);
-          final double rir    = _parseToDouble(set.rir);
-          if (weight <= 0 || reps <= 0) continue;
-
-          final double e1rm = calculateE1RM(weight, reps, rir);
-          final currentBest = bestByExercise[name];
-          if (currentBest == null || e1rm > (currentBest['e1rm'] as double)) {
-            bestByExercise[name] = {
-              'weight': weight,
-              'reps'  : reps,
-              'rir'   : rir,
-              'date'  : workout.date,
-              'e1rm'  : e1rm,
-            };
-          }
-        }
-      }
-
-      // append one top set per exercise for this workout
-      for (final entry in bestByExercise.entries) {
-        topSetsByExercise.putIfAbsent(entry.key, () => []);
-        topSetsByExercise[entry.key]!.add({
-          'weight': entry.value['weight'],
-          'reps'  : entry.value['reps'],
-          'rir'   : entry.value['rir'],
-          'date'  : entry.value['date'],
-        });
-      }
-    }
-
-    // ensure newest → oldest
-    for (final list in topSetsByExercise.values) {
-      list.sort((a, b) {
-        final ad = a['date'] as DateTime?;
-        final bd = b['date'] as DateTime?;
-        if (ad == null && bd == null) return 0;
-        if (ad == null) return 1;
-        if (bd == null) return -1;
-        return bd.compareTo(ad);
-      });
-    }
-
-    print('✅ [SmartProgression] Loaded top sets for: ${topSetsByExercise.keys}');
-  }
-
-
-  //Warm Up Service Function for speed
   static void _applyTopSetsFromSnapshot(QuerySnapshot<Map<String, dynamic>> snapshot) {
     if (snapshot.docs.isEmpty) return;
 
@@ -3087,44 +3479,29 @@ class PeriodizationModelUtils {
 
   // WES and bb2 function
 
+  /// Used weight×reps×RIR combos for one exercise.
+  ///
+  /// Delegates to [usedCombosFor], which reads the prebuilt index built from
+  /// the single athlete history snapshot. It no longer walks every saved
+  /// workout matching `ex['name']` exactly: identity is resolved once
+  /// (exerciseId first, legacy name fallback), exactly like top-set history.
+  ///
+  /// Scope is unchanged — the FIRST set of each exercise entry (the "top set"
+  /// convention this guard has always used), never back-off sets.
+  ///
+  /// [savedWorkouts] is retained for source compatibility and ignored; the
+  /// index is derived from [savedWorkoutsList].
   static Set<String> getUsedWeightRepsRirTripletsForExercise({
     required String exerciseName,
-    required List<Map<String, dynamic>> savedWorkouts,
+    List<Map<String, dynamic>>? savedWorkouts,
+    String exerciseId = '',
+    DateTime? asOfDate,
   }) {
-    final Set<String> used = {};
-
-    for (final workout in savedWorkouts) {
-      final List<dynamic>? exercises = workout['exercises'];
-      if (exercises == null) {
-        print('❌ No exercises found in workout');
-        continue;
-      }
-
-      for (final ex in exercises) {
-        if (ex['name'] != exerciseName) continue;
-
-        final sets = ex['sets'] as List<dynamic>? ?? [];
-        if (sets.isEmpty) {
-          print('⚠️ No sets in ${ex['name']}');
-          continue;
-        }
-
-        // Take the best set (assume first = top set)
-        final top = sets.first;
-
-        final double? w = top['weight']?.toDouble();
-        final int? r = top['reps'];
-        final double? rir = top['rir']?.toDouble();
-
-        if (w != null && r != null && rir != null) {
-          final key = '${w.toStringAsFixed(1)}_${r}_${rir.toStringAsFixed(1)}';
-
-          used.add(key);
-        }
-      }
-    }
-
-    return used;
+    return usedCombosFor(
+      exerciseId: exerciseId,
+      exerciseName: exerciseName,
+      asOfDate: asOfDate,
+    );
   }
 
 

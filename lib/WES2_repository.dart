@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'WES2_models.dart';
+import 'progression_history_store.dart';
 
 // Abstract interface — Phase 3 adds FirestoreWes2Repository below.
 abstract class Wes2Repository {
@@ -285,6 +286,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required Wes2FieldKey fieldKey,
     required dynamic value,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -490,6 +496,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required Wes2ExerciseRow row,
     required bool isDone,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -557,6 +568,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required Wes2ExerciseRow row,
     required int setCount,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -624,6 +640,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required DateTime date,
     required Wes2ExerciseRow row,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -677,6 +698,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required String exerciseId,
     required int setIndex,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -763,6 +789,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required DateTime date,
     required String exerciseId,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -815,6 +846,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required String newExerciseId,
     required String newName,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -1072,6 +1108,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required DateTime date,
     required List<Wes2ExerciseRow> rows,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -1097,6 +1138,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required String uid,
     required DateTime date,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
@@ -1123,6 +1169,11 @@ class FirestoreWes2Repository implements Wes2Repository {
     required String exerciseId,
     required int targetCircuitIndex,
   }) async {
+    // Any write to this day can change progression history for
+    // this athlete. Mark the day dirty so the next history
+    // hydration re-reads ONE document instead of everything.
+    ProgressionHistoryStore.instance
+        .markDayDirty(uid: uid, date: date);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)

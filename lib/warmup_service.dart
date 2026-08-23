@@ -10,6 +10,7 @@ import 'block_repository.dart';
 import 'app_check_ready.dart';
 
 import 'local_cache/block_plan_cache.dart'; // BlockPlanCache.getDay/putDay/putWeek
+import 'progression_history_store.dart';
 
 class WarmupService {
   WarmupService._();
@@ -762,109 +763,6 @@ class WarmupService {
 
 // ──────────────────────────────────────────────────────────────
 // ──────────────────────────────────────────────────────────────
-// STEP 6: Populate topSetsByExercise from savedWorkoutsList
-// Collapse to ONE sample per (exercise, date): the set with the HIGHEST e1RM
-// Dates are normalized to YYYY-MM-DD (strings)
-  void _populateTopSetsFromSavedWorkouts() {
-    final list = PeriodizationModelUtils.savedWorkoutsList;
-
-    // exerciseName -> (ymd -> bestSampleForThatDay)
-    final Map<String, Map<String, Map<String, dynamic>>> bestPerDay = {};
-
-    String _ymd(DateTime d) {
-      final m = d.month.toString().padLeft(2, '0');
-      final da = d.day.toString().padLeft(2, '0');
-      return '${d.year}-$m-$da';
-    }
-
-    DateTime? _parseAnyDate(dynamic v) {
-      if (v == null) return null;
-      if (v is DateTime) return v;
-      if (v is String) return DateTime.tryParse(v);
-      // If you have Firestore Timestamps around, add:
-      // if (v is Timestamp) return v.toDate();
-      return null;
-    }
-
-    for (final w in list) {
-      final exs = w['exercises'];
-      if (exs is! List) continue;
-
-      final wDate = _parseAnyDate(w['date']);
-      if (wDate == null) continue; // skip undated workouts
-      final y = _ymd(DateTime(wDate.year, wDate.month, wDate.day));
-
-      for (final ex in exs) {
-        if (ex is! Map) continue;
-
-        final exName = (ex['name'] ?? ex['exercise'] ?? '').toString().trim();
-        if (exName.isEmpty) continue;
-
-        final sets = (ex['sets'] is List)
-            ? List<Map<String, dynamic>>.from(ex['sets'])
-            : const <Map<String, dynamic>>[];
-
-        for (final s in sets) {
-          final weight = (s['actualWeight'] ?? s['weight']);
-          final reps   = (s['actualReps'] ?? s['reps']);
-          final rirRaw = (s['actualRir'] ?? s['rir']);
-
-          if (weight is! num || reps is! num) continue;
-
-          final double wKg  = (weight as num).toDouble();
-          final int    rInt = (reps as num).toInt();
-          final double rir  = (rirRaw is num)
-              ? (rirRaw as num).toDouble()
-              : (rirRaw is String ? (double.tryParse(rirRaw) ?? 0.0) : 0.0);
-
-          // e1RM exactly like PMU
-          final double e1 = PeriodizationModelUtils.calculateE1RM(
-            wKg, rInt.toDouble(), rir,
-          );
-
-          final dayMap = bestPerDay.putIfAbsent(exName, () => <String, Map<String, dynamic>>{});
-          final current = dayMap[y];
-
-          if (current == null || ((current['__e1rm'] as double) < e1)) {
-            dayMap[y] = {
-              'date'  : y,     // <-- store normalized string (JSON-safe)
-              'weight': wKg,
-              'reps'  : rInt,
-              'rir'   : rir,
-              '__e1rm': e1,    // internal for sorting/print; stripped later
-            };
-          }
-        }
-      }
-    }
-
-    // Publish into PMU.topSetsByExercise (newest → oldest by ymd string)
-    PeriodizationModelUtils.topSetsByExercise.clear();
-
-    int exCount = 0;
-    bestPerDay.forEach((exerciseName, dayMap) {
-      final values = dayMap.values.toList()
-        ..sort((a, b) => (b['date'] as String).compareTo(a['date'] as String));
-
-      final cleaned = values.map((m) {
-        final out = Map<String, dynamic>.from(m)..remove('__e1rm');
-        return out;
-      }).toList();
-
-      PeriodizationModelUtils.topSetsByExercise[exerciseName] = cleaned;
-      exCount++;
-
-      final dbg = values.take(6).map((v) {
-        final ds = v['date'] as String; // already YYYY-MM-DD
-        return '$ds ${v['weight']}×${v['reps']}@${v['rir']} (e1=${(v['__e1rm'] as double).toStringAsFixed(1)})';
-      }).join(', ');
-    });
-  }
-
-
-
-
-// ──────────────────────────────────────────────────────────────
 // STEP 7: Prefetch bodyweight history (warm cache layer)
 // ──────────────────────────────────────────────────────────────
   // STEP 7: bodyweight prefetch (print 4 most recent)
@@ -1055,42 +953,23 @@ class WarmupService {
           _warmWorkoutShapesForDate(d);
         }
 
-        // Warm recent workouts LIST
-        unawaited(
-          fs
-              .collection('users')
-              .doc(uid)
-              .collection('workouts')
-              .limit(_workoutWarmLimit.clamp(1, 1000))
-              .get(const GetOptions(source: Source.server)),
-        );
-
-        // ✅ Also materialize savedWorkoutsList for PMU (matches WES loadSavedWorkoutsForInstanceCount)
+        // Progression history: ONE authoritative hydration per athlete,
+        // shared with WES2 through ProgressionHistoryStore's in-flight Future.
+        //
+        // This replaces the previous "warm a limit()ed workout list, then read
+        // the collection cache-first and accept it when non-empty" pair. A
+        // non-empty Firestore collection cache is NOT evidence that the whole
+        // workouts collection is cached — that assumption is exactly how a
+        // partial cache masqueraded as complete athlete history and produced
+        // no-history progression fallbacks. The store keeps its own
+        // completeness marker instead, and publishes the snapshot (plus every
+        // derived index) through PeriodizationModelUtils.
         try {
-          final col = fs.collection('users').doc(uid).collection('workouts');
-
-          // 1) Try cache first
-          List<Map<String, dynamic>> workouts = const <Map<String, dynamic>>[];
-          try {
-            final cached = await col.get(const GetOptions(source: Source.cache));
-            workouts = cached.docs.map((d) => d.data()).toList();
-          } catch (_) {
-            /* cache miss is fine */
-          }
-
-          // 2) If cache empty, hit server
-          if (workouts.isEmpty) {
-            final server = await col.get(); // server
-            workouts = server.docs.map((d) => d.data()).toList();
-          }
-
-          // 3) Assign to PMU so rep indexing & progression models see history now
-          PeriodizationModelUtils.savedWorkoutsList =
-          List<Map<String, dynamic>>.from(workouts);
-          print(
-              '📦 [Warmup→PMU] seeded savedWorkoutsList count=${workouts.length}');
+          await ProgressionHistoryStore.instance.ensureHydrated(uid: uid);
+          print('📦 [Warmup→History] snapshot ready count='
+              '${PeriodizationModelUtils.savedWorkoutsList.length}');
         } catch (e) {
-          print('⚠️ [Warmup→PMU] failed to seed savedWorkoutsList: $e');
+          print('⚠️ [Warmup→History] hydration failed: $e');
         }
       }
 
@@ -1350,8 +1229,12 @@ class WarmupService {
         );
 
 
-        // ── STEP 6: top sets (derived from already-seeded savedWorkoutsList)
-        _populateTopSetsFromSavedWorkouts();
+        // ── STEP 6: top sets
+        // Nothing to do: PeriodizationModelUtils builds top sets, used combos
+        // and DUP exposure dates from the published snapshot in a single pass,
+        // keyed by exerciseId (legacy display name only for rows written
+        // without one). The old name-keyed rebuild here was a second, competing
+        // index that could disagree with the one WES2 used.
 
         // ── STEP 7: bodyweight prefetch (engine BW conversions may read-through)
         await _prefetchBodyweight(fs: fs, uid: uid);

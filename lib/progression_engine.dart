@@ -96,55 +96,22 @@ class ProgressionEngine {
       final todayStart = DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
       final windowStart = byWeek ? base.add(Duration(days: weekIndex * 7)) : base;
 
-      String norm(String s) {
-        var t = s.toLowerCase().trim();
-        t = t.replaceAll(RegExp(r'\([^)]*\)'), '');
-        t = t.replaceAll(RegExp(r'[^a-z0-9\s]'), ' ');
-        t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
-        t = t.replaceAll(RegExp(r'\bdb\b'), 'dumbbell');
-        t = t.replaceAll(RegExp(r'\bbb\b'), 'barbell');
-        return t;
-      }
-
-      final targetId = exerciseId;
-      final targetNameNorm = norm(exerciseName);
-
-      bool hasValidSet(dynamic setsRaw) {
-        final sets = (setsRaw is List) ? setsRaw.cast<Map>() : const <Map>[];
-        return sets.any((s) {
-          final w = (s['weight']?.toString() ?? '').trim();
-          final r = (s['reps']?.toString() ?? '').trim();
-          return w.isNotEmpty && r.isNotEmpty;
-        });
-      }
-
-      for (final w in PeriodizationModelUtils.savedWorkoutsList) {
-        final dateStr = (w['date'] ?? '').toString();
-        final dt = DateTime.tryParse(dateStr);
+      // Exposure dates come from the canonical history index: the exerciseId
+      // bucket unioned with the canonical-name bucket, which reproduces the
+      // historical id-OR-normalised-name-OR-nameToId matching exactly. This
+      // replaces a full rescan of every saved workout on every hint call.
+      final exposures = PeriodizationModelUtils.exposureDatesFor(
+        exerciseId: exerciseId,
+        exerciseName: exerciseName,
+      );
+      for (final ymd in exposures) {
+        final dt = DateTime.tryParse(ymd);
         if (dt == null) continue;
-
         final dayOnly = DateTime(dt.year, dt.month, dt.day);
-        if (dayOnly.isBefore(windowStart) || !dayOnly.isBefore(todayStart)) continue;
-
-        final exs = w['exercises'];
-        if (exs is! List) continue;
-
-        final matched = exs.any((ex) {
-          if (!hasValidSet(ex['sets'])) return false;
-
-          final exId = (ex['exerciseId'] ?? ex['id'] ?? ex['exercise_id'] ?? '').toString();
-          if (exId.isNotEmpty && exId == targetId) return true;
-
-          final exName = (ex['name'] ?? ex['exercise'] ?? ex['title'] ?? '').toString();
-          if (exName.isNotEmpty && norm(exName) == targetNameNorm) return true;
-
-          final mapped = (PeriodizationModelUtils.nameToId[exName] ?? '').toString();
-          return mapped.isNotEmpty && mapped == targetId;
-        });
-
-        if (matched) {
-          matchedDates.add(dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr);
+        if (dayOnly.isBefore(windowStart) || !dayOnly.isBefore(todayStart)) {
+          continue;
         }
+        matchedDates.add(ymd);
       }
 
       completedCount = matchedDates.length;
@@ -471,14 +438,8 @@ class ProgressionEngine {
         : rir;
 
 
-    final double defaultWeight =
-      PeriodizationModelUtils.getSuggestedWeightFromRep(
-        exerciseName,
-        repTarget.toInt(),
-        rir,
-      );
-
-      // Call the progression model (which contains its internal logic).
+    // Increment grid first: the baseline weight is snapped on the same
+    // exerciseId-keyed grid the progression models and the overlay use.
     final incRaw = _exerciseSettings[exerciseId]?['increments'];
     final incMap = PeriodizationModelUtils.incMapFromRaw(incRaw);
     final increments = PeriodizationModelUtils.expandIncrementOptions(incMap);
@@ -487,6 +448,39 @@ class ProgressionEngine {
 
     final List<double> _incOpts =
     (increments == null || increments.isEmpty) ? <double>[2.5] : increments;
+
+    // ── THE single exercise-identity resolution for this row ────────────────
+    // exerciseId first, legacy display name only for rows written without an
+    // id, sliced as-of the workout date being planned. Everything downstream —
+    // the baseline/default weight, computeBaseE1RMFromHistory, Smart
+    // Progression, Add Reps, Linear, and used-combo detection — is fed from
+    // THIS list. There is no second, name-based history lookup after this point.
+    final List<Map<String, dynamic>> routedTopSetHistory =
+        PeriodizationModelUtils.resolveTopSetHistory(
+      exerciseId: exerciseId,
+      exerciseName: exerciseName,
+      asOfDate: _selectedDate,
+    );
+
+    // Baseline ("default") weight — the value every model's week-1 short
+    // circuit returns. It is derived from routedTopSetHistory, so week 1 means
+    // "historical baseline without the progression increase", never "ignore
+    // history and use the generic 5/10/20 kg type default".
+    final double defaultWeight =
+      PeriodizationModelUtils.getSuggestedWeightFromRep(
+        exerciseName,
+        repTarget.toInt(),
+        rir,
+        exerciseId: exerciseId,
+        topSetHistory: routedTopSetHistory,
+        increments: _incOpts,
+        asOfDate: _selectedDate,
+      );
+
+    print('[ENGINE][history] row=$exerciseIndex name=$exerciseName '
+        'id=$exerciseId routedSamples=${routedTopSetHistory.length} '
+        'asOf=${_selectedDate?.toIso8601String().substring(0, 10)} '
+        'baseline=${defaultWeight.toStringAsFixed(1)}');
 
       final maxWeightMap = _exerciseSettings[exerciseId]?['maxWeightByReps'];
       final maxWeightKeys = (maxWeightMap is Map)
@@ -505,11 +499,11 @@ class ProgressionEngine {
 
         // ✅ fallback
         maxWeightByReps: _exerciseSettings[exerciseId]?['maxWeightByReps'],
-        // exerciseId-first lookup: history is now keyed by exerciseId when the
-        // workout document carried one. Fall back to name for legacy rows that
-        // were stored without an id (they remain under a name key).
-        topSetHistory: PeriodizationModelUtils.topSetsByExercise[exerciseId]
-            ?? PeriodizationModelUtils.topSetsByExercise[exerciseName],
+        // Same routed history the baseline above was computed from — resolved
+        // exactly once, upstream, by resolveTopSetHistory().
+        topSetHistory: routedTopSetHistory,
+        exerciseId: exerciseId,
+        asOfDate: _selectedDate,
         weekIndex: (blockStartDate == null || _selectedDate == null)
             ? 0 // safe default until initialized
             : PeriodizationModelUtils.getWeekIndexForDate(

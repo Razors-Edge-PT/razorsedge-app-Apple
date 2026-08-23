@@ -260,7 +260,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     int? dupSigReps;
     if (exSettings?['periodizationModel'] == 'DUP, Signature') {
       dupSigReps = _computeDupSignatureReps(
-          exSettings, weekIndex, row.exerciseId, row.name);
+          exSettings, weekIndex, row.exerciseId, row.name, date);
       if (dupSigReps != null) planReps = dupSigReps;
     }
     final planRir = BB3PlannedExerciseService.getRirFromPlan(
@@ -421,10 +421,19 @@ class Wes2HintServiceImpl implements Wes2HintService {
     if (weightHint == null &&
         set.weight.actualValue == null &&
         !_isBb3Locked(set.weight)) {
+      // Same identity boundary and same as-of date the engine uses, so this
+      // last-resort fill can never disagree with the routed history (a bare
+      // name lookup here is what produced 5 kg hints for exercises whose
+      // history is stored under an exerciseId).
       final defW = PeriodizationModelUtils.getSuggestedWeightFromRep(
         row.name,
         repsForWeight,
         rirForWeight,
+        exerciseId: row.exerciseId,
+        increments: PeriodizationModelUtils.expandIncrementOptions(
+          PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
+        ),
+        asOfDate: date,
       );
       if (defW > 0) {
         // Issue 5: PMU _defaultWeightForExercise returns 5 for Machine; override to 6.
@@ -1466,19 +1475,24 @@ class Wes2HintServiceImpl implements Wes2HintService {
     return best;
   }
 
-  /// Returns the DUP Signature rep target for Set 1 using exerciseSettings min/max
-  /// and history derived from savedWorkoutsList (the same source WES2 already uses).
-  /// Returns null when min/max are missing or invalid — never throws.
+  /// Returns the DUP Signature rep target for Set 1 using exerciseSettings
+  /// min/max and the athlete's routed top-set history.
   ///
-  /// [exerciseId] is the canonical Firestore exercise doc ID for the current row.
-  /// Match priority: exerciseId when the workout doc carries one; name fallback
-  /// only for legacy rows that have no id field. This mirrors the key strategy
-  /// in _rebuildTopSetsFromSavedWorkouts so DUP Signature history is consistent.
+  /// History comes from [PeriodizationModelUtils.resolveTopSetHistory] — the
+  /// single identity boundary (exerciseId first, legacy display name only for
+  /// rows written without an id), sliced as-of [asOfDate] so editing an older
+  /// day never sequences reps from workouts that happened afterwards. It is
+  /// the same indexed snapshot every progression model reads, so DUP Signature
+  /// can no longer disagree with them, and it costs an indexed lookup instead
+  /// of a full rescan of every saved workout per row.
+  ///
+  /// Returns null when min/max are missing or invalid — never throws.
   int? _computeDupSignatureReps(
     Map<String, dynamic>? exSettings,
     int weekIndex,
     String exerciseId,
     String exerciseName,
+    DateTime asOfDate,
   ) {
     final range = _parseDupSignatureRange(exSettings?['repTargets']);
     if (range == null) return null;
@@ -1491,53 +1505,18 @@ class Wes2HintServiceImpl implements Wes2HintService {
       return double.tryParse(v.toString().trim()) ?? 0.0;
     }
 
-    Map<String, dynamic>? asStringMap(dynamic v) {
-      if (v is Map) return Map<String, dynamic>.from(v);
-      return null;
-    }
+    // Routed history is newest-first, one top set per exercise/day.
+    final routed = PeriodizationModelUtils.resolveTopSetHistory(
+      exerciseId: exerciseId,
+      exerciseName: exerciseName,
+      asOfDate: asOfDate,
+    );
+    final rawHistory = <int>[
+      for (final sample in routed)
+        (parseDouble(sample['reps']) + parseDouble(sample['rir'])).floor(),
+    ];
 
-    // Build top-set effective-reps history from savedWorkoutsList (newest-first).
-    final rawHistory = <int>[];
-    for (final workout in PeriodizationModelUtils.savedWorkoutsList) {
-      final exercisesRaw = workout['exercises'];
-      if (exercisesRaw is! List) continue;
-      for (final ex in exercisesRaw) {
-        final exMap = asStringMap(ex);
-        if (exMap == null) continue;
-        // exerciseId-first: use the workout doc's id when present so exercises
-        // that share a display name but differ by id don't contaminate each other.
-        final docExId =
-            (exMap['exerciseId'] ?? exMap['id'] ?? '').toString().trim();
-        final docName = (exMap['name'] ?? '').toString().trim();
-        final matchesExercise = docExId.isNotEmpty
-            ? docExId == exerciseId
-            : docName == exerciseName;
-        if (!matchesExercise) continue;
-        final setsRaw = exMap['sets'];
-        final sets = setsRaw is List ? setsRaw : const <dynamic>[];
-        double bestE1rm = 0.0;
-        int? bestEffReps;
-        for (final s in sets) {
-          final sMap = asStringMap(s);
-          if (sMap == null) continue;
-          final w = parseDouble(sMap['weight']);
-          final r = parseDouble(sMap['reps']);
-          final rir = parseDouble(sMap['rir']);
-          if (w <= 0 || r <= 0) continue;
-          final total = r + rir;
-          final e1rm =
-              total <= 6 ? w * (36 / (37 - total)) : w * (1 + 0.0333 * total);
-          if (e1rm > bestE1rm) {
-            bestE1rm = e1rm;
-            bestEffReps = (r + rir).floor();
-          }
-        }
-        if (bestEffReps != null) rawHistory.add(bestEffReps);
-        break; // one top-set entry per workout for this exercise
-      }
-    }
-
-    // REsignatureRepTargets expects oldest-first; savedWorkoutsList is newest-first.
+    // REsignatureRepTargets expects oldest-first; routed history is newest-first.
     final history = rawHistory.reversed.toList();
     final sequence = PeriodizationModelUtils.REsignatureRepTargets(
       min: min,

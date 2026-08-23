@@ -29,6 +29,7 @@ import 'exercise_details_screen.dart';
 import 'top_sets_screen.dart';
 import 'periodization_model_utils.dart';
 import 'progression_engine.dart';
+import 'progression_history_store.dart';
 import 'block_exercise_defaults_repository.dart';
 import 'app_check_ready.dart';
 import 'startup_route_service.dart';
@@ -90,7 +91,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // Allows post-merge rows (source=completedServer) to still trigger BB3 sync.
   Set<String> _bb3PlannedExerciseIds = const {};
   // Composite key uid|blockId|date — prevents redundant server history refreshes.
-  String? _lastHistoryRefreshKey;
+  /// True while a background history refresh triggered by this screen is
+  /// still pending, so the follow-up hint pass is scheduled only once.
+  bool _awaitingHistoryRefresh = false;
   // Composite identity key for _cachedExerciseSettings — 'actingUid|blockId'.
   // Reloads cache unconditionally when actingUid or blockId changes.
   String? _cachedSettingsKey;
@@ -280,6 +283,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       _pauseWorkoutDurationSegment();
       _saveDraftNow();
     } else if (state == AppLifecycleState.resumed) {
+      // Workouts may have been logged on another device while we were away.
+      // Mark the history snapshot stale so the next hint pass refreshes it in
+      // the background; the current (valid) hints stay on screen meanwhile.
+      ProgressionHistoryStore.instance.markStale(_controller.actingUid);
       // Resync timer elapsed from the anchored start time after backgrounding.
       if (_timerRunning && _timerStartedAt != null) {
         _syncTimerElapsed();
@@ -687,6 +694,23 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // Snapshot hinted rows as baseline so same-set recalc can restore
       // original hints when the user clears all typed actuals.
       if (mounted) _controller.captureBaselineHintRows();
+
+      // A background history refresh (stale snapshot, or a day this session
+      // edited) may still be in flight. The hints just applied came from valid
+      // history, so nothing bogus is on screen; when fresher history lands,
+      // recompute once and apply atomically.
+      final pending =
+          ProgressionHistoryStore.instance.pendingRefresh(_controller.actingUid);
+      if (pending != null && !_awaitingHistoryRefresh) {
+        _awaitingHistoryRefresh = true;
+        // ignore: discarded_futures
+        pending.whenComplete(() {
+          _awaitingHistoryRefresh = false;
+          if (!mounted || !identityUnchanged()) return;
+          // ignore: discarded_futures
+          _loadAndApplyHints();
+        });
+      }
     } catch (e) {
       debugPrint('[WES2] Hint computation failed: $e');
       if (Wes2HintTrace.enabled) {
@@ -695,112 +719,40 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
-  /// Fetches the bounded block workout history from Firestore and patches it
-  /// into PeriodizationModelUtils.savedWorkoutsList so retroactive edits are
-  /// visible to progression hints without a full app restart.
+  /// Ensures the athlete's canonical progression history is hydrated and
+  /// published before hints are computed.
   ///
-  /// Runs at most once per (uid, blockId, selectedDate) triple. On server
-  /// failure the key is NOT marked, allowing a retry on the next navigation.
+  /// This used to fetch only [blockStart .. selectedDate] from the server and
+  /// rebuild the top-set index from that bounded window, which silently
+  /// discarded every workout older than the current block — an exercise with
+  /// years of top sets could still be classified as "no history" and fall back
+  /// to the generic 5 kg / 20 kg default.
+  ///
+  /// [ProgressionHistoryStore] now owns hydration for the whole app:
+  ///   * one authoritative server read per athlete per session, deduplicated
+  ///     with WarmupService through an in-flight Future keyed on UID,
+  ///   * zero network work when reopening WES2 with a still-valid snapshot,
+  ///   * a partial Firestore cache is never treated as complete history.
+  ///
+  /// First paint is unaffected: rows are already on screen before the hint
+  /// pass (and therefore this call) runs.
   Future<void> _refreshHistoryForHints(DateTime selectedDate) async {
     final uid = _controller.actingUid;
     if (uid.isEmpty) return;
-    final blockStart = _controller.blockStartDate;
-    if (blockStart == null) return;
-    final blockId = _controller.activeBlockId ?? '';
 
-    String ymd(DateTime d) =>
-        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    final store = ProgressionHistoryStore.instance;
+    await store.ensureHydrated(uid: uid);
 
-    final key = '$uid|$blockId|${ymd(selectedDate)}';
-    if (_lastHistoryRefreshKey == key) {
-      if (Wes2HintTrace.enabled) {
-        // Cause E probe: refresh skipped — history state is whatever a
-        // previous pass (possibly a FAILED one that never set the key —
-        // impossible — or WarmupService) left behind.
-        Wes2HintTrace.log(
-            'history',
-            'SKIP (key match) key=$key '
-            'savedList=${PeriodizationModelUtils.savedWorkoutsList.length} '
-            'topSetKeys=${PeriodizationModelUtils.topSetsByExercise.length}');
-        _traceHistoryAvailabilityForRows(uid);
-      }
-      return;
-    }
-
-    final startKey =
-        ymd(DateTime(blockStart.year, blockStart.month, blockStart.day));
-    final endKey =
-        ymd(DateTime(selectedDate.year, selectedDate.month, selectedDate.day));
     if (Wes2HintTrace.enabled) {
+      final snap = store.snapshotFor(uid);
       Wes2HintTrace.log(
           'history',
-          'fetch uid=$uid blockId=$blockId start=$startKey end=$endKey '
-          'savedListBefore=${PeriodizationModelUtils.savedWorkoutsList.length}');
-    }
-
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('workouts')
-          .orderBy(FieldPath.documentId)
-          .startAt([startKey]).endAt([endKey]).get(
-              const GetOptions(source: Source.server));
-
-      final freshData = snap.docs.map((doc) {
-        final data = Map<String, dynamic>.from(doc.data());
-        data['date'] ??= doc.id;
-        data['_uid'] =
-            uid; // uid-stamp so cross-athlete entries can be filtered
-        return data;
-      }).toList();
-
-      // Replace cached entries in [startKey, endKey]; leave earlier history intact.
-      final merged = <Map<String, dynamic>>[];
-      for (final w in PeriodizationModelUtils.savedWorkoutsList) {
-        final raw = (w['date'] ?? '').toString();
-        final wKey = raw.length >= 10 ? raw.substring(0, 10) : '';
-        if (wKey.isEmpty ||
-            wKey.compareTo(startKey) < 0 ||
-            wKey.compareTo(endKey) > 0) {
-          merged.add(w);
-        }
-      }
-      merged.addAll(freshData);
-
-      // Stable date order so downstream history logic receives a consistent list.
-      merged.sort((a, b) {
-        final aKey = (a['date'] ?? '').toString();
-        final bKey = (b['date'] ?? '').toString();
-        final ak = aKey.length >= 10 ? aKey.substring(0, 10) : aKey;
-        final bk = bKey.length >= 10 ? bKey.substring(0, 10) : bKey;
-        return bk
-            .compareTo(ak); // newest-first, matching WarmupService convention
-      });
-
-      PeriodizationModelUtils.savedWorkoutsList = merged;
-      _rebuildTopSetsFromSavedWorkouts(uid);
-      _lastHistoryRefreshKey = key;
-      if (Wes2HintTrace.enabled) {
-        Wes2HintTrace.log(
-            'history',
-            'server OK docs=${snap.docs.length} '
-            'savedListAfter=${merged.length} '
-            'topSetKeys=${PeriodizationModelUtils.topSetsByExercise.length} '
-            'keys=[${PeriodizationModelUtils.topSetsByExercise.keys.take(30).join(', ')}'
-            '${PeriodizationModelUtils.topSetsByExercise.length > 30 ? ', …' : ''}]');
-        _traceHistoryAvailabilityForRows(uid);
-      }
-    } catch (e) {
-      // Server fetch failed; savedWorkoutsList is unchanged.
-      // Key is intentionally NOT set — next navigation will retry.
-      if (Wes2HintTrace.enabled) {
-        // Cause E probe: this failure was previously swallowed silently.
-        Wes2HintTrace.log(
-            'history',
-            '❌ server fetch FAILED (hints will use stale/empty history): $e '
-            'savedList=${PeriodizationModelUtils.savedWorkoutsList.length}');
-      }
+          'snapshot uid=$uid workouts=${snap?.workoutCount ?? 0} '
+          'authoritative=${snap?.authoritative} '
+          'savedList=${PeriodizationModelUtils.savedWorkoutsList.length} '
+          'topSetKeys=${PeriodizationModelUtils.topSetsByExercise.length} '
+          'indexBuilds=${PeriodizationModelUtils.historyIndexBuilds}');
+      _traceHistoryAvailabilityForRows(uid);
     }
   }
 
@@ -863,7 +815,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         '${_controller.blockStartDate?.toIso8601String()}');
     b.writeln('loadState: ${_controller.loadState.name} '
         'epoch: ${_controller.loadEpoch}');
-    b.writeln('lastHistoryRefreshKey: $_lastHistoryRefreshKey');
+    final histSnap =
+        ProgressionHistoryStore.instance.snapshotFor(_controller.actingUid);
+    b.writeln('historySnapshot: workouts=${histSnap?.workoutCount ?? 0} '
+        'authoritative=${histSnap?.authoritative} '
+        'hydratedAt=${histSnap?.hydratedAt.toIso8601String()}');
     b.writeln('cachedSettingsKey: $_cachedSettingsKey');
     b.writeln('savedWorkoutsList: '
         '${PeriodizationModelUtils.savedWorkoutsList.length} entries');
@@ -967,106 +923,6 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         ],
       ),
     );
-  }
-
-  /// Rebuilds PeriodizationModelUtils.topSetsByExercise from the current
-  /// savedWorkoutsList, filtered to [actingUid] only.
-  /// Entries without a '_uid' stamp (loaded by WarmupService or legacy paths)
-  /// are included so pre-WES2 history is not silently dropped; once the coach
-  /// switches athletes and _refreshHistoryForHints stamps fresh entries, the
-  /// un-stamped legacy entries age out naturally as the block window advances.
-  ///
-  /// Key strategy: use exerciseId when the workout document carries one;
-  /// fall back to exercise name only for genuinely legacy rows that have no id.
-  /// This prevents exercises that share a display name but have different
-  /// canonical IDs from contaminating each other's top-set history.
-  void _rebuildTopSetsFromSavedWorkouts(String actingUid) {
-    double parseD(dynamic v) {
-      if (v == null) return 0.0;
-      if (v is num) return v.toDouble();
-      return double.tryParse(v.toString().trim()) ?? 0.0;
-    }
-
-    DateTime? parseDate(dynamic v) {
-      if (v is DateTime) return v;
-      if (v is String && v.length >= 10)
-        return DateTime.tryParse(v.substring(0, 10));
-      return null;
-    }
-
-    int skippedForeignUid = 0;
-    int keyedById = 0;
-    int keyedByName = 0;
-    final newMap = <String, List<Map<String, dynamic>>>{};
-    for (final w in PeriodizationModelUtils.savedWorkoutsList) {
-      // Skip entries explicitly stamped for a different athlete.
-      // Un-stamped entries (no '_uid' key) are kept for backwards compatibility
-      // with WarmupService and other loaders that pre-date this stamp.
-      final entryUid = w['_uid'] as String?;
-      if (entryUid != null && entryUid != actingUid) {
-        skippedForeignUid++;
-        continue;
-      }
-
-      final wDate = parseDate(w['date']);
-      if (wDate == null) continue;
-      final exs = w['exercises'];
-      if (exs is! List) continue;
-      for (final ex in exs) {
-        if (ex is! Map) continue;
-        // exerciseId-first keying: exercises that share a display name but have
-        // different canonical IDs each get their own isolated history bucket.
-        final exerciseId =
-            (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
-        final name = (ex['name'] ?? '').toString().trim();
-        // Must have at least one usable identity token.
-        if (exerciseId.isEmpty && name.isEmpty) continue;
-        final key = exerciseId.isNotEmpty ? exerciseId : name;
-        final sets = ex['sets'];
-        if (sets is! List) continue;
-        double bestE1rm = 0;
-        Map<String, dynamic>? best;
-        for (final s in sets) {
-          if (s is! Map) continue;
-          final w2 = parseD(s['weight'] ?? s['actualWeight']);
-          final r = parseD(s['reps'] ?? s['actualReps']);
-          final rir = parseD(s['rir'] ?? s['actualRir']);
-          if (w2 <= 0 || r <= 0) continue;
-          final e1rm = PeriodizationModelUtils.calculateE1RM(w2, r, rir);
-          if (e1rm > bestE1rm) {
-            bestE1rm = e1rm;
-            best = {'weight': w2, 'reps': r, 'rir': rir, 'date': wDate};
-          }
-        }
-        if (best != null) {
-          newMap.putIfAbsent(key, () => []).add(best);
-          if (exerciseId.isNotEmpty) {
-            keyedById++;
-          } else {
-            keyedByName++;
-          }
-        }
-      }
-    }
-    for (final list in newMap.values) {
-      list.sort((a, b) {
-        final ad = a['date'] as DateTime?;
-        final bd = b['date'] as DateTime?;
-        if (ad == null && bd == null) return 0;
-        if (ad == null) return 1;
-        if (bd == null) return -1;
-        return bd.compareTo(ad); // newest-first
-      });
-    }
-    PeriodizationModelUtils.topSetsByExercise
-      ..clear()
-      ..addAll(newMap);
-
-    debugPrint('[WES2][topSets] uid=$actingUid '
-        'savedList=${PeriodizationModelUtils.savedWorkoutsList.length} '
-        'topSetKeys=${newMap.length} '
-        'byId=$keyedById byName=$keyedByName '
-        'skippedForeignUid=$skippedForeignUid');
   }
 
   /// Returns true if [date] (midnight-normalised) is strictly before
