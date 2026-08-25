@@ -1252,7 +1252,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// Counts qualifying sets (weight > 0 AND reps > 0) across all rows for
   /// [date]. If the date reaches ≥ 2 qualifying sets and hasn't been counted
   /// before, records it in the membership doc and increments the count.
-  /// When the count reaches 4, sets paywallTriggered: true.
+  /// When the count reaches 1 (the user's first qualifying day), sets
+  /// paywallTriggered: true.
   /// Uses actorUid (logged-in account UID) — never the impersonated athlete.
   Future<void> _checkQualifyingDate({required DateTime date}) async {
     final actorUid = _controller.actorUid;
@@ -1286,7 +1287,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // Date qualifies — update local cache first, then persist.
     _qualifiedDatesCached.add(dateKey);
     _qualifiedDaysCountCached++;
-    final triggerPaywall = _qualifiedDaysCountCached >= 4;
+    final triggerPaywall = _qualifiedDaysCountCached >= 1;
 
     // Record qualifying day in the local cache (actor-keyed). The DURABLE
     // authority for the 3-day unlock is the membership doc count
