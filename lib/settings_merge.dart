@@ -194,6 +194,127 @@ class SettingsMerge {
     }
   }
 
+  // ── Structural (frequency) normalisation ───────────────────────────────────
+
+  /// Upper bound mirrored from the settings dialog's frequency clamp.
+  static const int maxWeeklyFrequency = 14;
+
+  /// Parses the trailing integer of a slot key such as `instance3` /
+  /// `session3`. Returns null for any key that is not a numbered slot of
+  /// [prefix] (unknown/future keys are therefore never touched).
+  static int? slotNumber(String key, String prefix) {
+    if (!key.startsWith(prefix)) return null;
+    return int.tryParse(key.substring(prefix.length));
+  }
+
+  /// Makes the per-session structure of [settings] agree with its own
+  /// `weeklyFrequency`, in place. Returns true when anything changed.
+  ///
+  /// `weeklyFrequency` is a STRUCTURAL scalar: it dictates how many
+  /// `instanceN` rep-target slots and `sessionN` RIR slots the object may
+  /// carry. Changing it therefore has to resize the structure, otherwise a
+  /// reduction leaves stale higher-numbered slots behind and the object fails
+  /// its own consistency check.
+  ///
+  /// Deliberately conservative:
+  ///  * only numbered `instanceN` / `sessionN` slots are added or removed;
+  ///  * every unrelated key, week, set, sibling leaf and unknown/future key is
+  ///    preserved untouched;
+  ///  * DUP Signature is skipped for rep targets (it uses `repRange`);
+  ///  * RIR sessions are only PRUNED here — genuinely new RIR sessions are
+  ///    materialised by the existing default-matrix healer
+  ///    (`healWeek1RirPlan`), so the app's intended RIR defaults stay the
+  ///    single source of that shape.
+  static bool normalizeStructureForFrequency(Map<String, dynamic> settings) {
+    final wfRaw = settings['weeklyFrequency'];
+    final wf = wfRaw is num ? wfRaw.toInt() : int.tryParse('${wfRaw ?? ''}');
+    if (wf == null || wf <= 0 || wf > maxWeeklyFrequency) return false;
+
+    var changed = false;
+
+    // ── Rep targets: exactly instance1..instanceWf in every week map ─────────
+    if (repTargetScope(settings['periodizationModel'] as String?) !=
+        WeekScope.signature) {
+      final rt = asMap(settings['repTargets']);
+      if (rt != null) {
+        var rtChanged = false;
+        for (final weekKey in rt.keys.toList()) {
+          if (!weekKey.startsWith('week')) continue;
+          final week = asMap(rt[weekKey]);
+          if (week == null) continue;
+          var weekChanged = false;
+
+          final numbered = <int, dynamic>{};
+          for (final k in week.keys.toList()) {
+            final n = slotNumber(k, 'instance');
+            if (n == null) continue; // unknown key → preserve
+            if (n > wf) {
+              week.remove(k); // stale slot outside the new frequency
+              weekChanged = true;
+            } else {
+              numbered[n] = week[k];
+            }
+          }
+
+          // Fill genuinely new slots by cycling the surviving pattern, so an
+          // increase never writes a hole (which would fail validation) and
+          // never blanks or corrupts the sessions the user already configured.
+          // A week carrying no instance slots at all is not instance-shaped
+          // (e.g. repRange leftovers) and is left entirely alone.
+          if (numbered.isNotEmpty) {
+            final ordered = numbered.keys.toList()..sort();
+            for (int n = 1; n <= wf; n++) {
+              if (numbered.containsKey(n)) continue;
+              week['instance$n'] = numbered[ordered[(n - 1) % ordered.length]];
+              weekChanged = true;
+            }
+          }
+
+          if (weekChanged) {
+            rt[weekKey] = week;
+            rtChanged = true;
+          }
+        }
+        if (rtChanged) {
+          settings['repTargets'] = rt;
+          changed = true;
+        }
+      }
+    }
+
+    // ── RIR plan: drop sessionN slots outside the new frequency ──────────────
+    final rp = asMap(settings['rirPlan']);
+    if (rp != null) {
+      var rpChanged = false;
+      for (final weekKey in rp.keys.toList()) {
+        if (!weekKey.startsWith('week')) continue;
+        final week = asMap(rp[weekKey]);
+        if (week == null) continue;
+        var weekChanged = false;
+        for (final k in week.keys.toList()) {
+          final n = slotNumber(k, 'session');
+          if (n != null && n > wf) {
+            week.remove(k);
+            weekChanged = true;
+          }
+        }
+        if (!weekChanged) continue;
+        if (week.isEmpty) {
+          rp.remove(weekKey);
+        } else {
+          rp[weekKey] = week;
+        }
+        rpChanged = true;
+      }
+      if (rpChanged) {
+        settings['rirPlan'] = rp;
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
   /// Applies [patch] onto a deep copy of the complete latest server object
   /// [latest] and returns the merged result. Untouched and unknown keys are
   /// always preserved; a partial nested map can never replace a complete one.
@@ -245,6 +366,16 @@ class SettingsMerge {
         _propagateRir(rp, c, scope, patch.totalBlockWeeks);
       }
       result['rirPlan'] = rp;
+    }
+
+    // Structural resize. `weeklyFrequency` and the effective periodization
+    // model together define how many instance/session slots may exist, so a
+    // change to either is a STRUCTURAL edit: the merged object is resized here,
+    // BEFORE it is written, rather than being left inconsistent for a later
+    // healer to "repair" out of the exercise library defaults.
+    if (patch.scalarChanges.containsKey('weeklyFrequency') ||
+        patch.scalarChanges.containsKey('periodizationModel')) {
+      normalizeStructureForFrequency(result);
     }
 
     return result;

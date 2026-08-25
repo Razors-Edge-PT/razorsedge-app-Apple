@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import 'exercise_catalog.dart';
+import 'settings_merge.dart';
 
 /// Shared defaults + seeding logic for Block Planner / WES.
 /// This is the "headless" version of BP's _seedDefaultsFor + getDefaultSettings,
@@ -331,6 +332,28 @@ class BlockExerciseDefaultsRepository {
   }
 
 
+  /// Structural deep equality for plain Firestore-shaped values (maps, lists,
+  /// scalars). Used so the lazy healer only writes fields it genuinely changed.
+  static bool _deepEquals(dynamic a, dynamic b) {
+    if (identical(a, b)) return true;
+    if (a is Map && b is Map) {
+      if (a.length != b.length) return false;
+      for (final k in a.keys) {
+        if (!b.containsKey(k)) return false;
+        if (!_deepEquals(a[k], b[k])) return false;
+      }
+      return true;
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (int i = 0; i < a.length; i++) {
+        if (!_deepEquals(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
+  }
+
   /// Sanitize values so Firestore is happy (no NaN, keys as strings, etc.)
   static dynamic _sanitizeForFirestore(dynamic value) {
     if (value is Map) {
@@ -597,6 +620,44 @@ class BlockExerciseDefaultsRepository {
   // 5b) LAZY HEALER: ensure a single exercise has defaults in a block doc
   // ---------------------------------------------------------------------------
 
+  /// Pure projection of the lazy healer: returns what [existing] should become
+  /// once [defaults] have been applied as SEEDS ONLY.
+  ///
+  /// INVARIANT: exercise-library defaults are seeds, never authority. A custom
+  /// `weeklyFrequency` / `repTargets` / `rirPlan` chosen by the athlete or
+  /// coach is a deliberate configuration, NOT corruption, even when it differs
+  /// from the factory default for that exercise (e.g. Bench Press defaults to
+  /// 4/week but a user validly runs it 3/week). Defaults therefore only fill
+  /// genuinely absent keys and genuinely absent sub-keys — they never overwrite
+  /// a value that is already present.
+  ///
+  /// The result is then made structurally self-consistent against the object's
+  /// OWN `weeklyFrequency` (never the library default), so a demonstrably
+  /// malformed structure (e.g. wf=3 carrying a stale `instance4`) is resized
+  /// without the user's chosen frequency ever being reset.
+  static Map<String, dynamic> projectHealedSettings(
+    Map<String, dynamic> existing,
+    Map<String, dynamic> defaults,
+  ) {
+    final projected = SettingsMerge.deepCopyMap(existing);
+    defaults.forEach((key, value) {
+      final current = projected[key];
+      if (current == null) {
+        projected[key] = value;
+      } else if (value is Map && current is Map) {
+        final sub = Map<String, dynamic>.from(current);
+        value.forEach((subKey, subValue) {
+          if (!sub.containsKey(subKey)) sub[subKey] = subValue;
+        });
+        projected[key] = sub;
+      }
+      // Scalar already present: the existing (possibly custom) value wins.
+    });
+
+    SettingsMerge.normalizeStructureForFrequency(projected);
+    return projected;
+  }
+
   /// Ensures [exerciseId] has complete, usable exerciseSettings in [blockId].
   /// No-op when settings are already complete (per [isSettingsUsable]).
   /// When settings are absent, writes the full default payload.
@@ -670,38 +731,16 @@ class BlockExerciseDefaultsRepository {
         'exerciseSettings': {exerciseId: settingsPayload},
       }, SetOptions(merge: true));
     } else {
-      // Partially present (e.g. only week-N repTargets/rirPlan fragments):
-      // update only fields and sub-keys that are missing — never overwrite.
-      //
-      // Exception: weeklyFrequency, repTargets, and rirPlan are tightly coupled
-      // (wf dictates how many instanceN keys must exist). When wf doesn't match
-      // the computed defaults, all three are force-overwritten as a unit so they
-      // stay self-consistent (e.g. wf=14 with only 2 instances → reset to 3/3/3).
+      // Partially present (e.g. only week-N repTargets/rirPlan fragments).
       final existingMap = Map<String, dynamic>.from(existingForId);
-      final existingWf = (existingMap['weeklyFrequency'] as num?)?.toInt() ?? 0;
-      final defaultWf  = (settingsPayload['weeklyFrequency'] as num?)?.toInt() ?? 0;
-      final wfMismatch = defaultWf > 0 && existingWf != defaultWf;
+      final projected = projectHealedSettings(existingMap, settingsPayload);
 
+      // Write only the top-level fields that actually changed.
       final updates = <String, dynamic>{};
-      settingsPayload.forEach((key, value) {
-        final isCoupled =
-            key == 'weeklyFrequency' || key == 'repTargets' || key == 'rirPlan';
-        if (wfMismatch && isCoupled) {
-          // Force-write the three coupled fields to make them self-consistent.
-          updates['exerciseSettings.$exerciseId.$key'] = value;
-        } else if (!existingMap.containsKey(key)) {
-          // Top-level key entirely absent: write the full default value.
-          updates['exerciseSettings.$exerciseId.$key'] = value;
-        } else if (!isCoupled && value is Map && existingMap[key] is Map) {
-          // Both are maps: only add sub-keys that are missing.
-          final existingSub = Map<String, dynamic>.from(existingMap[key] as Map);
-          (value as Map).forEach((subKey, subValue) {
-            if (!existingSub.containsKey(subKey)) {
-              updates['exerciseSettings.$exerciseId.$key.$subKey'] = subValue;
-            }
-          });
-        }
-        // Scalar field already present and not coupled: existing value wins — skip.
+      projected.forEach((key, value) {
+        if (_deepEquals(existingMap[key], value)) return;
+        updates['exerciseSettings.$exerciseId.$key'] =
+            _sanitizeForFirestore(value);
       });
       if (updates.isNotEmpty) {
         await docRef.update(updates);
