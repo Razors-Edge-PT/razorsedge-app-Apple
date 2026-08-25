@@ -5,6 +5,8 @@ import 'auth_signout.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_debug.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
+
+import 'membership_purchase_policy.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -357,14 +359,20 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
 
   Future<void> _onPurchaseUpdate(List<PurchaseDetails> purchases) async {
     for (final purchase in purchases) {
-      if (!_membershipProductIds.contains(purchase.productID)) continue;
+      if (!isMembershipProduct(purchase.productID, _membershipProductIds)) {
+        continue;
+      }
 
       debugPrint('[IAP] purchase update productId=${purchase.productID} '
           'status=${purchase.status} '
           'pendingCompletePurchase=${purchase.pendingCompletePurchase}');
 
-      if (purchase.status == PurchaseStatus.purchased ||
-          purchase.status == PurchaseStatus.restored) {
+      // Pure policy — see membership_purchase_policy.dart. Access is granted
+      // ONLY for purchased/restored; pending, error and cancelled never
+      // activate membership.
+      final decision = decideMembershipPurchase(purchase.status);
+
+      if (decision.grantsAccess) {
         // TODO: Production must validate the App Store / Play Billing receipt
         // server-side via a Cloud Function before fully trusting this
         // client-side membership activation.
@@ -393,43 +401,28 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
           // Always acknowledge. StoreKit and Play Billing both auto-refund a
           // purchase that is never completed/acknowledged — so this must run
           // even when the Firestore write above failed.
-          if (purchase.pendingCompletePurchase) {
+          if (shouldCompletePurchase(purchase)) {
             await InAppPurchase.instance.completePurchase(purchase);
             debugPrint('[IAP] completePurchase called');
           } else {
             debugPrint('[IAP] completePurchase not needed');
           }
         }
-        if (mounted) {
-          setState(() => _iapLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Membership activated.')),
-          );
-        }
-      } else if (purchase.status == PurchaseStatus.pending) {
-        // Play Billing can park a purchase here for days (e.g. cash/voucher
-        // payment). Release the CTA so it is never permanently disabled, and
-        // do NOT activate membership — activation only happens on
-        // purchased/restored above.
-        if (mounted) {
-          setState(() => _iapLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Waiting for payment confirmation…')),
-          );
-        }
-      } else if (purchase.status == PurchaseStatus.error) {
+      } else if (decision.outcome == MembershipPurchaseOutcome.failed) {
         debugPrint('[IAP] purchase error=${purchase.error}');
-        if (mounted) {
+      }
+
+      // Pending purchases stay pending: the CTA is released so it is never
+      // permanently disabled (Play can park a purchase for days on a
+      // cash/voucher payment) but no access is granted above.
+      if (mounted) {
+        if (decision.releasesLoading) {
           setState(() => _iapLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Purchase failed. Please try again.')),
-          );
         }
-      } else if (purchase.status == PurchaseStatus.canceled) {
-        if (mounted) {
-          setState(() => _iapLoading = false);
+        final message = decision.userMessage;
+        if (message != null) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Purchase cancelled.')),
+            SnackBar(content: Text(message)),
           );
         }
       }
