@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,35 +18,8 @@ import 'block_exercise_defaults_repository.dart';
 import 'block_creation_helper.dart';
 
 import 'package:localtest222/login_screen.dart';
+import 'signup_validation.dart';
 import 'periodization_model_utils.dart';
-
-/// Formats as dd-mm-yyyy while typing. Only digits are accepted; adds '-' after 2 and 4 digits.
-class DobDashFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
-    final digits = newValue.text.replaceAll(RegExp(r'\D'), '');
-    final b = StringBuffer();
-    int selIndex = newValue.selection.end;
-
-    for (int i = 0; i < digits.length && i < 8; i++) {
-      b.write(digits[i]);
-      // insert dashes after 2 and 4 digits
-      if (i == 1 || i == 3) {
-        b.write('-');
-        if (i + 1 < digits.length && newValue.selection.end == i + 1) {
-          selIndex++; // keep caret intuitive after auto-dash
-        }
-      }
-    }
-    final text = b.toString();
-    selIndex = selIndex.clamp(0, text.length);
-    return TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: selIndex),
-    );
-  }
-}
-
 
 class CreateNewAccountScreen extends StatefulWidget {
   const CreateNewAccountScreen({super.key});
@@ -61,15 +35,13 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   final TextEditingController _confirmPasswordController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _fullNameController = TextEditingController();
-  final TextEditingController _dobController = TextEditingController(); // stores yyyy-mm-dd string
-  final TextEditingController _dobDayController = TextEditingController();
-  final TextEditingController _dobMonthController = TextEditingController();
-  final TextEditingController _dobYearController = TextEditingController();
+  /// Canonical DOB carrier. Holds the PERSISTED representation, `dd-mm-yyyy`
+  /// (not `yyyy-mm-dd`, as an earlier comment here wrongly claimed).
+  final TextEditingController _dobController = TextEditingController();
 
-  final FocusNode _dobDayNode = FocusNode();
-  final FocusNode _dobMonthNode = FocusNode();
-  final FocusNode _dobYearNode = FocusNode();
-  String? _dobInlineError; // shown under the DOB row; also blocks submit
+  /// The picked date. The wheel picker can only produce real calendar dates,
+  /// so impossible dates such as 31 February are unreachable by construction.
+  DateTime? _dobDate;
 
 
   String? _selectedSex; // 'M' | 'F' | 'N'
@@ -84,9 +56,42 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   Timer? _usernameDebounce;
 
   final FocusNode _emailFocusNode = FocusNode();
-  bool _emailChecking = false;
-  bool? _emailAvailableFlag; // null = unknown, true = available, false = taken
-  String? _emailInlineError;
+  final FocusNode _usernameFocusNode = FocusNode();
+  final FocusNode _fullNameFocusNode = FocusNode();
+  final FocusNode _passwordFocusNode = FocusNode();
+  final FocusNode _confirmPasswordFocusNode = FocusNode();
+
+  /// Fields the user has actually interacted with. Nothing is marked invalid
+  /// on a freshly opened, untouched page — errors only appear once a field has
+  /// been touched and left, or once Continue has been pressed.
+  final Set<String> _touched = <String>{};
+
+  /// Current inline error per field. This is the single source of truth for
+  /// what the user sees: each field renders it via `errorText` AND returns it
+  /// from its `validator`, so a message can never be shown twice.
+  final Map<String, String?> _fieldErrors = <String, String?>{};
+
+  /// Anchors used to scroll to the first invalid field when Continue fails.
+  final Map<String, GlobalKey> _fieldKeys = {
+    SignupField.username: GlobalKey(),
+    SignupField.fullName: GlobalKey(),
+    SignupField.dob: GlobalKey(),
+    SignupField.sex: GlobalKey(),
+    SignupField.email: GlobalKey(),
+    SignupField.password: GlobalKey(),
+    SignupField.confirmPassword: GlobalKey(),
+  };
+
+  /// Order used both for "first invalid field" and for scroll targeting.
+  static const List<String> _fieldOrder = [
+    SignupField.username,
+    SignupField.fullName,
+    SignupField.dob,
+    SignupField.sex,
+    SignupField.email,
+    SignupField.password,
+    SignupField.confirmPassword,
+  ];
 
 
   @override
@@ -97,13 +102,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     _usernameController.dispose();
     _fullNameController.dispose();
     _dobController.dispose();
-    _dobDayController.dispose();
-    _dobMonthController.dispose();
-    _dobYearController.dispose();
-    _dobDayNode.dispose();
-    _dobMonthNode.dispose();
-    _dobYearNode.dispose();
     _emailFocusNode.dispose();
+    _usernameFocusNode.dispose();
+    _fullNameFocusNode.dispose();
+    _passwordFocusNode.dispose();
+    _confirmPasswordFocusNode.dispose();
 
     super.dispose();
   }
@@ -120,7 +123,6 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     }
   }
 
-  // Accepts "dd-mm-yyyy" or "yyyy-mm-dd"; returns normalized "yyyy-mm-dd" or null
   // Accepts "dd-mm-yyyy" or "yyyy-mm-dd"; returns normalized "dd-mm-yyyy" or null.
   String? _normalizeDob(String input) {
     final s = input.trim();
@@ -160,7 +162,6 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   }
 
 
-  final RegExp _usernameRe = RegExp(r'^.{3,22}$'); // length only, we'll add rules in validator
 
 
   Future<bool> _isUsernameAvailable(String username) async {
@@ -199,9 +200,13 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       _usernameChecking = false;
     });
 
-    // Quick local format check (same regex you already use)
-    if (!_usernameRe.hasMatch(v)) {
-      return; // show validator message on submit; no remote check
+    // Keep the inline error live while the user corrects it.
+    _revalidate(SignupField.username);
+
+    // Quick local format check — no point asking the server about a username
+    // that cannot be valid anyway.
+    if (validateUsername(v) != null) {
+      return;
     }
 
     _usernameDebounce = Timer(const Duration(milliseconds: 450), () async {
@@ -216,46 +221,263 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       } finally {
         if (mounted) setState(() => _usernameChecking = false);
       }
+      _revalidate(SignupField.username);
     });
   }
 
-  void _syncDobFromParts() {
-    final now = DateTime.now();
-    final dd = _dobDayController.text;
-    final mm = _dobMonthController.text;
-    final yy = _dobYearController.text;
+  /// Completes the username availability check immediately rather than waiting
+  /// for the debounce — used when the user leaves the field, and again as a
+  /// safety net when Continue is pressed.
+  Future<void> _resolveUsernameAvailability() async {
+    _usernameDebounce?.cancel();
+    final v = _usernameController.text.trim();
 
-    // Recompose into hidden _dobController for the validator
-    if (dd.length == 2 && mm.length == 2 && yy.length == 4) {
-      _dobController.text = '${dd.padLeft(2, '0')}-${mm.padLeft(2, '0')}-${yy}';
-    } else {
-      _dobController.text = ''; // incomplete -> validator will fail
+    // Format problems are reported by the validator; no remote call needed.
+    if (validateUsername(v) != null) {
+      if (mounted) setState(() => _usernameChecking = false);
+      return;
     }
+    // Already resolved for this exact value.
+    if (_usernameAvailableFlag != null && !_usernameChecking) return;
 
-    // Inline guardrails & fun messages
-    String? err;
-    final day  = int.tryParse(dd);
-    final mon  = int.tryParse(mm);
-    final year = int.tryParse(yy);
-
-    if (year != null && yy.length == 4) {
-      if (year < 1900) {
-        err = 'I call BS! you are not that old.';
-      } else if (year > now.year) {
-        err = 'No time travelers yet 😉';
-      } else {
-        final oldest = now.year - 120;
-        if (year < oldest) {
-          err = 'I call BS! you are not that old.';
-        }
-      }
+    if (mounted) setState(() => _usernameChecking = true);
+    try {
+      final ok = await _isUsernameAvailable(v);
+      if (mounted) setState(() => _usernameAvailableFlag = ok);
+    } catch (e, st) {
+      print('❌ [Username] availability check failed: $e\n$st');
+      // Leave the flag null: signup re-checks server-side before writing.
+    } finally {
+      if (mounted) setState(() => _usernameChecking = false);
     }
-
-    // We don’t fully validate “31-02” here—your form validator will catch that.
-    setState(() => _dobInlineError = err);
   }
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Per-field validation
+  //
+  // Nothing is shown on an untouched page. A field becomes "touched" when the
+  // user leaves it (or picks a value), and from then on its error is kept live
+  // as they correct it. Continue force-touches everything as a final safety net.
+  // ───────────────────────────────────────────────────────────────────────────
 
+  /// Computes the current error for [field] from scratch. Pure rules live in
+  /// signup_validation.dart; only availability state is local.
+  String? _computeFieldError(String field) {
+    switch (field) {
+      case SignupField.username:
+        return validateUsername(_usernameController.text) ??
+            usernameAvailabilityError(_usernameAvailableFlag);
+      case SignupField.fullName:
+        return validateFullName(_fullNameController.text);
+      case SignupField.dob:
+        return validateDob(_dobDate);
+      case SignupField.sex:
+        return validateSex(_selectedSex);
+      case SignupField.email:
+        return validateEmail(_emailController.text);
+      case SignupField.password:
+        return validatePassword(_passwordController.text);
+      case SignupField.confirmPassword:
+        return validateConfirmPassword(
+            _confirmPasswordController.text, _passwordController.text);
+      default:
+        return null;
+    }
+  }
+
+  /// Re-evaluates [field], but only once it has been touched, so a pristine
+  /// page never turns red.
+  void _revalidate(String field) {
+    if (!_touched.contains(field)) return;
+    final next = _computeFieldError(field);
+    if (_fieldErrors[field] == next) return;
+    setState(() => _fieldErrors[field] = next);
+  }
+
+  /// Marks [field] touched and validates it immediately — used on unfocus.
+  void _touchAndValidate(String field) {
+    _touched.add(field);
+    final next = _computeFieldError(field);
+    if (!mounted) return;
+    setState(() => _fieldErrors[field] = next);
+  }
+
+  /// Wires "validate when the user leaves this field" onto [node].
+  void _validateOnUnfocus(FocusNode node, String field) {
+    node.addListener(() {
+      if (!node.hasFocus) _touchAndValidate(field);
+    });
+  }
+
+  /// Full-form validation. Touches every field so all problems become visible,
+  /// then returns the first invalid field id (in visual order), or null.
+  String? _validateAllFields() {
+    _touched.addAll(_fieldOrder);
+    final errors = <String, String?>{};
+    for (final f in _fieldOrder) {
+      errors[f] = _computeFieldError(f);
+    }
+    if (mounted) setState(() => _fieldErrors.addAll(errors));
+    for (final f in _fieldOrder) {
+      if (errors[f] != null) return f;
+    }
+    return null;
+  }
+
+  /// Brings the first invalid field into view and focuses it when it is a text
+  /// field, so Continue never fails silently off-screen.
+  Future<void> _revealField(String field) async {
+    final ctx = _fieldKeys[field]?.currentContext;
+    if (ctx != null) {
+      await Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+        alignment: 0.15,
+      );
+    }
+    if (!mounted) return;
+    final node = switch (field) {
+      SignupField.username => _usernameFocusNode,
+      SignupField.fullName => _fullNameFocusNode,
+      SignupField.email => _emailFocusNode,
+      SignupField.password => _passwordFocusNode,
+      SignupField.confirmPassword => _confirmPasswordFocusNode,
+      _ => null,
+    };
+    if (node != null) FocusScope.of(context).requestFocus(node);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Date of birth — wheel picker
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /// Applies a date chosen in the picker and keeps the persisted `dd-mm-yyyy`
+  /// carrier in sync.
+  void _applyPickedDob(DateTime picked) {
+    // Normalise to a plain calendar day (no time component).
+    final day = DateTime(picked.year, picked.month, picked.day);
+    _dobDate = day;
+    _dobController.text = formatDobForStorage(day);
+    // Choosing a date counts as interacting with the field.
+    _touchAndValidate(SignupField.dob);
+  }
+
+  /// Opens a premium wheel-style date picker in a rounded modal sheet.
+  ///
+  /// Uses [CupertinoDatePicker] in date mode with day-first ordering for NZ
+  /// users. The wheel can only ever produce real calendar dates, so an
+  /// impossible date such as 31 February cannot be selected at all.
+  Future<void> _openDobPicker() async {
+    // Dismiss any keyboard so the sheet opens against a settled layout.
+    FocusScope.of(context).unfocus();
+
+    final now = DateTime.now();
+    final lastDate = DateTime(now.year, now.month, now.day);
+    final firstDate =
+        DateTime(now.year - kMaxPlausibleAgeYears, now.month, now.day);
+    // Land the wheel on a sensible adult age so most users spin only a little.
+    var temp = _dobDate ?? DateTime(now.year - 25, now.month, now.day);
+    if (temp.isAfter(lastDate)) temp = lastDate;
+    if (temp.isBefore(firstDate)) temp = firstDate;
+
+    final picked = await showModalBottomSheet<DateTime>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        var working = temp;
+        return SafeArea(
+          top: false,
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Grab handle — matches the app's understated sheet language.
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(top: 10, bottom: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                        child: const Text(
+                          'Cancel',
+                          style: TextStyle(color: Colors.black54, fontSize: 16),
+                        ),
+                      ),
+                      const Text(
+                        'Date of Birth',
+                        style: TextStyle(
+                          color: Colors.black87,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () =>
+                            Navigator.of(sheetContext).pop(working),
+                        child: const Text(
+                          'Done',
+                          style: TextStyle(
+                            color: Colors.blueAccent,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                SizedBox(
+                  height: 216,
+                  child: CupertinoTheme(
+                    data: const CupertinoThemeData(
+                      brightness: Brightness.light,
+                      textTheme: CupertinoTextThemeData(
+                        dateTimePickerTextStyle: TextStyle(
+                          color: Colors.black87,
+                          fontSize: 20,
+                        ),
+                      ),
+                    ),
+                    child: CupertinoDatePicker(
+                      mode: CupertinoDatePickerMode.date,
+                      dateOrder: DatePickerDateOrder.dmy, // NZ ordering
+                      initialDateTime: temp,
+                      minimumDate: firstDate,
+                      maximumDate: lastDate,
+                      onDateTimeChanged: (d) => working = d,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (picked != null) {
+      HapticFeedback.selectionClick();
+      _applyPickedDob(picked);
+    }
+  }
 
   void _register() async {
     if (!_formKey.currentState!.validate()) return;
@@ -319,7 +541,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
           'username': username,
           'usernameLower': username.toLowerCase(),
           'fullName': fullName,
-          'dob': dobNormalized,   // stored as yyyy-mm-dd (string)
+          'dob': dobNormalized,   // stored as dd-mm-yyyy (string)
           'sex': sex,             // 'M'|'F'|'N'
           'createdAt': FieldValue.serverTimestamp(),
         };
@@ -371,34 +593,42 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     }
   }
 
-  void _onEmailFocusChange() {
-    if (!_emailFocusNode.hasFocus) {
-      final email = _emailController.text.trim();
-      if (RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email)) {
-        _checkEmailAvailability(email);
-      }
-    }
-  }
-
-  Future<void> _checkEmailAvailability(String email) async {
-    setState(() {
-      _emailChecking = true;
-      _emailInlineError = null;
-    });
-    try {
-      // fetchSignInMethodsForEmail was removed in firebase_auth 6.x (underlying
-      // Android SDK removal). Duplicate-email errors surface during
-      // createUserWithEmailAndPassword; validator covers final enforcement.
-      if (mounted) setState(() => _emailAvailableFlag = null);
-    } catch (_) {
-      if (mounted) setState(() => _emailAvailableFlag = null);
-    } finally {
-      if (mounted) setState(() => _emailChecking = false);
-    }
-  }
+  // NOTE — deliberate absence of an email duplicate preflight.
+  //
+  // `fetchSignInMethodsForEmail` was removed in firebase_auth 6.x, so the old
+  // `_checkEmailAvailability()` had become a no-op that only ever drove a
+  // spinner and a tick that could never appear. It has been removed rather
+  // than left as misleading UI.
+  //
+  // The remaining ways to detect an already-registered email from the client
+  // are all account-enumeration primitives: querying `users_public` by email,
+  // or probing Firebase Auth. Either would let anyone check whether a given
+  // address has a GoodLift account, which is a privacy/security regression we
+  // are not willing to make for a UX nicety. Firebase itself is therefore the
+  // authority: the duplicate is caught at account-creation time on Page 2 and
+  // reported there with a specific, actionable message.
+  //
+  // Email FORMAT validation stays immediate and inline, on unfocus.
 
   void _continueToOnboarding() async {
-    if (!_formKey.currentState!.validate()) return;
+    // Final safety net: make sure a still-running username check has finished
+    // before deciding, so Continue is never blocked by an in-flight result the
+    // user cannot see.
+    if (_usernameChecking || _usernameAvailableFlag == null) {
+      setState(() => _isLoading = true);
+      await _resolveUsernameAvailability();
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
+
+    // Validate everything and surface the problem on the field that owns it.
+    final firstInvalid = _validateAllFields();
+    if (firstInvalid != null) {
+      await _revealField(firstInvalid);
+      return;
+    }
+    // Keep the Form in agreement with our own validation.
+    _formKey.currentState?.validate();
 
     setState(() {
       _isLoading = true;
@@ -410,26 +640,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       final password = _passwordController.text.trim();
       final username = _usernameController.text.trim();
       final fullName = _fullNameController.text.trim();
-      final dobRaw   = _dobController.text.trim();
       final sex      = _selectedSex; // 'M' | 'F' | 'N'
 
-      // Re-normalize DOB (same rules as your validator)
-      final dobNormalized = _normalizeDob(dobRaw);
-      if (dobNormalized == null) {
-        setState(() { _errorMessage = 'Please enter a valid date of birth.'; _isLoading = false; });
-        return;
-      }
-
-      // Optional: if your availability flag exists, block if it's explicitly false
-      if (_usernameAvailableFlag == false) {
-        setState(() { _errorMessage = 'That username is taken by your nemesis. Please choose another.'; _isLoading = false; });
-        return;
-      }
-
-      if (_emailAvailableFlag == false) {
-        setState(() { _errorMessage = 'This email is already in use.'; _isLoading = false; });
-        return;
-      }
+      // DOB comes from the picker, so it is already a real calendar date.
+      // Persisted format is unchanged: dd-mm-yyyy.
+      final dobNormalized = formatDobForStorage(_dobDate!);
 
       // Navigate to Page 2 (no account creation yet)
       if (!mounted) return;
@@ -442,7 +657,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
             password: password,
             username: username,
             fullName: fullName,
-            dob: dobNormalized, // yyyy-mm-dd
+            dob: dobNormalized, // dd-mm-yyyy
             sex: sex,
           ),
         ),
@@ -460,7 +675,22 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   void initState() {
     super.initState();
     _ensureAnonAuthForAvailability();
-    _emailFocusNode.addListener(_onEmailFocusChange);
+
+    // Validate each field the moment the user leaves it. Nothing is validated
+    // before it has been touched, so an untouched page opens clean.
+    _validateOnUnfocus(_fullNameFocusNode, SignupField.fullName);
+    _validateOnUnfocus(_emailFocusNode, SignupField.email);
+    _validateOnUnfocus(_passwordFocusNode, SignupField.password);
+    _validateOnUnfocus(_confirmPasswordFocusNode, SignupField.confirmPassword);
+
+    // Username additionally forces its availability check to complete on
+    // unfocus rather than relying on the 450ms debounce.
+    _usernameFocusNode.addListener(() async {
+      if (_usernameFocusNode.hasFocus) return;
+      _touched.add(SignupField.username);
+      await _resolveUsernameAvailability();
+      if (mounted) _touchAndValidate(SignupField.username);
+    });
   }
 
 
@@ -537,9 +767,12 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   controller: _usernameController,
                                   textInputAction: TextInputAction.next,
                                   style: const TextStyle(color: Colors.black54),
+                                  focusNode: _usernameFocusNode,
                                   decoration: InputDecoration(
                                     labelText: 'Username',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    errorText: _fieldErrors[SignupField.username],
+                                    errorStyle: const TextStyle(fontSize: 12),
                                     hintText: '3–22 chars. Go wild 🎉',
                                     hintStyle: TextStyle(
                                       color: Colors.blueAccent.withOpacity(0.6),
@@ -577,24 +810,14 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                     ),
                                   ),
                                   onChanged: _onUsernameChanged, // 👈 live availability
-                                  validator: (value) {
-                                    final v = (value ?? '').trim();
-                                    if (v.isEmpty) return 'Please choose a username';
-                                    if (!_usernameRe.hasMatch(v)) return '3–22 chars. Go wild 🎉';
-                                    if (v.contains(' ')) return 'No spaces allowed';
-                                    if (_usernameAvailableFlag == false) return 'That username is taken by your nemesis. Please choose another.';
-                                    return null;
-                                  },
-
+                                  validator: (_) => _fieldErrors[SignupField.username],
                                 ),
 
-                                if (_usernameAvailableFlag == false) ...[
-                                  const SizedBox(height: 6),
-                                  const Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text('That username is taken by your nemesis. Please choose another.', style: TextStyle(color: Colors.redAccent)),
-                                  ),
-                                ] else if (_usernameAvailableFlag == true) ...[
+                                // Only the positive state is rendered here. The
+                                // "taken" message is shown by the field's own
+                                // errorText, so it is never duplicated.
+                                if (_usernameAvailableFlag == true &&
+                                    _fieldErrors[SignupField.username] == null) ...[
                                   const SizedBox(height: 6),
                                   const Align(
                                     alignment: Alignment.centerLeft,
@@ -614,12 +837,17 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 
 // Full Name (required)
                                 TextFormField(
+                                  key: _fieldKeys[SignupField.fullName],
                                   controller: _fullNameController,
+                                  focusNode: _fullNameFocusNode,
                                   textCapitalization: TextCapitalization.words,
                                   style: const TextStyle(color: Colors.black54),
+                                  onChanged: (_) => _revalidate(SignupField.fullName),
                                   decoration: InputDecoration(
                                     labelText: 'Full Name',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    errorText: _fieldErrors[SignupField.fullName],
+                                    errorStyle: const TextStyle(fontSize: 12),
                                     hintText: 'Your legal/full name',
                                     hintStyle: TextStyle(
                                       color: Colors.blueAccent.withOpacity(0.6),
@@ -642,215 +870,101 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                       borderSide: const BorderSide(color: Colors.redAccent, width: 2),
                                     ),
                                   ),
-                                  validator: (value) {
-                                    if (value == null || value.trim().isEmpty) return 'Please enter your full name';
-                                    return null;
-                                  },
+                                  validator: (_) => _fieldErrors[SignupField.fullName],
                                 ),
 
                                 const SizedBox(height: 12),
 
                                 const SizedBox(height: 12),
 
-// Date of Birth (required; DD / MM / YYYY numeric fields → stored as dd-mm-yyyy)
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    InputDecorator(
+// Date of Birth (required). Tap to open a wheel picker; no manual typing,
+// so only real calendar dates are possible. Persisted as dd-mm-yyyy.
+                                Semantics(
+                                  button: true,
+                                  label: 'Date of birth',
+                                  value: _dobDate == null
+                                      ? 'Not set'
+                                      : formatDobForDisplay(_dobDate!),
+                                  child: InkWell(
+                                    key: _fieldKeys[SignupField.dob],
+                                    borderRadius: BorderRadius.circular(12),
+                                    onTap: _openDobPicker,
+                                    child: InputDecorator(
+                                      isEmpty: false,
                                       decoration: InputDecoration(
                                         labelText: 'Date of Birth',
-                                        labelStyle: const TextStyle(color: Colors.blueAccent),
+                                        labelStyle:
+                                            const TextStyle(color: Colors.blueAccent),
+                                        errorText: _fieldErrors[SignupField.dob],
+                                        errorStyle: const TextStyle(fontSize: 12),
+                                        suffixIcon: const Icon(
+                                          Icons.calendar_today,
+                                          color: Colors.blueAccent,
+                                          size: 20,
+                                        ),
                                         enabledBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: const BorderSide(color: Colors.blueAccent),
+                                          borderSide: const BorderSide(
+                                              color: Colors.blueAccent),
                                         ),
                                         focusedBorder: OutlineInputBorder(
                                           borderRadius: BorderRadius.circular(12),
-                                          borderSide: const BorderSide(color: Colors.lightBlue, width: 2),
+                                          borderSide: const BorderSide(
+                                              color: Colors.lightBlue, width: 2),
+                                        ),
+                                        errorBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                          borderSide:
+                                              const BorderSide(color: Colors.red),
+                                        ),
+                                        focusedErrorBorder: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                          borderSide: const BorderSide(
+                                              color: Colors.redAccent, width: 2),
                                         ),
                                       ),
-                                      child: Row(
-                                        children: [
-                                          // DD
-                                          SizedBox(
-                                            width: 56,
-                                            child: TextField(
-                                              controller: _dobDayController,
-                                              focusNode: _dobDayNode,
-                                              keyboardType: TextInputType.number,
-                                              textInputAction: TextInputAction.next,
-                                              style: const TextStyle(color: Colors.blueAccent), // numbers typed appear light blue
-                                              decoration: InputDecoration(
-                                                hintText: 'DD',
-                                                hintStyle: const TextStyle(color: Colors.blueAccent), // placeholder "DD" in light blue
-                                                counterText: '',
-                                                isDense: true,
-                                                border: InputBorder.none,
-                                              ),
-                                              maxLength: 2,
-                                              onChanged: (v) {
-                                                var digits = v.replaceAll(RegExp(r'\D'), '');
-                                                if (digits.length > 2) digits = digits.substring(0, 2);
-
-                                                if (digits.length == 2) {
-                                                  final iv = int.tryParse(digits) ?? 0;
-                                                  if (iv > 31) digits = '31';
-                                                }
-
-                                                if (digits != v) {
-                                                  _dobDayController.text = digits;
-                                                  _dobDayController.selection =
-                                                      TextSelection.collapsed(offset: digits.length);
-                                                }
-
-                                                if (digits.length == 2) _dobMonthNode.requestFocus();
-                                                _syncDobFromParts();
-                                              },
-                                            ),
-                                          ),
-
-                                          const Padding(
-                                            padding: EdgeInsets.symmetric(horizontal: 4),
-                                            child: Text('-', style: TextStyle(color: Colors.black54)),
-                                          ),
-
-                                          // MM
-                                          SizedBox(
-                                            width: 56,
-                                            child: TextField(
-                                              controller: _dobMonthController,
-                                              focusNode: _dobMonthNode,
-                                              keyboardType: TextInputType.number,
-                                              textInputAction: TextInputAction.next,
-                                              style: const TextStyle(color: Colors.blueAccent), // numbers typed appear light blue
-                                              decoration: InputDecoration(
-                                                hintText: 'MM',
-                                                hintStyle: const TextStyle(color: Colors.blueAccent), // placeholder "DD" in light blue
-                                                counterText: '',
-                                                isDense: true,
-                                                border: InputBorder.none,
-                                              ),
-                                              maxLength: 2,
-                                              onChanged: (v) {
-                                                var digits = v.replaceAll(RegExp(r'\D'), '');
-                                                if (digits.length > 2) digits = digits.substring(0, 2);
-
-                                                // Cap at 12
-                                                if (digits.length == 2) {
-                                                  final iv = int.tryParse(digits) ?? 0;
-                                                  if (iv > 12) digits = '12';
-                                                }
-
-                                                if (digits != v) {
-                                                  _dobMonthController.text = digits;
-                                                  _dobMonthController.selection = TextSelection.collapsed(offset: digits.length);
-                                                }
-
-                                                if (digits.length == 2) _dobYearNode.requestFocus();
-                                                _syncDobFromParts();
-                                              },
-
-                                            ),
-                                          ),
-                                          const Padding(
-                                            padding: EdgeInsets.symmetric(horizontal: 4),
-                                            child: Text('-', style: TextStyle(color: Colors.black54)),
-                                          ),
-
-                                          // YYYY
-                                          Expanded(
-                                            child: TextField(
-                                              controller: _dobYearController,
-                                              focusNode: _dobYearNode,
-                                              keyboardType: TextInputType.number,
-                                              textInputAction: TextInputAction.next,
-                                              style: const TextStyle(color: Colors.blueAccent), // numbers typed appear light blue
-                                              decoration: InputDecoration(
-                                                hintText: 'YYYY',
-                                                hintStyle: const TextStyle(color: Colors.blueAccent), // placeholder "DD" in light blue
-                                                counterText: '',
-                                                isDense: true,
-                                                border: InputBorder.none,
-                                                suffixIcon: null,
-                                              ),
-                                              maxLength: 4,
-                                              onChanged: (v) {
-                                                var digits = v.replaceAll(RegExp(r'\D'), '');
-                                                if (digits.length > 4) digits = digits.substring(0, 4);
-
-                                                if (digits != v) {
-                                                  _dobYearController.text = digits;
-                                                  _dobYearController.selection = TextSelection.collapsed(offset: digits.length);
-                                                }
-
-                                                _syncDobFromParts();
-                                              },
-
-                                            ),
-                                          ),
-
-                                          // Calendar button
-                                          IconButton(
-                                            icon: const Icon(Icons.calendar_today, color: Colors.blueAccent),
-                                            onPressed: () async {
-                                              final now = DateTime.now();
-                                              final firstDate = DateTime(now.year - 120, now.month, now.day);
-                                              final lastDate  = DateTime(now.year, now.month, now.day);
-                                              final picked = await showDatePicker(
-                                                context: context,
-                                                firstDate: firstDate,
-                                                lastDate: lastDate,
-                                                initialDate: DateTime(now.year - 25, now.month, now.day),
-                                              );
-                                              if (picked != null) {
-                                                _dobDayController.text = picked.day.toString().padLeft(2, '0');
-                                                _dobMonthController.text = picked.month.toString().padLeft(2, '0');
-                                                _dobYearController.text = picked.year.toString();
-                                                _syncDobFromParts();
-                                                setState(() {}); // refresh any error text
-                                              }
-                                            },
-                                          ),
-                                        ],
+                                      child: Text(
+                                        _dobDate == null
+                                            ? 'Select your date of birth'
+                                            : formatDobForDisplay(_dobDate!),
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          color: _dobDate == null
+                                              ? Colors.blueAccent.withOpacity(0.6)
+                                              : Colors.black54,
+                                        ),
                                       ),
                                     ),
-                                    if (_dobInlineError != null) ...[
-                                      const SizedBox(height: 6),
-                                      Text(_dobInlineError!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
-                                    ],
-
-
-                                    // Hidden validator field that the Form uses (reads _dobController)
-                                    SizedBox(
-                                      height: 0, width: 0,
-                                      child: TextFormField(
-                                        controller: _dobController,
-                                        validator: (value) {
-                                          if (_dobInlineError != null) return _dobInlineError; // block with inline reason
-                                          if (value == null || value.trim().isEmpty) return 'Please enter your date of birth';
-
-                                          final normalized = _normalizeDob(value); // also checks real calendar date + 120y window
-                                          if (normalized == null) return 'Enter a valid date (dd-mm-yyyy)';
-                                          _dobController.text = normalized; // keep canonical
-                                          return null;
-                                        },
-
-                                      ),
-                                    ),
-                                  ],
+                                  ),
                                 ),
 
+                                // Hidden Form participant so Form.validate()
+                                // still gates on DOB. It mirrors the same
+                                // message the field already shows, so the error
+                                // can never appear twice.
+                                SizedBox(
+                                  height: 0,
+                                  width: 0,
+                                  child: TextFormField(
+                                    controller: _dobController,
+                                    validator: (_) => _fieldErrors[SignupField.dob],
+                                  ),
+                                ),
 
                                 const SizedBox(height: 12),
 
 // Sex (required)
                                 DropdownButtonFormField<String>(
+                                  key: _fieldKeys[SignupField.sex],
                                   value: _selectedSex,
                                   style: const TextStyle(color: Colors.black87),
                                   dropdownColor: Colors.white,
+                                  validator: (_) => _fieldErrors[SignupField.sex],
                                   decoration: InputDecoration(
                                     labelText: 'Sex',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    errorText: _fieldErrors[SignupField.sex],
+                                    errorStyle: const TextStyle(fontSize: 12),
                                     filled: true,
                                     fillColor: Colors.white,
                                     enabledBorder: OutlineInputBorder(
@@ -884,44 +998,32 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                       child: Text('Yes.', style: TextStyle(color: Colors.black87)),
                                     ),
                                   ],
-                                  onChanged: (v) => setState(() => _selectedSex = v),
+                                  // Choosing an option counts as interaction,
+                                  // so a skipped Sex turns red rather than
+                                  // silently blocking Continue.
+                                  onChanged: (v) {
+                                    setState(() => _selectedSex = v);
+                                    _touchAndValidate(SignupField.sex);
+                                  },
                                 ),
                                 const SizedBox(height: 12),
                                 // Email
                                 TextFormField(
+                                  key: _fieldKeys[SignupField.email],
                                   controller: _emailController,
                                   focusNode: _emailFocusNode,
                                   keyboardType: TextInputType.emailAddress,
                                   style: const TextStyle(color: Colors.black54),
-                                  onChanged: (v) {
-                                    if (_emailAvailableFlag != null || _emailInlineError != null) {
-                                      setState(() {
-                                        _emailAvailableFlag = null;
-                                        _emailInlineError = null;
-                                      });
-                                    }
-                                  },
+                                  onChanged: (_) => _revalidate(SignupField.email),
                                   decoration: InputDecoration(
                                     labelText: 'Email',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    errorText: _fieldErrors[SignupField.email],
+                                    errorStyle: const TextStyle(fontSize: 12),
                                     hintText: 'Enter your email',
                                     hintStyle: TextStyle(
                                         color: Colors.blueAccent.withOpacity(0.6),
                                         fontSize: 16),
-                                    suffixIcon: _emailChecking
-                                        ? const Padding(
-                                            padding: EdgeInsets.all(12),
-                                            child: SizedBox(
-                                              width: 16, height: 16,
-                                              child: CircularProgressIndicator(strokeWidth: 2),
-                                            ),
-                                          )
-                                        : (_emailAvailableFlag == null
-                                            ? null
-                                            : Icon(
-                                                _emailAvailableFlag! ? Icons.check_circle : Icons.error,
-                                                color: _emailAvailableFlag! ? Colors.green : Colors.redAccent,
-                                              )),
                                     enabledBorder: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(12),
                                       borderSide:
@@ -942,38 +1044,28 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                           color: Colors.redAccent, width: 2),
                                     ),
                                   ),
-                                  validator: (value) {
-                                    if (value == null || value.isEmpty)
-                                      return 'Please enter your email';
-                                    if (!RegExp(r'^[^@]+@[^@]+\.[^@]+')
-                                        .hasMatch(value)) {
-                                      return 'Enter a valid email';
-                                    }
-                                    if (_emailAvailableFlag == false)
-                                      return 'This email is already in use.';
-                                    return null;
-                                  },
+                                  validator: (_) => _fieldErrors[SignupField.email],
                                 ),
-                                if (_emailInlineError != null) ...[
-                                  const SizedBox(height: 6),
-                                  Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      _emailInlineError!,
-                                      style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-                                    ),
-                                  ),
-                                ],
                                 const SizedBox(height: 12),
 
                                 // Password
                                 TextFormField(
+                                  key: _fieldKeys[SignupField.password],
                                   controller: _passwordController,
+                                  focusNode: _passwordFocusNode,
                                   obscureText: !_passwordVisible,
                                   style: const TextStyle(color: Colors.black54),
+                                  // Changing the password re-checks Confirm too,
+                                  // so a previously-matching pair goes red again.
+                                  onChanged: (_) {
+                                    _revalidate(SignupField.password);
+                                    _revalidate(SignupField.confirmPassword);
+                                  },
                                   decoration: InputDecoration(
                                     labelText: 'Password',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    errorText: _fieldErrors[SignupField.password],
+                                    errorStyle: const TextStyle(fontSize: 12),
                                     hintText: 'Enter your password',
                                     hintStyle: TextStyle(
                                       color: Colors.blueAccent.withOpacity(0.6),
@@ -1007,11 +1099,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                       borderSide: const BorderSide(color: Colors.redAccent, width: 2),
                                     ),
                                   ),
-                                  validator: (value) {
-                                    if (value == null || value.isEmpty) return 'Please enter a password';
-                                    if (value.length < 6) return 'Minimum 6 characters';
-                                    return null;
-                                  },
+                                  validator: (_) => _fieldErrors[SignupField.password],
                                 ),
 
                                 const SizedBox(height: 12),
@@ -1019,12 +1107,19 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                 // Confirm Password
                                 // Confirm Password
                                 TextFormField(
+                                  key: _fieldKeys[SignupField.confirmPassword],
                                   controller: _confirmPasswordController,
+                                  focusNode: _confirmPasswordFocusNode,
                                   obscureText: !_confirmPasswordVisible,
                                   style: const TextStyle(color: Colors.black54),
+                                  onChanged: (_) =>
+                                      _revalidate(SignupField.confirmPassword),
                                   decoration: InputDecoration(
                                     labelText: 'Confirm Password',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    errorText:
+                                        _fieldErrors[SignupField.confirmPassword],
+                                    errorStyle: const TextStyle(fontSize: 12),
                                     hintText: 'Re-enter your password',
                                     hintStyle: TextStyle(
                                       color: Colors.blueAccent.withOpacity(0.6),
@@ -1058,10 +1153,8 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                       borderSide: const BorderSide(color: Colors.redAccent, width: 2),
                                     ),
                                   ),
-                                  validator: (value) {
-                                    if (value != _passwordController.text) return "Passwords do not match";
-                                    return null;
-                                  },
+                                  validator: (_) =>
+                                      _fieldErrors[SignupField.confirmPassword],
                                 ),
 
 
@@ -1229,7 +1322,7 @@ class OnboardingPageTwo extends StatefulWidget {
   final String? sex;       // 'M' | 'F' | 'N'
   final String? username;
   final String? fullName;
-  final String? dob;       // yyyy-mm-dd
+  final String? dob;       // dd-mm-yyyy
 
   const OnboardingPageTwo({
     Key? key,
@@ -1847,24 +1940,46 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     print('⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');
   }
 
-  bool _uiIsValid() {
-    // Required: goals (we’ll require that user has at least ordered them once — always true here)
-    final hasGoals = _goals.isNotEmpty;
+  /// Lists what is still missing, in the order the questions appear, using
+  /// language that names the specific thing to fix. Empty means valid.
+  ///
+  /// Previously the Finish button disabled itself whenever this was non-empty,
+  /// so tapping it did nothing and the explanation inside `_finish()` was
+  /// unreachable — the user got no feedback at all. Finish now stays tappable
+  /// and reports the first missing item from this list.
+  List<String> _missingRequirements() {
+    final missing = <String>[];
 
-    // Required: injuries selection is allowed to be empty, but if any checked, pain 1–10 must exist.
-    final injuryPainOk = _injuries.every((i) => (_painSlider[i] ?? 0) >= 1);
+    // Required: goals (ordered by default, so this is a defensive check).
+    if (_goals.isEmpty) {
+      missing.add('Pick at least one training goal.');
+    }
 
-    // Required: experience must be selected.
-    final hasExperience = _experience != null;
-
-    // Conditional required: if muscle/toned relevant, we require at least one body focus.
+    // Conditional: if muscle/toned was chosen, at least one body focus.
     final hasAnyFocus = _bodyFocusLevel.values.any((lvl) => lvl > 0);
-    final focusOk = !_muscleOrTonedChosen || hasAnyFocus;
+    if (_muscleOrTonedChosen && !hasAnyFocus) {
+      missing.add('Choose at least one body area to focus on.');
+    }
 
-    final envOk = _env != null; // require user to pick an environment
+    // Injuries may be empty, but any selected injury needs a pain level 1–10.
+    if (!_injuries.every((i) => (_painSlider[i] ?? 0) >= 1)) {
+      missing.add('Set a pain level (1–10) for each injury you selected.');
+    }
 
-    return hasGoals && injuryPainOk && hasExperience && focusOk && envOk;
+    // Required: experience.
+    if (_experience == null) {
+      missing.add('Choose your training experience.');
+    }
+
+    // Required: training environment.
+    if (_env == null) {
+      missing.add('Choose where you\'ll be training.');
+    }
+
+    return missing;
   }
+
+  bool _uiIsValid() => _missingRequirements().isEmpty;
 
   @override
   void dispose() {
@@ -1904,10 +2019,22 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
   Future<void> _finish() async {
-    if (!_uiIsValid()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete the required bits first')),
-      );
+    final missing = _missingRequirements();
+    if (missing.isNotEmpty) {
+      // Name the specific thing to fix rather than a generic form-level error,
+      // and say how many others remain so nothing is hidden.
+      final more = missing.length - 1;
+      final detail = more > 0
+          ? '${missing.first} (+$more more to finish)'
+          : missing.first;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(detail),
+            duration: const Duration(seconds: 4),
+          ),
+        );
       return;
     }
 
@@ -1935,15 +2062,27 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         } on FirebaseAuthException catch (linkErr) {
           if (linkErr.code == 'credential-already-in-use' ||
               linkErr.code == 'email-already-in-use') {
-            // Email already belongs to another account — do not write to Firestore.
+            // Email already belongs to another account — do not write to
+            // Firestore. This is the authoritative duplicate-email check:
+            // Page 1 deliberately does not preflight it, because every
+            // client-side way to do so is an account-enumeration primitive.
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'That email is already in use. Please go back and log in instead.',
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(
+                  SnackBar(
+                    content: const Text(
+                      'That email already has a GoodLift account.',
+                    ),
+                    duration: const Duration(seconds: 8),
+                    action: SnackBarAction(
+                      label: 'Log in',
+                      onPressed: () {
+                        Navigator.of(context).popUntil((r) => r.isFirst);
+                      },
+                    ),
                   ),
-                ),
-              );
+                );
             }
             return; // outer finally resets _saving
           }
@@ -1979,7 +2118,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         'username': username,
         'usernameLower': username.toLowerCase(),
         'fullName': widget.fullName,
-        'dob': widget.dob,    // yyyy-mm-dd string
+        'dob': widget.dob,    // dd-mm-yyyy string
         'sex': widget.sex,    // 'M'|'F'|'N'
         'createdAt': FieldValue.serverTimestamp(),
       };
@@ -1988,7 +2127,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       await DemographicsCache.save(
         uid: user.uid,
         sex: widget.sex,
-        dob: widget.dob, // yyyy-mm-dd
+        dob: widget.dob, // dd-mm-yyyy
       );
 
 
@@ -4030,7 +4169,10 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton(
-                        onPressed: _saving ? null : (_uiIsValid() ? _finish : null),
+                        // Deliberately NOT gated on _uiIsValid(): a disabled
+                        // button cannot tell the user what is missing. _finish()
+                        // validates and reports the specific blocker.
+                        onPressed: _saving ? null : _finish,
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 14),
                           side: const BorderSide(color: Colors.blueAccent),
