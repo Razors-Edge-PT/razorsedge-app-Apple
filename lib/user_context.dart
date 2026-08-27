@@ -180,9 +180,9 @@ class UserContext extends ChangeNotifier {
       // Load meta (dates)
       final fs = FirebaseFirestore.instance;
       final doc = await fs
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(id)
           .get(const GetOptions(source: Source.server));
       final data = doc.data() ?? const {};
@@ -307,9 +307,9 @@ class UserContext extends ChangeNotifier {
       if (id == null || id.isEmpty) return;
       final fs = FirebaseFirestore.instance;
       final doc = await fs
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(id)
           .get(const GetOptions(source: Source.server));
       final data = doc.data() ?? const {};

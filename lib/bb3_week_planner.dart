@@ -270,9 +270,9 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         List<BB3Exercise> planned;
         if (fromServer) {
           final dayRef = FirebaseFirestore.instance
-              .collection('planned_blocks')
+              .collection('users')
               .doc(uid)
-              .collection('blocks')
+              .collection('planned_blocks')
               .doc(blockId)
               .collection('weeks')
               .doc('week_$weekIndex')

@@ -9,7 +9,7 @@ import 'wes2_exercise_settings_patch.dart';
 // Abstract interface — unchanged from Phase 1.
 abstract class Wes2PlanService {
   /// Load BB3 planned day rows from:
-  ///   /planned_blocks/{uid}/blocks/{blockId}/weeks/week_{weekIndex}/days/day_{dayIndex}
+  ///   users/{uid}/planned_blocks/{blockId}/weeks/week_{weekIndex}/days/day_{dayIndex}
   Future<List<Wes2ExerciseRow>> loadPlannedDay({
     required String uid,
     required String blockId,
@@ -18,7 +18,7 @@ abstract class Wes2PlanService {
   });
 
   /// Load the block-level exerciseSettings map from:
-  ///   /planned_blocks/{uid}/blocks/{blockId}.exerciseSettings
+  ///   users/{uid}/planned_blocks/{blockId}.exerciseSettings
   Future<Map<String, dynamic>> loadExerciseSettings({
     required String uid,
     required String blockId,
@@ -84,9 +84,9 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required int dayIndex,
   }) async {
     final snap = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .collection('weeks')
         .doc('week_$weekIndex')
@@ -216,9 +216,9 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required String blockId,
   }) async {
     final docRef = _db
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId);
 
     final snap = await docRef.get();
@@ -270,9 +270,9 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required List<Wes2ExerciseRow> updatedRows,
   }) async {
     final dayRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .collection('weeks')
         .doc('week_$weekIndex')
@@ -338,9 +338,9 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required ExerciseSettingsPatch patch,
   }) async {
     final docRef = _db
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId);
 
     return _db.runTransaction<Map<String, dynamic>>((txn) async {
@@ -390,9 +390,9 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required String exerciseId,
   }) async {
     final docRef = _db
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId);
 
     return _db.runTransaction<Map<String, dynamic>?>((txn) async {

@@ -23,7 +23,7 @@ void main() {
 
   Future<void> seedBlocks() async {
     final blocks =
-        fs.collection('planned_blocks').doc(uid).collection('blocks');
+        fs.collection('users').doc(uid).collection('planned_blocks');
     final now = DateTime.now();
     await blocks.doc('blockA').set({
       'isActive': true,
@@ -114,9 +114,9 @@ void main() {
   test('no active block → bootstrap aborts without setting the flag '
       '(so it can retry after repair)', () async {
     await fs
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc('blockA')
         .update({'isActive': false});
 

@@ -1584,9 +1584,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
     final uid = user.uid;
     final blocksRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     final existingBlocks = await blocksRef.get();
 
@@ -2401,7 +2401,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
       // ─────────────────────────────────────────────────────────────
       // 4) Ensure first planned block exists, then write best-effort PRs
-      //    into planned_blocks/<uid>/blocks/<blockId> under BOTH:
+      //    into users/<uid>/planned_blocks/<blockId> under BOTH:
       //    exerciseSettings + plannedExerciseDetails
       // ─────────────────────────────────────────────────────────────
 
@@ -2494,9 +2494,9 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
         if (updates.isNotEmpty) {
           await db
-              .collection('planned_blocks')
+              .collection('users')
               .doc(user.uid)
-              .collection('blocks')
+              .collection('planned_blocks')
               .doc(blockIdToUse)
               .set(updates, SetOptions(merge: true));
 
@@ -2548,8 +2548,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
       // Update active block doc (additive — does NOT mutate exercises or plannedExercises)
       if (activeBlockId != null && activeBlockId.isNotEmpty) {
-        await db.collection('planned_blocks').doc(actingUid)
-            .collection('blocks').doc(activeBlockId)
+        await db.collection('users').doc(actingUid)
+            .collection('planned_blocks').doc(activeBlockId)
             .set({'templateCandidateExerciseIds': candidateIds}, SetOptions(merge: true));
       }
 

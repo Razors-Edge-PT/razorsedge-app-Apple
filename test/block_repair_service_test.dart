@@ -11,7 +11,7 @@ void main() {
 
   CollectionReference<Map<String, dynamic>> blocksCol(
           FakeFirebaseFirestore fs, String uid) =>
-      fs.collection('planned_blocks').doc(uid).collection('blocks');
+      fs.collection('users').doc(uid).collection('planned_blocks');
 
   Future<List<String>> activeBlockIds(
       FakeFirebaseFirestore fs, String uid) async {

@@ -793,3 +793,15 @@ exports.coachReviewContext = coachCheckins.coachReviewContext;
 exports.coachPrepareCheckInCopy = coachCheckins.coachPrepareCheckInCopy;
 exports.coachUndoCheckIn = coachCheckins.coachUndoCheckIn;
 exports.coachSkipCheckIn = coachCheckins.coachSkipCheckIn;
+
+// ====================================
+// Planned-blocks schema transition
+// ====================================
+// Temporary two-way compatibility mirror. It lets released app builds that
+// still use /planned_blocks/{uid}/blocks/... coexist safely with the canonical
+// /users/{uid}/planned_blocks/... hierarchy during rollout.
+const plannedBlocksCompat = require('./planned_blocks_compat');
+exports.mirrorLegacyPlannedBlocksToUsers =
+  plannedBlocksCompat.mirrorLegacyPlannedBlocksToUsers;
+exports.mirrorUserPlannedBlocksToLegacy =
+  plannedBlocksCompat.mirrorUserPlannedBlocksToLegacy;

@@ -32,9 +32,9 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 
   Future<void> _setBlockAsActive(String blockId) async {
     final blocksRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     // load the block you want to activate
     final newActiveSnap = await blocksRef.doc(blockId).get();
@@ -77,9 +77,9 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 
   Future<void> _deleteBlock(String blockId) async {
     await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .delete();
   }
@@ -125,9 +125,9 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
       final uid = userId;
 
       final blocksRef = FirebaseFirestore.instance
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks');
+          .collection('planned_blocks');
 
       final existingBlocks = await blocksRef.get();
 
@@ -616,9 +616,9 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
   @override
   Widget build(BuildContext context) {
     final blocksRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     return Scaffold(
       appBar: AppBar(title: const Text('Planned Blocks')),

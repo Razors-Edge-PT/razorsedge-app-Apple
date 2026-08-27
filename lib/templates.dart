@@ -975,9 +975,9 @@ class _TemplatesScreenState extends State<TemplatesScreen> {
     // 2) load block meta (dates) → we show under the headers
     final uid = userId;
     final blocksSnap = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .get();
     debugPrint(
         '📦 [Templates] blocksSnap.docs=${blocksSnap.docs.length} for uid=$uid');

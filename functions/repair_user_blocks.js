@@ -79,7 +79,7 @@ async function run() {
   console.log(`  templatesBranch=${u.templatesBranch ?? "null"}\n`);
 
   // ── 2. Blocks ──────────────────────────────────────────────────────────────
-  const blocksCol = db.collection("planned_blocks").doc(uid).collection("blocks");
+  const blocksCol = db.collection("users").doc(uid).collection("planned_blocks");
   const blocksSnap = await blocksCol.get();
   const blocks = blocksSnap.docs.map((d) => ({
     id: d.id,
@@ -89,7 +89,7 @@ async function run() {
     start: toDate(d.data().startDate),
     end: toDate(d.data().endDate),
   }));
-  console.log(`planned_blocks/${uid}/blocks: ${blocks.length} doc(s)`);
+  console.log(`users/${uid}/planned_blocks: ${blocks.length} doc(s)`);
   for (const b of blocks) {
     console.log(`  ${b.id} active=${b.isActive} start=${fmt(b.start)} end=${fmt(b.end)} name="${b.name}"`);
   }

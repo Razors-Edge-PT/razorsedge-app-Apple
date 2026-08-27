@@ -73,9 +73,9 @@ class FirestoreService {
     if (userId == null) throw Exception('User not logged in');
 
     final query = await _firestore
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .where('isActive', isEqualTo: true)
         .limit(1)
         .get();

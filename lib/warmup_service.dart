@@ -71,9 +71,9 @@ class WarmupService {
   }) async {
     try {
       final doc = await fs
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(activeBlockId)
           .get(const GetOptions(source: Source.server));
       if (!doc.exists) return (null, null);
@@ -165,8 +165,8 @@ class WarmupService {
       }
 
       final dSnap = await fs
-          .collection('planned_blocks').doc(uid)
-          .collection('blocks').doc(blockId)
+          .collection('users').doc(uid)
+          .collection('planned_blocks').doc(blockId)
           .collection('weeks').doc('week_$weekIndex')
           .collection('days').doc('day_$dayIndex')
           .get(const GetOptions(source: Source.server));
@@ -272,9 +272,9 @@ class WarmupService {
 
     // Fallback to Firestore day doc
     final dayDoc = await fs
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .collection('weeks')
         .doc('week_$weekIndex')
@@ -447,15 +447,15 @@ class WarmupService {
     DocumentSnapshot<Map<String, dynamic>>? cacheSnap;
     try {
       cacheSnap = await fs
-          .collection('planned_blocks').doc(uid)
-          .collection('blocks').doc(blockId)
+          .collection('users').doc(uid)
+          .collection('planned_blocks').doc(blockId)
           .get(const GetOptions(source: Source.cache));
     } catch (_) {
       cacheSnap = null;
     }
     final serverSnap = await fs
-        .collection('planned_blocks').doc(uid)
-        .collection('blocks').doc(blockId)
+        .collection('users').doc(uid)
+        .collection('planned_blocks').doc(blockId)
         .get(const GetOptions(source: Source.server));
 
     final blockSnap = (serverSnap.exists) ? serverSnap : cacheSnap;
@@ -648,8 +648,8 @@ class WarmupService {
     }
 
     final daysCol = fs
-        .collection('planned_blocks').doc(uid)
-        .collection('blocks').doc(blockId)
+        .collection('users').doc(uid)
+        .collection('planned_blocks').doc(blockId)
         .collection('weeks').doc('week_$weekIndex')
         .collection('days');
 
@@ -986,7 +986,7 @@ class WarmupService {
 
       // Warm planned blocks surface (small list)
       final blocksCol =
-      fs.collection('planned_blocks').doc(uid).collection('blocks');
+      fs.collection('users').doc(uid).collection('planned_blocks');
       final blocksSnap =
       await blocksCol.limit(5).get(const GetOptions(source: Source.server));
       for (final b in blocksSnap.docs) {

@@ -6,7 +6,7 @@ import '../planned_only_resolver.dart';
 /// Opens immediately; fetches exercises and planned IDs asynchronously inside.
 ///
 /// [excludedIds]   — exerciseIds already on the current WES2 day; omitted entirely.
-/// [actingUid]     — for planned_blocks/{uid}/blocks/{blockId} read.
+/// [actingUid]     — for users/{uid}/planned_blocks/{blockId} read.
 /// [activeBlockId] — if null, planned toggle is hidden.
 ///
 /// Returns a `({String exerciseId, String name})` record on selection,

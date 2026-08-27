@@ -1561,8 +1561,8 @@ class TemplateGenerator {
 
       // Step 3: exerciseSettings.keys from active block doc
       if (activeBlockId != null) {
-        final blockDoc = await db.collection('planned_blocks').doc(uid)
-            .collection('blocks').doc(activeBlockId).get();
+        final blockDoc = await db.collection('users').doc(uid)
+            .collection('planned_blocks').doc(activeBlockId).get();
         final settings = blockDoc.data()?['exerciseSettings'] as Map<String, dynamic>? ?? {};
         if (settings.isNotEmpty) {
           debugPrint('🧩 [GEN] step3: exerciseSettings.keys → ${settings.length} ids');

@@ -156,7 +156,7 @@ PHASE_GUIDANCE = {
         - activeBlockId guard: if no active block exists, show a snackbar and no-op.
           Never proceed with a save if activeBlockId is absent.
         - Save writes ONLY to:
-            /planned_blocks/{uid}/blocks/{blockId}.exerciseSettings[exerciseId]
+            users/{uid}/planned_blocks/{blockId}.exerciseSettings[exerciseId]
           NEVER write to plannedExerciseDetails under any circumstances.
         - Internet required for save. Do NOT queue offline. If offline, show error in dialog
           and leave dialog open so user can retry.
@@ -187,7 +187,7 @@ PHASE_GUIDANCE = {
             replace a BB3-sourced exercise
             move/reorder a BB3-sourced exercise between circuits or within a circuit
         - Write ONLY to the BB3 planned day path:
-            /planned_blocks/{uid}/blocks/{blockId}/weeks/week_{weekIndex}/days/day_{dayIndex}
+            users/{uid}/planned_blocks/{blockId}/weeks/week_{weekIndex}/days/day_{dayIndex}
         - Verify the planned-day Firestore write shape by reading existing WES2_plan_service
           or other existing WES2 service code. Do NOT copy internal BB3 Dart write logic.
         - Do NOT edit bb3_*.dart files.
@@ -209,7 +209,7 @@ PHASE_GUIDANCE = {
         - WES2 typed actual values ALWAYS win. Never overwrite a TextEditingController's text
           during hint recalculation. Caret/cursor must not jump.
         - Never overwrite actualValue or any completed set field with a hint value.
-        - Use exerciseSettings (from planned_blocks/{uid}/blocks/{blockId}.exerciseSettings)
+        - Use exerciseSettings (from users/{uid}/planned_blocks/{blockId}.exerciseSettings)
           as the authoritative source for periodization and progression model configuration.
         - Hints recalculate instantly and locally when any field changes. No save is required
           to trigger recalculation. Recalculation must not lag or show a spinner.
@@ -245,7 +245,7 @@ COMPACT_SPEC_BRIEF = textwrap.dedent("""\
     - Blank WES2-added rows persist in wesPlannedExercises[].
     - Completed rows live in exercises[] only.
     - isMarkedDone lives in exercises[] only.
-    - ExerciseSettings writes only to planned_blocks/{uid}/blocks/{blockId}.exerciseSettings.
+    - ExerciseSettings writes only to users/{uid}/planned_blocks/{blockId}.exerciseSettings.
     - NEVER write to plannedExerciseDetails.
     - ExerciseSettings save requires internet; do NOT queue offline.
     - BB3 structural updates (delete/replace/reorder) write back to BB3 planned day path only.

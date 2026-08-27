@@ -112,6 +112,38 @@ test('rules: athlete reads own analytics but can never write them', async () => 
   }));
 });
 
+test('rules: canonical nested planned blocks use the training-access gate', async () => {
+  const block = as('ath1').doc('users/ath1/planned_blocks/blockA');
+  const day = as('ath1').doc(
+    'users/ath1/planned_blocks/blockA/weeks/week_0/days/day_1',
+  );
+
+  await assertSucceeds(block.set({ name: 'Block A', isActive: true }));
+  await assertSucceeds(day.set({ exercises: [] }));
+  await assertSucceeds(
+    as('coachSeeded').doc('users/ath1/planned_blocks/blockA').get(),
+  );
+  await assertSucceeds(
+    as('coachSeeded')
+      .doc('users/ath1/planned_blocks/blockA')
+      .update({ name: 'Coach edit' }),
+  );
+  await assertFails(
+    as('coachOk').doc('users/ath1/planned_blocks/blockA').get(),
+  );
+});
+
+test('rules: legacy planned-block path remains available during rollout', async () => {
+  const legacy = as('ath1').doc('planned_blocks/ath1/blocks/blockA');
+  await assertSucceeds(legacy.set({ name: 'Legacy block' }));
+  await assertSucceeds(
+    as('coachSeeded').doc('planned_blocks/ath1/blocks/blockA').get(),
+  );
+  await assertFails(
+    as('coachOk').doc('planned_blocks/ath1/blocks/blockA').get(),
+  );
+});
+
 // ── Coach workspace isolation (item B) ──────────────────────────────────────
 
 test('rules: Coach A cannot read Coach B reports or settings', async () => {
