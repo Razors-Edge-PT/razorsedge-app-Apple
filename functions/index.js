@@ -793,3 +793,24 @@ exports.coachReviewContext = coachCheckins.coachReviewContext;
 exports.coachPrepareCheckInCopy = coachCheckins.coachPrepareCheckInCopy;
 exports.coachUndoCheckIn = coachCheckins.coachUndoCheckIn;
 exports.coachSkipCheckIn = coachCheckins.coachSkipCheckIn;
+
+// ── Coach Mode: onboarding, entitlements and coach⇄athlete relationships ────
+// Required once per NEW callable in this project (Domain Restricted Sharing —
+// see CALLABLE_OPTS in functions/coach/index.js and docs/coach_mode.md):
+//   gcloud run services update <lowercased-function-name>
+//     --no-invoker-iam-check --region=us-central1 --project=goodlift-us-storage
+const coachMode = require('./coach/coach_mode');
+exports.coachModeSubmitApplication = coachMode.coachModeSubmitApplication;
+exports.coachModeWithdrawApplication = coachMode.coachModeWithdrawApplication;
+exports.coachModeReviewApplication = coachMode.coachModeReviewApplication;
+exports.coachModeGrantCoach = coachMode.coachModeGrantCoach;
+exports.coachModeSetCoachState = coachMode.coachModeSetCoachState;
+exports.coachModeAdminLookupAccount = coachMode.coachModeAdminLookupAccount;
+exports.coachModeInviteAthlete = coachMode.coachModeInviteAthlete;
+exports.coachModeCancelInvite = coachMode.coachModeCancelInvite;
+exports.coachModeRespondToInvite = coachMode.coachModeRespondToInvite;
+exports.coachModeRevokeCoach = coachMode.coachModeRevokeCoach;
+exports.coachModeReleaseAthlete = coachMode.coachModeReleaseAthlete;
+exports.coachModeRemoveSeededAthlete = coachMode.coachModeRemoveSeededAthlete;
+exports.coachOnCoachAthleteLinkWritten = coachMode.coachOnCoachAthleteLinkWritten;
+exports.coachOnAccountEntitlementWritten = coachMode.coachOnAccountEntitlementWritten;

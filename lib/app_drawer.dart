@@ -9,6 +9,9 @@ import 'membership_gate.dart';
 import '../SavedWorkoutsScreen.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
+import 'coach_mode/athlete_coaching_screen.dart';
+import 'coach_mode/coach_admin_screen.dart';
+import 'coach_mode/coach_mode_screen.dart';
 import 'main.dart';
 import 'planned_blocks_screen.dart';
 import 'package:provider/provider.dart';
@@ -202,6 +205,33 @@ class AppDrawer extends StatelessWidget {
             );
           }),
 
+
+          // 🧑‍🏫 Coaching section
+          const DrawerSectionHeader(title: "Coaching"),
+
+          // Athlete-side: invitations, current coaches, revoke access.
+          _drawerTile(context, Icons.supervisor_account_outlined, 'Coaching', () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AthleteCoachingScreen()),
+            );
+          }),
+
+          // Coach Mode application / status. Available to every signed-in
+          // account, whatever their membership state.
+          _drawerTile(context, Icons.workspace_premium_outlined, 'Coach Mode', () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CoachModeScreen()),
+            );
+          }),
+
+          // Super-admin only, by the same hard-coded UID used everywhere else.
+          if (context.read<UserContext>().isSuperAdmin)
+            _drawerTile(
+                context, Icons.verified_user_outlined, 'Coach Management', () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const CoachAdminScreen()),
+              );
+            }),
 
           // ⚙️ Utilities section
           const DrawerSectionHeader(title: "Utilities"),

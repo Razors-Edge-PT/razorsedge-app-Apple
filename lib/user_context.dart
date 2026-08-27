@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 // ⬇️ Bring in your existing classes (names taken from your snippets)
 import 'block_repository.dart';   // BlockRepository().fetchActiveBlockId(...)
+import 'coach_mode/coach_mode_models.dart';
 import 'warmup_service.dart';                  // WarmupService.instance.warmWES(...)
 import 'app_check_ready.dart';
 import 'startup_trace.dart';
@@ -14,6 +15,10 @@ import 'startup_trace.dart';
 class UserContext extends ChangeNotifier {
   // Identity & roles
   final String actorUid;   // the authenticated user
+
+  /// Fast-routing hint from the mirrored `isCoach` custom claim (or the legacy
+  /// hard-coded list). NOT an authorization decision on its own — see
+  /// [hasCoachMode], which prefers the server-authoritative entitlement.
   final bool isCoach;
   String actingAsUid;      // athlete in-focus (actorUid if not coaching)
 
@@ -24,9 +29,46 @@ class UserContext extends ChangeNotifier {
 
   bool get isActingAsSelf => actingAsUid == actorUid;
 
-  bool get isSuperAdmin => [
-    'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
-  ].contains(actorUid);
+  // The single hard-coded super admin. Defined once in
+  // coach_mode/coach_mode_models.dart and matched exactly by
+  // firestore.rules isSuperAdmin(), functions/coach/coach_mode_model.js
+  // SUPER_ADMIN_UID and functions/coach/authz.js.
+  bool get isSuperAdmin => actorUid == kSuperAdminUid;
+
+  // ── Coach Mode entitlement (server-authoritative) ──────────────────────
+  // accountEntitlements/{uid} is the real grant. The client hydrates it in
+  // the background; until it arrives the mirrored claim is used for routing
+  // only. A suspended or revoked entitlement always beats a stale claim.
+  CoachEntitlement _coachEntitlement = CoachEntitlement.none;
+  CoachEntitlement get coachEntitlement => _coachEntitlement;
+
+  set coachEntitlement(CoachEntitlement value) {
+    if (identical(_coachEntitlement, value)) return;
+    if (_coachEntitlement.state == value.state &&
+        _coachEntitlement.source == value.source &&
+        _coachEntitlement.reason == value.reason) {
+      return;
+    }
+    _coachEntitlement = value;
+    notifyListeners();
+  }
+
+  /// The resolved role: super admin, coach, or athlete.
+  CoachRole get coachRole => resolveCoachRole(
+        uid: actorUid,
+        entitlement: _coachEntitlement,
+        claimIsCoach: isCoach,
+      );
+
+  /// Whether this account may use Coach Mode features at all. Super admin
+  /// always may; an ordinary coach needs an active entitlement (or, until the
+  /// entitlement has loaded, the mirrored claim).
+  bool get hasCoachMode => coachRole != CoachRole.athlete;
+
+  /// True only for an entitlement the server has explicitly put on hold.
+  bool get coachModeSuspendedOrRevoked =>
+      !isSuperAdmin &&
+      (_coachEntitlement.isSuspended || _coachEntitlement.isRevoked);
 
   // ✅ Admin override (kept from your version)
   bool get isAdmin => [

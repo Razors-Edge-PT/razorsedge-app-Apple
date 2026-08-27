@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
-import 'request_access_screen.dart';
+import 'coach_mode/coach_mode_models.dart';
+import 'coach_mode/coach_mode_service.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
@@ -47,6 +48,18 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
   Map<String, dynamic> _athletes = {};
   String _search = '';
 
+  // Canonical pending invitations (coachAthleteLinks with status 'pending').
+  // These are NOT roster entries — a pending invitation grants no access — so
+  // they are held separately from _athletes and rendered as their own section.
+  List<CoachAthleteLink> _pending = const [];
+  // Athlete UIDs that come only from the LEGACY super-admin-seeded roster.
+  // Removal for these goes through the removal-only seeded callable rather
+  // than the canonical release path.
+  Set<String> _seededOnlyUids = {};
+
+  final CoachModeService _coachMode = CoachModeService();
+  bool _busy = false;
+
   @override
   void initState() {
     super.initState();
@@ -78,7 +91,8 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
   Future<void> _loadAthletes(UserContext userContext) async {
     // Roster loading lives in CoachRosterService so this screen and the Coach
     // Check-ins screens always resolve the same athletes (super-admin => all
-    // users; ordinary coach => approved + admin-seeded assignments).
+    // users; ordinary coach => active canonical links + legacy approved and
+    // super-admin-seeded assignments).
     try {
       final roster = await CoachRosterService().loadRoster(userContext);
       if (!mounted) return;
@@ -91,6 +105,45 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
     } catch (e) {
       debugPrint("❌ Error loading athletes: $e");
     }
+
+    await Future.wait([
+      _loadPendingInvitations(userContext.actorUid),
+      _loadSeededOnlyUids(userContext.actorUid),
+    ]);
+  }
+
+  /// Pending invitations this coach has sent and the athlete has not yet
+  /// answered. Read-only here; every change goes through a callable.
+  Future<void> _loadPendingInvitations(String coachUid) async {
+    try {
+      final links = await _coachMode.watchCoachLinks(coachUid).first;
+      if (!mounted) return;
+      setState(() => _pending = splitCoachRoster(links).pending);
+    } catch (e) {
+      debugPrint('⚠️ [CoachHome] pending invitations load failed: $e');
+    }
+  }
+
+  /// LEGACY: which roster entries exist only because the super admin seeded
+  /// them. Drives which removal callable the delete action uses.
+  Future<void> _loadSeededOnlyUids(String coachUid) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('coachAssignments')
+          .doc(coachUid)
+          .get();
+      final seeded = Map<String, dynamic>.from(doc.data()?['athletes'] ?? {});
+      if (!mounted) return;
+      setState(() => _seededOnlyUids = seeded.keys.toSet());
+    } catch (e) {
+      // A coach with no seeded roster simply has none; this is not an error.
+      debugPrint('ℹ️ [CoachHome] seeded roster read: $e');
+    }
+  }
+
+  Future<void> _refresh() async {
+    final uc = UserContext.maybeOf(context);
+    if (uc != null) await _loadAthletes(uc);
   }
 
 
@@ -154,95 +207,113 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
   }
 
 
-  // ---------- Added: helper to add athlete by email ----------
-  Future<void> _addAthleteByEmail(BuildContext context, String email) async {
+  // ---------- Invite an athlete by exact email ----------
+  // Goes through coachModeInviteAthlete: the server resolves the account,
+  // enforces the coach's active entitlement, rejects self-invites and
+  // duplicates, rate-limits, and creates the pending link. The client cannot
+  // create a relationship itself.
+  Future<void> _inviteAthleteByEmail(BuildContext context, String email) async {
     final trimmed = email.trim().toLowerCase();
     if (trimmed.isEmpty) return;
 
+    setState(() => _busy = true);
     try {
-      final coachUid = UserContext.of(context, listen: false).actorUid;
-
-      // Resolve athlete via hashed email
-      final hash = emailHash(trimmed);
-      final lookup = await FirebaseFirestore.instance
-          .collection('user_lookup')
-          .doc(hash)
-          .get();
-
-      if (!lookup.exists) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No user found for $trimmed')),
-        );
-        return;
-      }
-
-      final data = lookup.data()!;
-      final athleteUid = (data['uid'] as String).trim();
-      final athleteName = (data['displayName'] ?? '') as String;
-
-      if (athleteUid == coachUid) {
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("You can't add yourself.")),
-        );
-        return;
-      }
-
-      // Create/refresh a PENDING access request (idempotent key)
-      final user = FirebaseAuth.instance.currentUser!;
-      final coachName = user.displayName ?? '';
-      final coachEmail = user.email ?? '';
-
-      final requestId = '${coachUid}__${athleteUid}'; // deterministic
-      await FirebaseFirestore.instance
-          .collection('accessRequests')
-          .doc(requestId)
-          .set({
-        'coachUid': coachUid,
-        'coachName': coachName,
-        'coachEmail': coachEmail,
-        'athleteUid': athleteUid,
-        'athleteDisplayName': athleteName,
-        'athleteEmail': trimmed,
-        'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-      debugPrint('📨 [addAthleteByEmail] Created access request $requestId → $trimmed');
-
+      await _coachMode.inviteAthlete(trimmed);
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Request sent to $trimmed')),
+        SnackBar(content: Text('Invitation sent to $trimmed')),
       );
-    } catch (e) {
-      debugPrint('❌ addAthleteByEmail error: $e');
+      await _refresh();
+    } on CoachModeException catch (e) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to send request')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-
-  // ---------- Added: helper to remove athlete ----------
-  Future<void> _removeAthlete(String uid) async {
-    final coachUid = context.read<UserContext>().actorUid;
+  // ---------- Cancel a pending invitation ----------
+  Future<void> _cancelInvite(CoachAthleteLink link) async {
+    setState(() => _busy = true);
     try {
-      await FirebaseFirestore.instance
-          .collection('coachAssignments')
-          .doc(coachUid)
-          .update({'athletes.$uid': FieldValue.delete()});
+      await _coachMode.cancelInvite(link.athleteUid);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Invitation to ${link.athleteLabel} cancelled')),
+      );
+      await _refresh();
+    } on CoachModeException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
+  // ---------- Remove an athlete from the roster ----------
+  // Canonical relationships are ENDED through coachModeReleaseAthlete.
+  // LEGACY super-admin-seeded entries go through the removal-only
+  // coachModeRemoveSeededAthlete callable — clients can no longer write
+  // coachAssignments at all, which is what closed the self-seeding hole.
+  Future<void> _removeAthlete(String uid) async {
+    final label = _labelFor(uid);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove athlete?'),
+        content: Text(
+          '$label will immediately lose their coaching link with you. You will '
+          'no longer see their training, planned blocks or check-ins.\n\n'
+          'They keep all of their own data.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _busy = true);
+    try {
+      if (_seededOnlyUids.contains(uid)) {
+        await _coachMode.removeSeededAthlete(uid);
+      } else {
+        await _coachMode.releaseAthlete(uid);
+      }
+      if (!mounted) return;
       setState(() {
         _athletes.remove(uid);
+        _seededOnlyUids.remove(uid);
       });
-    } catch (e) {
-      debugPrint('❌ Failed to remove athlete: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to remove athlete')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$label removed')));
+      await _refresh();
+    } on CoachModeException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _labelFor(String uid) {
+    final a = _athletes[uid] ?? const {};
+    for (final key in ['username', 'displayName', 'fullName', 'email']) {
+      final v = (a[key] ?? '').toString().trim();
+      if (v.isNotEmpty) return v;
+    }
+    return uid;
   }
 
   @override
@@ -307,30 +378,48 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
               },
             ),
 
-            // Coach path: add by email (will fail if rules block coach from writing 'athletes')
+            // Coach path: invite by exact email. The athlete must accept before
+            // any access is granted.
             IconButton(
-              tooltip: 'Add athlete by email',
+              tooltip: 'Invite athlete by email',
               icon: const Icon(Icons.person_add_alt),
-              onPressed: () async {
+              onPressed: _busy ? null : () async {
                 final controller = TextEditingController();
                 final email = await showDialog<String>(
                   context: context,
                   builder: (ctx) => AlertDialog(
-                    title: const Text('Add athlete by email'),
-                    content: TextField(
-                      controller: controller,
-                      decoration: const InputDecoration(hintText: 'athlete@email.com'),
-                      autofocus: true,
-                      keyboardType: TextInputType.emailAddress,
+                    title: const Text('Invite athlete'),
+                    content: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextField(
+                          controller: controller,
+                          decoration: const InputDecoration(
+                            hintText: 'athlete@email.com',
+                            labelText: 'Their exact GoodLift email',
+                          ),
+                          autofocus: true,
+                          keyboardType: TextInputType.emailAddress,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'They will be asked to accept before you can see any '
+                          'of their training.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      ],
                     ),
                     actions: [
                       TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                      TextButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Add')),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(ctx, controller.text),
+                        child: const Text('Send invitation'),
+                      ),
                     ],
                   ),
                 );
                 if (email != null && email.trim().isNotEmpty) {
-                  await _addAthleteByEmail(context, email);
+                  await _inviteAthleteByEmail(context, email);
                 }
               },
             ),
@@ -599,35 +688,68 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                   onChanged: (value) => setState(() => _search = value),
                 ),
 
-                const SizedBox(height: 8),
-
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        icon: Icon(Icons.person_add, size: 24, color: Theme.of(context).colorScheme.secondary),
-                        label: const Text("Request Access", style: TextStyle(fontSize: 14)),
-                        style: ElevatedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-                          visualDensity: VisualDensity.compact,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        ),
-                        onPressed: () {
-                          Navigator.of(context).push(MaterialPageRoute(
-                            builder: (_) => ChangeNotifierProvider<UserContext>.value(
-                              value: context.read<UserContext>(),
-                              child: const RequestAccessScreen(),
-                            ),
-                          ));
-                        },
-                      ),
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
+
+          // ── Pending invitations ────────────────────────────────────────
+          // A pending invitation is NOT a roster entry and grants no access,
+          // so it lives in its own clearly-labelled section above the roster.
+          if (_pending.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 4, 14, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'AWAITING ACCEPTANCE (${_pending.length})',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    letterSpacing: 1.1,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white54,
+                  ),
+                ),
+              ),
+            ),
+            ..._pending.map((link) => Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                  child: Card(
+                    elevation: 0,
+                    color: Theme.of(context).cardTheme.color ??
+                        Theme.of(context).colorScheme.surface,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    child: ListTile(
+                      dense: true,
+                      visualDensity: const VisualDensity(vertical: -4),
+                      leading: const Icon(Icons.hourglass_top,
+                          color: Colors.amberAccent, size: 22),
+                      title: Text(
+                        link.athleteLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13),
+                      ),
+                      subtitle: Text(
+                        coachLinkStatusLabel(link.status),
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 12),
+                      ),
+                      trailing: TextButton(
+                        onPressed: _busy ? null : () => _cancelInvite(link),
+                        child: const Text('Cancel',
+                            style: TextStyle(color: Colors.white70, fontSize: 12)),
+                      ),
+                    ),
+                  ),
+                )),
+            const SizedBox(height: 6),
+          ],
+
+          if (filteredUids.isEmpty && _pending.isEmpty)
+            const Expanded(child: _CoachEmptyState())
+          else
           Expanded(
             child: ListView.separated(
               padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
@@ -708,7 +830,7 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                       icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 22),
-                      onPressed: () => _removeAthlete(uid),
+                      onPressed: _busy ? null : () => _removeAthlete(uid),
                       tooltip: 'Remove athlete',
                     ),
 
@@ -725,6 +847,41 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
           ),
           const SizedBox(height: 36),
         ],
+      ),
+    );
+  }
+}
+
+/// Shown when a coach has neither athletes nor outstanding invitations.
+class _CoachEmptyState extends StatelessWidget {
+  const _CoachEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.groups_outlined,
+                size: 48, color: Theme.of(context).colorScheme.secondary),
+            const SizedBox(height: 16),
+            const Text(
+              'No athletes yet',
+              style: TextStyle(
+                  fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Invite an athlete with the person icon above, using the exact '
+              'email on their GoodLift account. They accept the invitation '
+              'before you can see any of their training.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.white60, height: 1.4),
+            ),
+          ],
+        ),
       ),
     );
   }

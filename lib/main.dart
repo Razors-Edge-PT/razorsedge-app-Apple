@@ -26,6 +26,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
+import 'coach_mode/coach_mode_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -339,6 +340,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       _userContext = UserContext(actorUid: user.uid, isCoach: isCoach);
       StartupTrace.userContextCreated();
 
+      // Server-authoritative Coach Mode state. Fire-and-forget: never blocks
+      // render, and the mirrored claim above already handles fast routing.
+      _hydrateCoachEntitlement(_userContext!, user.uid);
+
       // Await ONLY local SharedPreferences hydration of cached block meta so
       // Home can read activeBlockId on its first build. Without this, Home sees
       // a transiently-null activeBlockId and wrongly enters first-time setup
@@ -372,6 +377,25 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // Route immediately — never stall on tokenPending for remembered users.
     StartupTrace.authenticatedSelected();
     setState(() => _phase = _AuthPhase.authenticated);
+  }
+
+  /// Loads accountEntitlements/{uid} in the background and keeps the context's
+  /// Coach Mode state live. The entitlement — not the mirrored `isCoach`
+  /// claim — is what actually authorises coach access, so a suspension or
+  /// revocation takes effect here as soon as the server commits it.
+  void _hydrateCoachEntitlement(UserContext ctx, String uid) {
+    unawaited(() async {
+      try {
+        final service = CoachModeService();
+        ctx.coachEntitlement = await service.fetchEntitlement(uid);
+        await for (final ent in service.watchMyEntitlement(uid)) {
+          if (!mounted || ctx.actorUid != uid) break;
+          ctx.coachEntitlement = ent;
+        }
+      } catch (e) {
+        debugPrint('[AUTHROOT] coach entitlement hydration failed: $e');
+      }
+    }());
   }
 
   /// Resolves the Firebase ID token in background and keeps isCoach prefs up to date.

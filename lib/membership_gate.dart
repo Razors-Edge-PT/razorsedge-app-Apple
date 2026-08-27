@@ -7,6 +7,9 @@ import 'auth_debug.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 
 import 'membership_purchase_policy.dart';
+import 'coach_mode/coach_mode_models.dart';
+import 'coach_mode/coach_mode_screen.dart';
+import 'coach_mode/coach_mode_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -28,6 +31,11 @@ Widget gatedWes2({DateTime? initialDate}) =>
 
 /// 🔐 UIDs that always have an "effective" active membership,
 /// regardless of what Firestore says.
+///
+/// LEGACY. New coaches must NOT be added here — an approved coach receives a
+/// real `accountEntitlements/{uid}` grant instead, which this gate honours
+/// below. This set is kept only so the accounts already on it (and released
+/// app versions) keep working; see docs/coach_mode.md for its retirement.
 const freeMembershipUids = <String>{
   'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
   'wuiMe7phxYQh0MM39bfnhgv20yS2', // Campbell
@@ -110,6 +118,19 @@ class _MembershipGateState extends State<MembershipGate> {
   bool _isFree = false;
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _stream;
 
+  /// True while an ACTIVE Coach Mode entitlement is in effect for this
+  /// account. An approved coach gets a working app and Coach Dashboard from
+  /// their entitlement — no `freeMembershipUids` edit, no redeploy.
+  ///
+  /// This deliberately does NOT weaken the athlete paywall: only the explicit
+  /// `active` state qualifies, and a suspended or revoked entitlement leaves
+  /// the account on exactly the normal membership rules.
+  ///
+  /// When a future coach IAP activates the same entitlement with
+  /// `source: 'iap'`, this path already works unchanged.
+  bool _coachModeActive = false;
+  StreamSubscription<CoachEntitlement>? _entitlementSub;
+
   @override
   void initState() {
     super.initState();
@@ -124,7 +145,37 @@ class _MembershipGateState extends State<MembershipGate> {
 
     _isFree = _uid != null && freeMembershipUids.contains(_uid);
     if (_uid != null && !_isFree) {
+      _watchCoachEntitlement(_uid!);
       _attachStream();
+    }
+  }
+
+  @override
+  void dispose() {
+    _entitlementSub?.cancel();
+    super.dispose();
+  }
+
+  void _watchCoachEntitlement(String uid) {
+    if (uid == kSuperAdminUid) {
+      // Super admin is the hard-coded constant and never depends on a document.
+      _coachModeActive = true;
+      return;
+    }
+    try {
+      _entitlementSub = CoachModeService()
+          .watchMyEntitlement(uid)
+          .listen((ent) {
+        if (!mounted) return;
+        if (ent.isActive != _coachModeActive) {
+          setState(() => _coachModeActive = ent.isActive);
+        }
+      }, onError: (Object e) {
+        // Never grant on error — the account simply stays on normal rules.
+        debugPrint('[MEMBERSHIP] coach entitlement watch failed: $e');
+      });
+    } catch (e) {
+      debugPrint('[MEMBERSHIP] coach entitlement watch could not start: $e');
     }
   }
 
@@ -203,6 +254,14 @@ class _MembershipGateState extends State<MembershipGate> {
     // 1) Free / comped users: always allowed in (no stream, no App Check wait).
     if (_isFree) {
       debugPrint('[MEMBERSHIP] free-membership uid — access granted');
+      return widget.child;
+    }
+
+    // 1b) Active Coach Mode entitlement: a manually approved coach uses the
+    // app and the Coach Dashboard while that approval is in effect, without
+    // being added to freeMembershipUids.
+    if (_coachModeActive) {
+      debugPrint('[MEMBERSHIP] active coach entitlement — access granted');
       return widget.child;
     }
 
@@ -712,6 +771,21 @@ class _MembershipInactiveScreenState extends State<MembershipInactiveScreen> {
                       child: const Text('Restore purchases'),
                     ),
                   ],
+
+                  // Coach Mode application entry point. Any signed-in account
+                  // may apply, including one whose membership is currently
+                  // inactive — Coach Mode approval is not a purchase and is
+                  // not gated by this paywall.
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const CoachModeScreen(),
+                      ),
+                    ),
+                    icon: const Icon(Icons.supervisor_account, size: 20),
+                    label: const Text('Are you a coach? Apply for Coach Mode'),
+                  ),
 
                   // iOS-only: Apple legal disclosure + links
                   if (Platform.isIOS) ...[

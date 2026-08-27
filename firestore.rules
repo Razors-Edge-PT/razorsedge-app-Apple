@@ -19,13 +19,48 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == "yoVAqScwLMQLAgNHh8v9IK49fBw2";
     }
 
-    // Assignment-doc only — no hard-coded UID list.
-    // Matches the app's real approval model exactly (CoachHomeScreen):
-    //   1. an admin-seeded coachAssignments athletes entry (any non-null), OR
-    //   2. an athleteAssignments coaches entry with approved == true.
-    // A pending / rejected / approved:false / malformed entry grants nothing.
+    // ── Coach Mode entitlement ───────────────────────────────────────────
+    // Server-owned. Coach access is a real entitlement, not a permanent
+    // boolean: only state == 'active' counts, so a suspended or revoked coach
+    // loses athlete access immediately even while link documents still exist.
+    // `.data.get(k, default)` is used throughout so a malformed/partial
+    // document denies instead of raising an evaluation error.
+    function hasCoachEntitlement(uid) {
+      return exists(/databases/$(database)/documents/accountEntitlements/$(uid)) &&
+        get(/databases/$(database)/documents/accountEntitlements/$(uid))
+          .data.get('coach', {}).get('state', '') == 'active';
+    }
+
+    // ── Canonical coach⇄athlete relationship ─────────────────────────────
+    // coachAthleteLinks/{coachUid}__{athleteUid}; only 'active' is a real
+    // relationship. pending / declined / cancelled / revoked_by_athlete /
+    // released_by_coach all grant nothing.
+    function hasActiveLink(coachUid, athleteUid) {
+      return exists(/databases/$(database)/documents/coachAthleteLinks/$(coachUid + '__' + athleteUid)) &&
+        get(/databases/$(database)/documents/coachAthleteLinks/$(coachUid + '__' + athleteUid))
+          .data.get('status', '') == 'active';
+    }
+
+    // Ordinary coach authorization. No hard-coded UID list.
+    //
+    //   CANONICAL: an ACTIVE coach entitlement AND an ACTIVE relationship.
+    //              Both are required — this is the only path new UI uses.
+    //
+    //   LEGACY (compatibility release only — see docs/coach_mode.md for the
+    //   retirement sequence):
+    //     1. a super-admin-seeded coachAssignments athletes entry (non-null).
+    //        Only the super admin can create these now, so a coach can no
+    //        longer seed arbitrary athletes into their own roster.
+    //     2. an athleteAssignments coaches entry with approved == true.
+    //        A pending / rejected / approved:false / malformed entry grants
+    //        nothing.
     function isCoachFor(userId) {
       return isSignedIn() && (
+        (
+          hasCoachEntitlement(request.auth.uid) &&
+          hasActiveLink(request.auth.uid, userId)
+        )
+        ||
         (
           exists(/databases/$(database)/documents/coachAssignments/$(request.auth.uid)) &&
           get(/databases/$(database)/documents/coachAssignments/$(request.auth.uid))
@@ -135,8 +170,14 @@ service cloud.firestore {
       }
 
       // ---- Training subcollections (workouts, blocks, etc.) ----
+      // `liftVideos` is EXCLUDED: rule evaluation is a logical OR across
+      // matching blocks, so without this guard the catch-all silently
+      // re-granted coaches the read AND write access the liftVideos block
+      // above deliberately withholds. Lift video metadata stays social-only
+      // (self / confirmed buddy / super admin) — Coach Mode is not a bypass
+      // for social content or media writes.
       match /{subcoll}/{doc=**} {
-        allow read, write: if canAccessTraining(userId);
+        allow read, write: if subcoll != 'liftVideos' && canAccessTraining(userId);
       }
     }
 
@@ -314,9 +355,18 @@ service cloud.firestore {
     // ======================================================
     // COACH / ATHLETE ASSIGNMENTS
     // ======================================================
+    // LEGACY super-admin-seeded rosters. Preserved as a valid authorization
+    // source, but no longer client-writable by the coach.
+    //
+    // SECURITY FIX: this document was previously writable by its own coach,
+    // so any signed-in account could seed itself a roster of arbitrary
+    // athletes — and isCoachFor() trusted any entry — granting full access to
+    // those athletes' training data. Writes are now super-admin only; a coach
+    // removes a seeded athlete through the coachModeRemoveSeededAthlete
+    // callable, which can only ever delete an entry, never add one.
     match /coachAssignments/{coachUid} {
-      // Each coach manages their own roster; super admin can manage any.
-      allow read, write: if request.auth.uid == coachUid || isSuperAdmin();
+      allow read: if request.auth.uid == coachUid || isSuperAdmin();
+      allow write: if isSuperAdmin();
     }
 
     match /athleteAssignments/{athleteUid} {
@@ -351,6 +401,69 @@ service cloud.firestore {
         request.auth.uid == resource.data.athleteUid
         || isSuperAdmin()
       );
+    }
+
+
+    // ======================================================
+    // COACH MODE (server-authoritative)
+    // ======================================================
+    // Every document below is written EXCLUSIVELY by Cloud Functions running
+    // with Admin SDK privileges (which bypass these rules). `allow write: if
+    // false` is therefore the whole write model: a client can never forge an
+    // application status, an entitlement, a coach profile, a relationship or
+    // an audit record.
+
+    // ---- Coach applications: private to applicant + super admin ----
+    // No coach, and no other signed-in user, can ever read someone's
+    // application. Submitted through coachModeSubmitApplication; reviewed
+    // through coachModeReviewApplication.
+    match /coachApplications/{applicantUid} {
+      allow read: if isSelf(applicantUid) || isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ---- Account entitlements: the authoritative Coach Mode grant ----
+    // Readable by the account itself (so the client can route and show
+    // suspended/revoked state) and by super admin. Never client-writable —
+    // forging accountEntitlements is the only way an account could fake
+    // Coach Mode, and it is closed here.
+    match /accountEntitlements/{uid} {
+      allow read: if isSelf(uid) || isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ---- Coach profiles: limited, invitation-safe identity ----
+    // Deliberately contains none of the application answers. Readable by the
+    // coach, by super admin, and by an athlete who actually has a link with
+    // that coach (so an invitation can name who is asking). Not a directory:
+    // an unrelated signed-in user cannot read it.
+    match /coachProfiles/{coachUid} {
+      allow read: if isSelf(coachUid)
+                  || isSuperAdmin()
+                  || (isSignedIn() && exists(
+                       /databases/$(database)/documents/coachAthleteLinks/$(coachUid + '__' + request.auth.uid)
+                     ));
+      allow write: if false;
+    }
+
+    // ---- Canonical coach⇄athlete relationships ----
+    // Readable only by the two parties and super admin — an unrelated signed-in
+    // user cannot read relationship data. All state changes go through the
+    // coachMode* callables, so a client cannot fabricate an active
+    // relationship or move one between statuses.
+    match /coachAthleteLinks/{linkDocId} {
+      allow read: if isSignedIn() && (
+        resource.data.coachUid == request.auth.uid
+        || resource.data.athleteUid == request.auth.uid
+        || isSuperAdmin()
+      );
+      allow write: if false;
+    }
+
+    // ---- Super-admin action audit ----
+    match /coachAdminAudit/{entryId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
     }
 
 

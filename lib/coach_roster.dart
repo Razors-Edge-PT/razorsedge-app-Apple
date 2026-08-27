@@ -5,10 +5,17 @@
 // implemented match firestore.rules `isCoachFor()` and the backend
 // functions/coach/authz.js exactly:
 //
-//   • super-admin  → every user document (effectively coach for all athletes;
-//                    no assignment document required)
-//   • ordinary coach → athleteAssignments where coaches.{uid}.approved == true
-//                      PLUS admin-seeded coachAssignments/{uid}.athletes
+//   • super-admin    → every user document (effectively coach for all
+//                      athletes; no assignment document required)
+//   • ordinary coach → CANONICAL: coachAthleteLinks where coachUid == {uid}
+//                      and status == 'active'
+//                      PLUS LEGACY: athleteAssignments where
+//                      coaches.{uid}.approved == true, and super-admin-seeded
+//                      coachAssignments/{uid}.athletes
+//
+// The canonical source is what all new UI and Cloud Functions write; the two
+// legacy sources are kept for the compatibility release only (see
+// docs/coach_mode.md for the retirement sequence).
 //
 // Ordinary-coach authorisation is NOT widened by this file. Reporting is
 // never enabled here — the roster is only a list of candidates.
@@ -16,6 +23,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
+import 'coach_mode/coach_mode_models.dart';
 import 'user_context.dart';
 
 @immutable
@@ -101,13 +109,23 @@ class CoachRoster {
     );
   }
 
-  /// The authorised athlete UIDs for an ordinary coach, from the two
-  /// assignment sources. Pure so the authorisation shape stays unit-testable.
+  /// The authorised athlete UIDs for an ordinary coach, across every
+  /// authorisation source. Pure so the authorisation shape stays unit-testable.
+  ///
+  /// [activeLinkAthleteUids] is the canonical source (coachAthleteLinks with
+  /// status 'active'); the other two are the legacy sources. Only ACTIVE links
+  /// are ever passed here — a pending invitation is not a roster entry and
+  /// grants no access.
   static Set<String> assignedUids({
     required Iterable<String> approvedAthleteUids,
     required Map<String, dynamic> seededAthletes,
+    Iterable<String> activeLinkAthleteUids = const [],
   }) {
-    return <String>{...approvedAthleteUids, ...seededAthletes.keys};
+    return <String>{
+      ...activeLinkAthleteUids,
+      ...approvedAthleteUids,
+      ...seededAthletes.keys,
+    };
   }
 
   static List<CoachAthlete> sorted(Iterable<CoachAthlete> athletes) {
@@ -148,7 +166,24 @@ class CoachRosterService {
 
   Future<List<CoachAthlete>> _loadAssignedAthletes(String coachUid) async {
     final approved = <String>{};
+    final activeLinks = <String>{};
     Map<String, dynamic> seeded = {};
+
+    // CANONICAL: active coach⇄athlete links. A pending / declined / cancelled /
+    // released / revoked link is deliberately excluded.
+    try {
+      final q = await _db
+          .collection(kColCoachAthleteLinks)
+          .where('coachUid', isEqualTo: coachUid)
+          .where('status', isEqualTo: 'active')
+          .get();
+      activeLinks.addAll(
+        q.docs.map((d) => CoachRoster.safeString(d.data()['athleteUid']))
+            .where((uid) => uid.isNotEmpty),
+      );
+    } catch (e) {
+      debugPrint('⚠️ [CoachRoster] coachAthleteLinks query failed: $e');
+    }
 
     try {
       final q = await _db
@@ -172,6 +207,7 @@ class CoachRosterService {
     final uids = CoachRoster.assignedUids(
       approvedAthleteUids: approved,
       seededAthletes: seeded,
+      activeLinkAthleteUids: activeLinks,
     );
 
     final out = <CoachAthlete>[];

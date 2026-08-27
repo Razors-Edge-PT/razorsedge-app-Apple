@@ -8,6 +8,7 @@ import 'app_drawer.dart';
 import 'app_theme.dart';
 import 'bb3_week_planner.dart';
 import 'coach_home_screen.dart';
+import 'coach_mode/athlete_coaching_screen.dart';
 import 'home_v2_app_bar.dart';
 import 'home_v2_calendar_service.dart';
 import 'home_v2_controller.dart';
@@ -334,6 +335,12 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // ── Coach invitations ─────────────────────────────────────
+                    // Renders nothing at all when there are none, so the
+                    // existing Home layout is unchanged for most users. Kept
+                    // entirely separate from Gymbro/buddy requests.
+                    const CoachInvitationBanner(),
+
                     // ── Quick Access ──────────────────────────────────────────
                     SizedBox(
                       height: (!_ctrl.wpDone || !_ctrl.wesDone) ? 296.0 : 280.0,
@@ -515,7 +522,13 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   );
                                 },
                               ),
-                              UserContext.of(context).isCoach
+                              // Coaches get the Coach Dashboard; everyone else
+                              // gets the athlete Coaching area (accept/decline
+                              // invitations, see and remove current coaches).
+                              // hasCoachMode prefers the server-authoritative
+                              // entitlement over the mirrored claim, so a
+                              // suspended coach falls back to the athlete view.
+                              UserContext.of(context).hasCoachMode
                                   ? _buildQACard(
                                       icon: Icons.supervisor_account,
                                       label: 'Coach\nDashboard',
@@ -534,8 +547,16 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                         );
                                       },
                                     )
-                                  : const SizedBox(
-                                      width: kFeatureCardWidth, height: 130),
+                                  : _buildQACard(
+                                      icon: Icons.supervisor_account_outlined,
+                                      label: 'Coaching',
+                                      onTap: () => Navigator.of(context).push(
+                                        MaterialPageRoute(
+                                          builder: (_) =>
+                                              const AthleteCoachingScreen(),
+                                        ),
+                                      ),
+                                    ),
                             ),
                           ],
                         ),
