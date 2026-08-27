@@ -62,7 +62,8 @@ void main() {
     });
 
     test('the collision is reported with the exact agreed copy', () {
-      expect(kUsernameTakenMessage, "That username's already taken — try another.");
+      expect(kUsernameTakenMessage,
+          "That username's already taken — try another.");
     });
   });
 
@@ -107,13 +108,15 @@ void main() {
       expect(outcome, UsernameGuardOutcome.checkFailed);
     });
 
-    test('the failure message is friendly, retryable, and does not claim "taken"',
+    test(
+        'the failure message is friendly, retryable, and does not claim "taken"',
         () {
       expect(
         kUsernameCheckFailedMessage,
         "We couldn't check that username right now. Check your connection and try again.",
       );
-      expect(kUsernameCheckFailedMessage.toLowerCase(), isNot(contains('taken')));
+      expect(
+          kUsernameCheckFailedMessage.toLowerCase(), isNot(contains('taken')));
     });
 
     test('every outcome maps to exactly one action', () {
@@ -225,6 +228,57 @@ void main() {
           File('lib/create_new_account_screen.dart').readAsStringSync();
       expect(source, contains('result != kSignupUsernameTakenResult'));
       expect(source, contains('_usernameAvailableFlag = false'));
+    });
+  });
+
+  group('createdAt reuses the guard\'s account-creation definition', () {
+    // createdAt must be stamped exactly once, at real account creation, and
+    // never re-stamped by an onboarding-only edit. The task requirement is
+    // specifically that this NOT invent a second, possibly-conflicting
+    // definition of "is this a new account" — it must reuse the same
+    // isAccountCreationPath() call the username guard already established.
+    late String finishBody;
+
+    setUpAll(() {
+      final source =
+          File('lib/create_new_account_screen.dart').readAsStringSync();
+      final start = source.indexOf('Future<void> _finish() async {');
+      final end = source.indexOf('Future<void> _recomputeTemplateCandidates');
+      finishBody = source.substring(start, end);
+    });
+
+    test('isAccountCreationPath is called exactly once', () {
+      // Not twice with the same/different args — a single boolean, reused.
+      expect(
+        'isAccountCreationPath('.allMatches(finishBody).length,
+        1,
+        reason: 'a second call would risk a conflicting definition of '
+            '"is this a new account"',
+      );
+    });
+
+    test('the username guard and the createdAt write share one isNewAccount',
+        () {
+      final guardUse = finishBody.indexOf('if (isNewAccount)');
+      final createdAtUse =
+          finishBody.indexOf('buildCreatedAtField(isNewAccount: isNewAccount)');
+      expect(guardUse, greaterThan(-1));
+      expect(createdAtUse, greaterThan(-1));
+    });
+
+    test('isAccountCreationPath is computed before either use', () {
+      final computed = finishBody.indexOf('isAccountCreationPath(');
+      final guardUse = finishBody.indexOf('if (isNewAccount)');
+      final createdAtUse = finishBody.indexOf('buildCreatedAtField(');
+      expect(computed, lessThan(guardUse));
+      expect(computed, lessThan(createdAtUse));
+    });
+
+    test('createdAt is written via buildCreatedAtField, not inline', () {
+      // Guards against a regression back to an unconditional
+      // 'createdAt': FieldValue.serverTimestamp() in the payload map.
+      expect(finishBody, isNot(contains("'createdAt': FieldValue")));
+      expect(finishBody, contains('buildCreatedAtField(isNewAccount:'));
     });
   });
 }

@@ -15,7 +15,13 @@
 /// overwrites it. So a field must only ever be added here when the caller
 /// actually supplied a value; omitting an unsupplied field is what lets the
 /// user's existing value survive an onboarding-only edit.
+///
+/// `createdAt` is the same class of bug, just gated on "is this real account
+/// creation" rather than "was this field supplied" — see
+/// [buildCreatedAtField] below.
 library;
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Returns just the identity keys that should be merged into `users` /
 /// `users_public`. A `null` input omits its key(s) entirely rather than
@@ -51,3 +57,22 @@ Map<String, dynamic> buildIdentityPayloadFields({
 
   return fields;
 }
+
+/// Returns the `createdAt` key that should be merged into `users` /
+/// `users_public`, or nothing at all.
+///
+/// [isNewAccount] must be the SAME boolean the caller already computed for
+/// the final username guard (`isAccountCreationPath()` in
+/// signup_username_guard.dart) — reusing it, rather than deriving a second,
+/// possibly-conflicting notion of "is this a new account", is what makes it
+/// impossible for a genuine new account to accidentally skip the stamp: both
+/// checks gate on the exact same "no current user, or an anonymous session
+/// being upgraded" condition that the real auth-creation branches below it
+/// are about to act on.
+///
+/// True → `createdAt` is (re-)stamped, exactly once, at real account
+/// creation. False → the key is omitted entirely (never written as `null` or
+/// re-stamped), so an onboarding-only edit can never overwrite the account's
+/// true creation time.
+Map<String, dynamic> buildCreatedAtField({required bool isNewAccount}) =>
+    isNewAccount ? {'createdAt': FieldValue.serverTimestamp()} : {};

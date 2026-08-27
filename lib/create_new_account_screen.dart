@@ -2135,6 +2135,18 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       UserCredential? cred;
       final current = auth.currentUser;
 
+      // The single definition of "this Finish call is creating a brand-new
+      // account" — reused below both by the username guard and by the
+      // createdAt stamp, so the two can never disagree about which mode this
+      // is. True exactly when one of the two auth branches further down is
+      // about to run (no current user, or an anonymous session being
+      // upgraded); false for an established non-anonymous user, i.e. Page 2
+      // opened in edit mode from Templates / the drawer.
+      final isNewAccount = isAccountCreationPath(
+        hasCurrentUser: current != null,
+        isAnonymous: current?.isAnonymous == true,
+      );
+
       // ── Final username uniqueness guard ──────────────────────────────────
       // Page 1's live check is convenience only and can go stale. This is the
       // authoritative one, and it sits BEFORE the branch below on purpose:
@@ -2145,13 +2157,10 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       //    Page 1 with the user's details intact. After auth succeeds AppRoot
       //    swaps in the authenticated navigator and Page 1 no longer exists.
       //
-      // Skipped for an established non-anonymous user (Page 2 opened in edit
-      // mode from Templates / the drawer): that path creates no account and
-      // must not be blocked by a check against the user's own record.
-      if (isAccountCreationPath(
-        hasCurrentUser: current != null,
-        isAnonymous: current?.isAnonymous == true,
-      )) {
+      // Skipped for an established non-anonymous user (edit mode): that path
+      // creates no account and must not be blocked by a check against the
+      // user's own record.
+      if (isNewAccount) {
         final outcome = await checkUsernameStillAvailable(
           widget.username ?? '',
           isUsernameAvailableInPublicIndex,
@@ -2241,6 +2250,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       // field whose key is absent, so writing an explicit null/'' here would
       // silently wipe the user's existing value. See
       // onboarding_identity_payload.dart.
+      //
+      // createdAt is the same class of bug: it must be stamped exactly once,
+      // at real account creation, and never re-stamped by a later onboarding
+      // edit — merge() would otherwise overwrite the user's true creation
+      // time with the edit time on every "Save Changes".
       final payload = {
         'email': user.email,
         ...buildIdentityPayloadFields(
@@ -2249,7 +2263,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           sex: widget.sex,   // 'M'|'F'|'N'
           dob: widget.dob,   // dd-mm-yyyy string
         ),
-        'createdAt': FieldValue.serverTimestamp(),
+        ...buildCreatedAtField(isNewAccount: isNewAccount),
       };
 
       // ✅ Cache demographics locally for offline + fast access across the app
