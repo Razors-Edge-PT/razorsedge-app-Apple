@@ -49,8 +49,14 @@ String? validateUsername(String? raw) {
 }
 
 /// Error for a username whose availability check came back negative.
-/// [available] is null when the check has not run or could not complete —
-/// which is never itself an error, since signup re-checks server-side.
+///
+/// [available] is null when the check has not run or could not complete. That
+/// is deliberately not an error here: this check is a *convenience*, and
+/// blocking Continue because a Firestore read failed would be needlessly
+/// hostile. The authoritative check runs immediately before the account is
+/// committed — see `checkUsernameStillAvailable()` in
+/// signup_username_guard.dart, which fails closed rather than write an
+/// unverified name.
 String? usernameAvailabilityError(bool? available) =>
     available == false ? "That username's already taken — try another." : null;
 
@@ -89,6 +95,94 @@ String? validateConfirmPassword(String? confirm, String? password) {
   if (c.isEmpty) return 'Re-enter your password.';
   if (c != (password ?? '')) return "Those passwords don't match yet.";
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page 2 (OnboardingPageTwo) required-answer rules.
+//
+// These live here, next to the Page 1 rules, for the same reason: the screen
+// itself cannot be exercised without a live Firebase backend, but the rules and
+// the user-facing copy are pure and must not drift.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Ids for the required sections on Page 2. Used to key both the missing-
+/// requirement messages and the screen's scroll anchors.
+class OnboardingSection {
+  static const goals = 'goals';
+  static const bodyFocus = 'bodyFocus';
+  static const injuries = 'injuries';
+  static const experience = 'experience';
+  static const env = 'env';
+}
+
+/// Exact user-facing copy for the Page 2 requirements. These strings are
+/// specified verbatim by the product owner — do not paraphrase them.
+const String kGoalsMissingMessage = 'Pick at least one training goal.';
+const String kBodyFocusMissingMessage =
+    "Pick at least one area you'd like to focus on.";
+const String kInjuryPainMissingMessage =
+    'Give this a pain rating out of 10 so we can account for it.';
+const String kExperienceMissingMessage =
+    'Select your training experience level.';
+const String kEnvironmentMissingMessage =
+    'Tell us what kind of gym you will usually train at.';
+
+/// Lists what Page 2 is still missing, in the order the questions appear, each
+/// paired with the section that owns it. Empty means valid.
+///
+/// Pure by design: the screen computes these booleans from its own state and
+/// delegates, so the rules and copy can be tested without a backend.
+List<({String section, String message})> missingOnboardingRequirements({
+  required bool hasGoal,
+  required bool muscleOrTonedChosen,
+  required bool hasAnyBodyFocus,
+  required bool everyInjuryRated,
+  required bool hasExperience,
+  required bool hasEnvironment,
+}) {
+  final missing = <({String section, String message})>[];
+
+  // Required: goals (ordered by default, so this is a defensive check).
+  if (!hasGoal) {
+    missing.add((
+      section: OnboardingSection.goals,
+      message: kGoalsMissingMessage,
+    ));
+  }
+
+  // Conditional: if muscle/toned was chosen, at least one body focus.
+  if (muscleOrTonedChosen && !hasAnyBodyFocus) {
+    missing.add((
+      section: OnboardingSection.bodyFocus,
+      message: kBodyFocusMissingMessage,
+    ));
+  }
+
+  // Injuries may be empty, but any selected injury needs a pain level 1–10.
+  if (!everyInjuryRated) {
+    missing.add((
+      section: OnboardingSection.injuries,
+      message: kInjuryPainMissingMessage,
+    ));
+  }
+
+  // Required: experience.
+  if (!hasExperience) {
+    missing.add((
+      section: OnboardingSection.experience,
+      message: kExperienceMissingMessage,
+    ));
+  }
+
+  // Required: training environment.
+  if (!hasEnvironment) {
+    missing.add((
+      section: OnboardingSection.env,
+      message: kEnvironmentMissingMessage,
+    ));
+  }
+
+  return missing;
 }
 
 /// Sex is genuinely required: `home_bootstrap_service`, `home_screen` and

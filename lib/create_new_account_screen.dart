@@ -19,7 +19,26 @@ import 'block_creation_helper.dart';
 
 import 'package:localtest222/login_screen.dart';
 import 'signup_validation.dart';
+import 'signup_username_guard.dart';
 import 'periodization_model_utils.dart';
+
+/// The app's single username-availability read: `users_public` keyed by the
+/// normalised lowercase name. Both Page 1's live/debounced convenience check
+/// and Page 2's final commit-time guard go through this, so the two can never
+/// disagree about normalisation.
+///
+/// Throws if the read fails — callers decide what that means. Page 1 treats a
+/// failure as "unknown" and does not block; Page 2's final guard fails closed.
+Future<bool> isUsernameAvailableInPublicIndex(String usernameLower) async {
+  final q = await FirebaseFirestore.instance
+      .collection('users_public')
+      .where('usernameLower', isEqualTo: usernameLower)
+      .limit(1)
+      .get();
+
+  // If there's a hit, it's taken.
+  return q.docs.isEmpty;
+}
 
 class CreateNewAccountScreen extends StatefulWidget {
   const CreateNewAccountScreen({super.key});
@@ -96,6 +115,9 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 
   @override
   void dispose() {
+    // The debounce fires 450ms after the last keystroke; without this, leaving
+    // the screen mid-type would call setState() on a disposed State.
+    _usernameDebounce?.cancel();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -164,17 +186,8 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 
 
 
-  Future<bool> _isUsernameAvailable(String username) async {
-    final lower = username.toLowerCase();
-    final q = await FirebaseFirestore.instance
-        .collection('users_public')
-        .where('usernameLower', isEqualTo: lower)
-        .limit(1)
-        .get();
-
-    // If there's a hit, it's taken.
-    return q.docs.isEmpty;
-  }
+  Future<bool> _isUsernameAvailable(String username) =>
+      isUsernameAvailableInPublicIndex(username.trim().toLowerCase());
 
   Future<void> _ensureAnonAuthForAvailability() async {
     final auth = FirebaseAuth.instance;
@@ -210,10 +223,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     }
 
     _usernameDebounce = Timer(const Duration(milliseconds: 450), () async {
+      if (!mounted) return;
       setState(() => _usernameChecking = true);
       try {
         final ok = await _isUsernameAvailable(v); // now hits users_public
-        setState(() => _usernameAvailableFlag = ok);
+        if (mounted) setState(() => _usernameAvailableFlag = ok);
         print('🔎 [Username] "$v" → ${ok ? 'available' : 'taken'}');
       } catch (e, st) {
         print('❌ [Username] availability check failed: $e\n$st');
@@ -221,7 +235,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       } finally {
         if (mounted) setState(() => _usernameChecking = false);
       }
-      _revalidate(SignupField.username);
+      if (mounted) _revalidate(SignupField.username);
     });
   }
 
@@ -246,7 +260,9 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       if (mounted) setState(() => _usernameAvailableFlag = ok);
     } catch (e, st) {
       print('❌ [Username] availability check failed: $e\n$st');
-      // Leave the flag null: signup re-checks server-side before writing.
+      // Leave the flag null. Continue is not blocked by a check that could not
+      // complete: this one is a convenience. The authoritative guard runs just
+      // before the account is committed and fails closed.
     } finally {
       if (mounted) setState(() => _usernameChecking = false);
     }
@@ -288,6 +304,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   /// Re-evaluates [field], but only once it has been touched, so a pristine
   /// page never turns red.
   void _revalidate(String field) {
+    if (!mounted) return;
     if (!_touched.contains(field)) return;
     final next = _computeFieldError(field);
     if (_fieldErrors[field] == next) return;
@@ -635,6 +652,12 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       _errorMessage = null;
     });
 
+    // Page 2 runs the authoritative username uniqueness check just before it
+    // commits the account. If the name was claimed in the meantime it pops back
+    // with this result rather than writing it, so Page 1 — still mounted below,
+    // with every field the user typed intact — can turn the field red.
+    Future<Object?>? pageTwoResult;
+
     try {
       final email = _emailController.text.trim();
       final password = _passwordController.text.trim();
@@ -648,7 +671,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 
       // Navigate to Page 2 (no account creation yet)
       if (!mounted) return;
-      Navigator.push(
+      pageTwoResult = Navigator.push<Object?>(
         context,
         MaterialPageRoute(
           builder: (_) => OnboardingPageTwo(
@@ -668,6 +691,17 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     } finally {
       if (mounted) setState(() { _isLoading = false; });
     }
+
+    if (pageTwoResult == null) return;
+    final result = await pageTwoResult;
+    if (!mounted || result != kSignupUsernameTakenResult) return;
+
+    // Someone claimed the name between Continue and account creation. Show the
+    // same message the live check uses — via the field's own error, so it is
+    // never rendered twice — and take the user straight to it.
+    setState(() => _usernameAvailableFlag = false);
+    _touchAndValidate(SignupField.username);
+    await _revealField(SignupField.username);
   }
 
 
@@ -764,6 +798,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 
                                 // Username (required)
                                 TextFormField(
+                                  key: _fieldKeys[SignupField.username],
                                   controller: _usernameController,
                                   textInputAction: TextInputAction.next,
                                   style: const TextStyle(color: Colors.black54),
@@ -938,17 +973,17 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   ),
                                 ),
 
-                                // Hidden Form participant so Form.validate()
+                                // Invisible Form participant so Form.validate()
                                 // still gates on DOB. It mirrors the same
-                                // message the field already shows, so the error
-                                // can never appear twice.
-                                SizedBox(
-                                  height: 0,
-                                  width: 0,
-                                  child: TextFormField(
-                                    controller: _dobController,
-                                    validator: (_) => _fieldErrors[SignupField.dob],
-                                  ),
+                                // message the field above already shows, so the
+                                // error can never appear twice. A FormField
+                                // (not a TextFormField) is used deliberately:
+                                // it paints nothing and cannot be reached by
+                                // focus traversal.
+                                FormField<DateTime>(
+                                  initialValue: _dobDate,
+                                  validator: (_) => _fieldErrors[SignupField.dob],
+                                  builder: (_) => const SizedBox.shrink(),
                                 ),
 
                                 const SizedBox(height: 12),
@@ -1340,6 +1375,16 @@ class OnboardingPageTwo extends StatefulWidget {
 
 class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   final _formKey = GlobalKey<FormState>();
+
+  /// Anchors on each required section's header, so Finish can scroll the first
+  /// unmet requirement into view instead of only naming it in a snack bar.
+  final Map<String, GlobalKey> _sectionKeys = {
+    OnboardingSection.goals: GlobalKey(),
+    OnboardingSection.bodyFocus: GlobalKey(),
+    OnboardingSection.injuries: GlobalKey(),
+    OnboardingSection.experience: GlobalKey(),
+    OnboardingSection.env: GlobalKey(),
+  };
 
   // ── A) Goals: start with full list; user reorders to set priority.
   List<String> _goals = [
@@ -1940,46 +1985,88 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     print('⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');
   }
 
-  /// Lists what is still missing, in the order the questions appear, using
-  /// language that names the specific thing to fix. Empty means valid.
+  /// Lists what is still missing, in the order the questions appear, paired
+  /// with the section that owns it. Empty means valid.
   ///
   /// Previously the Finish button disabled itself whenever this was non-empty,
   /// so tapping it did nothing and the explanation inside `_finish()` was
   /// unreachable — the user got no feedback at all. Finish now stays tappable
-  /// and reports the first missing item from this list.
-  List<String> _missingRequirements() {
-    final missing = <String>[];
+  /// and reports the first missing item, scrolling to the section that owns it.
+  ///
+  /// There is deliberately no `_uiIsValid()` helper any more: the only thing it
+  /// was ever used for was disabling the button, which is the bug above.
+  ///
+  /// The rules and the exact user-facing copy live in signup_validation.dart so
+  /// they can be tested without a backend; this only reads them off state.
+  List<({String section, String message})> _missingRequirements() =>
+      missingOnboardingRequirements(
+        hasGoal: _goals.isNotEmpty,
+        muscleOrTonedChosen: _muscleOrTonedChosen,
+        hasAnyBodyFocus: _bodyFocusLevel.values.any((lvl) => lvl > 0),
+        everyInjuryRated: _injuries.every((i) => (_painSlider[i] ?? 0) >= 1),
+        hasExperience: _experience != null,
+        hasEnvironment: _env != null,
+      );
 
-    // Required: goals (ordered by default, so this is a defensive check).
-    if (_goals.isEmpty) {
-      missing.add('Pick at least one training goal.');
+  /// Reports an account-creation failure that the user can actually act on.
+  /// Firebase is the authority on whether an email is already registered —
+  /// Page 1 deliberately does not preflight it, because every client-side way
+  /// to do so is an account-enumeration primitive — so this is where a
+  /// duplicate finally surfaces, and it has to be specific.
+  void _showAuthFailure(FirebaseAuthException e) {
+    debugPrint('❌ [Onboarding Finish] auth failed: ${e.code} — ${e.message}');
+    if (!mounted) return;
+    final duplicate =
+        e.code == 'email-already-in-use' || e.code == 'credential-already-in-use';
+    final String message;
+    switch (e.code) {
+      case 'email-already-in-use':
+      case 'credential-already-in-use':
+        message = 'That email already has a GoodLift account.';
+        break;
+      case 'invalid-email':
+        message = "That doesn't look like a valid email address.";
+        break;
+      case 'weak-password':
+        message = 'Password needs at least 6 characters.';
+        break;
+      case 'network-request-failed':
+        message = 'No connection — check your network and try again.';
+        break;
+      default:
+        message = 'Could not create your account. (${e.message})';
     }
-
-    // Conditional: if muscle/toned was chosen, at least one body focus.
-    final hasAnyFocus = _bodyFocusLevel.values.any((lvl) => lvl > 0);
-    if (_muscleOrTonedChosen && !hasAnyFocus) {
-      missing.add('Choose at least one body area to focus on.');
-    }
-
-    // Injuries may be empty, but any selected injury needs a pain level 1–10.
-    if (!_injuries.every((i) => (_painSlider[i] ?? 0) >= 1)) {
-      missing.add('Set a pain level (1–10) for each injury you selected.');
-    }
-
-    // Required: experience.
-    if (_experience == null) {
-      missing.add('Choose your training experience.');
-    }
-
-    // Required: training environment.
-    if (_env == null) {
-      missing.add('Choose where you\'ll be training.');
-    }
-
-    return missing;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: Duration(seconds: duplicate ? 8 : 5),
+          action: duplicate
+              ? SnackBarAction(
+                  label: 'Log in',
+                  onPressed: () {
+                    Navigator.of(context).popUntil((r) => r.isFirst);
+                  },
+                )
+              : null,
+        ),
+      );
   }
 
-  bool _uiIsValid() => _missingRequirements().isEmpty;
+  /// Scrolls the header of [section] into view. Silently does nothing when the
+  /// section is not currently built (some are conditional), in which case the
+  /// snack bar still names the problem.
+  Future<void> _revealSection(String section) async {
+    final ctx = _sectionKeys[section]?.currentContext;
+    if (ctx == null) return;
+    await Scrollable.ensureVisible(
+      ctx,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+      alignment: 0.1,
+    );
+  }
 
   @override
   void dispose() {
@@ -2022,11 +2109,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     final missing = _missingRequirements();
     if (missing.isNotEmpty) {
       // Name the specific thing to fix rather than a generic form-level error,
-      // and say how many others remain so nothing is hidden.
+      // say how many others remain so nothing is hidden, and scroll to it.
       final more = missing.length - 1;
       final detail = more > 0
-          ? '${missing.first} (+$more more to finish)'
-          : missing.first;
+          ? '${missing.first.message} (+$more more to finish)'
+          : missing.first.message;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
@@ -2035,6 +2122,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
             duration: const Duration(seconds: 4),
           ),
         );
+      await _revealSection(missing.first.section);
       return;
     }
 
@@ -2045,6 +2133,52 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       final auth = FirebaseAuth.instance;
       UserCredential? cred;
       final current = auth.currentUser;
+
+      // ── Final username uniqueness guard ──────────────────────────────────
+      // Page 1's live check is convenience only and can go stale. This is the
+      // authoritative one, and it sits BEFORE the branch below on purpose:
+      //
+      //  * it therefore covers BOTH creation paths (anonymous link and
+      //    create-new) by construction — neither can be missed;
+      //  * nothing has been created yet, so a collision can pop cleanly back to
+      //    Page 1 with the user's details intact. After auth succeeds AppRoot
+      //    swaps in the authenticated navigator and Page 1 no longer exists.
+      //
+      // Skipped for an established non-anonymous user (Page 2 opened in edit
+      // mode from Templates / the drawer): that path creates no account and
+      // must not be blocked by a check against the user's own record.
+      if (isAccountCreationPath(
+        hasCurrentUser: current != null,
+        isAnonymous: current?.isAnonymous == true,
+      )) {
+        final outcome = await checkUsernameStillAvailable(
+          widget.username ?? '',
+          isUsernameAvailableInPublicIndex,
+        );
+        debugPrint('🔒 [Onboarding Finish] final username guard: ${outcome.name}');
+        if (!mounted) return;
+        switch (actionForGuardOutcome(outcome)) {
+          case SignupCommitAction.proceed:
+            break;
+          case SignupCommitAction.returnToUsernameField:
+            // Nothing written, nothing created. Page 1 turns the field red.
+            Navigator.of(context).pop(kSignupUsernameTakenResult);
+            return;
+          case SignupCommitAction.showRetryableError:
+            // Fail closed: an unreadable index proves nothing about
+            // uniqueness, so we must not write the name. Form state is kept so
+            // Finish can simply be tapped again.
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                const SnackBar(
+                  content: Text(kUsernameCheckFailedMessage),
+                  duration: Duration(seconds: 6),
+                ),
+              );
+            return;
+        }
+      }
 
       if (current?.isAnonymous == true) {
         // Upgrade the anonymous session to a real email/password account.
@@ -2060,39 +2194,25 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
             await cred.user?.updateDisplayName(username);
           }
         } on FirebaseAuthException catch (linkErr) {
-          if (linkErr.code == 'credential-already-in-use' ||
-              linkErr.code == 'email-already-in-use') {
-            // Email already belongs to another account — do not write to
-            // Firestore. This is the authoritative duplicate-email check:
-            // Page 1 deliberately does not preflight it, because every
-            // client-side way to do so is an account-enumeration primitive.
-            if (mounted) {
-              ScaffoldMessenger.of(context)
-                ..hideCurrentSnackBar()
-                ..showSnackBar(
-                  SnackBar(
-                    content: const Text(
-                      'That email already has a GoodLift account.',
-                    ),
-                    duration: const Duration(seconds: 8),
-                    action: SnackBarAction(
-                      label: 'Log in',
-                      onPressed: () {
-                        Navigator.of(context).popUntil((r) => r.isFirst);
-                      },
-                    ),
-                  ),
-                );
-            }
-            return; // outer finally resets _saving
-          }
-          rethrow; // let outer catch handle unexpected errors
+          // Email already belongs to another account, or the credentials
+          // themselves are rejected — do not write anything to Firestore.
+          _showAuthFailure(linkErr);
+          return; // outer finally resets _saving
         }
       } else if (current == null) {
-        cred = await auth.createUserWithEmailAndPassword(
-          email: widget.email,
-          password: widget.password,
-        );
+        // Reached when the anonymous sign-in on Page 1 could not complete.
+        // This path needs the same specific failure reporting as the link
+        // path above; without it a duplicate email surfaced as the generic
+        // "Could not finish setup. Please try again."
+        try {
+          cred = await auth.createUserWithEmailAndPassword(
+            email: widget.email,
+            password: widget.password,
+          );
+        } on FirebaseAuthException catch (createErr) {
+          _showAuthFailure(createErr);
+          return; // outer finally resets _saving
+        }
 
         // displayName = username (optional)
         final user = auth.currentUser;
@@ -2780,7 +2900,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     ),
                     const SizedBox(height: 16),
 
-                    _SectionHeader("What do you care about most? (drag to rank)", color: Colors.blueAccent),
+                    _SectionHeader(
+                      "What do you care about most? (drag to rank)",
+                      color: Colors.blueAccent,
+                      key: _sectionKeys[OnboardingSection.goals],
+                    ),
                     const SizedBox(height: 8),
                     _GoalsRanker(
                       items: _goals,
@@ -2805,7 +2929,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     // C) Injuries (checkbox + pain slider)
                     const SizedBox(height: 19),
-                    _SectionHeader("Any existing niggles or injuries?", color: Colors.blueAccent),
+                    _SectionHeader(
+                      "Any existing niggles or injuries?",
+                      color: Colors.blueAccent,
+                      key: _sectionKeys[OnboardingSection.injuries],
+                    ),
                     const SizedBox(height: 8),
 
                     Container(
@@ -3027,7 +3155,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     // D) Experience
                     const SizedBox(height: 16),
-                    _SectionHeader("Weights Training experience", color: Colors.blueAccent),
+                    _SectionHeader(
+                      "Weights Training experience",
+                      color: Colors.blueAccent,
+                      key: _sectionKeys[OnboardingSection.experience],
+                    ),
                     const SizedBox(height: 6),
 
                     Container(
@@ -3262,7 +3394,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                       _SectionHeader(
                         "Any areas you’d like to especially focus on?"
                             "\nTap once, twice or thrice for extra emphasis",
-
+                        key: _sectionKeys[OnboardingSection.bodyFocus],
                       ),
 
 
@@ -3712,7 +3844,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
                     // ── Equipment / Environment (REQUIRED)
                     const SizedBox(height: 10),
-                    _SectionHeader("What kind of training equipment do you have available?", color: Colors.black),
+                    _SectionHeader(
+                      "What kind of training equipment do you have available?",
+                      color: Colors.black,
+                      key: _sectionKeys[OnboardingSection.env],
+                    ),
                     const SizedBox(height: 8),
 
 // Environment picker (compact chips)
