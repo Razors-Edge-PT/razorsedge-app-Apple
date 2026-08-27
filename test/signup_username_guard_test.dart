@@ -191,9 +191,12 @@ void main() {
       expect(guard, lessThan(create));
     });
 
-    test('the guard runs before usernameLower is written', () {
+    test('the guard runs before username/usernameLower are written', () {
+      // username/usernameLower are written via buildIdentityPayloadFields()
+      // (see onboarding_identity_payload.dart) rather than inline — that
+      // call site is where the write actually happens.
       final guard = finishBody.indexOf('checkUsernameStillAvailable(');
-      final write = finishBody.indexOf("'usernameLower'");
+      final write = finishBody.indexOf('buildIdentityPayloadFields(');
       expect(write, greaterThan(-1));
       expect(guard, lessThan(write));
     });
@@ -212,7 +215,7 @@ void main() {
     test('a collision pops back to Page 1 instead of writing', () {
       final guard = finishBody.indexOf('checkUsernameStillAvailable(');
       final pop = finishBody.indexOf('pop(kSignupUsernameTakenResult)');
-      final write = finishBody.indexOf("'usernameLower'");
+      final write = finishBody.indexOf('buildIdentityPayloadFields(');
       expect(pop, greaterThan(guard));
       expect(pop, lessThan(write));
     });

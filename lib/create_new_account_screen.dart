@@ -20,6 +20,7 @@ import 'block_creation_helper.dart';
 import 'package:localtest222/login_screen.dart';
 import 'signup_validation.dart';
 import 'signup_username_guard.dart';
+import 'onboarding_identity_payload.dart';
 import 'periodization_model_utils.dart';
 
 /// The app's single username-availability read: `users_public` keyed by the
@@ -2232,14 +2233,22 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       await ensureMembershipDoc(user.uid);
 
       // 2) Write profile payload to users & users_public
-      final username = (widget.username ?? '').trim();
+      //
+      // Identity fields (username/usernameLower/fullName/sex/dob) are added
+      // ONLY when this widget instance actually carries a value for them.
+      // Edit mode (Templates / drawer) passes null for whichever identity
+      // field it isn't letting the user change — merge() only protects a
+      // field whose key is absent, so writing an explicit null/'' here would
+      // silently wipe the user's existing value. See
+      // onboarding_identity_payload.dart.
       final payload = {
         'email': user.email,
-        'username': username,
-        'usernameLower': username.toLowerCase(),
-        'fullName': widget.fullName,
-        'dob': widget.dob,    // dd-mm-yyyy string
-        'sex': widget.sex,    // 'M'|'F'|'N'
+        ...buildIdentityPayloadFields(
+          username: widget.username,
+          fullName: widget.fullName,
+          sex: widget.sex,   // 'M'|'F'|'N'
+          dob: widget.dob,   // dd-mm-yyyy string
+        ),
         'createdAt': FieldValue.serverTimestamp(),
       };
 
