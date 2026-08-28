@@ -11,6 +11,7 @@ test('planned-blocks migration defaults to a non-writing dry run', () => {
     uid: null,
     execute: false,
     verify: false,
+    allowKnownOrphans: false,
   });
   assert.deepEqual(
     migration.parseArgs(['--uid', 'athlete-1', '--execute']),
@@ -19,7 +20,17 @@ test('planned-blocks migration defaults to a non-writing dry run', () => {
       uid: 'athlete-1',
       execute: true,
       verify: false,
+      allowKnownOrphans: false,
     },
+  );
+});
+
+test('known orphans must be opted in explicitly', () => {
+  // Off unless asked for: an unexpected orphan still fails the run.
+  assert.equal(migration.parseArgs([]).allowKnownOrphans, false);
+  assert.equal(
+    migration.parseArgs(['--verify', '--allow-known-orphans']).allowKnownOrphans,
+    true,
   );
 });
 
@@ -112,3 +123,40 @@ test('migration recursively copies block, week, and day documents', async () => 
   );
   assert.ok(writes.every((write) => write.options.merge === false));
 });
+
+test('a missing users/{uid} doc copies nothing, even with --allow-known-orphans',
+  async () => {
+    // The flag only stops confirmed deleted accounts failing the run. It must
+    // never cause their data to be written into the canonical hierarchy, which
+    // would resurrect deleted users' training data under a phantom user doc.
+    for (const allowKnownOrphans of [false, true]) {
+      const touched = [];
+      const db = {
+        collection(name) {
+          touched.push(`collection:${name}`);
+          return {
+            doc: (id) => ({
+              async get() { return { exists: false }; },
+              collection(child) {
+                touched.push(`collection:${name}/${id}/${child}`);
+                return { async listDocuments() { return []; } };
+              },
+            }),
+          };
+        },
+      };
+
+      const stats = migration.newStats();
+      await migration.migrateUser(db, 'deleted-user', {
+        execute: true,
+        verify: false,
+        allowKnownOrphans,
+      }, stats);
+
+      assert.deepEqual(stats.orphanUsers, ['deleted-user']);
+      assert.equal(stats.sourceDocuments, 0);
+      assert.equal(stats.created, 0);
+      // It must bail out before ever reaching the legacy blocks subcollection.
+      assert.ok(!touched.some((entry) => entry.includes('/blocks')));
+    }
+  });

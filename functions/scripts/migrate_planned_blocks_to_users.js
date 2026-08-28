@@ -20,6 +20,13 @@ function usage() {
     '',
     'Verify source documents all exist identically at the canonical path:',
     '  npm run migrate:planned-blocks -- --project goodlift-us-storage --uid <uid> --verify',
+    '',
+    'Legacy uids whose users/{uid} document no longer exists are ALWAYS skipped',
+    'and never copied. By default their presence also fails the run. Once they',
+    'have been confirmed as deleted accounts, --allow-known-orphans stops them',
+    'failing the run so the live users can still be verified. They are still',
+    'reported, still skipped, and conflicts/missing documents still fail:',
+    '  npm run migrate:planned-blocks -- --project goodlift-us-storage --verify --allow-known-orphans',
   ].join('\n');
 }
 
@@ -29,12 +36,14 @@ function parseArgs(argv) {
     uid: null,
     execute: false,
     verify: false,
+    allowKnownOrphans: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--execute') out.execute = true;
     else if (arg === '--verify') out.verify = true;
+    else if (arg === '--allow-known-orphans') out.allowKnownOrphans = true;
     else if (arg === '--uid') out.uid = argv[++i];
     else if (arg === '--project') out.projectId = argv[++i];
     else if (arg === '--help' || arg === '-h') out.help = true;
@@ -231,7 +240,12 @@ async function run(argv = process.argv.slice(2)) {
   }
   printSummary(mode, options.projectId, uids, stats);
 
-  if (stats.conflicts.length > 0 || stats.orphanUsers.length > 0) return 2;
+  // Orphans are never copied, whatever this flag says — migrateUser() skips
+  // them before touching any block. The flag only decides whether their
+  // presence, once confirmed as deleted accounts, still fails the run.
+  const orphansBlock =
+    stats.orphanUsers.length > 0 && !options.allowKnownOrphans;
+  if (stats.conflicts.length > 0 || orphansBlock) return 2;
 
   if (options.execute) {
     const verifyOptions = { ...options, execute: false, verify: true };
@@ -240,9 +254,11 @@ async function run(argv = process.argv.slice(2)) {
       await migrateUser(db, uid, verifyOptions, verifyStats);
     }
     printSummary('POST_COPY_VERIFY', options.projectId, uids, verifyStats);
+    const verifyOrphansBlock =
+      verifyStats.orphanUsers.length > 0 && !options.allowKnownOrphans;
     if (verifyStats.missing > 0 ||
         verifyStats.conflicts.length > 0 ||
-        verifyStats.orphanUsers.length > 0) {
+        verifyOrphansBlock) {
       return 3;
     }
   }
