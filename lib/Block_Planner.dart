@@ -83,7 +83,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
           return;
         }
 
-        // 1) Persist the full block doc (planned_blocks/{uid}/blocks/{blockId})
+        // 1) Persist the full block doc (users/{uid}/planned_blocks/{blockId})
         await _savePlannedExercises(suppressSnack: true);
 
         print('🧪[BP.dispose pre] blockId=$blockIdToUse '
@@ -172,9 +172,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     if (userId == null) return;
 
     final doc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .get();
 
@@ -209,9 +209,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 // 🔧 Self-heal corrupted blocks (safe, idempotent)
       if (fixed.length != loadedExercises.length) {
         FirebaseFirestore.instance
-            .collection('planned_blocks')
+            .collection('users')
             .doc(userId)
-            .collection('blocks')
+            .collection('planned_blocks')
             .doc(blockId)
             .update({
           'exercises': fixed,
@@ -315,9 +315,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     }
 
     final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(bid);
 
 // ✅ Special-case repTargets so stale instances can't survive merge
@@ -469,9 +469,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     await loadExercisesFromFirestore(); // ✅ Ensure names are ready
 
     final doc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .get();
 
@@ -530,9 +530,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
 
     final userBlocksRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     // ─── 1) If we're turning this block on, look for any other active one ───
     if (setActive) {
@@ -1416,9 +1416,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
     // 🔄 Now writing into the *same* collection as savePlannedBlock
     final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockIdToUse);
 
     print("📤 Saving exerciseSettings for ${exercises.length} exercises");
@@ -1661,9 +1661,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
           .inDays ~/ 7 + 1;
 
       final weeksCollection = FirebaseFirestore.instance
-          .collection('planned_blocks')
+          .collection('users')
           .doc(userId) // ✅ selected athlete
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(blockIdToUse!)
           .collection('weeks');
 
@@ -1732,9 +1732,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     }
 
     final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockIdToUse); // ✅ read the actual block being edited
 
     final snapshot = await docRef.get();
@@ -2668,9 +2668,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     };
 
     FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(bid)
         .set(payload, SetOptions(merge: true))
         .then((_) => print("✅ [RIR.flush] wrote on $reason for ${widget.exerciseName}"))
@@ -2961,9 +2961,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
       if (uid != null && uid.isNotEmpty && bid != null && bid.isNotEmpty) {
         final docRef = FirebaseFirestore.instance
-            .collection('planned_blocks')
+            .collection('users')
             .doc(uid)
-            .collection('blocks')
+            .collection('planned_blocks')
             .doc(bid);
 
         // Pull latest local entry (safeSave already wrote into exerciseSettings)

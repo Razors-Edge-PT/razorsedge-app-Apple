@@ -10,9 +10,9 @@ class BlockPlannerRepository {
     required String blockId,
   }) async {
     final doc = await _db
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .get();
     if (!doc.exists) {
@@ -36,20 +36,23 @@ class BlockPlannerRepository {
 
     print('🧪 [Repo] fetchActiveBlockId called for user: ${user.uid}');
 
-    final doc = await _db
-        .collection('planned_blocks')
+    final blocks = await _db
+        .collection('users')
         .doc(user.uid)
+        .collection('planned_blocks')
+        .where('isActive', isEqualTo: true)
+        .limit(1)
         .get();
 
-    if (!doc.exists) {
-      print('❌ [Repo] No document found at planned_blocks/${user.uid}');
+    if (blocks.docs.isEmpty) {
+      print('❌ [Repo] No active planned block found for ${user.uid}');
       return null;
     }
 
-    final id = doc.data()?['activeBlockId'];
+    final id = blocks.docs.first.id;
     print('🎯 [Repo] activeBlockId from Firestore = $id');
 
-    return id as String?;
+    return id;
   }
 
 }

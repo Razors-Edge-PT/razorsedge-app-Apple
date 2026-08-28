@@ -352,7 +352,7 @@ Phase 19 target: Settings Cog Dialog.
 - Use block-level exerciseSettings only; do not write plannedExerciseDetails.
 - Requires activeBlockId guard.
 - Internet-required; no offline queue.
-- Save only planned_blocks/{uid}/blocks/{blockId}.exerciseSettings[exerciseId].
+- Save only users/{uid}/planned_blocks/{blockId}.exerciseSettings[exerciseId].
 - Do not implement hint recalculation beyond reload/refresh trigger.
 - Do not modify BP/BB3/PMU/progression files.
 """.strip()

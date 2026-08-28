@@ -10,8 +10,8 @@ import 'periodization_model_utils.dart';
 // Written from scratch — no code shared with _mergeNewBB2ExercisesIntoDraft.
 //
 // Firestore paths:
-//   Primary  : planned_blocks/{uid}/blocks/{blockId}/weeks/week_{n}/days/day_{n}
-//   Fallback : planned_blocks/{uid}/blocks/{blockId}/block_data/{YYYY-MM-DD}
+//   Primary  : users/{uid}/planned_blocks/{blockId}/weeks/week_{n}/days/day_{n}
+//   Fallback : users/{uid}/planned_blocks/{blockId}/block_data/{YYYY-MM-DD}
 //
 // Identity rule: exerciseId is the unique key per day.
 // Override identity for WES hints: exerciseId + setIndex (never row-based).
@@ -31,9 +31,9 @@ class BB3PlannedExerciseService {
     int dayIndex,
   ) =>
       _fs
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(blockId)
           .collection('weeks')
           .doc('week_$weekIndex')
@@ -46,9 +46,9 @@ class BB3PlannedExerciseService {
     DateTime date,
   ) =>
       _fs
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(blockId)
           .collection('block_data')
           .doc(_dateFmt.format(date));
@@ -366,9 +366,9 @@ class BB3PlannedExerciseService {
   ) async {
     try {
       final snap = await _fs
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(blockId)
           .get();
       if (snap.exists && snap.data() != null) {
@@ -383,9 +383,9 @@ class BB3PlannedExerciseService {
   static Future<List<BB3BlockSettings>> listBlocks(String uid) async {
     try {
       final snaps = await _fs
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .get();
       return snaps.docs
           .map((d) => BB3BlockSettings.fromDoc(d.id, d.data()))

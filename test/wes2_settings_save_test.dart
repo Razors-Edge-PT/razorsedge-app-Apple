@@ -54,9 +54,9 @@ Future<FakeFirebaseFirestore> _seed(Map<String, dynamic> settings,
     {Map<String, dynamic> extraDocFields = const {}}) async {
   final db = FakeFirebaseFirestore();
   await db
-      .collection('planned_blocks')
+      .collection('users')
       .doc(_uid)
-      .collection('blocks')
+      .collection('planned_blocks')
       .doc(_block)
       .set({
     'exerciseSettings': {
@@ -86,9 +86,9 @@ Future<FakeFirebaseFirestore> _seed(Map<String, dynamic> settings,
 Future<Map<String, dynamic>> _allExerciseSettings(
     FakeFirebaseFirestore db) async {
   final snap = await db
-      .collection('planned_blocks')
+      .collection('users')
       .doc(_uid)
-      .collection('blocks')
+      .collection('planned_blocks')
       .doc(_block)
       .get();
   return Map<String, dynamic>.from(snap.data()!['exerciseSettings'] as Map);
@@ -96,9 +96,9 @@ Future<Map<String, dynamic>> _allExerciseSettings(
 
 Future<Map<String, dynamic>> _readSettings(FakeFirebaseFirestore db) async {
   final snap = await db
-      .collection('planned_blocks')
+      .collection('users')
       .doc(_uid)
-      .collection('blocks')
+      .collection('planned_blocks')
       .doc(_block)
       .get();
   return Map<String, dynamic>.from(

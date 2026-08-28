@@ -363,9 +363,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     final swTotal = Stopwatch()..start();
     final blocksRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     final existingBlocks = await blocksRef.get();
 
@@ -890,9 +890,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _activeBlockSub = null;
     if (uid.isEmpty) return;
     _activeBlockSub = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .where('isActive', isEqualTo: true)
         .snapshots()
         .listen((_) {
@@ -1512,9 +1512,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     if (uid.isEmpty) throw Exception('No UID — cannot fetch active block');
 
     final query = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .where('isActive', isEqualTo: true)
         .limit(1)
         .get();

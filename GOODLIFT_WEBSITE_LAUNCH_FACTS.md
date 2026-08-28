@@ -26,7 +26,7 @@ Primary store is **Cloud Firestore**, keyed by Firebase UID. Categories:
 
 - **Account / profile:** email, display name, photo URL, provider IDs, created/last-login timestamps; username, full name, date of birth, sex. Public mirror in `users_public`. (`login_screen.dart` `_upsertUserDoc`, `create_new_account_screen.dart`)
 - **Onboarding / training profile:** goals, body-focus targets, injuries + pain levels, training experience, equipment/environment, best-effort lifts, training days/effort. (`create_new_account_screen.dart` `OnboardingAnswers`)
-- **Workout plans, planned blocks & templates:** `planned_blocks/{uid}/blocks/...`, templates. (`Block_Planner.dart`, `templates.dart`, `WES2_template_service.dart`)
+- **Workout plans, planned blocks & templates:** `users/{uid}/planned_blocks/...`, templates. (`Block_Planner.dart`, `templates.dart`, `WES2_template_service.dart`)
 - **Exercises & completed workouts:** per-set **weight, reps, RIR, velocity**, plus completion state. (`WES2_models.dart` — `Wes2FieldKey { weight, reps, rir, velocity }`)
 - **Workout / training history:** `users/{uid}/workouts`, daily/monthly rollups `re_daily`, `re_monthly`. (`functions/index.js` `repointsMonthlyAggregator`)
 - **Progression / calculated insights (RE Points):** per-lift bests, monthly totals, badges, feed posts. (`functions/index.js`; `progression_engine.dart`, `periodization_model_utils.dart`)
@@ -105,9 +105,9 @@ Flow: `account_deletion_screen.dart` (`_deleteAccount`). Reachable from **Settin
 | Deletion available in-app | ✅ (Settings; plus iOS paywall) |
 | Firebase Auth user deleted | ✅ `currentUser.delete()` |
 | Main Firestore user doc deleted | ✅ `users/{uid}` and `users_public/{uid}` |
-| Subcollections recursively deleted | ⚠️ **Partial.** Only `workouts`, `weights`, `re_cache`, `re_daily` are deleted (one level). |
+| Subcollections recursively deleted | ⚠️ **Partial.** Only `workouts`, `weights`, `re_cache`, `re_daily`, and top-level `planned_blocks` documents are deleted (one level). |
 | Local Isar / cached data cleared | ❌ Not cleared by the deletion flow (user is signed out afterward) |
-| Records that may remain | `re_monthly`; `profile/*` (incl. `membership`); `planned_blocks/{uid}/blocks/...` (deep nesting, TODO); `posts`; `conversations/{id}/messages` (parent conv doc deleted, messages subcollection not recursed); `account_deletion_requests/{uid}` (kept by design as audit) |
+| Records that may remain | `re_monthly`; `profile/*` (incl. `membership`); `users/{uid}/planned_blocks/...` (deep nesting, TODO); `posts`; `conversations/{id}/messages` (parent conv doc deleted, messages subcollection not recursed); `account_deletion_requests/{uid}` (kept by design as audit) |
 | User told deletion ≠ subscription cancellation | ❌ **No such warning** in the deletion screen |
 
 **Deletion gaps to fix or disclose (see Section E):** residual data in several collections, no local-cache wipe, and no notice that deleting the account does not cancel the Apple/Google/Stripe subscription.

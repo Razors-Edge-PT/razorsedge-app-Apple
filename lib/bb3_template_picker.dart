@@ -48,9 +48,9 @@ class _BB3TemplatePickerState extends State<BB3TemplatePicker> {
     Map<String, String> blockNames = {};
     try {
       final blocksSnap = await FirebaseFirestore.instance
-          .collection('planned_blocks')
+          .collection('users')
           .doc(widget.uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .get();
       for (final doc in blocksSnap.docs) {
         final name = doc.data()['name'] as String?;

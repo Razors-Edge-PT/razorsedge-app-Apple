@@ -71,9 +71,9 @@ class _CreateTemplateScreenState extends State<CreateTemplateScreen> {
 
     // 2) load ALL blocks for dropdown
     final blocksSnap = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId) // ✅ selected athlete
-        .collection('blocks')
+        .collection('planned_blocks')
         .get();
 
     final loadedBlocks = <Map<String, String>>[];

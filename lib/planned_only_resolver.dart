@@ -12,9 +12,9 @@ Future<Set<String>> resolvePlannedOnlyIds({
   if (blockId == null || blockId.isEmpty) return const {};
   try {
     final blockDoc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId)
         .get();
     final data = blockDoc.data();

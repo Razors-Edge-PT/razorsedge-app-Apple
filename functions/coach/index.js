@@ -659,8 +659,8 @@ async function completedWorkoutDays(athleteUid, dateKeys) {
 
 /** Active block meta ({blockId, startKey, endKey}) or null. */
 async function activeBlock(athleteUid, tz) {
-  const q = await db.collection('planned_blocks').doc(athleteUid)
-    .collection('blocks')
+  const q = await db.collection('users').doc(athleteUid)
+    .collection('planned_blocks')
     .where('isActive', '==', true)
     .limit(1)
     .get();
@@ -681,8 +681,8 @@ async function activeBlock(athleteUid, tz) {
 async function plannedCountForWeek(athleteUid, block, weekIndex) {
   const refs = [];
   for (let i = 0; i < 7; i++) {
-    refs.push(db.collection('planned_blocks').doc(athleteUid)
-      .collection('blocks').doc(block.blockId)
+    refs.push(db.collection('users').doc(athleteUid)
+      .collection('planned_blocks').doc(block.blockId)
       .collection('weeks').doc(`week_${weekIndex}`)
       .collection('days').doc(`day_${i}`));
   }

@@ -17,9 +17,9 @@ class BlockRepository {
     if (uid == null) return null;
 
     final snap = await _firestore
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .where('isActive', isEqualTo: true)
         .limit(1)
         .get();

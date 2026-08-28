@@ -1,6 +1,7 @@
-# Recursively copy /planned_blocks/{uid} from OLD → NEW:
-# - copies parent doc fields
-# - copies ALL subcollections (e.g., blocks/* and anything nested under those)
+# Recursively copy legacy /planned_blocks/{uid}/blocks/{blockId} from OLD to
+# canonical /users/{uid}/planned_blocks/{blockId} in NEW:
+# - preserves every block document ID and field
+# - copies ALL nested subcollections (weeks/days, block_data, and future ones)
 # Uses your gcloud login. Start with DRY_RUN = True.
 # Run: py firestore_planned_blocks_migrator.py
 
@@ -25,9 +26,8 @@ USER_MAPPINGS = [
 ]
 
 # ---- BEHAVIOR ----
-DRY_RUN   = False             # print only; no writes
+DRY_RUN   = True              # print only; no writes
 MODE      = "skip"           # "skip" | "merge" | "overwrite"
-CREATE_EMPTY_PARENT = True   # ensure parent doc exists even if source has no fields
 
 # ---- AUTH ----
 adc_creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
@@ -57,12 +57,6 @@ def _copy_doc_recursive(src_doc_ref: firestore.DocumentReference,
         if not DRY_RUN:
             _upsert(dst_doc_ref, src_snap.to_dict())
         moved += 1
-    else:
-        if CREATE_EMPTY_PARENT and path_hint.count("/") == 1:  # only for top-level planned_blocks/{uid}
-            print(f"{'WOULD ' if DRY_RUN else ''}ENSURE EMPTY PARENT: {path_hint}")
-            if not DRY_RUN:
-                dst_doc_ref.set({}, merge=True)
-
     # Recurse into every subcollection under this doc
     for subcol in src_doc_ref.collections():
         for child_snap in subcol.stream():
@@ -75,8 +69,17 @@ def _copy_doc_recursive(src_doc_ref: firestore.DocumentReference,
 
 def copy_planned_blocks_for_user(old_uid: str, new_uid: str) -> int:
     src_user_doc = old_db.collection("planned_blocks").document(old_uid)
-    dst_user_doc = new_db.collection("planned_blocks").document(new_uid)
-    return _copy_doc_recursive(src_user_doc, dst_user_doc, f"planned_blocks/{new_uid}")
+    dst_blocks = (new_db.collection("users").document(new_uid)
+                  .collection("planned_blocks"))
+    moved = 0
+    for src_block in src_user_doc.collection("blocks").list_documents():
+        dst_block = dst_blocks.document(src_block.id)
+        moved += _copy_doc_recursive(
+            src_block,
+            dst_block,
+            f"users/{new_uid}/planned_blocks/{src_block.id}",
+        )
+    return moved
 
 def main():
     total = 0

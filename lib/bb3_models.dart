@@ -207,7 +207,7 @@ class BB3Exercise {
 }
 
 // ─── BB3BlockSettings ─────────────────────────────────────────────────────────
-// Block-level settings read from planned_blocks/{uid}/blocks/{blockId}.
+// Block-level settings read from users/{uid}/planned_blocks/{blockId}.
 
 class BB3BlockSettings {
   final String blockId;

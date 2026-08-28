@@ -18,7 +18,7 @@ enum HomeV2CalendarDayKind {
 /// Pure static helper — no state, no BuildContext.
 ///
 /// Data sources (spec section 8.6):
-///   Planned:   planned_blocks/{uid}/blocks/{blockId}/weeks/week_N/days/day_N
+///   Planned:   users/{uid}/planned_blocks/{blockId}/weeks/week_N/days/day_N
 ///              → planned when exercises is a non-empty List
 ///   Also:      users/{uid}/workouts/{yyyy-MM-dd}.wesPlannedExercises
 ///              → planned when wesPlannedExercises is a non-empty List
@@ -82,7 +82,7 @@ class HomeV2CalendarService {
 
   // ── Block planned days ──────────────────────────────────────────────────────
 
-  /// Fetches /planned_blocks/{uid}/blocks/{blockId}/weeks/week_N/days/day_N
+  /// Fetches users/{uid}/planned_blocks/{blockId}/weeks/week_N/days/day_N
   /// for every date in [month] that falls inside the active block's date range.
   /// A date is counted as planned only when the day doc's exercises list is
   /// non-empty.  All day-doc reads are issued in parallel.
@@ -90,9 +90,9 @@ class HomeV2CalendarService {
       String uid, DateTime month) async {
     // 1. Load active block metadata.
     final query = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .where('isActive', isEqualTo: true)
         .limit(1)
         .get();
@@ -124,9 +124,9 @@ class HomeV2CalendarService {
       dates.add(norm);
       futures.add(
         FirebaseFirestore.instance
-            .collection('planned_blocks')
+            .collection('users')
             .doc(uid)
-            .collection('blocks')
+            .collection('planned_blocks')
             .doc(blockId)
             .collection('weeks')
             .doc('week_$wIdx')
