@@ -51,9 +51,9 @@ class HomeBootstrapService {
 
     final swTotal = Stopwatch()..start();
     final blocksRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     final existingBlocks = await blocksRef.get();
 
@@ -555,9 +555,9 @@ class HomeBootstrapService {
     required void Function() onChange,
   }) {
     final sub = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .where('isActive', isEqualTo: true)
         .snapshots()
         .listen((_) => onChange());
@@ -676,9 +676,9 @@ class HomeBootstrapService {
     await appCheckReady;
 
     final blocksRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     final snap = await blocksRef.get();
     if (snap.docs.isEmpty) return;

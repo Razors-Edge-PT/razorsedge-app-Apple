@@ -66,7 +66,7 @@ class BlockRepairService {
   }
 
   CollectionReference<Map<String, dynamic>> _blocksCol(String uid) =>
-      _fs.collection('planned_blocks').doc(uid).collection('blocks');
+      _fs.collection('users').doc(uid).collection('planned_blocks');
 
   CollectionReference<Map<String, dynamic>> _templatesCol(String uid) =>
       _fs.collection('users').doc(uid).collection('templates');

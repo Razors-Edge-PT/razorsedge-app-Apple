@@ -506,9 +506,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
     if (userId == null || widget.blockId == null) return;
 
     final doc = await FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(userId)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(widget.blockId)
         .get();
 

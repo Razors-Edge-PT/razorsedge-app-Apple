@@ -69,7 +69,13 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
       // Delete known direct subcollections under users/{uid}.
       // TODO (Cloud Function follow-up): recursive deletion of any deeper nesting
       // not covered here (e.g. sub-docs within re_daily entries).
-      for (final sub in ['workouts', 'weights', 're_cache', 're_daily']) {
+      for (final sub in [
+        'workouts',
+        'weights',
+        're_cache',
+        're_daily',
+        'planned_blocks',
+      ]) {
         try {
           final snap =
               await db.collection('users').doc(uid).collection(sub).get();
@@ -84,11 +90,8 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
       await db.collection('users').doc(uid).delete();
       await db.collection('users_public').doc(uid).delete();
 
-      // TODO (Cloud Function follow-up): planned_blocks/{uid}/blocks/... is deeply
-      // nested and cannot be fully erased client-side.
-      try {
-        await db.collection('planned_blocks').doc(uid).delete();
-      } catch (_) {}
+      // TODO (Cloud Function follow-up): nested documents below
+      // users/{uid}/planned_blocks/{blockId} still require recursive deletion.
 
       // Delete conversation docs where this user is a participant.
 

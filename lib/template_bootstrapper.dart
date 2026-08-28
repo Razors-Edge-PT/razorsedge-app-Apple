@@ -22,9 +22,9 @@ class TemplatesBootstrapper {
   /// Returns the active blockId and a startDate-ordered list of all upcoming (non-active) blockIds.
   static Future<({String? activeId, List<String> upcomingIds})> _resolveOrderedBlockIds(String uid) async {
     final blocksCol = _db
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     final snap = await blocksCol.get();
     if (snap.docs.isEmpty) {
@@ -121,9 +121,9 @@ class TemplatesBootstrapper {
   /// Debug utility: lists all blocks for a given user
   static Future<void> debugPrintAllBlocks(String uid) async {
     final blocksCol = _db
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks');
+        .collection('planned_blocks');
 
     final snap = await blocksCol.get();
 

@@ -711,9 +711,9 @@ void main() {
     Future<FakeFirebaseFirestore> seed() async {
       final db = FakeFirebaseFirestore();
       await db
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(blockId)
           .set({
         'exerciseSettings': {
@@ -838,9 +838,9 @@ void main() {
       );
 
       final snap = await db
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(blockId)
           .get();
       final data = snap.data()!;

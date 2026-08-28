@@ -183,7 +183,12 @@ service cloud.firestore {
 
 
     // ======================================================
-    // PLANNED BLOCKS
+    // LEGACY PLANNED BLOCKS (temporary migration compatibility)
+    // Canonical planned blocks now live at:
+    // users/{userId}/planned_blocks/{blockId}/...
+    // and are covered by the training-subcollections rule above.
+    // Keep this legacy rule until old app builds and the compatibility mirror
+    // have been retired.
     // ======================================================
     match /planned_blocks/{userId} {
       allow read, write: if canAccessTraining(userId);

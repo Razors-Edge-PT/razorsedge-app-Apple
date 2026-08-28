@@ -468,9 +468,9 @@ class BlockExerciseDefaultsRepository {
     final safeValue = _sanitizeForFirestore(value);
 
     final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId);
 
     print('📤 [DefaultsRepo] Writing $exerciseId → $key = ${jsonEncode(safeValue)}');
@@ -496,9 +496,9 @@ class BlockExerciseDefaultsRepository {
     print('🌱 [DefaultsRepo] Seeding defaults for block=$blockId (ex=${exerciseIds.length})');
 
     final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId);
 
     // 1) Fetch exercise meta (name, category, bodyPart) – same as BP _seedDefaultsFor
@@ -672,9 +672,9 @@ class BlockExerciseDefaultsRepository {
     if (exerciseId.isEmpty || blockId.isEmpty) return;
 
     final docRef = FirebaseFirestore.instance
-        .collection('planned_blocks')
+        .collection('users')
         .doc(uid)
-        .collection('blocks')
+        .collection('planned_blocks')
         .doc(blockId);
 
     // 1. Check whether settings are already complete — skip if so.
@@ -856,9 +856,9 @@ class BlockExerciseDefaultsRepository {
   }) async {
     try {
       final docRef = FirebaseFirestore.instance
-          .collection('planned_blocks')
+          .collection('users')
           .doc(uid)
-          .collection('blocks')
+          .collection('planned_blocks')
           .doc(blockId);
 
       final snap = await docRef.get();
