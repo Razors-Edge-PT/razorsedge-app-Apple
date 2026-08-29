@@ -1257,19 +1257,29 @@ test('migration CLI: --apply exits 3 on unresolved legacy coach uids', async () 
 
   const report = JSON.parse(res.stdout);
   assert.equal(report.blocked, true);
+  assert.equal(report.auditComplete, true,
+    'gate 3 is only meaningful when the audit genuinely completed');
   assert.ok(report.counts.legacyCoachesUnresolved >= 1);
   assert.ok(
     report.unresolvedLegacyCoaches.some((u) => u.uid === strayCoach),
     'the stray coach uid must be named in the report',
   );
-  // A blocked run performs NO writes — the gate runs before any migration work.
-  assert.equal(report.counts.entitlementsCreated, 0);
-  assert.equal(report.counts.linksCreated, 0);
 
-  // And it genuinely wrote nothing: the stray coach has no entitlement.
+  // The counts are PLAN counts (what WOULD be done) — the preflight now runs
+  // before the gates so the report can say what is pending. What matters is
+  // that a blocked run wrote NOTHING, which is asserted against the database.
   const ent = await db.collection(M.COL_ENTITLEMENTS).doc(strayCoach).get();
   assert.equal(ent.exists, false,
     'a discovered legacy uid must NEVER be auto-entitled');
+
+  for (const uid of migration.LEGACY_COACH_UIDS) {
+    const e = await db.collection(M.COL_ENTITLEMENTS).doc(uid).get();
+    assert.equal(e.exists, false,
+      'a blocked apply must not write entitlement for ' + uid);
+  }
+  const links = await db.collection(M.COL_LINKS)
+    .where('migratedFrom', '==', 'athleteAssignments').get();
+  assert.equal(links.size, 0, 'a blocked apply must not create links');
 });
 
 test('migration CLI: --allow-unresolved proceeds past the gate', async () => {

@@ -18,6 +18,18 @@
 //      the reviewed set below or already actively entitled. Unresolved uids
 //      are a BLOCKING conflict and are never auto-entitled.
 //
+// FAIL-CLOSED PREFLIGHT (applies to dry runs too):
+//   Every REQUIRED read runs first, in a planning phase that writes nothing.
+//   If any of them fails, the audit is marked auditComplete:false and the run
+//   exits 4 — a dry run too, because its counts would otherwise be mistaken
+//   for findings. Under --apply the abort happens BEFORE the first write, so a
+//   read failure can never leave a half-applied migration.
+//   --allow-unresolved overrides reviewed DATA only; it never overrides an
+//   operational read failure.
+//
+// Exit codes: 0 ok · 1 unexpected error · 2 wrong/unresolved project
+//             3 unresolved legacy coaches · 4 incomplete audit/preflight
+//
 // Credentials: uses GOOGLE_APPLICATION_CREDENTIALS or the ambient service
 // account, exactly like the other admin scripts in this folder.
 //
@@ -79,6 +91,12 @@ const EXIT_OK = 0;                 // dry run or apply completed
 const EXIT_UNEXPECTED_ERROR = 1;   // unhandled exception
 const EXIT_PROJECT_BLOCKED = 2;    // wrong / unresolved Firebase project
 const EXIT_UNRESOLVED_COACHES = 3; // unresolved legacy coach uids
+// A REQUIRED discovery/preflight read failed, so the audit is incomplete and
+// its counts mean nothing. Returned by BOTH dry runs and --apply, and --apply
+// aborts before its first write. Deliberately distinct from 3: a data conflict
+// (unresolved coach uids) and an operational read failure are different
+// conditions and must never be conflated.
+const EXIT_INCOMPLETE_AUDIT = 4;
 
 // ── Project guard ───────────────────────────────────────────────────────────
 // The ONLY project this migration may write to. A dry run is safe anywhere;
@@ -154,9 +172,18 @@ const report = {
     legacyCoachesUnresolved: 0,
     legacyCoachesAlreadyEntitled: 0,
   },
+  // false as soon as ANY required read fails. Every count above is then
+  // untrustworthy and must not be read as a finding.
+  auditComplete: true,
   unresolvedLegacyCoaches: [],
   actions: [],
+  // DATA conditions: malformed records, ambiguous approvals, conflicts.
+  // These are findings about the data and never block on their own.
   problems: [],
+  // OPERATIONAL failures: a required Firestore/Auth read did not complete
+  // (expired credentials, permission denied, network). These are NOT findings
+  // about the data — they mean we could not look. They always fail closed.
+  operationalFailures: [],
   notes: [],
 };
 
@@ -164,13 +191,39 @@ function act(kind, detail) {
   report.actions.push(Object.assign({ kind }, detail));
 }
 
+/** A DATA-level finding. Never blocks by itself. */
 function problem(kind, detail) {
   report.problems.push(Object.assign({ kind }, detail));
 }
 
-// ── Step 1: entitlements for the hard-coded coaches ─────────────────────────
+/**
+ * A required read did not complete. Marks the whole audit incomplete, which
+ * blocks --apply before any write and makes a dry run exit non-zero.
+ *
+ * This is what makes a failed scan fail CLOSED. Previously a scan error was
+ * swallowed into `problem()` and the scan returned an empty array, so an
+ * expired credential looked exactly like "there is nothing here": every count
+ * read 0, the unresolved-coach gate passed vacuously, and the run reported
+ * success.
+ */
+function operationalFailure(kind, detail) {
+  report.auditComplete = false;
+  report.operationalFailures.push(Object.assign({ kind }, detail));
+}
 
-async function migrateEntitlements() {
+// ── Step 1 (PLAN): entitlements for the reviewed coach accounts ─────────────
+//
+// PLANNING IS READ-ONLY. Every write moved into the apply* functions below and
+// runs only after the ENTIRE preflight has completed successfully, so a read
+// failure part-way through can never leave a half-applied migration.
+
+const plan = {
+  entitlements: [],   // { uid }
+  claims: [],         // { uid, next, preservedKeys }
+  links: [],          // { coachUid, athleteUid, legacyEntry }
+};
+
+async function planEntitlements() {
   for (const uid of LEGACY_COACH_UIDS) {
     if (M.isSuperAdminUid(uid)) {
       // Defensive: the super admin must never be given an entitlement.
@@ -185,7 +238,10 @@ async function migrateEntitlements() {
     try {
       snap = await db.collection(M.COL_ENTITLEMENTS).doc(uid).get();
     } catch (err) {
-      problem('entitlement-read-failed', { uid, error: String(err) });
+      // REQUIRED read. Without it we cannot tell "no entitlement" from
+      // "could not look", and creating one blindly could clobber a deliberate
+      // suspension.
+      operationalFailure('entitlement-read-failed', { uid, error: String(err) });
       continue;
     }
 
@@ -201,7 +257,8 @@ async function migrateEntitlements() {
 
     if (state === 'suspended' || state === 'revoked') {
       // A deliberate later decision must not be undone by a rerun of this
-      // script. Report it; never guess.
+      // script. Report it; never guess. This is a DATA conflict, not an
+      // operational failure — it does not block.
       report.counts.entitlementsSkippedNonActive += 1;
       problem('entitlement-conflict', {
         uid,
@@ -214,9 +271,13 @@ async function migrateEntitlements() {
 
     report.counts.entitlementsCreated += 1;
     act('entitlement-create', { uid, state: 'active', source: 'manual_review' });
+    plan.entitlements.push({ uid });
+  }
+}
 
-    if (!APPLY) continue;
-
+async function applyEntitlements() {
+  for (const item of plan.entitlements) {
+    const uid = item.uid;
     try {
       const now = FV.serverTimestamp();
       await db.collection(M.COL_ENTITLEMENTS).doc(uid).set({
@@ -269,15 +330,30 @@ async function identityFor(uid) {
   return { uid, displayName, email, photoUrl };
 }
 
-// ── Step 2: refresh mirrored custom claims (opt-in) ──────────────────────────
+// ── Step 2 (PLAN): mirrored custom claims (opt-in, --claims) ────────────────
 
-async function refreshClaims() {
+async function planClaims() {
   for (const uid of LEGACY_COACH_UIDS) {
     let rec;
     try {
       rec = await admin.auth().getUser(uid);
     } catch (err) {
-      problem('claim-refresh-lookup-failed', { uid, error: String(err) });
+      // DISTINGUISH the two cases. "This account does not exist" is a DATA
+      // condition — the uid is stale, and blocking on it forever would be
+      // wrong. Anything else (expired credentials, permission denied, network)
+      // means we could not look, and must fail closed.
+      if (err && err.code === 'auth/user-not-found') {
+        problem('claim-refresh-account-missing', {
+          uid,
+          detail: 'No Firebase Auth record for this uid — the account no '
+            + 'longer exists. No claim can be set; review whether it should '
+            + 'still be in the reviewed coach list.',
+        });
+      } else {
+        operationalFailure('claim-refresh-lookup-failed', {
+          uid, error: String(err),
+        });
+      }
       continue;
     }
     const existing = rec.customClaims || {};
@@ -290,23 +366,29 @@ async function refreshClaims() {
     const next = M.mergeCoachClaim(existing, true);
     report.counts.claimsRefreshed += 1;
     act('claim-set', { uid, preservedKeys: Object.keys(existing) });
-    if (!APPLY) continue;
+    plan.claims.push({ uid, next });
+  }
+}
+
+async function applyClaims() {
+  for (const item of plan.claims) {
     try {
-      await admin.auth().setCustomUserClaims(uid, next);
+      await admin.auth().setCustomUserClaims(item.uid, item.next);
     } catch (err) {
-      problem('claim-write-failed', { uid, error: String(err) });
+      problem('claim-write-failed', { uid: item.uid, error: String(err) });
     }
   }
 }
 
-// ── Step 3: athleteAssignments → canonical coachAthleteLinks ────────────────
+// ── Step 3 (PLAN): athleteAssignments → canonical coachAthleteLinks ─────────
 
-async function migrateApprovedRelationships() {
+async function planRelationships() {
   let snap;
   try {
     snap = await db.collection('athleteAssignments').get();
   } catch (err) {
-    problem('athlete-assignments-scan-failed', { error: String(err) });
+    // REQUIRED scan. An empty result and a failed scan are NOT the same thing.
+    operationalFailure('athlete-assignments-scan-failed', { error: String(err) });
     return;
   }
 
@@ -357,18 +439,23 @@ async function migrateApprovedRelationships() {
       }
 
       report.counts.approvedRelationshipsFound += 1;
-      await migrateOneLink(coachUid, athleteUid, entry);
+      await planOneLink(coachUid, athleteUid, entry);
     }
   }
 }
 
-async function migrateOneLink(coachUid, athleteUid, legacyEntry) {
+async function planOneLink(coachUid, athleteUid, legacyEntry) {
   const id = M.linkId(coachUid, athleteUid);
   let existing;
   try {
     existing = await db.collection(M.COL_LINKS).doc(id).get();
   } catch (err) {
-    problem('link-read-failed', { coachUid, athleteUid, error: String(err) });
+    // REQUIRED read: without it we cannot tell a missing link from a
+    // deliberately terminated one, and writing blindly would resurrect a
+    // relationship the athlete already ended.
+    operationalFailure('link-read-failed', {
+      coachUid, athleteUid, error: String(err),
+    });
     return;
   }
 
@@ -381,7 +468,7 @@ async function migrateOneLink(coachUid, athleteUid, legacyEntry) {
     }
     // The canonical document already records a DIFFERENT outcome — for
     // example the athlete revoked the coach after the legacy approval was
-    // written. Never resurrect it; report and move on.
+    // written. Never resurrect it; report and move on. DATA conflict.
     report.counts.linksSkippedConflicting += 1;
     problem('link-conflict', {
       coachUid, athleteUid,
@@ -394,40 +481,45 @@ async function migrateOneLink(coachUid, athleteUid, legacyEntry) {
 
   report.counts.linksCreated += 1;
   act('link-create', { coachUid, athleteUid, status: 'active' });
+  plan.links.push({ coachUid, athleteUid, legacyEntry });
+}
 
-  if (!APPLY) return;
+async function applyRelationships() {
+  for (const item of plan.links) {
+    const { coachUid, athleteUid, legacyEntry } = item;
+    const id = M.linkId(coachUid, athleteUid);
+    try {
+      const now = FV.serverTimestamp();
+      const [coachIdentity, athleteIdentity] = await Promise.all([
+        identityFor(coachUid), identityFor(athleteUid),
+      ]);
+      const approvedAt = legacyEntry.approvedAt || null;
 
-  try {
-    const now = FV.serverTimestamp();
-    const [coachIdentity, athleteIdentity] = await Promise.all([
-      identityFor(coachUid), identityFor(athleteUid),
-    ]);
-    const approvedAt = legacyEntry.approvedAt || null;
-
-    // create() would throw on a concurrent write; set with merge:false on a
-    // doc we just confirmed absent keeps the migration deterministic and
-    // rerunnable (a second run takes the already-active branch above).
-    await db.collection(M.COL_LINKS).doc(id).set({
-      coachUid,
-      athleteUid,
-      status: 'active',
-      coachSnapshot: M.buildPartySnapshot(coachIdentity),
-      athleteSnapshot: M.buildPartySnapshot(athleteIdentity),
-      requestedAt: approvedAt,
-      requestedBy: coachUid,
-      respondedAt: approvedAt,
-      respondedBy: athleteUid,
-      endedAt: null,
-      endedBy: null,
-      lastAction: 'migrated_from_athlete_assignments',
-      lastActorUid: M.SUPER_ADMIN_UID,
-      reason: null,
-      migratedFrom: 'athleteAssignments',
-      createdAt: now,
-      updatedAt: now,
-    });
-  } catch (err) {
-    problem('link-write-failed', { coachUid, athleteUid, error: String(err) });
+      // create() would throw on a concurrent write; set with merge:false on a
+      // doc we just confirmed absent keeps the migration deterministic and
+      // rerunnable (a second run takes the already-active branch above).
+      await db.collection(M.COL_LINKS).doc(id).set({
+        coachUid,
+        athleteUid,
+        status: 'active',
+        coachSnapshot: M.buildPartySnapshot(coachIdentity),
+        athleteSnapshot: M.buildPartySnapshot(athleteIdentity),
+        requestedAt: approvedAt,
+        requestedBy: coachUid,
+        respondedAt: approvedAt,
+        respondedBy: athleteUid,
+        endedAt: null,
+        endedBy: null,
+        lastAction: 'migrated_from_athlete_assignments',
+        lastActorUid: M.SUPER_ADMIN_UID,
+        reason: null,
+        migratedFrom: 'athleteAssignments',
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch (err) {
+      problem('link-write-failed', { coachUid, athleteUid, error: String(err) });
+    }
   }
 }
 
@@ -440,7 +532,7 @@ async function auditSeededAssignments() {
   try {
     snap = await db.collection('coachAssignments').get();
   } catch (err) {
-    problem('coach-assignments-scan-failed', { error: String(err) });
+    operationalFailure('coach-assignments-scan-failed', { error: String(err) });
     return;
   }
   let coachDocs = 0;
@@ -499,7 +591,9 @@ async function auditUnresolvedLegacyCoaches() {
       }
     }
   } catch (err) {
-    problem('unresolved-scan-failed',
+    // REQUIRED discovery scan. A failed scan must NEVER look like an empty
+    // one: that is exactly what let the unresolved-coach gate pass vacuously.
+    operationalFailure('unresolved-scan-failed',
       { collection: 'coachAssignments', error: String(err) });
   }
 
@@ -517,7 +611,7 @@ async function auditUnresolvedLegacyCoaches() {
       }
     }
   } catch (err) {
-    problem('unresolved-scan-failed',
+    operationalFailure('unresolved-scan-failed',
       { collection: 'athleteAssignments', error: String(err) });
   }
 
@@ -531,7 +625,8 @@ async function auditUnresolvedLegacyCoaches() {
       const snap = await db.collection(M.COL_ENTITLEMENTS).doc(uid).get();
       active = M.entitlementIsActive(snap.exists ? snap.data() : null);
     } catch (err) {
-      problem('unresolved-entitlement-read-failed', { uid, error: String(err) });
+      operationalFailure('unresolved-entitlement-read-failed',
+        { uid, error: String(err) });
     }
     if (active) {
       report.counts.legacyCoachesAlreadyEntitled += 1;
@@ -598,9 +693,51 @@ async function main() {
     return EXIT_PROJECT_BLOCKED;
   }
 
-  // ── Gate 2: unresolved legacy coaches ────────────────────────────────────
-  // Discovered BEFORE any write, so --apply aborts without a partial migration.
+  // ══ PREFLIGHT — every required READ, and not one write ══════════════════
+  //
+  // The whole plan is built first. Nothing is mutated until the entire
+  // preflight has completed successfully, so a read that fails part-way
+  // through can never leave a half-applied migration behind.
   const unresolved = await auditUnresolvedLegacyCoaches();
+  await planEntitlements();
+  if (REFRESH_CLAIMS) {
+    await planClaims();
+  } else {
+    report.notes.push({
+      note: 'custom claims not touched — rerun with --claims to refresh them',
+    });
+  }
+  await planRelationships();
+  await auditSeededAssignments();
+  auditFreeMembershipOverlap();
+
+  // ── Gate 2: audit completeness (operational) ─────────────────────────────
+  // Checked BEFORE the unresolved-coach gate: if we could not read, we do not
+  // know whether there are unresolved coaches either, so that gate's verdict
+  // is meaningless. --allow-unresolved deliberately does NOT reach this gate:
+  // it is an override for reviewed DATA, never for a failure to read.
+  if (!report.auditComplete) {
+    report.blocked = true;
+    report.blockedReason =
+      'INCOMPLETE AUDIT: ' + report.operationalFailures.length + ' required '
+      + 'read(s) did not complete, so every count in this report is '
+      + 'untrustworthy — a failed scan is NOT an empty one. '
+      + (APPLY
+        ? 'NOTHING WAS WRITTEN: --apply aborts before its first write. '
+        : '')
+      + 'Fix the underlying access problem (expired Application Default '
+      + 'Credentials are the usual cause — run "gcloud auth '
+      + 'application-default login" — otherwise check IAM read permission and '
+      + 'connectivity) and rerun. --allow-unresolved does NOT override this.';
+    report.finishedAt = new Date().toISOString();
+    emitReport();
+    process.stderr.write('\n' + report.blockedReason + '\n');
+    return EXIT_INCOMPLETE_AUDIT;
+  }
+
+  // ── Gate 3: unresolved legacy coaches (data) ─────────────────────────────
+  // Only reachable once the audit is known COMPLETE, so `unresolved` is a real
+  // answer rather than the empty list a failed scan used to produce.
   if (APPLY && unresolved.length > 0 && !ALLOW_UNRESOLVED) {
     report.blocked = true;
     report.blockedReason =
@@ -619,17 +756,12 @@ async function main() {
     return EXIT_UNRESOLVED_COACHES;
   }
 
-  await migrateEntitlements();
-  if (REFRESH_CLAIMS) {
-    await refreshClaims();
-  } else {
-    report.notes.push({
-      note: 'custom claims not touched — rerun with --claims to refresh them',
-    });
+  // ══ MUTATION — reached only with a COMPLETE preflight and every gate passed
+  if (APPLY) {
+    await applyEntitlements();
+    if (REFRESH_CLAIMS) await applyClaims();
+    await applyRelationships();
   }
-  await migrateApprovedRelationships();
-  await auditSeededAssignments();
-  auditFreeMembershipOverlap();
 
   report.finishedAt = new Date().toISOString();
   emitReport();
@@ -653,6 +785,7 @@ function emitReport() {
     line('');
   }
   line('  Project ............................. ' + (report.projectId || '(unresolved)'));
+  line('  Audit complete ...................... ' + (report.auditComplete ? 'yes' : 'NO'));
   if (report.blocked) {
     line('');
     line('  *** BLOCKED — NO WRITES PERFORMED ***');
@@ -671,6 +804,14 @@ function emitReport() {
   line('  Legacy coaches already entitled ..... ' + report.counts.legacyCoachesAlreadyEntitled);
   line('  Legacy coaches UNRESOLVED ........... ' + report.counts.legacyCoachesUnresolved);
   line('');
+
+  if (report.operationalFailures.length) {
+    line('  OPERATIONAL READ FAILURES (' + report.operationalFailures.length + ')'
+      + ' — the audit is INCOMPLETE and its counts mean nothing');
+    for (const f of report.operationalFailures) line('    ! ' + JSON.stringify(f));
+    line('    A failed scan is NOT an empty scan. Fix access and rerun.');
+    line('');
+  }
 
   if (report.unresolvedLegacyCoaches.length) {
     line('  UNRESOLVED LEGACY COACH UIDS — super admin must review each');
@@ -729,11 +870,18 @@ module.exports = {
   EXIT_UNEXPECTED_ERROR,
   EXIT_PROJECT_BLOCKED,
   EXIT_UNRESOLVED_COACHES,
+  EXIT_INCOMPLETE_AUDIT,
   _internals: {
-    migrateEntitlements,
-    migrateApprovedRelationships,
-    migrateOneLink,
+    planEntitlements,
+    applyEntitlements,
+    planClaims,
+    applyClaims,
+    planRelationships,
+    planOneLink,
+    applyRelationships,
     auditUnresolvedLegacyCoaches,
+    operationalFailure,
+    plan,
     report,
   },
 };
