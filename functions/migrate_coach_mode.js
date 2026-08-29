@@ -27,8 +27,19 @@
 //   --allow-unresolved overrides reviewed DATA only; it never overrides an
 //   operational read failure.
 //
-// Exit codes: 0 ok · 1 unexpected error · 2 wrong/unresolved project
-//             3 unresolved legacy coaches · 4 incomplete audit/preflight
+// EXIT-CODE CONTRACT
+//   0  OK               dry run completed, or apply completed with no failures
+//   1  UNEXPECTED       unhandled exception
+//   2  PROJECT BLOCKED  wrong or unresolved Firebase project (no reads at all)
+//   3  UNRESOLVED       legacy coach uids need super-admin review (DATA);
+//                       overridable with --allow-unresolved
+//   4  INCOMPLETE AUDIT a REQUIRED read failed, so the report is untrustworthy.
+//                       Dry runs return this too. --apply performs ZERO writes.
+//                       NOT overridable by --allow-unresolved.
+//   5  APPLY FAILED     one or more MUTATIONS failed. Does NOT imply zero
+//                       writes - Firestore+Auth cannot be globally atomic.
+//                       The report names what landed and what did not; every
+//                       operation is idempotent, so RERUN.
 //
 // Credentials: uses GOOGLE_APPLICATION_CREDENTIALS or the ambient service
 // account, exactly like the other admin scripts in this folder.
@@ -63,22 +74,32 @@ const ALLOW_UNRESOLVED = argv.includes('--allow-unresolved');
 // hard-coded lists are eventually removed.
 const LEGACY_COACH_UIDS = Object.freeze([
   'wuiMe7phxYQh0MM39bfnhgv20yS2', // Campbell
-  'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam W
   'jhIB7Yi1whYwPvBSmK27KltJGn23',
-  'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', // Adam@razorsedgept
+  'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', // Adam — primary coach account
+  'LGxzlyBNh5f1zclM1F0l6tl6Py82', // Adam Wells — secondary coach account
   'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
-  'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play reviewer
+  'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play reviewer — MUST retain Coach Mode
 ]);
+// REMOVED (reviewed by Richard, 2026-08-29):
+//   SMTEVGPH1MXgOgbcBbJFU1HjU8G3 — Adam's obsolete account. The Firebase Auth
+//     record and the users/ document are both gone, so it must never receive
+//     an entitlement, profile or claim. Adam's live accounts are
+//     ejBDKEZP… (primary) and LGxzly… (secondary), both listed above.
+//   tlmT17Jlgfe63OYfk8P2IPAs4072 — Aja Cranna-Powell is NOT a coach and is
+//     deliberately absent from every list in this repository.
 
 // The legacy free-membership list, kept here only so the report can flag any
 // account that is comped but has no coach entitlement (informational).
 const LEGACY_FREE_MEMBERSHIP_UIDS = Object.freeze([
   'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard (super admin)
   'wuiMe7phxYQh0MM39bfnhgv20yS2', // Campbell
-  'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam
   'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play Reviewer Account
   'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
 ]);
+// Mirrors freeMembershipUids in lib/membership_gate.dart. Adam's secondary
+// coach account is deliberately NOT here: it receives a real entitlement
+// through the reviewed set above, which is the whole point of Coach Mode —
+// a new coach must never need a code change.
 
 // ── Process exit codes ──────────────────────────────────────────────────────
 // The CLI contract. main() RETURNS one of these; the wrapper below is the only
@@ -97,6 +118,11 @@ const EXIT_UNRESOLVED_COACHES = 3; // unresolved legacy coach uids
 // (unresolved coach uids) and an operational read failure are different
 // conditions and must never be conflated.
 const EXIT_INCOMPLETE_AUDIT = 4;
+// One or more MUTATIONS failed. A multi-service migration (Firestore + Auth)
+// cannot be globally atomic, so this does NOT promise zero prior writes — it
+// promises an honest non-zero result naming exactly what succeeded and what
+// did not. Every operation is idempotent, so the fix is always: rerun.
+const EXIT_APPLY_FAILED = 5;
 
 // ── Project guard ───────────────────────────────────────────────────────────
 // The ONLY project this migration may write to. A dry run is safe anywhere;
@@ -171,6 +197,8 @@ const report = {
     approvedRelationshipsFound: 0,
     legacyCoachesUnresolved: 0,
     legacyCoachesAlreadyEntitled: 0,
+    reviewedCoachesMissing: 0,
+    linksSkippedMissingParty: 0,
   },
   // false as soon as ANY required read fails. Every count above is then
   // untrustworthy and must not be read as a finding.
@@ -184,6 +212,15 @@ const report = {
   // (expired credentials, permission denied, network). These are NOT findings
   // about the data — they mean we could not look. They always fail closed.
   operationalFailures: [],
+  // MUTATION failures. Non-empty ⇒ exit 5 and "rerun required".
+  applyFailures: [],
+  // What actually got written, so a partial run is honestly reportable.
+  applied: {
+    entitlements: [],
+    profiles: [],
+    claims: [],
+    links: [],
+  },
   notes: [],
 };
 
@@ -211,6 +248,14 @@ function operationalFailure(kind, detail) {
   report.operationalFailures.push(Object.assign({ kind }, detail));
 }
 
+/**
+ * A MUTATION failed. Distinct from both problem() (data findings) and
+ * operationalFailure() (we could not read). Forces exit 5.
+ */
+function applyFailure(kind, detail) {
+  report.applyFailures.push(Object.assign({ kind }, detail));
+}
+
 // ── Step 1 (PLAN): entitlements for the reviewed coach accounts ─────────────
 //
 // PLANNING IS READ-ONLY. Every write moved into the apply* functions below and
@@ -218,17 +263,75 @@ function operationalFailure(kind, detail) {
 // failure part-way through can never leave a half-applied migration.
 
 const plan = {
-  entitlements: [],   // { uid }
-  claims: [],         // { uid, next, preservedKeys }
-  links: [],          // { coachUid, athleteUid, legacyEntry }
+  entitlements: [],   // { uid, identity }
+  claims: [],         // { uid, next }
+  links: [],          // { coachUid, athleteUid, legacyEntry, coachIdentity, athleteIdentity }
 };
+
+// uid -> resolved identity. Populated during PLANNING only.
+const identityCache = new Map();
+// uids confirmed ABSENT from Firebase Auth (a data fact, not a read failure).
+const missingAccounts = new Set();
+
+/**
+ * Resolves one account display identity. READ-ONLY, planning phase only.
+ *
+ * Previously this ran inside applyEntitlements()/applyRelationships(), i.e.
+ * AFTER writes had begun, so a credential/permission/network failure during
+ * identity resolution could strike mid-mutation. It is now part of the
+ * preflight and its failures fail closed like any other required read.
+ *
+ * `auth/user-not-found` is a DATA fact: the account is gone. It is recorded in
+ * `missingAccounts` and does NOT mark the audit incomplete.
+ */
+async function resolveIdentity(uid) {
+  if (identityCache.has(uid)) return identityCache.get(uid);
+
+  let displayName = '';
+  let email = '';
+  let photoUrl = '';
+  let authMissing = false;
+
+  try {
+    const rec = await admin.auth().getUser(uid);
+    displayName = rec.displayName || '';
+    email = rec.email || '';
+    photoUrl = rec.photoURL || '';
+  } catch (err) {
+    if (err && err.code === 'auth/user-not-found') {
+      authMissing = true;
+      missingAccounts.add(uid);
+    } else {
+      operationalFailure('identity-auth-lookup-failed', { uid, error: String(err) });
+      return null;
+    }
+  }
+
+  try {
+    const snap = await db.collection('users').doc(uid).get();
+    const d = snap.exists ? (snap.data() || {}) : {};
+    displayName = displayName || String(d.username || d.displayName || d.fullName || '');
+    email = email || String(d.email || '');
+  } catch (err) {
+    // REQUIRED read: a snapshot built from a half-read profile would be wrong,
+    // and this used to run mid-mutation.
+    operationalFailure('identity-user-doc-read-failed', { uid, error: String(err) });
+    return null;
+  }
+
+  const identity = { uid, displayName, email, photoUrl, authMissing };
+  identityCache.set(uid, identity);
+  return identity;
+}
+
+// -- Step 1 (PLAN): entitlements for the reviewed coach accounts -------------
 
 async function planEntitlements() {
   for (const uid of LEGACY_COACH_UIDS) {
     if (M.isSuperAdminUid(uid)) {
       // Defensive: the super admin must never be given an entitlement.
       report.notes.push({
-        note: 'super admin present in legacy coach list — skipped by design',
+        note: 'super admin present in legacy coach list - skipped by design',
         uid,
       });
       continue;
@@ -238,9 +341,6 @@ async function planEntitlements() {
     try {
       snap = await db.collection(M.COL_ENTITLEMENTS).doc(uid).get();
     } catch (err) {
-      // REQUIRED read. Without it we cannot tell "no entitlement" from
-      // "could not look", and creating one blindly could clobber a deliberate
-      // suspension.
       operationalFailure('entitlement-read-failed', { uid, error: String(err) });
       continue;
     }
@@ -256,78 +356,115 @@ async function planEntitlements() {
     }
 
     if (state === 'suspended' || state === 'revoked') {
-      // A deliberate later decision must not be undone by a rerun of this
-      // script. Report it; never guess. This is a DATA conflict, not an
-      // operational failure — it does not block.
       report.counts.entitlementsSkippedNonActive += 1;
       problem('entitlement-conflict', {
         uid,
         currentState: state,
         detail: 'Account is in the hard-coded coach list but its entitlement '
-          + 'was explicitly ' + state + '. Left unchanged — resolve manually.',
+          + 'was explicitly ' + state + '. Left unchanged - resolve manually.',
+      });
+      continue;
+    }
+
+    // Identity is resolved HERE, in the read phase.
+    const identity = await resolveIdentity(uid);
+    if (identity === null) continue; // operational failure already recorded
+
+    if (identity.authMissing) {
+      // A deleted account must not be planned for an entitlement or profile:
+      // that would create a grant nobody can use, attached to a blank identity.
+      report.counts.reviewedCoachesMissing += 1;
+      problem('reviewed-coach-account-missing', {
+        uid,
+        detail: 'No Firebase Auth record for this reviewed coach uid - the '
+          + 'account no longer exists. No entitlement, profile or claim is '
+          + 'planned. Remove it from LEGACY_COACH_UIDS.',
       });
       continue;
     }
 
     report.counts.entitlementsCreated += 1;
     act('entitlement-create', { uid, state: 'active', source: 'manual_review' });
-    plan.entitlements.push({ uid });
+    plan.entitlements.push({ uid, identity });
   }
 }
 
+/**
+ * Writes the entitlement AND its coach profile in ONE Firestore transaction,
+ * revalidating the entitlement state inside that transaction.
+ *
+ * Without the revalidation, an entitlement a super admin suspended or revoked
+ * between preflight and mutation would be silently resurrected to active.
+ * Without the transaction, a profile could exist for an entitlement that never
+ * landed.
+ */
 async function applyEntitlements() {
   for (const item of plan.entitlements) {
     const uid = item.uid;
     try {
-      const now = FV.serverTimestamp();
-      await db.collection(M.COL_ENTITLEMENTS).doc(uid).set({
-        uid,
-        coach: {
-          state: 'active',
-          source: 'manual_review',
-          grantedAt: now,
-          grantedBy: M.SUPER_ADMIN_UID,
-          approvedAt: now,
-          approvedBy: M.SUPER_ADMIN_UID,
-          migratedFrom: 'hardcoded_coach_list',
-          updatedAt: now,
-        },
-        updatedAt: now,
-      }, { merge: true });
+      await db.runTransaction(async (tx) => {
+        const entRef = db.collection(M.COL_ENTITLEMENTS).doc(uid);
+        const snap = await tx.get(entRef);
+        const coach = snap.exists ? ((snap.data() || {}).coach || null) : null;
+        const state = coach ? coach.state : null;
 
-      // Invitation-safe profile, so migrated coaches can invite immediately.
-      const identity = await identityFor(uid);
-      await db.collection(M.COL_PROFILES).doc(uid).set(
-        Object.assign(M.buildCoachProfile(identity), { updatedAt: now }),
-        { merge: true },
-      );
+        // MUTATION-TIME REVALIDATION.
+        if (state === 'active') {
+          const e = new Error('already active');
+          e.__skip = true;
+          throw e;
+        }
+        if (state === 'suspended' || state === 'revoked') {
+          const e = new Error('entitlement became ' + state + ' after preflight');
+          e.__conflict = state;
+          throw e;
+        }
+
+        const now = FV.serverTimestamp();
+        tx.set(entRef, {
+          uid,
+          coach: {
+            state: 'active',
+            source: 'manual_review',
+            grantedAt: now,
+            grantedBy: M.SUPER_ADMIN_UID,
+            approvedAt: now,
+            approvedBy: M.SUPER_ADMIN_UID,
+            migratedFrom: 'hardcoded_coach_list',
+            updatedAt: now,
+          },
+          updatedAt: now,
+        }, { merge: true });
+
+        // Same transaction: entitlement and profile land together or not at all.
+        tx.set(
+          db.collection(M.COL_PROFILES).doc(uid),
+          Object.assign(M.buildCoachProfile(item.identity), { updatedAt: now }),
+          { merge: true },
+        );
+      });
+
+      report.applied.entitlements.push(uid);
+      report.applied.profiles.push(uid);
     } catch (err) {
-      problem('entitlement-write-failed', { uid, error: String(err) });
+      if (err && err.__skip) {
+        // Became active concurrently - the desired end state, not a failure.
+        act('entitlement-already-active-at-write', { uid });
+        continue;
+      }
+      if (err && err.__conflict) {
+        applyFailure('entitlement-state-conflict', {
+          uid,
+          state: err.__conflict,
+          detail: 'The entitlement changed to ' + err.__conflict + ' between '
+            + 'preflight and mutation and was NOT overwritten. Review the '
+            + 'account, then rerun.',
+        });
+        continue;
+      }
+      applyFailure('entitlement-write-failed', { uid, error: String(err) });
     }
   }
-}
-
-async function identityFor(uid) {
-  let displayName = '';
-  let email = '';
-  let photoUrl = '';
-  try {
-    const rec = await admin.auth().getUser(uid);
-    displayName = rec.displayName || '';
-    email = rec.email || '';
-    photoUrl = rec.photoURL || '';
-  } catch (err) {
-    problem('auth-lookup-failed', { uid, error: String(err) });
-  }
-  try {
-    const snap = await db.collection('users').doc(uid).get();
-    const d = snap.exists ? (snap.data() || {}) : {};
-    displayName = displayName || String(d.username || d.displayName || d.fullName || '');
-    email = email || String(d.email || '');
-  } catch (err) {
-    problem('user-doc-read-failed', { uid, error: String(err) });
-  }
-  return { uid, displayName, email, photoUrl };
 }
 
 // ── Step 2 (PLAN): mirrored custom claims (opt-in, --claims) ────────────────
@@ -343,6 +480,7 @@ async function planClaims() {
       // wrong. Anything else (expired credentials, permission denied, network)
       // means we could not look, and must fail closed.
       if (err && err.code === 'auth/user-not-found') {
+        missingAccounts.add(uid);
         problem('claim-refresh-account-missing', {
           uid,
           detail: 'No Firebase Auth record for this uid — the account no '
@@ -374,8 +512,9 @@ async function applyClaims() {
   for (const item of plan.claims) {
     try {
       await admin.auth().setCustomUserClaims(item.uid, item.next);
+      report.applied.claims.push(item.uid);
     } catch (err) {
-      problem('claim-write-failed', { uid: item.uid, error: String(err) });
+      applyFailure('claim-write-failed', { uid: item.uid, error: String(err) });
     }
   }
 }
@@ -466,9 +605,9 @@ async function planOneLink(coachUid, athleteUid, legacyEntry) {
       act('link-already-active', { coachUid, athleteUid });
       return;
     }
-    // The canonical document already records a DIFFERENT outcome — for
-    // example the athlete revoked the coach after the legacy approval was
-    // written. Never resurrect it; report and move on. DATA conflict.
+    // The canonical document already records a DIFFERENT outcome - for example
+    // the athlete revoked the coach after the legacy approval was written.
+    // Never resurrect it; report and move on. DATA conflict.
     report.counts.linksSkippedConflicting += 1;
     problem('link-conflict', {
       coachUid, athleteUid,
@@ -479,26 +618,50 @@ async function planOneLink(coachUid, athleteUid, legacyEntry) {
     return;
   }
 
+  // Identities resolved in the READ phase and cached on the plan.
+  const coachIdentity = await resolveIdentity(coachUid);
+  const athleteIdentity = await resolveIdentity(athleteUid);
+  if (coachIdentity === null || athleteIdentity === null) return; // op failure
+
+  // A link whose coach or athlete no longer exists would be an ACTIVE
+  // relationship with a blank snapshot that nobody can act on or revoke.
+  // Report it and skip; never write it.
+  const missing = [];
+  if (coachIdentity.authMissing) missing.push('coach');
+  if (athleteIdentity.authMissing) missing.push('athlete');
+  if (missing.length) {
+    report.counts.linksSkippedMissingParty += 1;
+    problem('link-party-account-missing', {
+      coachUid, athleteUid,
+      missing,
+      detail: 'The ' + missing.join(' and ') + ' account no longer exists in '
+        + 'Firebase Auth, so this approved legacy relationship would become a '
+        + 'blank active link. Skipped - clean up the stale athleteAssignments '
+        + 'entry.',
+    });
+    return;
+  }
+
   report.counts.linksCreated += 1;
   act('link-create', { coachUid, athleteUid, status: 'active' });
-  plan.links.push({ coachUid, athleteUid, legacyEntry });
+  plan.links.push({
+    coachUid, athleteUid, legacyEntry, coachIdentity, athleteIdentity,
+  });
 }
 
 async function applyRelationships() {
   for (const item of plan.links) {
-    const { coachUid, athleteUid, legacyEntry } = item;
+    const { coachUid, athleteUid, legacyEntry, coachIdentity, athleteIdentity } = item;
     const id = M.linkId(coachUid, athleteUid);
     try {
       const now = FV.serverTimestamp();
-      const [coachIdentity, athleteIdentity] = await Promise.all([
-        identityFor(coachUid), identityFor(athleteUid),
-      ]);
       const approvedAt = legacyEntry.approvedAt || null;
 
-      // create() would throw on a concurrent write; set with merge:false on a
-      // doc we just confirmed absent keeps the migration deterministic and
-      // rerunnable (a second run takes the already-active branch above).
-      await db.collection(M.COL_LINKS).doc(id).set({
+      // create() FAILS if the document now exists. Previously this was
+      // set(..., merge:false), which would silently overwrite a link created,
+      // accepted, declined, revoked or released between preflight and
+      // mutation - resurrecting a relationship the athlete had just ended.
+      await db.collection(M.COL_LINKS).doc(id).create({
         coachUid,
         athleteUid,
         status: 'active',
@@ -517,8 +680,19 @@ async function applyRelationships() {
         createdAt: now,
         updatedAt: now,
       });
+      report.applied.links.push(id);
     } catch (err) {
-      problem('link-write-failed', { coachUid, athleteUid, error: String(err) });
+      const code = err && (err.code === 6 || err.code === 'already-exists');
+      if (code) {
+        applyFailure('link-create-conflict', {
+          coachUid, athleteUid,
+          detail: 'A coachAthleteLinks document appeared between preflight and '
+            + 'mutation and was NOT overwritten. Rerun: the next preflight '
+            + 'will read its real status and act accordingly.',
+        });
+        continue;
+      }
+      applyFailure('link-write-failed', { coachUid, athleteUid, error: String(err) });
     }
   }
 }
@@ -756,11 +930,34 @@ async function main() {
     return EXIT_UNRESOLVED_COACHES;
   }
 
-  // ══ MUTATION — reached only with a COMPLETE preflight and every gate passed
+  // == MUTATION - reached only with a COMPLETE preflight and every gate passed
   if (APPLY) {
     await applyEntitlements();
     if (REFRESH_CLAIMS) await applyClaims();
     await applyRelationships();
+  }
+
+  // -- Gate 4: mutation outcome ---------------------------------------------
+  // A Firestore+Auth migration cannot be globally atomic, so this does NOT
+  // claim zero prior writes. It reports exactly what landed and what did not,
+  // and never returns success when any write failed. Every operation is
+  // idempotent, so a rerun finishes the job.
+  if (report.applyFailures.length > 0) {
+    report.blocked = true;
+    report.blockedReason =
+      'APPLY INCOMPLETE: ' + report.applyFailures.length + ' write(s) failed. '
+      + 'Applied so far - entitlements: ' + report.applied.entitlements.length
+      + ', profiles: ' + report.applied.profiles.length
+      + ', claims: ' + report.applied.claims.length
+      + ', links: ' + report.applied.links.length + '. '
+      + 'Earlier writes in this run DID land: this migration spans Firestore '
+      + 'and Auth and cannot be globally atomic. Every operation is idempotent, '
+      + 'so RERUN once the underlying cause is fixed - the next preflight will '
+      + 'skip whatever already succeeded. See applyFailures for details.';
+    report.finishedAt = new Date().toISOString();
+    emitReport();
+    process.stderr.write("\n" + report.blockedReason + "\n");
+    return EXIT_APPLY_FAILED;
   }
 
   report.finishedAt = new Date().toISOString();
@@ -803,7 +1000,21 @@ function emitReport() {
   line('  Canonical links skipped (conflict) ... ' + report.counts.linksSkippedConflicting);
   line('  Legacy coaches already entitled ..... ' + report.counts.legacyCoachesAlreadyEntitled);
   line('  Legacy coaches UNRESOLVED ........... ' + report.counts.legacyCoachesUnresolved);
+  line('  Reviewed coaches MISSING (deleted) .. ' + report.counts.reviewedCoachesMissing);
+  line('  Links skipped (missing party) ....... ' + report.counts.linksSkippedMissingParty);
   line('');
+
+  if (report.applyFailures.length) {
+    line('  WRITE FAILURES (' + report.applyFailures.length + ') - RERUN REQUIRED');
+    for (const f of report.applyFailures) line('    x ' + JSON.stringify(f));
+    line('    Applied before/around the failures:');
+    line('      entitlements: ' + report.applied.entitlements.length
+      + '  profiles: ' + report.applied.profiles.length
+      + '  claims: ' + report.applied.claims.length
+      + '  links: ' + report.applied.links.length);
+    line('    All operations are idempotent - rerunning is safe and completes.');
+    line('');
+  }
 
   if (report.operationalFailures.length) {
     line('  OPERATIONAL READ FAILURES (' + report.operationalFailures.length + ')'
@@ -871,6 +1082,7 @@ module.exports = {
   EXIT_PROJECT_BLOCKED,
   EXIT_UNRESOLVED_COACHES,
   EXIT_INCOMPLETE_AUDIT,
+  EXIT_APPLY_FAILED,
   _internals: {
     planEntitlements,
     applyEntitlements,
@@ -881,6 +1093,10 @@ module.exports = {
     applyRelationships,
     auditUnresolvedLegacyCoaches,
     operationalFailure,
+    applyFailure,
+    resolveIdentity,
+    identityCache,
+    missingAccounts,
     plan,
     report,
   },

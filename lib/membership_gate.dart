@@ -39,7 +39,6 @@ Widget gatedWes2({DateTime? initialDate}) =>
 const freeMembershipUids = <String>{
   'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard
   'wuiMe7phxYQh0MM39bfnhgv20yS2', // Campbell
-  'SMTEVGPH1MXgOgbcBbJFU1HjU8G3', // Adam
   'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play Reviewer Account
   'L7YjSMnm7tXD3BwyskmmrgVhKsS2' // Ruby cakes
   // add more testers here later

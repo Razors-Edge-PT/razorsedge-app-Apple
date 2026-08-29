@@ -9,7 +9,7 @@
     "logs": "firebase functions:log",
     "migrate:planned-blocks": "node scripts/migrate_planned_blocks_to_users.js",
     "test": "node --test",
-    "test:rules": "firebase emulators:exec --only firestore --project rules-test \"node --test test-rules/rules.spec.js test-rules/coach_mode_rules.spec.js test-rules/integration.spec.js test-rules/coach_mode.spec.js\""
+    "test:rules": "firebase emulators:exec --only firestore,auth --project rules-test \"node --test test-rules/rules.spec.js test-rules/coach_mode_rules.spec.js test-rules/integration.spec.js test-rules/coach_mode.spec.js\""
   },
   "engines": {
     "node": "22"

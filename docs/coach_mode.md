@@ -428,54 +428,89 @@ node functions/migrate_coach_mode.js --apply --claims
 node functions/migrate_coach_mode.js --apply --allow-unresolved
 ```
 
+### Exit-code contract
+
+| Code | Meaning | Notes |
+|---:|---|---|
+| `0` | OK | dry run completed, or apply completed with no failures |
+| `1` | Unexpected exception | unhandled error |
+| `2` | Project blocked | wrong or unresolved Firebase project; no reads attempted |
+| `3` | Unresolved legacy coaches | a DATA condition; overridable with `--allow-unresolved` |
+| `4` | Incomplete audit / preflight | a REQUIRED read failed. Dry runs return this too. `--apply` performs **zero** writes. **Not** overridable |
+| `5` | Apply failed | one or more MUTATIONS failed. Does **not** imply zero writes |
+
 ### Safety gates on `--apply`
 
-A dry run is safe anywhere. `--apply` (and `--apply --claims`) refuses unless
-**both** gates pass, and both are checked *before any write*, so a blocked run
-never leaves a partial migration.
+A dry run is safe anywhere. Gates run in order, all before any write.
 
-**Gate 1 — project.** The resolved Firebase project must be exactly
-`goodlift-us-storage` (from `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT` /
-`FIREBASE_PROJECT` / `FIREBASE_CONFIG`). Anything else — including an
-unresolved project or a near-miss like `goodlift-us-storage-dev` — aborts with
-exit code 2.
+**Gate 1 — project.** Must resolve to exactly `goodlift-us-storage`. Anything
+else — unresolved, or a near-miss like `goodlift-us-storage-dev` — exits **2**
+before a single read.
 
-**Gate 2 — unresolved legacy coaches.** The script scans **both** assignment
-collections for every uid that legacy data would authorise as a coach, and
-reports each one that is neither in the reviewed set (`LEGACY_COACH_UIDS`) nor
-already actively entitled.
+**Gate 2 — audit completeness (operational).** Every required read runs first,
+in a planning phase that writes nothing: the discovery scans, each reviewed
+coach's entitlement, each candidate link, and **every identity lookup**
+(Firebase Auth + `users/{uid}`). If any fails, `auditComplete` is `false`, the
+counts are untrustworthy, and the run exits **4** — for a dry run too. Under
+`--apply` the abort happens before the first write.
+
+`--allow-unresolved` deliberately cannot reach this gate: it overrides reviewed
+**data**, never a failure to read.
+
+**Gate 3 — unresolved legacy coaches (data).** Only reachable once the audit is
+known complete, so the verdict is a real answer rather than the empty list a
+failed scan used to produce. Exits **3**; `--allow-unresolved` overrides.
+
+**Gate 4 — mutation outcome.** Any failed Firestore or Auth write exits **5**.
+
+### Preflight / mutation separation
+
+Planning (`planEntitlements`, `planClaims`, `planRelationships`) performs every
+required read and caches resolved identities on the plan. Mutation
+(`applyEntitlements`, `applyClaims`, `applyRelationships`) uses only prepared
+values and performs **no ordinary identity or discovery reads**. A credential,
+permission or network failure therefore cannot strike mid-mutation.
+
+### Concurrency
+
+* **Entitlement + profile** are written in **one Firestore transaction** that
+  **revalidates the entitlement state inside the transaction**. An entitlement
+  suspended or revoked between preflight and mutation is never resurrected —
+  it is reported as `entitlement-state-conflict` and exits 5.
+* **Links** use `create()`, which fails if the document now exists. A link
+  created, accepted, declined, revoked or released between preflight and
+  mutation is never overwritten; the collision is reported as
+  `link-create-conflict` and exits 5.
+
+### Honest partial-write reporting
+
+This migration spans Firestore **and** Auth, so it cannot be globally atomic
+and does not pretend to be. On exit 5 the report names exactly what landed
+(`applied.entitlements` / `.profiles` / `.claims` / `.links`) and what did not
+(`applyFailures`), and states that a **rerun is required**. Every operation is
+idempotent — the next preflight skips whatever already succeeded.
+
+### Deleted and missing accounts
+
+`auth/user-not-found` is a **data fact**, not an operational failure, so a stale
+uid never blocks the migration. But:
+
+* a reviewed coach whose Auth account is gone is **not** planned for an
+  entitlement, profile or claim (`reviewed-coach-account-missing`);
+* an approved legacy relationship whose coach or athlete is gone is **skipped**
+  rather than written as a blank active link (`link-party-account-missing`).
+
+### Unresolved legacy coaches
+
+The script scans **both** assignment collections for every uid that legacy data
+would authorise as a coach, and reports each that is neither in the reviewed set
+(`LEGACY_COACH_UIDS`) nor already actively entitled.
 
 These are **never auto-entitled.** `coachAssignments` was historically
-self-writable, so a discovered uid may simply be an account that wrote itself
-a roster; auto-granting Coach Mode from that data would re-open the very
-vulnerability this work closed.
-
-Because an active entitlement is now mandatory, an unresolved uid means a coach
-who **will lose access at the rules deploy** — so it is a **blocking** conflict
-(exit code 3). Resolve it by having super admin review each uid and grant Coach
-Mode explicitly (Coach Management → Grant, or `coachModeGrantCoach`), then
-rerun. `--allow-unresolved` proceeds anyway and is only for a super admin who
-has reviewed them and deliberately intends not to grant.
-
-What it does:
-
-1. Creates **active `manual_review` entitlements** for the hard-coded coach
-   accounts, so nobody is locked out.
-2. Leaves Richard as hard-coded super admin — never given an entitlement.
-3. Migrates `athleteAssignments[...].approved === true` into **active**
-   `coachAthleteLinks`.
-4. Leaves `coachAssignments` (super-admin seeded) **completely untouched**.
-5. Reports malformed / conflicting / ambiguous records instead of guessing:
-   * `entitlement-conflict` — account is in the hard-coded list but its
-     entitlement was explicitly suspended/revoked. Left alone.
-   * `link-conflict` — a canonical link already exists in a non-active state
-     (e.g. the athlete later revoked). The legacy approval is **not** applied
-     over it.
-   * `ambiguous-approval`, `malformed-coach-entry`,
-     `malformed-athlete-assignment`, `self-assignment`.
-6. Idempotent: a second run reports `already-active` and writes nothing new.
-
----
+self-writable, so a discovered uid may simply be an account that wrote itself a
+roster; auto-granting from that data would re-open the very vulnerability this
+work closed. Resolve by having super admin review each uid and grant Coach Mode
+explicitly (Coach Management → Grant, or `coachModeGrantCoach`), then rerun.
 
 ## 8. Retiring the legacy path
 
