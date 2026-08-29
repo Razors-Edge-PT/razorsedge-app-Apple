@@ -827,3 +827,29 @@ exports.mirrorLegacyPlannedBlocksToUsers =
   plannedBlocksCompat.mirrorLegacyPlannedBlocksToUsers;
 exports.mirrorUserPlannedBlocksToLegacy =
   plannedBlocksCompat.mirrorUserPlannedBlocksToLegacy;
+
+// ====================================
+// Profile showcase (Big Five achievements, identity, stories)
+// ====================================
+// Additive module. Everything above is untouched.
+//
+// The Big Five projection is ALWAYS ON: unlike coachAnalytics it is not gated
+// on a Coach Mode entitlement, because every user's profile shows it. The two
+// projections share only the E1RM curve (showcase/e1rm_spec re-exports
+// coach/e1rm) and are otherwise independent, so neither lifecycle can disturb
+// the other. Nothing here reads or writes rePoints* fields — the rolling
+// 12-month calculation and this lifetime projection never overwrite each other.
+//
+// Required once per NEW callable in this project (Domain Restricted Sharing —
+// see docs/coach_mode.md):
+//   gcloud run services update profilechangeusername
+//     --no-invoker-iam-check --region=us-central1 --project=goodlift-us-storage
+const showcase = require('./showcase/firestore_store');
+exports.showcaseOnWorkoutWrite = showcase.showcaseOnWorkoutWrite;
+
+const identity = require('./identity');
+exports.profileChangeUsername = identity.profileChangeUsername;
+
+const stories = require('./social/stories');
+exports.storyOnPublished = stories.storyOnPublished;
+exports.storyCleanupScheduler = stories.storyCleanupScheduler;

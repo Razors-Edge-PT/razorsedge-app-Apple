@@ -157,6 +157,23 @@ service cloud.firestore {
       ];
     }
 
+    // ── Subcollections that carry their OWN write rule below ─────────────
+    // Rule matches are ORed, so a subcollection left inside the users/{userId}
+    // catch-all is granted everything that catch-all grants, however narrow
+    // its dedicated block is. These are therefore CUT OUT of the catch-all's
+    // write clause, leaving their own block as the only thing that can
+    // authorise a write:
+    //   showcase / showcaseDays — server-owned Big Five projection, derived
+    //     from workout history by showcaseOnWorkoutWrite. A client that could
+    //     write it could forge its own lifetime achievements.
+    //   stories — the 24-hour window must start at the SERVER's clock, so
+    //     create is constrained to publishedAt == request.time.
+    // Reads are unaffected: the catch-all still gives the owner and the super
+    // admin read, and each block widens reads where that is intended.
+    function hasOwnWriteRule(subcoll) {
+      return subcoll in ['showcase', 'showcaseDays', 'stories'];
+    }
+
 
     // ======================================================
     // USERS PUBLIC (search, avatars, public stats)
@@ -167,7 +184,21 @@ service cloud.firestore {
       allow read: if isSignedIn();
 
       // Only the owner or super admin may write (no coach write).
-      allow write: if isSelf(userId) || isSuperAdmin();
+      //
+      // profileShowcaseV1 is EXCLUDED from the owner's write: it is the
+      // presentation mirror of the server-maintained Big Five projection.
+      // Leaving it writable would let any account publish achievements it
+      // never performed, which is precisely what the proof-video feature is
+      // meant to make meaningful. The super admin keeps full access, matching
+      // the existing hard-coded super-admin behaviour elsewhere in this file.
+      allow write: if isSuperAdmin()
+                   || (
+                        isSelf(userId)
+                        && !request.resource.data
+                              .diff(resource == null ? {} : resource.data)
+                              .affectedKeys()
+                              .hasAny(['profileShowcaseV1'])
+                      );
     }
 
 
@@ -213,6 +244,58 @@ service cloud.firestore {
         allow delete: if isSignedIn() && request.auth.uid == userId;
       }
 
+      // ---- Proof-of-record media pointers ----
+      // users/{userId}/proofs/{recordFingerprint}
+      // A proof attaches to the EXACT source performance (see
+      // functions/showcase/reducer.js), not to a generic lift slot, so a
+      // record that changes leaves its old proof behind in the gallery
+      // instead of silently re-labelling new work.
+      // Social visibility only — an assigned coach is NOT a bypass.
+      match /proofs/{fingerprint} {
+        allow read: if isSocial(userId);
+        allow write: if isSelf(userId) || isSuperAdmin();
+      }
+
+      // ---- Stories (24-hour media) ----
+      // Social visibility; owner-only mutation.
+      //
+      // The 24-hour window MUST start at the server's clock, so create
+      // requires publishedAt == request.time and forbids a client-supplied
+      // expiresAt (storyOnPublished stamps that from publishedAt). A client
+      // cannot therefore backdate or extend a story, and an offline-selected
+      // story simply never reaches this rule until it genuinely publishes.
+      match /stories/{storyId} {
+        allow read: if isSocial(userId);
+
+        allow create: if isSelf(userId)
+                      && request.resource.data.ownerUid == userId
+                      && request.resource.data.publishedAt == request.time
+                      && !('expiresAt' in request.resource.data);
+
+        // The owner may correct presentational fields only; the publication
+        // clock is immutable once set.
+        allow update: if (isSelf(userId) || isSuperAdmin())
+                      && request.resource.data.publishedAt == resource.data.publishedAt
+                      && request.resource.data.ownerUid == resource.data.ownerUid;
+
+        allow delete: if isSelf(userId) || isSuperAdmin();
+      }
+
+      // ---- Server-owned Big Five projection ----
+      // Written exclusively by showcaseOnWorkoutWrite (Admin SDK bypasses
+      // rules). The owner and super admin may read their own derived data;
+      // the OWNER may never write it. The super admin retains write through
+      // the users/{userId} catch-all below, matching the hard-coded
+      // super-admin behaviour used throughout this file.
+      match /showcase/{doc=**} {
+        allow read: if isSelf(userId) || isSuperAdmin();
+        allow write: if false;
+      }
+      match /showcaseDays/{doc=**} {
+        allow read: if isSelf(userId) || isSuperAdmin();
+        allow write: if false;
+      }
+
       // ---- User subcollections ----
       //
       // FAIL-CLOSED. A coach reaches ONLY the explicitly listed training
@@ -235,10 +318,19 @@ service cloud.firestore {
       // The canonical nested planned blocks
       // (users/{userId}/planned_blocks/{blockId}/...) are covered by the
       // 'planned_blocks' entry plus the {doc=**} recursion.
+      //
+      // Subcollections listed in hasOwnWriteRule() are cut out of the WRITE
+      // clause here. Because matches are ORed, leaving them in would re-grant
+      // the owner unconstrained writes and quietly undo the server-owned and
+      // server-clock guarantees their own blocks above exist to enforce.
       match /{subcoll}/{doc=**} {
-        allow read, write: if isSelf(userId)
-                           || isSuperAdmin()
-                           || (isTrainingSubcollection(subcoll) && isCoachFor(userId));
+        allow read: if isSelf(userId)
+                    || isSuperAdmin()
+                    || (isTrainingSubcollection(subcoll) && isCoachFor(userId));
+
+        allow write: if isSuperAdmin()
+                     || (isSelf(userId) && !hasOwnWriteRule(subcoll))
+                     || (isTrainingSubcollection(subcoll) && isCoachFor(userId));
       }
     }
 
@@ -615,6 +707,29 @@ service cloud.firestore {
         allow write: if false;
       }
     }
+
+    // ======================================================
+    // USERNAME UNIQUENESS INDEX
+    // ======================================================
+    // usernames/{sha256(normalisedName)} → { uid, username, usernameLower }
+    //
+    // The document id is a HASH, not the name: a username may legally contain
+    // '/', '.' or '..', none of which are safe as a Firestore document id.
+    //
+    // Written exclusively by the profileChangeUsername callable, inside one
+    // transaction that reserves the new key, releases the old one and updates
+    // both user documents. A client "query then write" can never be race-free,
+    // so client writes are refused outright here — that refusal is what makes
+    // case-insensitive uniqueness an actual guarantee rather than a hope.
+    //
+    // Signed-in read is allowed so the app can check availability with a
+    // single document get. It exposes no more than the existing
+    // users_public usernameLower query already does.
+    match /usernames/{indexKey} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
 
     // ======================================================
     // EMAIL → UID LOOKUP

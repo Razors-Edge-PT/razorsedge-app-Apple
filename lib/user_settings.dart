@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'profile/data/identity_repository.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -220,18 +221,22 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
         return;
       }
 
-      // Final check on username uniqueness
-      final available = await _isUsernameAvailable(username);
-      if (!available) {
+      // Username uniqueness goes through the central identity service, which
+      // reserves the name in ONE backend transaction. The old code here read
+      // a query and then wrote — two devices could both read "free" and both
+      // write. It also wrote the name itself; that is now the callable's job,
+      // which is why username/usernameLower are absent from the payloads
+      // below. Everything else on this form is still written from here.
+      final UsernameChangeResult identityResult =
+          await IdentityRepository.shared.changeUsername(username);
+      if (!identityResult.isSuccess) {
         setState(() {
-          _error = 'That username is taken. Choose another.';
+          _error = identityResult.message ?? 'That username could not be saved.';
         });
         return;
       }
 
       final payloadPrivate = {
-        'username': username,
-        'usernameLower': username.toLowerCase(),
         'fullName': fullName,
         'dob': dobNorm,
         'sex': sex,
@@ -239,10 +244,7 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
       };
 
       final payloadPublic = {
-        'username': username,
-        'usernameLower': username.toLowerCase(),
-        'displayName': username,
-        'fullName': fullName, // 👈 new
+        'fullName': fullName,
         'updatedAt': FieldValue.serverTimestamp(),
       };
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'profile/data/identity_repository.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_diag.dart';
 import 'auth_signout.dart';
@@ -542,22 +543,31 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
           await user.updateDisplayName(username);
         }
 
-        // Now that we are signed in, check availability
-        final ok = await _isUsernameAvailable(username);
+        // Claim the username through the central identity service. This
+        // ATOMICALLY reserves it and writes username/usernameLower onto both
+        // user documents, so two people signing up with the same name at the
+        // same moment cannot both succeed — which a "read the index, then
+        // write" check could never guarantee. It also fails closed when it
+        // cannot reach the backend, rather than assuming the name is free.
+        final UsernameChangeResult claim =
+            await IdentityRepository.shared.changeUsername(username);
 
-        if (!ok) {
+        if (!claim.isSuccess) {
           await _cleanupNewUserOnFailure();
           setState(() {
-            _errorMessage = 'That username is taken by your nemesis. Please choose another.';
+            _errorMessage = claim.outcome == UsernameChangeOutcome.taken
+                ? 'That username is taken by your nemesis. Please choose another.'
+                : (claim.message ?? 'That username could not be saved.');
             _isLoading = false;
           });
           return;
         }
 
+        // username / usernameLower are deliberately absent: the callable above
+        // owns them, and writing them again here could only ever disagree
+        // with the reservation index.
         final payload = {
           'email': user.email,
-          'username': username,
-          'usernameLower': username.toLowerCase(),
           'fullName': fullName,
           'dob': dobNormalized,   // stored as dd-mm-yyyy (string)
           'sex': sex,             // 'M'|'F'|'N'
@@ -2235,6 +2245,37 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       final user = auth.currentUser;
       if (user == null) {
         throw Exception('No user after registration');
+      }
+
+      // ── Atomic username reservation ──────────────────────────────────────
+      // The guard above runs BEFORE the account exists, so it can only ever be
+      // advisory: it reads the index and the name can be claimed in the gap
+      // before this account writes it. Now that we are authenticated, the
+      // callable settles it for real — one backend transaction reserves the
+      // name and writes username/usernameLower onto both user documents, so
+      // two simultaneous signups for one name cannot both win.
+      //
+      // It runs BEFORE the profile payload below: a refused name must leave no
+      // profile behind claiming it.
+      if (isNewAccount) {
+        final UsernameChangeResult claim =
+            await IdentityRepository.shared.changeUsername(widget.username ?? '');
+        if (!mounted) return;
+        if (!claim.isSuccess) {
+          if (claim.outcome == UsernameChangeOutcome.taken) {
+            Navigator.of(context).pop(kSignupUsernameTakenResult);
+          } else {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(
+                SnackBar(
+                  content: Text(claim.message ?? kUsernameCheckFailedMessage),
+                  duration: const Duration(seconds: 6),
+                ),
+              );
+          }
+          return; // outer finally resets _saving
+        }
       }
 
       // 🔐 Ensure membership doc exists for this new account.

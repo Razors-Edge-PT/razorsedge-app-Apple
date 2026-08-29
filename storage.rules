@@ -1,0 +1,193 @@
+rules_version = '2';
+
+// GoodLift Cloud Storage rules.
+//
+// These were previously kept only as a loose note in firestore_rules/*.txt and
+// were NOT referenced by firebase.json, so `firebase deploy` never shipped
+// them and the repository could not be trusted as the source of truth. This
+// file is that source of truth; firebase.json now points at it.
+//
+// The access model mirrors firestore.rules exactly:
+//   * avatars              — readable by any signed-in user (a profile identity
+//                            is visible to signed-in users)
+//   * posts / lift videos  — owner, confirmed friend, super admin
+//   * stories              — owner, confirmed friend, super admin
+//   * DM media             — conversation participants who are friends
+//   * everything else      — denied
+//
+// An assigned COACH is deliberately absent from every social gate. A coach
+// reaches training data, not a client's social media, unless they are also a
+// confirmed friend (in which case isBuddyOf already covers them).
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ======================================================
+    // HELPERS
+    // ======================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // The single hard-coded super-admin UID, matching firestore.rules.
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.uid == "yoVAqScwLMQLAgNHh8v9IK49fBw2";
+    }
+
+    // Bidirectional + accepted-status friendship check (mirrors the Firestore
+    // helper of the same name).
+    //
+    // NOTE the firestore.exists / firestore.get prefix. Storage rules have NO
+    // bare exists()/get() — those are Firestore-rules builtins. The previous
+    // hand-maintained copy of these rules used the bare form, which raises
+    // "Function not found: exists" at evaluation time and therefore DENIED
+    // every friend read of post, story and lift-video media. Verified by
+    // functions/test-rules/profile_storage_rules.spec.js against the real
+    // rules engine.
+    function isBuddyOf(ownerUid) {
+      return isSignedIn() && (
+        (
+          firestore.exists(/databases/(default)/documents/buddyAssignments/$(request.auth.uid)) &&
+          firestore.get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
+            .data.athletes[ownerUid] != null &&
+          firestore.get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
+            .data.athletes[ownerUid].status == 'accepted'
+        )
+        ||
+        (
+          firestore.exists(/databases/(default)/documents/buddyAssignments/$(ownerUid)) &&
+          firestore.get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
+            .data.athletes[request.auth.uid] != null &&
+          firestore.get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
+            .data.athletes[request.auth.uid].status == 'accepted'
+        )
+      );
+    }
+
+    // Social visibility: self, confirmed friend, or super admin.
+    // Coach is deliberately excluded — coach status is not a media bypass.
+    function isSocial(ownerUid) {
+      return isSignedIn() && (
+        request.auth.uid == ownerUid ||
+        isBuddyOf(ownerUid) ||
+        isSuperAdmin()
+      );
+    }
+
+    function isOwner(ownerUid) {
+      return isSignedIn() && request.auth.uid == ownerUid;
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('^image/.*');
+    }
+
+    function isVideo() {
+      return request.resource.contentType.matches('^video/.*');
+    }
+
+    // ~10 MB images, ~100 MB videos. Matches the client-side pre-check in the
+    // media outbox, so a file that would be rejected here is rejected before
+    // it is ever queued.
+    function sizeOk() {
+      return (isImage() && request.resource.size < 10 * 1024 * 1024)
+          || (isVideo() && request.resource.size < 100 * 1024 * 1024);
+    }
+
+
+    // ======================================================
+    // AVATAR — users/{uid}/profile/{fileName}
+    //
+    // Only the profile photo lives here, in its own subdirectory, distinct
+    // from /posts/, /stories/ and /liftVideos/. Any signed-in user may read
+    // it, consistent with the users_public Firestore rule. Only the owner may
+    // upload or replace it.
+    //
+    // Avatar replacement is identity-superseded on the client (see
+    // MediaOutbox): a stale upload can never overwrite a newer choice,
+    // because each attempt writes its own generation-stamped object and only
+    // the winning generation is referenced by the user document.
+    // ======================================================
+    match /users/{ownerUid}/profile/{fileName} {
+      allow read: if isSignedIn();
+      allow create, update: if isOwner(ownerUid) && isImage() && sizeOk();
+      allow delete: if isOwner(ownerUid) || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // POST MEDIA — users/{uid}/posts/{postId}/{fileName}
+    //
+    // Grid uploads AND proof videos. A proof is an ordinary post carrying an
+    // achievement fingerprint, so it reuses this path rather than uploading a
+    // second copy of the same file.
+    // ======================================================
+    match /users/{ownerUid}/posts/{postId}/{fileName} {
+      allow read: if isSocial(ownerUid);
+      allow create, update: if isOwner(ownerUid) && sizeOk();
+      allow delete: if isOwner(ownerUid) || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // STORIES — users/{uid}/stories/{storyId}/{fileName}
+    //
+    // 24-hour media. Expiry is enforced by the Firestore document's
+    // server-derived publishedAt and swept by storyCleanupScheduler; Storage
+    // itself has no clock, so these objects are only ever reachable through a
+    // live story document.
+    // ======================================================
+    match /users/{ownerUid}/stories/{storyId}/{fileName} {
+      allow read: if isSocial(ownerUid);
+      allow create, update: if isOwner(ownerUid) && sizeOk();
+      allow delete: if isOwner(ownerUid) || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // LIFT VIDEOS — users/{uid}/liftVideos/{fileName}
+    //
+    // Legacy per-lift videos. Preserved as-is: they predate record
+    // provenance and are never auto-claimed as proof of a current record.
+    // ======================================================
+    match /users/{ownerUid}/liftVideos/{fileName} {
+      allow read: if isSocial(ownerUid);
+      allow create, update: if isOwner(ownerUid) && sizeOk();
+      allow delete: if isOwner(ownerUid) || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // DM MEDIA — dm/{convId}/...
+    //
+    // Actual paths written by the app:
+    //   dm/{convId}/{msgId}/image_{ts}.jpg
+    //   dm/{convId}/{msgId}/video_{ts}.mp4
+    // ======================================================
+    match /dm/{convId}/{allPaths=**} {
+      function isConvParticipant() {
+        return isSignedIn() &&
+          firestore.get(/databases/(default)/documents/conversations/$(convId))
+            .data.participants[request.auth.uid] == true;
+      }
+
+      // convId = uid1_uid2 (UIDs sorted ascending, joined by "_", 57 chars).
+      // Mirrors the Firestore DM friend-gate.
+      function isConvFriend() {
+        return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
+      }
+
+      allow read: if (isConvParticipant() && isConvFriend()) || isSuperAdmin();
+      allow write: if isConvParticipant() && isConvFriend();
+    }
+
+
+    // ======================================================
+    // Everything else fails closed.
+    // ======================================================
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

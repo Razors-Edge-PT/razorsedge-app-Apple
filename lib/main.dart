@@ -1,5 +1,7 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
+import 'profile/profile_services.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -878,6 +880,21 @@ void main() async {
     );
   }
   StartupTrace.firebaseInitialized();
+
+  // Firestore offline persistence, set BEFORE any Firestore call so it can
+  // actually take effect (settings are locked once the SDK is first used).
+  //
+  // It is on by default on Android and iOS, but stating it here makes the
+  // profile's offline contract explicit rather than inherited: the profile
+  // shell, identity, bio, achievements and grid metadata are served from this
+  // cache on a warm reopen, with no second local copy of that data anywhere.
+  // The unlimited cache size stops an active user's own profile being evicted
+  // by ordinary browsing, which is what would otherwise turn a warm reopen
+  // cold.
+  FirebaseFirestore.instance.settings = const Settings(
+    persistenceEnabled: true,
+    cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+  );
   // Auth-persistence diagnostic: log project/app id + currentUser + last
   // provider + explicit-logout immediately after init on this (possibly new)
   // process. Fire-and-forget — proves whether the native session survived.
@@ -901,6 +918,18 @@ void main() async {
   // the first frame renders with the user's persisted theme (no theme flash).
   final themeController = ThemeController();
   await themeController.load();
+
+  // Durable media-upload outbox. Opened (and drained) in the background so an
+  // upload interrupted by a crash or a lost connection resumes on this launch
+  // without the user having to reopen their profile. Deliberately NOT awaited:
+  // the first frame must not wait on SQLite or the network.
+  unawaited(
+    ProfileServices.ensureInitialised()
+        .then((ProfileServices services) => services.processOutbox())
+        .catchError((Object e) {
+      debugPrint('Profile media outbox could not start: $e');
+    }),
+  );
 
   StartupTrace.runAppCalled();
   runApp(
