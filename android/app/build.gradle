@@ -6,8 +6,24 @@ plugins {
     id "com.google.gms.google-services"
 }
 
-def flutterVersionCode = project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "80"
-def flutterVersionName = project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.7.10"
+// Version comes from pubspec.yaml. `flutter build` writes it into
+// android/local.properties as flutter.versionName / flutter.versionCode, so
+// that file is read FIRST and is the authoritative source.
+//
+// The previous code only checked project.hasProperty('flutter.versionCode'),
+// which the modern dev.flutter.flutter-gradle-plugin never sets. That check was
+// always false, so every release silently fell back to the hardcoded literals
+// below and shipped 1.7.10+80 no matter what pubspec.yaml said.
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader -> localProperties.load(reader) }
+}
+
+def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+    ?: (project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "80")
+def flutterVersionName = localProperties.getProperty('flutter.versionName')
+    ?: (project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.7.10")
 
 android {
     namespace = "com.goodlift.razorsedge"

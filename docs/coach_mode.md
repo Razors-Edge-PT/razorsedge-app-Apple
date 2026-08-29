@@ -668,6 +668,44 @@ Verify: the service annotation `run.googleapis.com/invoker-iam-disabled` is
 `"true"`, and an unauthenticated POST returns **401** (our application layer)
 rather than **403** (infrastructure block).
 
+### The Coach Mode functions deploy exits 2 on this project — observed behaviour
+
+Because Domain Restricted Sharing blocks the `allUsers` invoker binding, the
+exact Coach Mode deployment **finishes with exit code 2** even when every
+function is created correctly. The tail of the log reads:
+
+```
+Unable to set the invoker for the IAM policy on the following functions:
+        coachModeAdminLookupAccount(us-central1)
+        ... (all 13 callables)
+Error: There was an error deploying functions:
+- Error Failed to set invoker function coachModeInviteAthlete in region us-central1
+  ... (one line per callable)
+```
+
+**Never treat an exit-2 deployment as successful automatically.** It is
+acceptable ONLY when all of the following are proven from production, not from
+the deploy log:
+
+1. All **15** intended exports exist and are `ACTIVE` (13 callables + 2
+   triggers), Gen 2, `us-central1`, Node.js 22, with the trigger document paths
+   matching the source.
+2. Every reported error is *solely* `Failed to set invoker` on one of the 13
+   callables. Any other error — a build failure, a missing export, a quota or
+   permission error on anything else — is a **real hard stop**.
+3. No pre-existing function was deleted, and no unexpected function was created.
+4. The manual `--no-invoker-iam-check` step then succeeds for all 13 callables.
+5. All 13 callables subsequently return an application-level **401**
+   (`{"error":{"message":"Sign in required.","status":"UNAUTHENTICATED"}}`),
+   never an infrastructure **403**, and never an unexpected 2xx or 5xx.
+
+If any of those five fail, stop before deploying rules.
+
+Practical consequence for automation: a CI job for this project must not treat
+a nonzero exit from the Coach Mode functions deploy as automatically fatal, nor
+as automatically fine. It has to inspect the error lines and then run the
+production verification above.
+
 ### Full deployment order
 
 Designed so **no existing coach is ever locked out**.
@@ -677,7 +715,7 @@ Designed so **no existing coach is ever locked out**.
 | 1 | `node functions/migrate_coach_mode.js` (dry run) | Counts look right; zero unexplained `problems` |
 | 2 | `node functions/migrate_coach_mode.js --apply` | Every hard-coded coach has `accountEntitlements/{uid}.coach.state == 'active'`; approved relationships are active links |
 | 3 | `node functions/migrate_coach_mode.js --apply --claims` | `isCoach` claim set; unrelated claims intact |
-| 4 | Deploy ONLY the Coach Mode exports (see the `--only` selector below) | All thirteen callables + two triggers listed |
+| 4 | Deploy ONLY the Coach Mode exports (see the `--only` selector below) | All 15 exports `ACTIVE` in production. **Expect exit 2** from the invoker binding — accept it only against the five checks above |
 | 5 | Apply the `--no-invoker-iam-check` step above to each **new** callable | Unauthenticated POST returns 401, not 403 |
 | 6 | `firebase deploy --only firestore:indexes` then `firebase deploy --only firestore:rules` | Indexes **Enabled** before rules go live, so admin queries do not fail |
 | 7 | Release the compatible app version | Coach Dashboard, Coaching area and Coach Mode screen all load |
