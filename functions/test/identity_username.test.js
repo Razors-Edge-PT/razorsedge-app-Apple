@@ -130,6 +130,37 @@ test('a reservation belonging to another account is never released', () => {
   assert.strictEqual(plan.releaseOld, false);
 });
 
+test('a CONTESTED marker blocks the name for everyone, including the holders', () => {
+  // The backfill writes { contested: true } with NO uid for a name several
+  // legacy accounts already display. It declares no winner, and it must stop a
+  // brand-new signup taking a name four existing profiles show.
+  const contested = { usernameLower: 'tata', contested: true, contestedUids: [A, B] };
+  for (const uid of [A, B, 'brandNewUser']) {
+    const plan = planUsernameChange({
+      callerUid: uid,
+      requested: 'tata',
+      currentLower: null,
+      existingReservation: contested,
+      oldReservation: null,
+    });
+    assert.strictEqual(plan.decision, Decision.TAKEN, uid);
+  }
+});
+
+test('a contested marker is never released when a holder renames away', () => {
+  const plan = planUsernameChange({
+    callerUid: A,
+    requested: 'SomethingElse',
+    currentLower: 'tata',
+    existingReservation: null,
+    // Their old key is the contested marker, which belongs to nobody.
+    oldReservation: { usernameLower: 'tata', contested: true },
+  });
+  assert.strictEqual(plan.decision, Decision.CLAIM);
+  assert.strictEqual(plan.releaseOld, false,
+    'freeing a contested name would let a stranger take it');
+});
+
 test('an invalid name never reaches the index', () => {
   const plan = planUsernameChange({
     callerUid: A,

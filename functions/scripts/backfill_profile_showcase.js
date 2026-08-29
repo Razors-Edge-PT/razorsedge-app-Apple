@@ -73,11 +73,28 @@ function parseArgs(argv) {
   return out;
 }
 
-/** Compares two snapshots by value, ignoring the mirror's updatedAtMs stamp. */
+/**
+ * Compares two snapshots BY VALUE, ignoring the mirror's updatedAtMs stamp.
+ *
+ * Key order is normalised first. Firestore returns a document's fields in its
+ * own order, which is not the order the reducer builds them in, so a plain
+ * JSON.stringify comparison reports every single account as differing even
+ * when the values are identical.
+ */
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = canonical(value[key]);
+    return out;
+  }
+  return value;
+}
+
 function sameSnapshot(a, b) {
   const strip = (s) => {
     if (!s) return null;
-    const copy = JSON.parse(JSON.stringify(s));
+    const copy = canonical(JSON.parse(JSON.stringify(s)));
     delete copy.updatedAtMs;
     if (copy.lifts && Object.keys(copy.lifts).length === 0) delete copy.lifts;
     return copy;

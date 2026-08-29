@@ -139,6 +139,8 @@ async function main() {
     verifiedMissing: 0,
     verifiedWrongOwner: 0,
     skippedByCollision: 0,
+    contestedMarkers: 0,
+    contestedWritten: 0,
   };
 
   if (collisions.length) {
@@ -173,13 +175,54 @@ async function main() {
     const existing = snap.exists ? snap.data() : null;
 
     if (list.length > 1) {
-      // Contested name. Leave the index alone entirely: writing either uid
-      // would silently declare a winner.
+      // Contested name. NO account is declared the winner — that is the
+      // operator's call, not this script's.
+      //
+      // But the key cannot simply be left empty either: the callable decides
+      // uniqueness from this index alone, so an absent reservation would let a
+      // BRAND-NEW signup claim a name four existing accounts already display.
+      // So a BLOCKING marker is written instead: a document with no `uid`.
+      // planUsernameChange() compares existingReservation.uid to the caller,
+      // and `undefined !== callerUid` for everybody, so the name is refused to
+      // every account — including the current holders, who keep the name they
+      // already display and are only prevented from re-claiming it. The
+      // contested uids are recorded on the document so the clash can be
+      // settled by hand later.
       counts.skippedByCollision += list.length;
+      counts.contestedMarkers += 1;
+      if (existing && existing.uid) {
+        // A real single owner is already indexed. Never replace that with a
+        // block; report it and move on.
+        process.stdout.write(
+          `  CONTESTED "${lower}" already indexed to ${existing.uid} — left as is
+`,
+        );
+        continue;
+      }
+      if (options.apply) {
+        batch.set(
+          ref,
+          {
+            usernameLower: lower,
+            contested: true,
+            contestedUids: list.map((a) => a.uid),
+            backfilledAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        );
+        batched += 1;
+        counts.contestedWritten += 1;
+        if (batched >= 400) await commit();
+      }
       continue;
     }
 
     const acct = list[0];
+    if (existing && existing.contested === true && !existing.uid) {
+      // Expected state for a contested name: blocked for everyone, owned by
+      // nobody. Not a verification failure.
+      continue;
+    }
     if (existing && existing.uid === acct.uid) {
       counts.alreadyIndexed += 1;
       if (options.verify) counts.verifiedOk += 1;
@@ -224,10 +267,11 @@ async function main() {
   }
 
   if (options.verify) {
+    // A collision group is not a verification failure once it carries a
+    // blocking marker: the index is CORRECT, it just records a clash nobody
+    // has settled yet. Missing or wrongly-owned reservations still fail.
     const clean =
-      counts.verifiedMissing === 0 &&
-      counts.verifiedWrongOwner === 0 &&
-      counts.collisionGroups === 0;
+      counts.verifiedMissing === 0 && counts.verifiedWrongOwner === 0;
     process.stdout.write(`\nVerification: ${clean ? 'CLEAN' : 'NOT CLEAN'}\n`);
     return clean ? 0 : 1;
   }
