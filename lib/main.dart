@@ -421,11 +421,17 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     final service = CoachModeService();
 
     // Seed once so the first frame after resolution is already correct.
+    //
+    // On FAILURE we deliberately assign nothing: the context keeps its last
+    // known entitlement, and `coachEntitlementResolved` stays false only if it
+    // was never resolved. Assigning a fabricated `none` here would both
+    // discard authoritative state and re-enable claim-only routing.
     unawaited(service.fetchEntitlement(uid).then((ent) {
       if (!mounted || !identical(_entitlementCtx, ctx)) return;
       ctx.coachEntitlement = ent;
     }).catchError((Object e) {
-      debugPrint('[AUTHROOT] coach entitlement seed failed: $e');
+      debugPrint('[AUTHROOT] coach entitlement seed failed — '
+          'keeping last known state: $e');
     }));
 
     _entitlementSub = service.watchMyEntitlement(uid).listen(
@@ -437,8 +443,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         ctx.coachEntitlement = ent;
       },
       onError: (Object e) {
-        // Never grant on error — the context keeps its last known state.
-        debugPrint('[AUTHROOT] coach entitlement watch failed: $e');
+        // Never grant, and never DOWNGRADE, on error: the context keeps its
+        // last known entitlement rather than falling back to the claim.
+        debugPrint('[AUTHROOT] coach entitlement watch failed — '
+            'keeping last known state: $e');
       },
     );
   }

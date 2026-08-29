@@ -42,11 +42,26 @@ class UserContext extends ChangeNotifier {
   CoachEntitlement _coachEntitlement = CoachEntitlement.none;
   CoachEntitlement get coachEntitlement => _coachEntitlement;
 
+  /// True once an entitlement read has genuinely SUCCEEDED for this account.
+  ///
+  /// A read FAILURE must never set this: after a successful read, `none` is
+  /// authoritative ("no Coach Mode") and the mirrored claim is ignored, so a
+  /// later network/App Check failure cannot promote a stale claim back into
+  /// coach access. Assigning [coachEntitlement] is what marks it resolved,
+  /// which is why failures must not assign at all.
+  bool _coachEntitlementResolved = false;
+  bool get coachEntitlementResolved => _coachEntitlementResolved;
+
   set coachEntitlement(CoachEntitlement value) {
-    if (identical(_coachEntitlement, value)) return;
-    if (_coachEntitlement.state == value.state &&
-        _coachEntitlement.source == value.source &&
-        _coachEntitlement.reason == value.reason) {
+    final wasResolved = _coachEntitlementResolved;
+    _coachEntitlementResolved = true;
+    if (identical(_coachEntitlement, value) ||
+        (_coachEntitlement.state == value.state &&
+            _coachEntitlement.source == value.source &&
+            _coachEntitlement.reason == value.reason)) {
+      // Value unchanged — but the FIRST successful read still flips the role
+      // from claim-provisional to authoritative, so listeners must be told.
+      if (!wasResolved) notifyListeners();
       return;
     }
     _coachEntitlement = value;
@@ -58,6 +73,7 @@ class UserContext extends ChangeNotifier {
         uid: actorUid,
         entitlement: _coachEntitlement,
         claimIsCoach: isCoach,
+        entitlementResolved: _coachEntitlementResolved,
       );
 
   /// Whether this account may use Coach Mode features at all. Super admin

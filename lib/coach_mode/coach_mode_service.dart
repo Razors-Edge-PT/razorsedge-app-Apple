@@ -94,13 +94,27 @@ class CoachModeService {
         .map((s) => CoachEntitlement.fromMap(s.data()));
   }
 
+  /// Reads accountEntitlements/{uid} once.
+  ///
+  /// A SUCCESSFUL read with no document is a valid [CoachEntitlement.none] —
+  /// the account genuinely holds no Coach Mode.
+  ///
+  /// A read/network/App Check FAILURE throws [CoachModeException]. It must not
+  /// be flattened into `none`: doing so made the caller's error handler
+  /// unreachable, overwrote the last known authoritative state, and let a
+  /// stale `isCoach` claim take over routing (because `none` re-enables the
+  /// claim fallback in [resolveCoachRole]). Callers keep their last known
+  /// entitlement on failure — see `_attachCoachEntitlement` in main.dart.
   Future<CoachEntitlement> fetchEntitlement(String uid) async {
     try {
       final s = await _db.collection(kColAccountEntitlements).doc(uid).get();
       return CoachEntitlement.fromMap(s.data());
     } catch (e) {
       debugPrint('⚠️ [CoachMode] entitlement read failed for $uid: $e');
-      return CoachEntitlement.none;
+      throw CoachModeException(
+        'Could not verify Coach Mode status.',
+        code: 'entitlement-read-failed',
+      );
     }
   }
 

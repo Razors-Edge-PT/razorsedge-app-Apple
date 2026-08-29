@@ -1218,3 +1218,90 @@ test('entitlement: repeated restores increment without rewriting provenance', as
     assert.equal(now.revocationReason, null);
   }
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// Migration CLI — exit code 3 (unresolved legacy coaches)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Exercised through the EMULATOR: GCLOUD_PROJECT is the production id so the
+// project guard passes, but FIRESTORE_EMULATOR_HOST redirects every read and
+// write to the local emulator. Production is never contacted.
+
+test('migration CLI: --apply exits 3 on unresolved legacy coach uids', async () => {
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const migration = require('../migrate_coach_mode');
+
+  // A coach uid that legacy data authorises but that has no entitlement and is
+  // not in the reviewed set.
+  const strayCoach = freshUid('strayLegacyCoach');
+  const athlete = await makeAccount('strayLegacyAthlete');
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [strayCoach]: { approved: true } },
+  });
+
+  const script = path.join(__dirname, '..', 'migrate_coach_mode.js');
+  const env = Object.assign({}, process.env, {
+    GCLOUD_PROJECT: migration.REQUIRED_PROJECT_ID,
+    FIRESTORE_EMULATOR_HOST: process.env.FIRESTORE_EMULATOR_HOST,
+  });
+
+  const res = spawnSync(process.execPath, [script, '--apply', '--json'], {
+    env, encoding: 'utf8', timeout: 120000,
+  });
+
+  assert.equal(res.status, migration.EXIT_UNRESOLVED_COACHES,
+    'unresolved legacy coaches must block with status 3\nstdout:\n'
+    + res.stdout + '\nstderr:\n' + res.stderr);
+  assert.match(res.stderr, /REFUSING TO APPLY/);
+
+  const report = JSON.parse(res.stdout);
+  assert.equal(report.blocked, true);
+  assert.ok(report.counts.legacyCoachesUnresolved >= 1);
+  assert.ok(
+    report.unresolvedLegacyCoaches.some((u) => u.uid === strayCoach),
+    'the stray coach uid must be named in the report',
+  );
+  // A blocked run performs NO writes — the gate runs before any migration work.
+  assert.equal(report.counts.entitlementsCreated, 0);
+  assert.equal(report.counts.linksCreated, 0);
+
+  // And it genuinely wrote nothing: the stray coach has no entitlement.
+  const ent = await db.collection(M.COL_ENTITLEMENTS).doc(strayCoach).get();
+  assert.equal(ent.exists, false,
+    'a discovered legacy uid must NEVER be auto-entitled');
+});
+
+test('migration CLI: --allow-unresolved proceeds past the gate', async () => {
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const migration = require('../migrate_coach_mode');
+
+  const script = path.join(__dirname, '..', 'migrate_coach_mode.js');
+  const env = Object.assign({}, process.env, {
+    GCLOUD_PROJECT: migration.REQUIRED_PROJECT_ID,
+    FIRESTORE_EMULATOR_HOST: process.env.FIRESTORE_EMULATOR_HOST,
+  });
+
+  // A dry run is never blocked by gate 2 in the first place.
+  const dry = spawnSync(process.execPath, [script, '--json'], {
+    env, encoding: 'utf8', timeout: 120000,
+  });
+  assert.equal(dry.status, migration.EXIT_OK,
+    'a dry run must always exit 0\nstderr:\n' + dry.stderr);
+  const dryReport = JSON.parse(dry.stdout);
+  assert.equal(dryReport.mode, 'DRY-RUN');
+  assert.notEqual(dryReport.blocked, true);
+
+  // The reviewed escape hatch clears gate 2 and completes.
+  const applied = spawnSync(
+    process.execPath, [script, '--apply', '--allow-unresolved', '--json'],
+    { env, encoding: 'utf8', timeout: 120000 },
+  );
+  assert.equal(applied.status, migration.EXIT_OK,
+    'an allowed apply must exit 0\nstderr:\n' + applied.stderr);
+  const report = JSON.parse(applied.stdout);
+  assert.notEqual(report.blocked, true);
+  // Still reports the unresolved uids for the operator.
+  assert.ok(report.counts.legacyCoachesUnresolved >= 1);
+});

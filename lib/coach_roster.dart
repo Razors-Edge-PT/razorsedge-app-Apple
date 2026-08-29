@@ -112,20 +112,35 @@ class CoachRoster {
   /// The authorised athlete UIDs for an ordinary coach, across every
   /// authorisation source. Pure so the authorisation shape stays unit-testable.
   ///
-  /// [activeLinkAthleteUids] is the canonical source (coachAthleteLinks with
-  /// status 'active'); the other two are the legacy sources. Only ACTIVE links
-  /// are ever passed here — a pending invitation is not a roster entry and
-  /// grants no access.
+  /// Delegates to [composeAuthorisedAthleteUids] so the client uses the SAME
+  /// rule as firestore.rules `isCoachFor()` and functions/coach/authz.js
+  /// `evaluateAssignmentDetail()` — there is one implementation, not two.
+  ///
+  /// [terminalLinkAthleteUids] is what makes an athlete revocation or a coach
+  /// release actually disappear from the dashboard: without it, a stale legacy
+  /// approval kept the athlete listed even though the server denied every read
+  /// (leaving a bare-UID row with an unusable Remove action).
   static Set<String> assignedUids({
     required Iterable<String> approvedAthleteUids,
     required Map<String, dynamic> seededAthletes,
     Iterable<String> activeLinkAthleteUids = const [],
+    Iterable<String> terminalLinkAthleteUids = const [],
   }) {
-    return <String>{
-      ...activeLinkAthleteUids,
-      ...approvedAthleteUids,
-      ...seededAthletes.keys,
-    };
+    final links = <CoachAthleteLink>[
+      for (final uid in activeLinkAthleteUids)
+        CoachAthleteLink(
+            id: uid, coachUid: '', athleteUid: uid,
+            status: CoachLinkStatus.active),
+      for (final uid in terminalLinkAthleteUids)
+        CoachAthleteLink(
+            id: uid, coachUid: '', athleteUid: uid,
+            status: CoachLinkStatus.releasedByCoach),
+    ];
+    return composeAuthorisedAthleteUids(
+      canonicalLinks: links,
+      legacyApprovedUids: approvedAthleteUids,
+      legacySeededUids: seededAthletes.keys,
+    );
   }
 
   static List<CoachAthlete> sorted(Iterable<CoachAthlete> athletes) {
@@ -185,21 +200,24 @@ class CoachRosterService {
 
   Future<List<CoachAthlete>> _loadAssignedAthletes(String coachUid) async {
     final approved = <String>{};
-    final activeLinks = <String>{};
+    final canonicalLinks = <CoachAthleteLink>[];
     Map<String, dynamic> seeded = {};
 
-    // CANONICAL: active coach⇄athlete links. A pending / declined / cancelled /
-    // released / revoked link is deliberately excluded.
+    // CANONICAL: ALL of this coach's links, not only the active ones.
+    //
+    // The terminal ones matter: a declined / cancelled / revoked_by_athlete /
+    // released_by_coach link cancels a stale legacy approval, exactly as the
+    // server does. Querying only status == 'active' left released athletes in
+    // the roster whenever an old athleteAssignments approval survived the
+    // migration — a row the coach could see but not read or remove.
     try {
       final q = await _db
           .collection(kColCoachAthleteLinks)
           .where('coachUid', isEqualTo: coachUid)
-          .where('status', isEqualTo: 'active')
           .get();
-      activeLinks.addAll(
-        q.docs.map((d) => CoachRoster.safeString(d.data()['athleteUid']))
-            .where((uid) => uid.isNotEmpty),
-      );
+      canonicalLinks.addAll(q.docs.map(
+        (d) => CoachAthleteLink.fromMap(d.id, d.data()),
+      ));
     } catch (e) {
       debugPrint('⚠️ [CoachRoster] coachAthleteLinks query failed: $e');
     }
@@ -223,10 +241,11 @@ class CoachRosterService {
       debugPrint('⚠️ [CoachRoster] coachAssignments read failed: $e');
     }
 
-    final uids = CoachRoster.assignedUids(
-      approvedAthleteUids: approved,
-      seededAthletes: seeded,
-      activeLinkAthleteUids: activeLinks,
+    // One rule, shared with the server (see composeAuthorisedAthleteUids).
+    final uids = composeAuthorisedAthleteUids(
+      canonicalLinks: canonicalLinks,
+      legacyApprovedUids: approved,
+      legacySeededUids: seeded.keys,
     );
 
     final out = <CoachAthlete>[];

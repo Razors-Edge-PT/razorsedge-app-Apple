@@ -209,10 +209,15 @@ enum CoachRole { athlete, coach, superAdmin }
 ///   custom claim is only a fast-routing hint: it is honoured while the
 ///   entitlement document has not loaded yet, but an explicitly suspended or
 ///   revoked entitlement always wins over a stale claim.
+/// * [entitlementResolved] records that a read genuinely SUCCEEDED at least
+///   once. Once it has, `none` means "this account authoritatively holds no
+///   Coach Mode" and the claim is never consulted again — so a later read
+///   failure cannot resurrect a stale claim.
 CoachRole resolveCoachRole({
   required String uid,
   required CoachEntitlement entitlement,
   bool claimIsCoach = false,
+  bool entitlementResolved = false,
 }) {
   if (uid == kSuperAdminUid) return CoachRole.superAdmin;
   if (entitlement.isActive) return CoachRole.coach;
@@ -220,6 +225,8 @@ CoachRole resolveCoachRole({
     // Explicitly suspended or revoked — a stale claim must not resurrect it.
     return CoachRole.athlete;
   }
+  // state == none. Authoritative once resolved; provisional before that.
+  if (entitlementResolved) return CoachRole.athlete;
   return claimIsCoach ? CoachRole.coach : CoachRole.athlete;
 }
 
@@ -258,6 +265,22 @@ CoachLinkStatus coachLinkStatusFrom(Object? raw) {
 /// grants no training access at all.
 bool linkStatusGrantsAccess(CoachLinkStatus status) =>
     status == CoachLinkStatus.active;
+
+/// The statuses that record a DELIBERATE end to the relationship.
+/// Mirrors LINK_TERMINAL_STATUSES in functions/coach/coach_mode_model.js.
+const Set<CoachLinkStatus> kTerminalLinkStatuses = {
+  CoachLinkStatus.declined,
+  CoachLinkStatus.cancelled,
+  CoachLinkStatus.revokedByAthlete,
+  CoachLinkStatus.releasedByCoach,
+};
+
+/// A terminal link is authoritative over a stale legacy `approved` entry it was
+/// migrated from. `pending` is deliberately NOT terminal — it neither grants
+/// nor terminates — and neither is `unknown`, so a malformed document can never
+/// silently strip a legitimate legacy approval.
+bool linkStatusIsTerminal(CoachLinkStatus status) =>
+    kTerminalLinkStatuses.contains(status);
 
 String coachLinkStatusLabel(CoachLinkStatus status) {
   switch (status) {
@@ -308,6 +331,9 @@ class CoachAthleteLink {
 
   bool get isActive => linkStatusGrantsAccess(status);
   bool get isPending => status == CoachLinkStatus.pending;
+
+  /// Records a deliberate end to the relationship — see [linkStatusIsTerminal].
+  bool get isTerminal => linkStatusIsTerminal(status);
 
   /// Best label for the athlete side of this link.
   String get athleteLabel => _label(athleteDisplayName, athleteEmail, athleteUid);
@@ -437,19 +463,54 @@ AthleteCoachingSplit splitAthleteCoaching(Iterable<CoachAthleteLink> links) {
   );
 }
 
-/// Merges canonical active links with the LEGACY assignment sources so a coach
-/// mid-migration never loses an athlete they already had. Legacy sources are
-/// removed once adoption is confirmed (see docs/coach_mode.md).
+/// Composes the athletes an ordinary coach may act on, using EXACTLY the
+/// server's rule (functions/coach/authz.js `evaluateAssignmentDetail`, and
+/// firestore.rules `isCoachFor`):
+///
+///   • an ACTIVE canonical link            → included
+///   • a super-admin SEED                  → included, even with a terminal link
+///   • a legacy APPROVAL                   → included ONLY when no terminal
+///                                            link exists for that athlete
+///   • PENDING                             → neither grants nor terminates
+///
+/// [canonicalLinks] must be ALL of the coach's links, not just the active ones:
+/// terminal links are what cancel a stale legacy approval. Passing only active
+/// links silently reintroduces released/revoked athletes into the roster.
+///
+/// Entitlement state is handled one level up (CoachRosterService.loadRoster
+/// switches on the resolved [CoachRole]) so this stays a pure set operation.
 Set<String> composeAuthorisedAthleteUids({
   required Iterable<CoachAthleteLink> canonicalLinks,
   Iterable<String> legacyApprovedUids = const [],
   Iterable<String> legacySeededUids = const [],
 }) {
-  return <String>{
-    ...canonicalLinks.where((l) => l.isActive).map((l) => l.athleteUid),
-    ...legacyApprovedUids,
-    ...legacySeededUids,
-  };
+  final active = <String>{};
+  final terminal = <String>{};
+  for (final l in canonicalLinks) {
+    if (l.athleteUid.isEmpty) continue;
+    if (l.isActive) {
+      active.add(l.athleteUid);
+    } else if (l.isTerminal) {
+      terminal.add(l.athleteUid);
+    }
+    // pending / unknown: contribute nothing either way.
+  }
+
+  final seeded = legacySeededUids.where((u) => u.isNotEmpty).toSet();
+
+  // Active links and super-admin seeds always include the athlete. A seed is
+  // deliberately NOT overridden by a terminal link — seeding is a separate,
+  // admin-controlled compatibility path.
+  final out = <String>{...active, ...seeded};
+
+  // A legacy approval only survives while no terminal link contradicts it.
+  for (final uid in legacyApprovedUids) {
+    if (uid.isEmpty) continue;
+    if (terminal.contains(uid) && !seeded.contains(uid)) continue;
+    out.add(uid);
+  }
+
+  return out;
 }
 
 // ── Application form model + validation ─────────────────────────────────────

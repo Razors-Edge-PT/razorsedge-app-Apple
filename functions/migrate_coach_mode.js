@@ -68,6 +68,18 @@ const LEGACY_FREE_MEMBERSHIP_UIDS = Object.freeze([
   'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
 ]);
 
+// ── Process exit codes ──────────────────────────────────────────────────────
+// The CLI contract. main() RETURNS one of these; the wrapper below is the only
+// place that calls process.exit, and it always honours the returned code.
+//
+// A previous version set process.exitCode inside main() and then ended with
+// `.then(() => process.exit(0))`, which overrode every blocker and reported
+// success for a refused run — so CI and deploy scripts could not detect it.
+const EXIT_OK = 0;                 // dry run or apply completed
+const EXIT_UNEXPECTED_ERROR = 1;   // unhandled exception
+const EXIT_PROJECT_BLOCKED = 2;    // wrong / unresolved Firebase project
+const EXIT_UNRESOLVED_COACHES = 3; // unresolved legacy coach uids
+
 // ── Project guard ───────────────────────────────────────────────────────────
 // The ONLY project this migration may write to. A dry run is safe anywhere;
 // --apply and --apply --claims refuse to run unless the resolved project is
@@ -583,8 +595,7 @@ async function main() {
     report.finishedAt = new Date().toISOString();
     emitReport();
     process.stderr.write('\n' + guard.reason + '\n');
-    process.exitCode = 2;
-    return;
+    return EXIT_PROJECT_BLOCKED;
   }
 
   // ── Gate 2: unresolved legacy coaches ────────────────────────────────────
@@ -605,8 +616,7 @@ async function main() {
     report.finishedAt = new Date().toISOString();
     emitReport();
     process.stderr.write('\n' + report.blockedReason + '\n');
-    process.exitCode = 3;
-    return;
+    return EXIT_UNRESOLVED_COACHES;
   }
 
   await migrateEntitlements();
@@ -623,6 +633,7 @@ async function main() {
 
   report.finishedAt = new Date().toISOString();
   emitReport();
+  return EXIT_OK;
 }
 
 function emitReport() {
@@ -696,10 +707,14 @@ function emitReport() {
 
 if (require.main === module) {
   main()
-    .then(() => process.exit(0))
+    .then((code) => {
+      // NEVER a hard-coded 0 here: that is exactly what previously masked a
+      // refused run, reporting success for a blocked migration.
+      process.exit(typeof code === 'number' ? code : EXIT_OK);
+    })
     .catch((err) => {
       process.stderr.write('MIGRATION FAILED: ' + (err && err.stack ? err.stack : err) + '\n');
-      process.exit(1);
+      process.exit(EXIT_UNEXPECTED_ERROR);
     });
 }
 
@@ -709,6 +724,11 @@ module.exports = {
   REQUIRED_PROJECT_ID,
   projectGuard,
   resolveProjectId,
+  main,
+  EXIT_OK,
+  EXIT_UNEXPECTED_ERROR,
+  EXIT_PROJECT_BLOCKED,
+  EXIT_UNRESOLVED_COACHES,
   _internals: {
     migrateEntitlements,
     migrateApprovedRelationships,

@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_mode/coach_mode_models.dart';
+import 'coach_mode/coach_mode_role_watcher.dart';
 import 'coach_mode/coach_mode_service.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'dart:convert';
@@ -44,7 +45,8 @@ class CoachHomeScreen extends StatefulWidget {
   State<CoachHomeScreen> createState() => _CoachHomeScreenState();
 }
 
-class _CoachHomeScreenState extends State<CoachHomeScreen> {
+class _CoachHomeScreenState extends State<CoachHomeScreen>
+    with CoachModeRoleWatcher<CoachHomeScreen> {
   Map<String, dynamic> _athletes = {};
   String _search = '';
 
@@ -60,62 +62,56 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
   final CoachModeService _coachMode = CoachModeService();
   bool _busy = false;
 
-  // The UserContext this screen is listening to, so the listener is always
-  // removed from the same instance it was added to.
-  UserContext? _watchedContext;
-  bool _ejected = false;
-
-  /// Reacts to a live Coach Mode role change. A coach who is suspended or
-  /// revoked mid-session is removed from the dashboard immediately rather than
-  /// keeping a stale, now-unauthorised view of athlete data.
-  void _onRoleChanged() {
-    final ctx = _watchedContext;
-    if (!mounted || _ejected || ctx == null) return;
-    if (ctx.hasCoachMode) return;
-    _ejected = true;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Coach Mode is no longer active on this account.'),
-    ));
-    Navigator.of(context).maybePop();
-  }
-
   @override
   void dispose() {
-    _watchedContext?.removeListener(_onRoleChanged);
-    _watchedContext = null;
+    disposeRoleWatcher();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    // Binding happens in CoachModeRoleWatcher.didChangeDependencies, which
+    // re-runs whenever the provided UserContext INSTANCE changes.
+  }
 
-    // Delay provider access until after first build
+  /// The bound context has Coach Mode — (re)load its roster.
+  @override
+  void onCoachModeBound(UserContext userContext) {
+    _loadAthletes(userContext);
+  }
+
+  /// The bound context has NO Coach Mode: on first bind, on a rebind to a
+  /// replacement context that already carries a suspension, or on a live
+  /// suspension/revocation.
+  @override
+  void onCoachModeRevoked({required bool duringBind}) {
+    // Drop any roster already on screen so no athlete data survives the frames
+    // before the pop lands. build() also fails closed independently.
+    if (mounted && !duringBind) {
+      setState(() {
+        _athletes = {};
+        _pending = const [];
+        _seededOnlyUids = {};
+      });
+    } else {
+      _athletes = {};
+      _pending = const [];
+      _seededOnlyUids = {};
+    }
+    _ejectAfterFrame(duringBind
+        ? 'Access denied — only coaches can open this screen.'
+        : 'Coach Mode is no longer active on this account.');
+  }
+
+  /// Leaves the dashboard once the current frame is done. Navigator and
+  /// ScaffoldMessenger cannot be used during didChangeDependencies/build.
+  void _ejectAfterFrame(String message) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final userContext = Provider.of<UserContext?>(context, listen: false);
-
-      if (userContext == null) {
-        debugPrint("⚠️ UserContext is null — maybe not initialized yet.");
-        return;
-      }
-
-      // Gate on the RESOLVED role (super admin, or an active entitlement), not
-      // on the mirrored `isCoach` claim, which can be stale for a whole
-      // session after a suspension or revocation.
-      if (!userContext.hasCoachMode) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text("Access denied — only coaches can open this screen."),
-        ));
-        Navigator.pop(context);
-        return;
-      }
-
-      // Keep watching: a suspension or revocation that lands while the
-      // dashboard is open must eject the coach during this session.
-      userContext.addListener(_onRoleChanged);
-      _watchedContext = userContext;
-
-      _loadAthletes(userContext);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+      Navigator.of(context).maybePop();
     });
   }
 
@@ -400,6 +396,14 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
       );
+    }
+
+    // FAIL CLOSED. Watched via UserContext.of(context) upstream, so a
+    // suspension or revocation arriving on the CURRENT (possibly replaced)
+    // context re-runs build and swaps the dashboard out immediately — no
+    // athlete data is rendered for the frames before _ejectAfterFrame pops.
+    if (!userContext.hasCoachMode) {
+      return const _CoachAccessRevokedScreen();
     }
 
     // ---------- Updated: search + alphabetical sort by email ----------
@@ -923,6 +927,50 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
           ),
           const SizedBox(height: 36),
         ],
+      ),
+    );
+  }
+}
+
+/// Fail-closed replacement for the dashboard once the resolved context reports
+/// no Coach Mode. Deliberately renders no athlete data of any kind.
+class _CoachAccessRevokedScreen extends StatelessWidget {
+  const _CoachAccessRevokedScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Coach Dashboard')),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lock_outline, size: 48, color: Colors.white54),
+              const SizedBox(height: 16),
+              const Text(
+                'Coach Mode is not active',
+                style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Your coach access is no longer active on this account, so the '
+                'dashboard is unavailable.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.white60),
+              ),
+              const SizedBox(height: 20),
+              OutlinedButton(
+                onPressed: () => Navigator.of(context).maybePop(),
+                child: const Text('Go back'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
