@@ -605,19 +605,64 @@ gcloud run services update <lowercased-function-name> \
   --project=goodlift-us-storage
 ```
 
-For the twelve new callables:
+### Deploying ONLY the Coach Mode exports
+
+Never run an unrestricted `firebase deploy --only functions` for this feature —
+it would touch every unrelated function in the project. Deploy exactly the 13
+callables and 2 triggers, and nothing else.
+
+Build the selector from an array so no stray whitespace can corrupt it:
+
+```bash
+COACH_MODE_EXPORTS=(
+  coachModeAdminLookupAccount
+  coachModeCancelInvite
+  coachModeGrantCoach
+  coachModeInviteAthlete
+  coachModeReleaseAthlete
+  coachModeRemoveAthleteFromRoster
+  coachModeRemoveSeededAthlete
+  coachModeRespondToInvite
+  coachModeReviewApplication
+  coachModeRevokeCoach
+  coachModeSetCoachState
+  coachModeSubmitApplication
+  coachModeWithdrawApplication
+  coachOnAccountEntitlementWritten
+  coachOnCoachAthleteLinkWritten
+)
+SELECTOR=$(printf "functions:%s," "${COACH_MODE_EXPORTS[@]}")
+SELECTOR=${SELECTOR%,}
+
+firebase deploy --project goodlift-us-storage --only "$SELECTOR"
+```
+
+The first 13 entries are the callables; the last two are the Firestore
+triggers. Regenerate the list straight from the source of truth:
+
+```bash
+grep -oE "^exports\.(coachMode[A-Za-z]+|coachOn(CoachAthleteLink|AccountEntitlement)Written)" \
+  functions/index.js | sed 's/exports\.//' | sort
+```
+
+For the thirteen new callables:
 
 ```
 coachmodesubmitapplication      coachmodeinviteathlete
 coachmodewithdrawapplication    coachmodecancelinvite
-coachmoderreviewapplication†    coachmoderespondtoinvite
+coachmodereviewapplication      coachmoderespondtoinvite
 coachmodegrantcoach             coachmoderevokecoach
 coachmodesetcoachstate          coachmodereleaseathlete
 coachmodeadminlookupaccount     coachmoderemoveseededathlete
+                                coachmoderemoveathletefromroster
 ```
 
-† Use the exact service name Cloud Run reports — confirm with
-`gcloud run services list --project=goodlift-us-storage`.
+Always confirm the exact service names Cloud Run reports rather than trusting
+this list: `gcloud run services list --project=goodlift-us-storage`.
+
+The two Firestore TRIGGERS — `coachOnCoachAthleteLinkWritten` and
+`coachOnAccountEntitlementWritten` — must **not** be given invoker-disabled or
+public access. They are event-driven and are never invoked over HTTP.
 
 Verify: the service annotation `run.googleapis.com/invoker-iam-disabled` is
 `"true"`, and an unauthenticated POST returns **401** (our application layer)
@@ -632,7 +677,7 @@ Designed so **no existing coach is ever locked out**.
 | 1 | `node functions/migrate_coach_mode.js` (dry run) | Counts look right; zero unexplained `problems` |
 | 2 | `node functions/migrate_coach_mode.js --apply` | Every hard-coded coach has `accountEntitlements/{uid}.coach.state == 'active'`; approved relationships are active links |
 | 3 | `node functions/migrate_coach_mode.js --apply --claims` | `isCoach` claim set; unrelated claims intact |
-| 4 | `firebase deploy --only functions` | All twelve callables + two triggers listed |
+| 4 | Deploy ONLY the Coach Mode exports (see the `--only` selector below) | All thirteen callables + two triggers listed |
 | 5 | Apply the `--no-invoker-iam-check` step above to each **new** callable | Unauthenticated POST returns 401, not 403 |
 | 6 | `firebase deploy --only firestore:indexes` then `firebase deploy --only firestore:rules` | Indexes **Enabled** before rules go live, so admin queries do not fail |
 | 7 | Release the compatible app version | Coach Dashboard, Coaching area and Coach Mode screen all load |
