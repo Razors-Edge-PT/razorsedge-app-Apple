@@ -87,6 +87,54 @@ test.before(async () => {
       athletes: { cmAthleteSeeded: { email: 'seeded@x.com' } },
     });
 
+    // ── CORRECTIVE PASS fixtures ──
+    // Legacy approval, NO entitlement.
+    await db.doc('athleteAssignments/cmLegacyAthlete').set({
+      coaches: { cmLegacyApprovedNoEnt: { approved: true } },
+    });
+    // SUSPENDED entitlement + seeded assignment.
+    await db.doc('accountEntitlements/cmCoachSuspSeeded').set({
+      coach: { state: 'suspended', source: 'manual_review' },
+    });
+    await db.doc('coachAssignments/cmCoachSuspSeeded').set({
+      athletes: { cmSuspSeededAthlete: { email: 's@x.com' } },
+    });
+    // REVOKED entitlement + legacy approval.
+    await db.doc('accountEntitlements/cmCoachRevApproved').set({
+      coach: { state: 'revoked', source: 'manual_review' },
+    });
+    await db.doc('athleteAssignments/cmRevApprovedAthlete').set({
+      coaches: { cmCoachRevApproved: { approved: true } },
+    });
+    // ACTIVE entitlement + seeded assignment (documented compatibility).
+    await db.doc('accountEntitlements/cmCoachEntSeeded').set(active);
+    await db.doc('coachAssignments/cmCoachEntSeeded').set({
+      athletes: { cmEntSeededAthlete: { email: 'es@x.com' } },
+    });
+    // ACTIVE entitlement + legacy approval.
+    await db.doc('accountEntitlements/cmCoachEntApproved').set(active);
+    await db.doc('athleteAssignments/cmEntApprovedAthlete').set({
+      coaches: { cmCoachEntApproved: { approved: true } },
+    });
+    // ACTIVE entitlement + legacy approval + TERMINATED canonical link.
+    await db.doc('accountEntitlements/cmCoachTerminated').set(active);
+    await db.doc('athleteAssignments/cmTerminatedAthlete').set({
+      coaches: { cmCoachTerminated: { approved: true } },
+    });
+    await db.doc(link('cmCoachTerminated', 'cmTerminatedAthlete')).set({
+      coachUid: 'cmCoachTerminated', athleteUid: 'cmTerminatedAthlete',
+      status: 'released_by_coach',
+    });
+    // ACTIVE entitlement + SEEDED assignment + TERMINATED link: seeding wins.
+    await db.doc('accountEntitlements/cmCoachTermSeeded').set(active);
+    await db.doc('coachAssignments/cmCoachTermSeeded').set({
+      athletes: { cmTermSeededAthlete: { email: 'ts@x.com' } },
+    });
+    await db.doc(link('cmCoachTermSeeded', 'cmTermSeededAthlete')).set({
+      coachUid: 'cmCoachTermSeeded', athleteUid: 'cmTermSeededAthlete',
+      status: 'revoked_by_athlete',
+    });
+
     // ── Applications, profiles, audit ──
     await db.doc('coachApplications/cmApplicant').set({
       uid: 'cmApplicant', status: 'submitted',
@@ -105,11 +153,30 @@ test.before(async () => {
     // ── Training data the access tests read ──
     for (const a of ['cmAthlete', 'cmAthletePending', 'cmAthleteSusp', 'cmAthleteRev',
       'cmAthleteNoEnt', 'cmAthleteSeeded', 'cmAthleteDeclined', 'cmAthleteCancelled',
-      'cmAthleteRevoked', 'cmAthleteReleased', 'cmStrangerAthlete']) {
+      'cmAthleteRevoked', 'cmAthleteReleased', 'cmStrangerAthlete',
+      'cmLegacyAthlete', 'cmSuspSeededAthlete', 'cmRevApprovedAthlete',
+      'cmEntSeededAthlete', 'cmEntApprovedAthlete', 'cmTerminatedAthlete',
+      'cmTermSeededAthlete']) {
       await db.doc(`users/${a}`).set({ email: `${a}@x.com` });
       await db.doc(`users/${a}/workouts/2026-08-10`).set({ exercises: [] });
       await db.doc(`planned_blocks/${a}`).set({ isActive: true });
       await db.doc(`coachAnalytics/${a}`).set({ enabledBy: {} });
+    }
+
+    // Subcollection fixtures for the fail-closed allowlist tests.
+    for (const sub of ['workouts', 'weights', 'block_planner', 'block_data',
+      'plannedExerciseDetails', 'templates', 'customExercises']) {
+      await db.doc(`users/cmAthlete/${sub}/d1`).set({ seeded: true });
+    }
+    await db.doc('users/cmAthlete/planned_blocks/b1').set({ name: 'Block 1' });
+    await db.doc('users/cmAthlete/planned_blocks/b1/weeks/w1').set({ n: 1 });
+    await db.doc('users/cmAthlete/profile/membership')
+      .set({ active: true, paywallTriggered: false });
+    await db.doc('users/cmAthlete/buddyInvites/someSender')
+      .set({ fromUid: 'someSender', buddyUid: 'cmAthlete' });
+    for (const sub of ['someFutureFeature', 'billing', 'privateNotes',
+      're_daily', 're_monthly', 're_cache', 'onboarding', 'posts']) {
+      await db.doc(`users/cmAthlete/${sub}/d1`).set({ seeded: true });
     }
 
     // ── Social / DM fixtures, to prove Coach Mode is not a bypass ──
@@ -237,9 +304,16 @@ test('rules: an unrelated signed-in account reaches no athlete data', async () =
   await assertFails(as('cmStranger').doc('coachAnalytics/cmAthlete').get());
 });
 
-test('rules: LEGACY super-admin-seeded relationships still authorise', async () => {
-  await assertSucceeds(as('cmCoachSeeded').doc('users/cmAthleteSeeded').get());
-  await assertSucceeds(as('cmCoachSeeded').doc('users/cmAthleteSeeded/workouts/2026-08-10').get());
+test('rules: LEGACY seeded relationships authorise ONLY with an entitlement', async () => {
+  // cmCoachSeeded has the seed but no entitlement — denied (corrective pass).
+  await assertFails(as('cmCoachSeeded').doc('users/cmAthleteSeeded').get());
+  await assertFails(
+    as('cmCoachSeeded').doc('users/cmAthleteSeeded/workouts/2026-08-10').get());
+
+  // cmCoachEntSeeded has the same shape PLUS an active entitlement — allowed.
+  await assertSucceeds(as('cmCoachEntSeeded').doc('users/cmEntSeededAthlete').get());
+  await assertSucceeds(
+    as('cmCoachEntSeeded').doc('users/cmEntSeededAthlete/workouts/2026-08-10').get());
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -431,4 +505,150 @@ test('rules: the hard-coded super admin uid is unchanged', () => {
     'firestore.rules must keep the single hard-coded super-admin uid');
   const model = require('../coach/coach_mode_model');
   assert.equal(model.SUPER_ADMIN_UID, SUPER);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CORRECTIVE PASS — active entitlement mandatory for EVERY source
+// ══════════════════════════════════════════════════════════════════════════
+
+test('rules: a LEGACY SEEDED assignment alone (no entitlement) DENIES', async () => {
+  // cmCoachSeeded has a seeded roster but no accountEntitlements document.
+  await assertFails(as('cmCoachSeeded').doc('users/cmAthleteSeeded').get());
+  await assertFails(
+    as('cmCoachSeeded').doc('users/cmAthleteSeeded/workouts/2026-08-10').get());
+  await assertFails(as('cmCoachSeeded').doc('coachAnalytics/cmAthleteSeeded').get());
+});
+
+test('rules: a LEGACY APPROVED assignment alone (no entitlement) DENIES', async () => {
+  await assertFails(as('cmLegacyApprovedNoEnt').doc('users/cmLegacyAthlete').get());
+  await assertFails(
+    as('cmLegacyApprovedNoEnt').doc('users/cmLegacyAthlete/workouts/2026-08-10').get());
+});
+
+test('rules: SUSPENDED entitlement plus SEEDED assignment DENIES', async () => {
+  await assertFails(as('cmCoachSuspSeeded').doc('users/cmSuspSeededAthlete').get());
+  await assertFails(
+    as('cmCoachSuspSeeded').doc('users/cmSuspSeededAthlete/workouts/2026-08-10').get());
+});
+
+test('rules: REVOKED entitlement plus LEGACY APPROVED assignment DENIES', async () => {
+  await assertFails(as('cmCoachRevApproved').doc('users/cmRevApprovedAthlete').get());
+  await assertFails(
+    as('cmCoachRevApproved').doc('users/cmRevApprovedAthlete/workouts/2026-08-10').get());
+});
+
+test('rules: an ACTIVE entitlement plus a legacy source authorises', async () => {
+  // The intentionally documented compatibility behaviour.
+  await assertSucceeds(as('cmCoachEntSeeded').doc('users/cmEntSeededAthlete').get());
+  await assertSucceeds(
+    as('cmCoachEntSeeded').doc('users/cmEntSeededAthlete/workouts/2026-08-10').get());
+  await assertSucceeds(as('cmCoachEntApproved').doc('users/cmEntApprovedAthlete').get());
+});
+
+test('rules: a TERMINATED link overrides a stale legacy approval', async () => {
+  // Active entitlement + legacy approved entry, but the canonical link says
+  // the coach released the athlete. The newer explicit decision wins.
+  await assertFails(as('cmCoachTerminated').doc('users/cmTerminatedAthlete').get());
+  await assertFails(
+    as('cmCoachTerminated').doc('users/cmTerminatedAthlete/workouts/2026-08-10').get());
+});
+
+test('rules: a terminated link does NOT override a super-admin seed', async () => {
+  await assertSucceeds(as('cmCoachTermSeeded').doc('users/cmTermSeededAthlete').get());
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CORRECTIVE PASS — fail-closed users subcollections
+// ══════════════════════════════════════════════════════════════════════════
+
+test('rules: an assigned coach CAN reach every training subcollection', async () => {
+  const c = as('cmCoachActive');
+  for (const sub of ['workouts', 'weights', 'block_planner', 'block_data',
+    'plannedExerciseDetails', 'templates', 'customExercises']) {
+    await assertSucceeds(c.doc(`users/cmAthlete/${sub}/d1`).get());
+    await assertSucceeds(c.doc(`users/cmAthlete/${sub}/d1`).set({ x: 1 }));
+  }
+});
+
+test('rules: an assigned coach CAN reach canonical nested planned blocks', async () => {
+  const c = as('cmCoachActive');
+  await assertSucceeds(c.doc('users/cmAthlete/planned_blocks/b1').get());
+  await assertSucceeds(c.doc('users/cmAthlete/planned_blocks/b1').set({ n: 1 }));
+  // Deeply nested documents under a block are reachable too.
+  await assertSucceeds(
+    c.doc('users/cmAthlete/planned_blocks/b1/weeks/w1').get());
+  await assertSucceeds(
+    c.doc('users/cmAthlete/planned_blocks/b1/weeks/w1').set({ n: 1 }));
+});
+
+test('rules: an assigned coach CANNOT read or write profile/membership', async () => {
+  const c = as('cmCoachActive');
+  await assertFails(c.doc('users/cmAthlete/profile/membership').get());
+  await assertFails(
+    c.doc('users/cmAthlete/profile/membership').set({ active: true }));
+  await assertFails(
+    c.doc('users/cmAthlete/profile/membership')
+      .set({ active: true }, { merge: true }));
+  // The athlete keeps full access to their own membership document.
+  await assertSucceeds(as('cmAthlete').doc('users/cmAthlete/profile/membership').get());
+});
+
+test('rules: an assigned coach CANNOT read athlete buddyInvites', async () => {
+  const c = as('cmCoachActive');
+  // Coach Mode grants no visibility into the athlete's social invitations.
+  await assertFails(c.doc('users/cmAthlete/buddyInvites/someSender').get());
+  // Nor may a coach forge or tamper with an invite from someone else.
+  await assertFails(c.doc('users/cmAthlete/buddyInvites/someSender')
+    .set({ status: 'accepted' }, { merge: true }));
+  await assertFails(c.doc('users/cmAthlete/buddyInvites/otherPerson')
+    .set({ fromUid: 'otherPerson', buddyUid: 'cmAthlete' }));
+
+  // NOTE: a coach sending their OWN buddy invite is ordinary social behaviour
+  // available to every signed-in account (the buddyInvites block allows the
+  // sender to create their own invite). That is not a Coach Mode privilege,
+  // and it is unchanged by this work.
+
+  // The athlete still reads their own invites.
+  await assertSucceeds(as('cmAthlete').doc('users/cmAthlete/buddyInvites/someSender').get());
+});
+
+test('rules: an assigned coach CANNOT access or write liftVideos', async () => {
+  const c = as('cmCoachActive');
+  await assertFails(c.doc('users/cmAthlete/liftVideos/v1').get());
+  await assertFails(c.doc('users/cmAthlete/liftVideos/v1').set({ url: 'x' }));
+  await assertFails(c.doc('users/cmAthlete/liftVideos/v2').set({ url: 'new' }));
+  // The owner still controls their own media metadata.
+  await assertSucceeds(as('cmAthlete').doc('users/cmAthlete/liftVideos/v1').get());
+});
+
+test('rules: an UNKNOWN future users subcollection fails closed for a coach', async () => {
+  const c = as('cmCoachActive');
+  for (const sub of ['someFutureFeature', 'billing', 'privateNotes', 're_daily',
+    're_monthly', 're_cache', 'onboarding', 'posts']) {
+    await assertFails(c.doc(`users/cmAthlete/${sub}/d1`).get(),
+      `coach must not read users/cmAthlete/${sub}`);
+    await assertFails(c.doc(`users/cmAthlete/${sub}/d1`).set({ x: 1 }),
+      `coach must not write users/cmAthlete/${sub}`);
+  }
+  // But the athlete keeps full access to all of their own data.
+  const a = as('cmAthlete');
+  await assertSucceeds(a.doc('users/cmAthlete/someFutureFeature/d1').set({ x: 1 }));
+  await assertSucceeds(a.doc('users/cmAthlete/re_daily/d1').set({ x: 1 }));
+});
+
+test('rules: super admin still reaches every users subcollection', async () => {
+  const s = as(SUPER);
+  await assertSucceeds(s.doc('users/cmAthlete/profile/membership').get());
+  await assertSucceeds(s.doc('users/cmAthlete/someFutureFeature/d1').get());
+  await assertSucceeds(s.doc('users/cmAthlete/workouts/2026-08-10').get());
+  await assertSucceeds(s.doc('users/cmAthlete/planned_blocks/b1').get());
+});
+
+test('rules: legacy top-level planned_blocks stays entitlement-gated', async () => {
+  // The legacy compatibility hierarchy is still readable by an authorised
+  // coach, and still denied to a suspended one. No active read/write path to
+  // planned_blocks/{uid}/blocks/... is reintroduced here.
+  await assertSucceeds(as('cmCoachActive').doc('planned_blocks/cmAthlete').get());
+  await assertFails(as('cmCoachSuspended').doc('planned_blocks/cmAthleteSusp').get());
+  await assertFails(as('cmCoachSeeded').doc('planned_blocks/cmAthleteSeeded').get());
 });

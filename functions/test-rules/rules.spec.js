@@ -33,6 +33,17 @@ test.before(async () => {
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
     // Assignment fixtures.
+    // An ACTIVE coach entitlement is now MANDATORY for every ordinary
+    // authorization source, so each coach fixture gets one. This also sharpens
+    // the denial cases below: coachPending and coachDenied are refused because
+    // of their assignment entry, NOT because they lack an entitlement.
+    const activeCoachEntitlement = {
+      coach: { state: 'active', source: 'manual_review' },
+    };
+    for (const uid of ['coachSeeded', 'coachOk', 'coachPending', 'coachDenied']) {
+      await db.doc(`accountEntitlements/${uid}`).set(activeCoachEntitlement);
+    }
+
     await db.doc('coachAssignments/coachSeeded').set({
       athletes: { ath1: { email: 'ath1@x.com' } },
     });
@@ -172,6 +183,11 @@ test('rules: coach cannot forge copiedAt/finalText or any report mutation', asyn
 
 test('rules: revoked coach immediately loses settings/reports/analytics access', async () => {
   await env.withSecurityRulesDisabled(async (ctx) => {
+    // This coach holds Coach Mode; the test is about the ASSIGNMENT being
+    // removed, so the entitlement stays active throughout.
+    await ctx.firestore().doc('accountEntitlements/coachRevoked').set({
+      coach: { state: 'active', source: 'manual_review' },
+    });
     await ctx.firestore().doc('coachAssignments/coachRevoked').set({
       athletes: { ath9: {} },
     });

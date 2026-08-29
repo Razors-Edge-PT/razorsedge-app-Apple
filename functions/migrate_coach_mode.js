@@ -9,6 +9,14 @@
 //   node functions/migrate_coach_mode.js --apply         # perform writes
 //   node functions/migrate_coach_mode.js --apply --claims  # also refresh claims
 //   node functions/migrate_coach_mode.js --json          # machine-readable summary
+//   node functions/migrate_coach_mode.js --apply --allow-unresolved
+//                                                        # only after review
+//
+// SAFETY GATES on --apply (a dry run is safe anywhere):
+//   1. The resolved Firebase project MUST be exactly goodlift-us-storage.
+//   2. Every uid that legacy data would authorise as a coach must either be in
+//      the reviewed set below or already actively entitled. Unresolved uids
+//      are a BLOCKING conflict and are never auto-entitled.
 //
 // Credentials: uses GOOGLE_APPLICATION_CREDENTIALS or the ambient service
 // account, exactly like the other admin scripts in this folder.
@@ -33,6 +41,9 @@ const argv = process.argv.slice(2);
 const APPLY = argv.includes('--apply');
 const REFRESH_CLAIMS = argv.includes('--claims');
 const AS_JSON = argv.includes('--json');
+// Escape hatch for a super admin who has REVIEWED the unresolved legacy coach
+// uids and deliberately intends to proceed without granting them Coach Mode.
+const ALLOW_UNRESOLVED = argv.includes('--allow-unresolved');
 
 // ── The hard-coded ordinary-coach accounts being migrated ───────────────────
 // Mirrors _devCoachUids in lib/main.dart and UserContext.isAdmin, minus the
@@ -57,6 +68,59 @@ const LEGACY_FREE_MEMBERSHIP_UIDS = Object.freeze([
   'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
 ]);
 
+// ── Project guard ───────────────────────────────────────────────────────────
+// The ONLY project this migration may write to. A dry run is safe anywhere;
+// --apply and --apply --claims refuse to run unless the resolved project is
+// exactly this, so the script can never mutate a staging, personal or
+// mistyped project.
+const REQUIRED_PROJECT_ID = 'goodlift-us-storage';
+
+function resolveProjectId() {
+  return (
+    process.env.GCLOUD_PROJECT
+    || process.env.GOOGLE_CLOUD_PROJECT
+    || process.env.FIREBASE_PROJECT
+    || (() => {
+      try {
+        // eslint-disable-next-line global-require
+        const cfg = JSON.parse(process.env.FIREBASE_CONFIG || '{}');
+        return cfg.projectId || '';
+      } catch (_) {
+        return '';
+      }
+    })()
+    || ''
+  );
+}
+
+/**
+ * Pure guard, exported for tests: may this invocation write?
+ * Returns { allowed, reason }.
+ */
+function projectGuard({ apply, projectId }) {
+  if (!apply) {
+    return { allowed: true, reason: 'dry run — no writes attempted' };
+  }
+  if (!projectId) {
+    return {
+      allowed: false,
+      reason:
+        'REFUSING TO APPLY: the Firebase project could not be resolved. Set '
+        + 'GCLOUD_PROJECT=' + REQUIRED_PROJECT_ID + ' (or GOOGLE_CLOUD_PROJECT) '
+        + 'and ensure GOOGLE_APPLICATION_CREDENTIALS points at that project.',
+    };
+  }
+  if (projectId !== REQUIRED_PROJECT_ID) {
+    return {
+      allowed: false,
+      reason:
+        'REFUSING TO APPLY: resolved project is "' + projectId + '" but this '
+        + 'migration may only write to "' + REQUIRED_PROJECT_ID + '".',
+    };
+  }
+  return { allowed: true, reason: 'project verified: ' + projectId };
+}
+
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 const FV = admin.firestore.FieldValue;
@@ -75,7 +139,10 @@ const report = {
     linksSkippedConflicting: 0,
     athleteAssignmentDocsScanned: 0,
     approvedRelationshipsFound: 0,
+    legacyCoachesUnresolved: 0,
+    legacyCoachesAlreadyEntitled: 0,
   },
+  unresolvedLegacyCoaches: [],
   actions: [],
   problems: [],
   notes: [],
@@ -385,6 +452,105 @@ async function auditSeededAssignments() {
   });
 }
 
+/**
+ * Discovers EVERY uid that legacy data would authorise as a coach, from BOTH
+ * assignment collections, and reports the ones that are neither in the
+ * reviewed migration set (LEGACY_COACH_UIDS) nor already actively entitled.
+ *
+ * These are NEVER auto-entitled. `coachAssignments` was historically
+ * self-writable, so any uid discovered there may be an account that simply
+ * wrote itself a roster — auto-granting Coach Mode from that data would
+ * re-open the very vulnerability this work closed. Each one needs a human
+ * decision by the super admin.
+ *
+ * Because rules now require an ACTIVE entitlement for every ordinary source,
+ * an unresolved uid here means a coach who will LOSE access at the rules
+ * deploy — so this is treated as a BLOCKING apply conflict.
+ */
+async function auditUnresolvedLegacyCoaches() {
+  const discovered = new Map(); // uid -> Set of source labels
+
+  function note(uid, source) {
+    if (!uid || typeof uid !== 'string') return;
+    if (!discovered.has(uid)) discovered.set(uid, new Set());
+    discovered.get(uid).add(source);
+  }
+
+  // Source 1: super-admin-seeded rosters.
+  try {
+    const snap = await db.collection('coachAssignments').get();
+    for (const doc of snap.docs) {
+      const athletes = (doc.data() || {}).athletes;
+      if (athletes && typeof athletes === 'object' && !Array.isArray(athletes)
+          && Object.keys(athletes).length > 0) {
+        note(doc.id, 'coachAssignments');
+      }
+    }
+  } catch (err) {
+    problem('unresolved-scan-failed',
+      { collection: 'coachAssignments', error: String(err) });
+  }
+
+  // Source 2: athlete-approved entries.
+  try {
+    const snap = await db.collection('athleteAssignments').get();
+    for (const doc of snap.docs) {
+      const coaches = (doc.data() || {}).coaches;
+      if (!coaches || typeof coaches !== 'object' || Array.isArray(coaches)) continue;
+      for (const coachUid of Object.keys(coaches)) {
+        const entry = coaches[coachUid];
+        if (entry && typeof entry === 'object' && entry.approved === true) {
+          note(coachUid, 'athleteAssignments');
+        }
+      }
+    }
+  } catch (err) {
+    problem('unresolved-scan-failed',
+      { collection: 'athleteAssignments', error: String(err) });
+  }
+
+  const unresolved = [];
+  for (const [uid, sources] of discovered) {
+    if (M.isSuperAdminUid(uid)) continue;            // hard-coded, never needs one
+    if (LEGACY_COACH_UIDS.includes(uid)) continue;   // in the reviewed set
+
+    let active = false;
+    try {
+      const snap = await db.collection(M.COL_ENTITLEMENTS).doc(uid).get();
+      active = M.entitlementIsActive(snap.exists ? snap.data() : null);
+    } catch (err) {
+      problem('unresolved-entitlement-read-failed', { uid, error: String(err) });
+    }
+    if (active) {
+      report.counts.legacyCoachesAlreadyEntitled += 1;
+      continue;
+    }
+
+    unresolved.push({ uid, sources: Array.from(sources).sort() });
+  }
+
+  report.counts.legacyCoachesUnresolved = unresolved.length;
+  report.unresolvedLegacyCoaches = unresolved;
+
+  for (const u of unresolved) {
+    problem('unresolved-legacy-coach', {
+      uid: u.uid,
+      sources: u.sources,
+      detail:
+        'This uid is authorised by legacy assignment data but has no active '
+        + 'entitlement and is not in the reviewed migration set. It is NOT '
+        + 'auto-entitled: coachAssignments was historically self-writable, so '
+        + 'the data cannot be trusted to confer Coach Mode. Super admin must '
+        + 'review the account and, if genuine, grant it explicitly via the '
+        + 'Coach Management screen (or the coachModeGrantCoach callable) '
+        + 'BEFORE the rules deploy — otherwise this account loses athlete '
+        + 'access when active entitlement becomes mandatory.',
+    });
+  }
+
+  return unresolved;
+}
+
 function auditFreeMembershipOverlap() {
   const comped = LEGACY_FREE_MEMBERSHIP_UIDS.filter(
     (uid) => !M.isSuperAdminUid(uid) && !LEGACY_COACH_UIDS.includes(uid),
@@ -406,6 +572,43 @@ async function main() {
     uid: M.SUPER_ADMIN_UID,
   });
 
+  // ── Gate 1: project ──────────────────────────────────────────────────────
+  const projectId = resolveProjectId();
+  report.projectId = projectId;
+  const guard = projectGuard({ apply: APPLY, projectId });
+  report.projectGuard = guard;
+  if (!guard.allowed) {
+    report.blocked = true;
+    report.blockedReason = guard.reason;
+    report.finishedAt = new Date().toISOString();
+    emitReport();
+    process.stderr.write('\n' + guard.reason + '\n');
+    process.exitCode = 2;
+    return;
+  }
+
+  // ── Gate 2: unresolved legacy coaches ────────────────────────────────────
+  // Discovered BEFORE any write, so --apply aborts without a partial migration.
+  const unresolved = await auditUnresolvedLegacyCoaches();
+  if (APPLY && unresolved.length > 0 && !ALLOW_UNRESOLVED) {
+    report.blocked = true;
+    report.blockedReason =
+      'REFUSING TO APPLY: ' + unresolved.length + ' legacy coach uid(s) are '
+      + 'authorised by assignment data but have no active entitlement and are '
+      + 'not in the reviewed migration set. Because an active entitlement is '
+      + 'now mandatory for every ordinary authorization source, applying now '
+      + 'would leave them unable to reach their athletes. Super admin must '
+      + 'review each uid listed under unresolvedLegacyCoaches and grant Coach '
+      + 'Mode explicitly (Coach Management screen, or coachModeGrantCoach), '
+      + 'then rerun. If you have reviewed them and intend to proceed without '
+      + 'granting, rerun with --allow-unresolved.';
+    report.finishedAt = new Date().toISOString();
+    emitReport();
+    process.stderr.write('\n' + report.blockedReason + '\n');
+    process.exitCode = 3;
+    return;
+  }
+
   await migrateEntitlements();
   if (REFRESH_CLAIMS) {
     await refreshClaims();
@@ -419,6 +622,10 @@ async function main() {
   auditFreeMembershipOverlap();
 
   report.finishedAt = new Date().toISOString();
+  emitReport();
+}
+
+function emitReport() {
 
   if (AS_JSON) {
     process.stdout.write(JSON.stringify(report, null, 2) + '\n');
@@ -434,6 +641,13 @@ async function main() {
     line('  NOTHING WAS WRITTEN. Rerun with --apply to perform these writes.');
     line('');
   }
+  line('  Project ............................. ' + (report.projectId || '(unresolved)'));
+  if (report.blocked) {
+    line('');
+    line('  *** BLOCKED — NO WRITES PERFORMED ***');
+    line('  ' + report.blockedReason);
+    line('');
+  }
   line('  Entitlements created ................ ' + report.counts.entitlementsCreated);
   line('  Entitlements already active ......... ' + report.counts.entitlementsAlreadyActive);
   line('  Entitlements skipped (suspended/revoked) ' + report.counts.entitlementsSkippedNonActive);
@@ -443,7 +657,20 @@ async function main() {
   line('  Canonical links created ............. ' + report.counts.linksCreated);
   line('  Canonical links already active ...... ' + report.counts.linksAlreadyActive);
   line('  Canonical links skipped (conflict) ... ' + report.counts.linksSkippedConflicting);
+  line('  Legacy coaches already entitled ..... ' + report.counts.legacyCoachesAlreadyEntitled);
+  line('  Legacy coaches UNRESOLVED ........... ' + report.counts.legacyCoachesUnresolved);
   line('');
+
+  if (report.unresolvedLegacyCoaches.length) {
+    line('  UNRESOLVED LEGACY COACH UIDS — super admin must review each');
+    for (const u of report.unresolvedLegacyCoaches) {
+      line('    ? ' + u.uid + '  via ' + u.sources.join(' + '));
+    }
+    line('    These are never auto-entitled: coachAssignments was historically');
+    line('    self-writable, so the data cannot be trusted to confer Coach Mode.');
+    line('    Grant genuine coaches explicitly, then rerun.');
+    line('');
+  }
 
   if (report.notes.length) {
     line('  NOTES');
@@ -479,5 +706,14 @@ if (require.main === module) {
 module.exports = {
   LEGACY_COACH_UIDS,
   LEGACY_FREE_MEMBERSHIP_UIDS,
-  _internals: { migrateEntitlements, migrateApprovedRelationships, migrateOneLink, report },
+  REQUIRED_PROJECT_ID,
+  projectGuard,
+  resolveProjectId,
+  _internals: {
+    migrateEntitlements,
+    migrateApprovedRelationships,
+    migrateOneLink,
+    auditUnresolvedLegacyCoaches,
+    report,
+  },
 };

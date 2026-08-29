@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/coach_mode/coach_mode_models.dart';
+import 'package:localtest222/coach_mode/coach_mode_service.dart';
 import 'package:localtest222/coach_roster.dart';
+import 'package:localtest222/user_context.dart';
 
 // Client-side Coach Mode model tests.
 //
@@ -668,4 +670,205 @@ void main() {
       expect(split.invitations, isEmpty);
     });
   });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // CORRECTIVE PASS — client role lifecycle and entitlement replacement
+  // ══════════════════════════════════════════════════════════════════════
+
+  group('UserContext Coach Mode lifecycle', () {
+    const active = CoachEntitlement(state: CoachEntitlementState.active);
+    const suspended = CoachEntitlement(state: CoachEntitlementState.suspended);
+    const revoked = CoachEntitlement(state: CoachEntitlementState.revoked);
+
+    test('a newly approved coach gains Coach Mode without a restart', () {
+      // Starts as an ordinary athlete: no claim, no entitlement.
+      final ctx = UserContext(actorUid: 'u1', isCoach: false);
+      expect(ctx.hasCoachMode, isFalse);
+      expect(ctx.coachRole, CoachRole.athlete);
+
+      var notified = 0;
+      ctx.addListener(() => notified++);
+
+      // The entitlement stream delivers the approval mid-session.
+      ctx.coachEntitlement = active;
+
+      expect(ctx.hasCoachMode, isTrue);
+      expect(ctx.coachRole, CoachRole.coach);
+      expect(notified, 1, reason: 'listeners must be told so the UI rebuilds');
+    });
+
+    test('a suspended coach loses Coach Mode mid-session', () {
+      // Started the session with a valid claim.
+      final ctx = UserContext(actorUid: 'u1', isCoach: true)
+        ..coachEntitlement = active;
+      expect(ctx.hasCoachMode, isTrue);
+
+      var notified = 0;
+      ctx.addListener(() => notified++);
+
+      ctx.coachEntitlement = suspended;
+
+      expect(ctx.hasCoachMode, isFalse,
+          reason: 'a suspension must take effect during the session');
+      expect(ctx.coachModeSuspendedOrRevoked, isTrue);
+      expect(notified, 1);
+    });
+
+    test('a revoked coach loses Coach Mode mid-session', () {
+      final ctx = UserContext(actorUid: 'u1', isCoach: true)
+        ..coachEntitlement = active;
+      ctx.coachEntitlement = revoked;
+      expect(ctx.hasCoachMode, isFalse);
+      expect(ctx.coachModeSuspendedOrRevoked, isTrue);
+    });
+
+    test('the isCoach claim is NOT authoritative once the entitlement resolves',
+        () {
+      // Stale claim says coach; the server says suspended.
+      final ctx = UserContext(actorUid: 'u1', isCoach: true);
+      expect(ctx.hasCoachMode, isTrue,
+          reason: 'the claim may route the very first frame');
+
+      ctx.coachEntitlement = suspended;
+      expect(ctx.hasCoachMode, isFalse,
+          reason: 'the resolved entitlement must beat the stale claim');
+
+      ctx.coachEntitlement = revoked;
+      expect(ctx.hasCoachMode, isFalse);
+    });
+
+    test('the super admin is never affected by entitlement state', () {
+      final ctx = UserContext(actorUid: kSuperAdminUid, isCoach: false);
+      expect(ctx.isSuperAdmin, isTrue);
+      expect(ctx.hasCoachMode, isTrue);
+
+      ctx.coachEntitlement = revoked;
+      expect(ctx.hasCoachMode, isTrue,
+          reason: 'super admin is the hard-coded constant, never a document');
+      expect(ctx.coachModeSuspendedOrRevoked, isFalse);
+      expect(ctx.coachRole, CoachRole.superAdmin);
+    });
+
+    test('setting the same entitlement does not notify', () {
+      final ctx = UserContext(actorUid: 'u1', isCoach: false)
+        ..coachEntitlement = active;
+      var notified = 0;
+      ctx.addListener(() => notified++);
+      ctx.coachEntitlement =
+          const CoachEntitlement(state: CoachEntitlementState.active);
+      expect(notified, 0, reason: 'no spurious rebuilds');
+    });
+
+    test('a replacement UserContext can carry the resolved entitlement across',
+        () {
+      // Mirrors what AppRoot does when it rebuilds the context after token
+      // resolution: the new context must not regress to claim-only Coach Mode.
+      final oldCtx = UserContext(actorUid: 'u1', isCoach: false)
+        ..coachEntitlement = suspended;
+
+      final newCtx = UserContext(actorUid: 'u1', isCoach: true);
+      expect(newCtx.hasCoachMode, isTrue,
+          reason: 'claim-only, before the entitlement is carried over');
+
+      newCtx.coachEntitlement = oldCtx.coachEntitlement;
+      expect(newCtx.hasCoachMode, isFalse,
+          reason: 'the resolved suspension must survive the replacement');
+    });
+  });
+
+  group('roster visibility follows the resolved role', () {
+    // CoachRosterService.loadRoster switches on exactly this, so the pure
+    // resolution is what gets pinned here.
+    CoachRole roleFor(CoachEntitlement e, {bool claim = false, String uid = 'u1'}) =>
+        resolveCoachRole(uid: uid, entitlement: e, claimIsCoach: claim);
+
+    test('suspended or revoked yields the athlete role (empty roster)', () {
+      expect(
+        roleFor(const CoachEntitlement(state: CoachEntitlementState.suspended),
+            claim: true),
+        CoachRole.athlete,
+      );
+      expect(
+        roleFor(const CoachEntitlement(state: CoachEntitlementState.revoked),
+            claim: true),
+        CoachRole.athlete,
+      );
+    });
+
+    test('active yields the coach role', () {
+      expect(
+        roleFor(const CoachEntitlement(state: CoachEntitlementState.active)),
+        CoachRole.coach,
+      );
+    });
+
+    test('super admin yields the super-admin role regardless', () {
+      expect(
+        roleFor(const CoachEntitlement(state: CoachEntitlementState.revoked),
+            uid: kSuperAdminUid),
+        CoachRole.superAdmin,
+      );
+    });
+
+    test('unresolved entitlement is provisional on the claim only', () {
+      expect(roleFor(CoachEntitlement.none, claim: true), CoachRole.coach);
+      expect(roleFor(CoachEntitlement.none, claim: false), CoachRole.athlete);
+    });
+  });
+
+  group('super-admin coach list is searchable by person', () {
+    CoachProfileSummary summary({
+      String uid = 'coach1',
+      String displayName = '',
+      String email = '',
+    }) =>
+        CoachProfileSummary(
+          uid: uid,
+          entitlement: const CoachEntitlement(state: CoachEntitlementState.active),
+          source: CoachEntitlementSource.manualReview,
+          displayName: displayName,
+          email: email,
+        );
+
+    test('label prefers display name, then email, then uid', () {
+      expect(summary(displayName: 'Coach Rich', email: 'r@x.com').label,
+          'Coach Rich');
+      expect(summary(email: 'r@x.com').label, 'r@x.com');
+      expect(summary().label, 'coach1');
+      expect(summary(displayName: '   ').label, 'coach1');
+    });
+
+    test('search matches name, email and uid case-insensitively', () {
+      final c = summary(
+          uid: 'aBcDeF', displayName: 'Coach Rich', email: 'Rich@Example.com');
+      expect(c.matches(''), isTrue, reason: 'empty query matches everything');
+      expect(c.matches('rich'), isTrue);
+      expect(c.matches('COACH'), isTrue);
+      expect(c.matches('example.com'), isTrue);
+      expect(c.matches('abcdef'), isTrue);
+      expect(c.matches('nobody'), isFalse);
+    });
+
+    test('a coach with no profile is still findable by uid', () {
+      final c = summary(uid: 'lonelyUid');
+      expect(c.label, 'lonelyUid');
+      expect(c.matches('lonely'), isTrue);
+    });
+
+    test('withProfile enriches without losing entitlement state', () {
+      final base = CoachProfileSummary(
+        uid: 'c1',
+        entitlement:
+            const CoachEntitlement(state: CoachEntitlementState.suspended),
+        source: CoachEntitlementSource.superAdminGrant,
+      );
+      final enriched =
+          base.withProfile(displayName: 'Name', email: 'e@x.com');
+      expect(enriched.uid, 'c1');
+      expect(enriched.displayName, 'Name');
+      expect(enriched.entitlement.isSuspended, isTrue);
+      expect(enriched.source, CoachEntitlementSource.superAdminGrant);
+    });
+  });
+
 }

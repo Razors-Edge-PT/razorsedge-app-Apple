@@ -812,6 +812,7 @@ exports.coachModeRespondToInvite = coachMode.coachModeRespondToInvite;
 exports.coachModeRevokeCoach = coachMode.coachModeRevokeCoach;
 exports.coachModeReleaseAthlete = coachMode.coachModeReleaseAthlete;
 exports.coachModeRemoveSeededAthlete = coachMode.coachModeRemoveSeededAthlete;
+exports.coachModeRemoveAthleteFromRoster = coachMode.coachModeRemoveAthleteFromRoster;
 exports.coachOnCoachAthleteLinkWritten = coachMode.coachOnCoachAthleteLinkWritten;
 exports.coachOnAccountEntitlementWritten = coachMode.coachOnAccountEntitlementWritten;
 

@@ -35,46 +35,69 @@ service cloud.firestore {
     // coachAthleteLinks/{coachUid}__{athleteUid}; only 'active' is a real
     // relationship. pending / declined / cancelled / revoked_by_athlete /
     // released_by_coach all grant nothing.
+    function linkStatus(coachUid, athleteUid) {
+      return exists(/databases/$(database)/documents/coachAthleteLinks/$(coachUid + '__' + athleteUid))
+        ? get(/databases/$(database)/documents/coachAthleteLinks/$(coachUid + '__' + athleteUid))
+            .data.get('status', '')
+        : '';
+    }
+
     function hasActiveLink(coachUid, athleteUid) {
-      return exists(/databases/$(database)/documents/coachAthleteLinks/$(coachUid + '__' + athleteUid)) &&
-        get(/databases/$(database)/documents/coachAthleteLinks/$(coachUid + '__' + athleteUid))
-          .data.get('status', '') == 'active';
+      return linkStatus(coachUid, athleteUid) == 'active';
+    }
+
+    // A canonical link recording a DELIBERATE end to the relationship. It is
+    // authoritative over a stale legacy `approved` entry the link was migrated
+    // from, so an athlete revocation or a coach release takes effect at once.
+    function hasTerminatedLink(coachUid, athleteUid) {
+      return linkStatus(coachUid, athleteUid) in
+        ['declined', 'cancelled', 'revoked_by_athlete', 'released_by_coach'];
+    }
+
+    function hasSeededAssignment(coachUid, athleteUid) {
+      return exists(/databases/$(database)/documents/coachAssignments/$(coachUid)) &&
+        get(/databases/$(database)/documents/coachAssignments/$(coachUid))
+          .data.get('athletes', {}).get(athleteUid, null) != null;
+    }
+
+    function hasLegacyApproval(coachUid, athleteUid) {
+      return exists(/databases/$(database)/documents/athleteAssignments/$(athleteUid)) &&
+        get(/databases/$(database)/documents/athleteAssignments/$(athleteUid))
+          .data.get('coaches', {}).get(coachUid, {}).get('approved', false) == true;
     }
 
     // Ordinary coach authorization. No hard-coded UID list.
     //
-    //   CANONICAL: an ACTIVE coach entitlement AND an ACTIVE relationship.
-    //              Both are required — this is the only path new UI uses.
+    // An ACTIVE coach entitlement is MANDATORY for every source below. A
+    // suspended, revoked, missing or malformed entitlement denies athlete
+    // access outright — including when a legacy assignment exists. The legacy
+    // collections may narrow WHICH athletes a coach reaches, but they can
+    // never confer coach status: historically `coachAssignments` was
+    // self-writable, so trusting it alone was the original vulnerability.
     //
-    //   LEGACY (compatibility release only — see docs/coach_mode.md for the
-    //   retirement sequence):
+    // Given an active entitlement, any ONE of these authorises:
+    //   CANONICAL — an ACTIVE coachAthleteLinks document.
+    //   LEGACY (compatibility release only — see docs/coach_mode.md §8):
     //     1. a super-admin-seeded coachAssignments athletes entry (non-null).
-    //        Only the super admin can create these now, so a coach can no
-    //        longer seed arbitrary athletes into their own roster.
-    //     2. an athleteAssignments coaches entry with approved == true.
-    //        A pending / rejected / approved:false / malformed entry grants
-    //        nothing.
+    //        Only the super admin can create these. NOT overridden by a
+    //        terminated link — seeding is a separate admin-controlled path
+    //        that this pass deliberately does not redesign.
+    //     2. an athleteAssignments coaches entry with approved == true, and
+    //        ONLY while no terminated canonical link exists for the pair.
+    //
+    // Kept logically identical to functions/coach/authz.js
+    // evaluateAssignmentDetail() and to the Flutter roster composition.
     function isCoachFor(userId) {
-      return isSignedIn() && (
-        (
-          hasCoachEntitlement(request.auth.uid) &&
+      return isSignedIn()
+        && hasCoachEntitlement(request.auth.uid)
+        && (
           hasActiveLink(request.auth.uid, userId)
-        )
-        ||
-        (
-          exists(/databases/$(database)/documents/coachAssignments/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/coachAssignments/$(request.auth.uid))
-            .data.athletes[userId] != null
-        )
-        ||
-        (
-          exists(/databases/$(database)/documents/athleteAssignments/$(userId)) &&
-          get(/databases/$(database)/documents/athleteAssignments/$(userId))
-            .data.coaches[request.auth.uid] != null &&
-          get(/databases/$(database)/documents/athleteAssignments/$(userId))
-            .data.coaches[request.auth.uid].approved == true
-        )
-      );
+          || hasSeededAssignment(request.auth.uid, userId)
+          || (
+            hasLegacyApproval(request.auth.uid, userId)
+            && !hasTerminatedLink(request.auth.uid, userId)
+          )
+        );
     }
 
     // Bidirectional + accepted-status check.
@@ -111,6 +134,27 @@ service cloud.firestore {
     // Training data gate: self, assignment-based coach, or super admin.
     function canAccessTraining(userId) {
       return isSelf(userId) || isCoachFor(userId) || isSuperAdmin();
+    }
+
+    // ── The athlete training subcollections a coach may reach ────────────
+    // An explicit allowlist under users/{userId}. Everything NOT listed here
+    // is unreachable by a coach — private account state (profile/membership),
+    // social data (buddyInvites, posts, liftVideos, conversations), RE Points
+    // caches (re_daily, re_monthly, re_cache), onboarding UI state, and any
+    // subcollection added in future, which therefore fails closed.
+    //
+    // Inventoried from actual repository usage; keep in step with the app.
+    function isTrainingSubcollection(subcoll) {
+      return subcoll in [
+        'workouts',                // logged training
+        'weights',                 // bodyweight entries (coach analytics)
+        'planned_blocks',          // CANONICAL nested planned blocks
+        'block_planner',           // block planner state
+        'block_data',              // per-block week/day planning data
+        'plannedExerciseDetails',  // per-exercise planning detail
+        'templates',               // training templates
+        'customExercises'          // per-account exercise catalog
+      ];
     }
 
 
@@ -169,15 +213,32 @@ service cloud.firestore {
         allow delete: if isSignedIn() && request.auth.uid == userId;
       }
 
-      // ---- Training subcollections (workouts, blocks, etc.) ----
-      // `liftVideos` is EXCLUDED: rule evaluation is a logical OR across
-      // matching blocks, so without this guard the catch-all silently
-      // re-granted coaches the read AND write access the liftVideos block
-      // above deliberately withholds. Lift video metadata stays social-only
-      // (self / confirmed buddy / super admin) — Coach Mode is not a bypass
-      // for social content or media writes.
+      // ---- User subcollections ----
+      //
+      // FAIL-CLOSED. A coach reaches ONLY the explicitly listed training
+      // subcollections (isTrainingSubcollection above). The owner and the
+      // super admin keep full access to everything under users/{userId}.
+      //
+      // This replaces a blanket `canAccessTraining(userId)` catch-all. Rule
+      // evaluation is a logical OR across matching blocks, so that catch-all
+      // silently overrode the narrower blocks above it and handed assigned
+      // coaches read AND write on:
+      //   • profile/membership   — subscription state
+      //   • buddyInvites         — social invitations
+      //   • liftVideos           — media metadata
+      // and would have done the same for every subcollection added later.
+      //
+      // Anything not on the training list is now unreachable by a coach by
+      // default, so a NEW subcollection fails closed until it is deliberately
+      // added to isTrainingSubcollection().
+      //
+      // The canonical nested planned blocks
+      // (users/{userId}/planned_blocks/{blockId}/...) are covered by the
+      // 'planned_blocks' entry plus the {doc=**} recursion.
       match /{subcoll}/{doc=**} {
-        allow read, write: if subcoll != 'liftVideos' && canAccessTraining(userId);
+        allow read, write: if isSelf(userId)
+                           || isSuperAdmin()
+                           || (isTrainingSubcollection(subcoll) && isCoachFor(userId));
       }
     }
 

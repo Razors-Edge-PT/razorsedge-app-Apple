@@ -150,6 +150,23 @@ class CoachModeService {
         if (coachUid != null) 'coachUid': coachUid,
       });
 
+  /// SOURCE-AWARE roster removal — what the Coach Dashboard uses.
+  ///
+  /// A pair can be authorised by several sources at once after migration. The
+  /// server removes every source this coach may remove, then re-evaluates and
+  /// returns the truth:
+  ///   removedSources, failedSources, previousSources, remainingSources,
+  ///   stillAuthorized
+  /// so the UI never reports success while access remains.
+  Future<Map<String, dynamic>> removeAthleteFromRoster(
+    String athleteUid, {
+    String reason = '',
+  }) =>
+      _call('coachModeRemoveAthleteFromRoster', {
+        'athleteUid': athleteUid,
+        'reason': reason,
+      });
+
   // ── Athlete: respond / revoke ─────────────────────────────────────────────
 
   Future<void> acceptInvite(String coachUid) => _call(
@@ -182,23 +199,46 @@ class CoachModeService {
             .toList());
   }
 
-  /// Coaches with an entitlement in the given state.
+  /// Coaches with an entitlement in the given state, enriched with the
+  /// invitation-safe display name/email from coachProfiles so the super-admin
+  /// list is searchable by person rather than only by UID.
+  ///
+  /// The profile lookup is best-effort: a coach with no profile document still
+  /// appears, identified by UID.
   Stream<List<CoachProfileSummary>> watchCoachesByState(String state) {
     return _db
         .collection(kColAccountEntitlements)
         .where('coach.state', isEqualTo: state)
         .snapshots()
-        .map((q) => q.docs.map((d) {
-              final data = d.data();
-              final coach = data['coach'] is Map
-                  ? Map<String, dynamic>.from(data['coach'] as Map)
-                  : const <String, dynamic>{};
-              return CoachProfileSummary(
-                uid: d.id,
-                entitlement: CoachEntitlement.fromMap(data),
-                source: coachEntitlementSourceFrom(coach['source']),
-              );
-            }).toList());
+        .asyncMap((q) async {
+      final summaries = q.docs.map((d) {
+        final data = d.data();
+        final coach = data['coach'] is Map
+            ? Map<String, dynamic>.from(data['coach'] as Map)
+            : const <String, dynamic>{};
+        return CoachProfileSummary(
+          uid: d.id,
+          entitlement: CoachEntitlement.fromMap(data),
+          source: coachEntitlementSourceFrom(coach['source']),
+        );
+      }).toList();
+
+      final profiles = await Future.wait(
+        summaries.map((s) => fetchCoachProfile(s.uid)),
+      );
+
+      final enriched = <CoachProfileSummary>[];
+      for (var i = 0; i < summaries.length; i++) {
+        final p = profiles[i];
+        enriched.add(summaries[i].withProfile(
+          displayName: p?.displayName ?? '',
+          email: p?.email ?? '',
+        ));
+      }
+      enriched.sort((a, b) =>
+          a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+      return enriched;
+    });
   }
 
   /// Limited, invitation-safe coach identity. Returns null when unreadable.
@@ -297,9 +337,43 @@ class CoachProfileSummary {
   final String uid;
   final CoachEntitlement entitlement;
   final CoachEntitlementSource source;
+  final String displayName;
+  final String email;
+
   const CoachProfileSummary({
     required this.uid,
     required this.entitlement,
     required this.source,
+    this.displayName = '',
+    this.email = '',
   });
+
+  CoachProfileSummary withProfile({
+    required String displayName,
+    required String email,
+  }) =>
+      CoachProfileSummary(
+        uid: uid,
+        entitlement: entitlement,
+        source: source,
+        displayName: displayName,
+        email: email,
+      );
+
+  /// Best human label, falling back to the UID.
+  String get label {
+    if (displayName.trim().isNotEmpty) return displayName.trim();
+    if (email.trim().isNotEmpty) return email.trim();
+    return uid;
+  }
+
+  /// Does this coach match a free-text super-admin search?
+  /// Matches name, email or UID, case-insensitively.
+  bool matches(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return displayName.toLowerCase().contains(q) ||
+        email.toLowerCase().contains(q) ||
+        uid.toLowerCase().contains(q);
+  }
 }

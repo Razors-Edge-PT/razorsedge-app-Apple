@@ -26,6 +26,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:provider/provider.dart';
 import 'user_context.dart';
 import 'coach_home_screen.dart';
+import 'coach_mode/coach_mode_models.dart';
 import 'coach_mode/coach_mode_service.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:facebook_app_events/facebook_app_events.dart';
@@ -104,14 +105,23 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   // Per-uid cache of isCoach so we never block on getIdTokenResult at startup.
   static const _kCoachCache = 'goodlift_iscoach_'; // + uid suffix
 
+  // Startup routing hint ONLY — never an authorization decision.
+  //
+  // The ordinary coach UIDs that used to live here have been removed: coach
+  // access is now the server-owned accountEntitlements/{uid} document, so a
+  // coach is added by granting an entitlement (no code change, no release).
+  // Those accounts received migrated entitlements — see
+  // functions/migrate_coach_mode.js.
+  //
+  // ONLY the hard-coded super admin may remain, and only so the very first
+  // frame routes correctly before the entitlement stream has resolved.
+  // `UserContext.hasCoachMode` is what actually decides Coach Mode.
+  //
+  // This is deliberately separate from `UserContext.isAdmin` (a generic admin
+  // list) and from `freeMembershipUids` (historical comped memberships).
+  // Neither of those confers Coach Mode.
   static const _devCoachUids = {
-    'yoVAqScwLMQLAgNHh8v9IK49fBw2', // Richard Razorsedge
-    'wuiMe7phxYQh0MM39bfnhgv20yS2',
-    'SMTEVGPH1MXgOgbcBbJFU1HjU8G3',
-    'jhIB7Yi1whYwPvBSmK27KltJGn23',
-    'ejBDKEZPFfQz2Sdzd7BZlNydxZ33', // Adam@razorsedgept
-    'L7YjSMnm7tXD3BwyskmmrgVhKsS2', // Ruby cakes
-    'ykx0RvDMc5OIuZ2R4kqWMhGbrGV2', // Google Play reviewer
+    kSuperAdminUid, // Richard — the single hard-coded super admin
   };
 
   _AuthPhase _phase = _AuthPhase.loading;
@@ -248,6 +258,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
+    _detachCoachEntitlement();
     super.dispose();
   }
 
@@ -342,7 +353,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
 
       // Server-authoritative Coach Mode state. Fire-and-forget: never blocks
       // render, and the mirrored claim above already handles fast routing.
-      _hydrateCoachEntitlement(_userContext!, user.uid);
+      _attachCoachEntitlement(_userContext!, user.uid);
 
       // Await ONLY local SharedPreferences hydration of cached block meta so
       // Home can read activeBlockId on its first build. Without this, Home sees
@@ -379,23 +390,63 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     setState(() => _phase = _AuthPhase.authenticated);
   }
 
-  /// Loads accountEntitlements/{uid} in the background and keeps the context's
-  /// Coach Mode state live. The entitlement — not the mirrored `isCoach`
-  /// claim — is what actually authorises coach access, so a suspension or
-  /// revocation takes effect here as soon as the server commits it.
-  void _hydrateCoachEntitlement(UserContext ctx, String uid) {
-    unawaited(() async {
-      try {
-        final service = CoachModeService();
-        ctx.coachEntitlement = await service.fetchEntitlement(uid);
-        await for (final ent in service.watchMyEntitlement(uid)) {
-          if (!mounted || ctx.actorUid != uid) break;
-          ctx.coachEntitlement = ent;
+  /// The live accountEntitlements/{uid} subscription. Owned here so it is
+  /// always cancelled before a new one is attached and on dispose — a leaked
+  /// subscription would keep writing Coach Mode state into a discarded
+  /// UserContext.
+  StreamSubscription<CoachEntitlement>? _entitlementSub;
+
+  /// The context the current subscription feeds. Used to detach cleanly when
+  /// UserContext is replaced after token resolution.
+  UserContext? _entitlementCtx;
+
+  /// Attaches the live entitlement watcher to [ctx], detaching any previous
+  /// one first.
+  ///
+  /// The entitlement — not the mirrored `isCoach` claim — is what actually
+  /// authorises coach access, so:
+  ///   • a newly approved coach gains the dashboard mid-session, and
+  ///   • a suspended or revoked coach loses it mid-session,
+  /// both without logging out.
+  ///
+  /// MUST be re-called whenever _userContext is replaced (see
+  /// _resolveTokenInBackground), otherwise the new context would keep the
+  /// startup claim as its only Coach Mode signal — i.e. the claim would stay
+  /// authoritative, which is exactly what this must prevent.
+  void _attachCoachEntitlement(UserContext ctx, String uid) {
+    // Detach the old watcher before attaching the new one.
+    _detachCoachEntitlement();
+    _entitlementCtx = ctx;
+
+    final service = CoachModeService();
+
+    // Seed once so the first frame after resolution is already correct.
+    unawaited(service.fetchEntitlement(uid).then((ent) {
+      if (!mounted || !identical(_entitlementCtx, ctx)) return;
+      ctx.coachEntitlement = ent;
+    }).catchError((Object e) {
+      debugPrint('[AUTHROOT] coach entitlement seed failed: $e');
+    }));
+
+    _entitlementSub = service.watchMyEntitlement(uid).listen(
+      (ent) {
+        // Ignore events for a context that has since been replaced.
+        if (!mounted || !identical(_entitlementCtx, ctx) || ctx.actorUid != uid) {
+          return;
         }
-      } catch (e) {
-        debugPrint('[AUTHROOT] coach entitlement hydration failed: $e');
-      }
-    }());
+        ctx.coachEntitlement = ent;
+      },
+      onError: (Object e) {
+        // Never grant on error — the context keeps its last known state.
+        debugPrint('[AUTHROOT] coach entitlement watch failed: $e');
+      },
+    );
+  }
+
+  void _detachCoachEntitlement() {
+    _entitlementSub?.cancel();
+    _entitlementSub = null;
+    _entitlementCtx = null;
   }
 
   /// Resolves the Firebase ID token in background and keeps isCoach prefs up to date.
@@ -431,7 +482,16 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
           'rebuilding UserContext uid=${user.uid}',
         );
         final newCtx = UserContext(actorUid: user.uid, isCoach: isCoachFromToken);
+        // Carry the already-resolved entitlement across so the replacement
+        // context never regresses to claim-only Coach Mode for a frame.
+        final resolved = _entitlementCtx?.coachEntitlement;
+        if (resolved != null) newCtx.coachEntitlement = resolved;
         setState(() => _userContext = newCtx);
+        // Re-point the live watcher at the NEW context and drop the old one.
+        // Without this the replacement context would keep the startup claim as
+        // its only Coach Mode signal — leaving the claim authoritative after
+        // entitlement resolution, which is precisely what must not happen.
+        _attachCoachEntitlement(newCtx, user.uid);
         unawaited(newCtx.bootstrapBlockMeta(uid: user.uid));
       }
     }).catchError((Object e) async {
@@ -632,6 +692,10 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     _memoUid = null;
     _tokenFuture = null;
     _userContext = null;
+    // The entitlement watcher belongs to the signed-out context — cancel it so
+    // it cannot deliver Coach Mode state into a discarded context, or leak
+    // across a sign-in as a different account.
+    _detachCoachEntitlement();
     // Invalidate the shared silent-restore handle so a NEW null event starts a
     // fresh attempt rather than sharing the one being torn down. Any in-flight
     // attempt self-abandons via its explicit-logout re-checks (it signs out a

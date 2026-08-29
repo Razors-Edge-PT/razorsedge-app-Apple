@@ -103,6 +103,10 @@ coach: {
   suspensionReason   string
   revokedAt/By       timestamp / uid
   revocationReason   string
+  restoredAt/By      timestamp / uid        (re-activation only)
+  restoredFrom       'suspended' | 'revoked'
+  restoreReason      string
+  restoreCount       number
   updatedAt          timestamp
 }
 coachInviteRate: { recentMs: number[] }     sliding-window rate-limit state
@@ -111,6 +115,12 @@ coachInviteRate: { recentMs: number[] }     sliding-window rate-limit state
 **Only `state === 'active'` grants coach access.** A suspended or revoked
 coach loses athlete access immediately, even though their relationship
 documents still exist.
+
+**Provenance is immutable.** Only a FIRST grant sets `source`, `grantedAt/By`
+and `approvedAt/By`. A restore (suspended/revoked → active) preserves all of
+them verbatim and records the re-activation separately in `restoredAt/By`,
+`restoredFrom`, `restoreReason` and `restoreCount`, so the audit trail of how
+an account originally obtained Coach Mode can never be rewritten.
 
 ### `coachProfiles/{coachUid}` — invitation-safe identity
 
@@ -204,43 +214,105 @@ parties, not the request payload, inside a transaction.
 
 ## 4. The authorization model
 
-An ordinary coach may act on an athlete when **either**:
+### The rule
 
-**CANONICAL** (all new UI and Functions)
+**1. The hard-coded super admin is the sole unconditional bypass.** Authorised
+for every athlete, reading no documents at all.
+
+**2. For every other account, an ACTIVE coach entitlement is MANDATORY.**
+
 ```
 accountEntitlements/{coachUid}.coach.state == 'active'
-  AND coachAthleteLinks/{coachUid}__{athleteUid}.status == 'active'
 ```
-Both are required. Neither alone grants anything.
 
-**LEGACY** (compatibility release only — see §8)
-1. `coachAssignments/{coachUid}.athletes[athleteUid] != null` — super-admin
-   seeded, now super-admin-writable only.
-2. `athleteAssignments/{athleteUid}.coaches[coachUid].approved == true` —
-   strictly boolean `true`.
+A **suspended, revoked, missing or malformed** entitlement denies athlete
+access outright — *including* when a legacy seeded assignment or a legacy
+approved entry exists. The legacy collections may narrow **which** athletes a
+coach reaches; they can never confer coach status. (`coachAssignments` was
+historically self-writable, so trusting it alone was the original
+vulnerability.)
 
-The super admin is authorised for every athlete with no documents at all.
+**3. Given an active entitlement, any ONE of these authorises the pair:**
 
-This one rule is implemented identically in three places, and the three are
-tested against each other:
+| # | Source | Notes |
+|---|---|---|
+| CANONICAL | `coachAthleteLinks/{coachUid}__{athleteUid}.status == 'active'` | What all new UI and Functions write |
+| LEGACY 1 | `coachAssignments/{coachUid}.athletes[athleteUid] != null` | Super-admin seeded; super-admin-writable only. **Not** overridden by a terminated link |
+| LEGACY 2 | `athleteAssignments/{athleteUid}.coaches[coachUid].approved == true` | Strictly boolean `true`. **Overridden** by a terminated canonical link |
+
+An active entitlement **alone** authorises nothing — it says *this account may
+coach*, never *which athletes*.
+
+### Terminal links beat stale legacy approvals
+
+After migration a canonical link and an old `approved: true` entry coexist. A
+link in `declined` / `cancelled` / `revoked_by_athlete` / `released_by_coach`
+is the **newer, explicit decision**, so an athlete revocation or a coach
+release takes effect immediately instead of being silently undone by the
+approval flag the link was migrated from.
+
+`pending` is **not** terminal — it neither grants nor terminates.
+
+A terminated link deliberately does **not** override a super-admin seed:
+seeding is a separate admin-controlled compatibility path, and this pass does
+not redesign it. A coach removes a seed through the removal-only callable.
+
+### Termination with no canonical link
+
+When a relationship exists **only** in the legacy collections, neither party
+can edit `athleteAssignments` from a client. Release/revoke therefore writes a
+terminal **tombstone** link, which is what cancels the stale approval. So
+termination genuinely ends access rather than reporting success while the
+legacy entry keeps authorising.
+
+### One rule, three layers
+
+Implemented identically and tested against each other:
 
 | Layer | Implementation |
 |---|---|
-| Rules | `firestore.rules` → `isCoachFor()`, built from `hasCoachEntitlement()` + `hasActiveLink()` |
-| Functions | `functions/coach/authz.js` → `evaluateAssignment()` / `isCoachFor()` |
-| Flutter | `lib/coach_roster.dart` → `CoachRoster.assignedUids()` (roster candidates only; never widens authorization) |
+| Rules | `firestore.rules` → `isCoachFor()` = `hasCoachEntitlement()` **AND** (`hasActiveLink()` OR `hasSeededAssignment()` OR (`hasLegacyApproval()` AND NOT `hasTerminatedLink()`)) |
+| Functions | `functions/coach/authz.js` → `evaluateAssignmentDetail()` / `evaluateAssignment()` / `isCoachFor()` |
+| Flutter | `lib/coach_roster.dart` → `loadRoster()` switches on `UserContext.coachRole`; `CoachRoster.assignedUids()` composes candidates only and never widens authorization |
 
-Coach access is limited to training/coaching data. It is **not** a bypass for:
+### Coach access is not a bypass
+
+Coach access is limited to the explicitly allowlisted training subcollections.
+It is **not** a bypass for:
 
 * DMs (`conversations/**` require a confirmed buddy relationship),
 * social content (`posts/**`, gated by `isSocial()`, which excludes coaches),
 * media (`users/{uid}/liftVideos/**`, social-only reads *and* writes),
+* subscription state (`users/{uid}/profile/membership`),
+* social invitations (`users/{uid}/buddyInvites/**`),
 * the athlete's identity document (`users/{uid}` root doc is read-only to a coach).
 
-> **Rules fix applied here:** the `users/{userId}/{subcoll}/{doc=**}` training
-> catch-all previously OR'd with the `liftVideos` block and silently re-granted
-> coaches the read/write access that block withholds. The catch-all now
-> excludes `liftVideos`.
+### Fail-closed users subcollections
+
+`users/{userId}/{subcoll}/{doc=**}` now reads:
+
+```
+allow read, write: if isSelf(userId)
+                   || isSuperAdmin()
+                   || (isTrainingSubcollection(subcoll) && isCoachFor(userId));
+```
+
+The owner and the super admin keep full access to everything. A coach reaches
+**only** this allowlist (`isTrainingSubcollection`):
+
+`workouts`, `weights`, `planned_blocks`, `block_planner`, `block_data`,
+`plannedExerciseDetails`, `templates`, `customExercises`
+
+`planned_blocks` covers the canonical nested hierarchy
+`users/{userId}/planned_blocks/{blockId}/...` via the `{doc=**}` recursion.
+
+> **Two rules bugs fixed here.** Rule evaluation is a logical OR across
+> matching blocks, so the previous blanket `canAccessTraining(userId)`
+> catch-all silently overrode the narrower blocks above it and handed assigned
+> coaches read **and write** on `profile/membership`, `buddyInvites` and
+> `liftVideos` — and would have done the same for every subcollection added
+> later. Anything not on the allowlist is now unreachable by a coach, so a
+> **new** subcollection fails closed until deliberately added.
 
 ---
 
@@ -263,6 +335,7 @@ All are v2 callables in `functions/coach/coach_mode.js`, exported from
 | `coachModeRevokeCoach` | athlete | revoke an active coach |
 | `coachModeReleaseAthlete` | coach | release an active athlete |
 | `coachModeRemoveSeededAthlete` | coach (own roster) or super admin | LEGACY seeded removal — **removal only** |
+| `coachModeRemoveAthleteFromRoster` | coach | SOURCE-AWARE removal: clears every source the coach may clear, then re-reads and reports `stillAuthorized` / `remainingSources` |
 
 Triggers:
 
@@ -350,7 +423,39 @@ node functions/migrate_coach_mode.js --apply
 
 # 4. Also refresh the mirrored isCoach custom claims (merged, never replaced)
 node functions/migrate_coach_mode.js --apply --claims
+
+# 5. Only after super admin has REVIEWED the unresolved uids (see below)
+node functions/migrate_coach_mode.js --apply --allow-unresolved
 ```
+
+### Safety gates on `--apply`
+
+A dry run is safe anywhere. `--apply` (and `--apply --claims`) refuses unless
+**both** gates pass, and both are checked *before any write*, so a blocked run
+never leaves a partial migration.
+
+**Gate 1 — project.** The resolved Firebase project must be exactly
+`goodlift-us-storage` (from `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT` /
+`FIREBASE_PROJECT` / `FIREBASE_CONFIG`). Anything else — including an
+unresolved project or a near-miss like `goodlift-us-storage-dev` — aborts with
+exit code 2.
+
+**Gate 2 — unresolved legacy coaches.** The script scans **both** assignment
+collections for every uid that legacy data would authorise as a coach, and
+reports each one that is neither in the reviewed set (`LEGACY_COACH_UIDS`) nor
+already actively entitled.
+
+These are **never auto-entitled.** `coachAssignments` was historically
+self-writable, so a discovered uid may simply be an account that wrote itself
+a roster; auto-granting Coach Mode from that data would re-open the very
+vulnerability this work closed.
+
+Because an active entitlement is now mandatory, an unresolved uid means a coach
+who **will lose access at the rules deploy** — so it is a **blocking** conflict
+(exit code 3). Resolve it by having super admin review each uid and grant Coach
+Mode explicitly (Coach Management → Grant, or `coachModeGrantCoach`), then
+rerun. `--allow-unresolved` proceeds anyway and is only for a super admin who
+has reviewed them and deliberately intends not to grant.
 
 What it does:
 

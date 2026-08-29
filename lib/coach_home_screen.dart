@@ -60,6 +60,32 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
   final CoachModeService _coachMode = CoachModeService();
   bool _busy = false;
 
+  // The UserContext this screen is listening to, so the listener is always
+  // removed from the same instance it was added to.
+  UserContext? _watchedContext;
+  bool _ejected = false;
+
+  /// Reacts to a live Coach Mode role change. A coach who is suspended or
+  /// revoked mid-session is removed from the dashboard immediately rather than
+  /// keeping a stale, now-unauthorised view of athlete data.
+  void _onRoleChanged() {
+    final ctx = _watchedContext;
+    if (!mounted || _ejected || ctx == null) return;
+    if (ctx.hasCoachMode) return;
+    _ejected = true;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Coach Mode is no longer active on this account.'),
+    ));
+    Navigator.of(context).maybePop();
+  }
+
+  @override
+  void dispose() {
+    _watchedContext?.removeListener(_onRoleChanged);
+    _watchedContext = null;
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -73,13 +99,21 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
         return;
       }
 
-      if (!userContext.isCoach) {
+      // Gate on the RESOLVED role (super admin, or an active entitlement), not
+      // on the mirrored `isCoach` claim, which can be stale for a whole
+      // session after a suspension or revocation.
+      if (!userContext.hasCoachMode) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text("Access denied — only coaches can open this screen."),
         ));
         Navigator.pop(context);
         return;
       }
+
+      // Keep watching: a suspension or revocation that lands while the
+      // dashboard is open must eject the coach during this session.
+      userContext.addListener(_onRoleChanged);
+      _watchedContext = userContext;
 
       _loadAthletes(userContext);
     });
@@ -285,12 +319,35 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
 
     setState(() => _busy = true);
     try {
-      if (_seededOnlyUids.contains(uid)) {
-        await _coachMode.removeSeededAthlete(uid);
-      } else {
-        await _coachMode.releaseAthlete(uid);
-      }
+      // ONE source-aware server action. A pair can be authorised by several
+      // sources at once after migration (canonical link + super-admin seed +
+      // stale legacy approval); the server removes every source this coach may
+      // remove and reports back what, if anything, still authorises.
+      final result = await _coachMode.removeAthleteFromRoster(uid);
       if (!mounted) return;
+
+      final stillAuthorized = result['stillAuthorized'] == true;
+      final remaining = (result['remainingSources'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const <String>[];
+
+      if (stillAuthorized) {
+        // Never claim success while access remains. The only source a coach
+        // cannot clear themselves is a super-admin seed re-added by an admin.
+        setState(() => _busy = false);
+        await _refresh();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            '$label was partly removed, but you still have access via '
+            '${_describeSources(remaining)}. Ask the GoodLift team to remove it.',
+          ),
+          duration: const Duration(seconds: 6),
+        ));
+        return;
+      }
+
       setState(() {
         _athletes.remove(uid);
         _seededOnlyUids.remove(uid);
@@ -305,6 +362,25 @@ class _CoachHomeScreenState extends State<CoachHomeScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Human wording for the authorization sources the server reported.
+  static String _describeSources(List<String> sources) {
+    if (sources.isEmpty) return 'another assignment';
+    return sources.map((s) {
+      switch (s) {
+        case 'canonical':
+          return 'an active coaching link';
+        case 'legacy_seeded':
+          return 'an assignment set up by the GoodLift team';
+        case 'legacy_approved':
+          return 'an older approval from the athlete';
+        case 'super_admin':
+          return 'super-admin access';
+        default:
+          return s;
+      }
+    }).join(' and ');
   }
 
   String _labelFor(String uid) {

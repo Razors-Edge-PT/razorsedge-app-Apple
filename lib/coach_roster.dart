@@ -143,11 +143,30 @@ class CoachRosterService {
   CoachRosterService({FirebaseFirestore? firestore})
       : _db = firestore ?? FirebaseFirestore.instance;
 
-  /// Loads the roster this coach may act on. Super-admin gets every user;
-  /// everyone else gets exactly their approved + seeded assignments.
+  /// Loads the roster this coach may act on.
+  ///
+  /// Resolved through [CoachRole], so the client mirrors the same precedence
+  /// the server enforces in firestore.rules isCoachFor() and
+  /// functions/coach/authz.js evaluateAssignmentDetail():
+  ///
+  ///   • super admin              → every user
+  ///   • ACTIVE entitlement       → the assigned athletes
+  ///   • suspended / revoked      → EMPTY, even when legacy assignments exist
+  ///   • entitlement not yet loaded → provisionally the claim's answer
+  ///
+  /// The provisional case exists only so a real coach does not see an empty
+  /// dashboard for the moment before the entitlement stream resolves; it is
+  /// never a grant, because every underlying read is still gated by the rules.
   Future<List<CoachAthlete>> loadRoster(UserContext ctx) async {
-    if (ctx.isSuperAdmin) return _loadAllUsers();
-    return _loadAssignedAthletes(ctx.actorUid);
+    switch (ctx.coachRole) {
+      case CoachRole.superAdmin:
+        return _loadAllUsers();
+      case CoachRole.coach:
+        return _loadAssignedAthletes(ctx.actorUid);
+      case CoachRole.athlete:
+        debugPrint('ℹ️ [CoachRoster] no active Coach Mode — empty roster');
+        return const <CoachAthlete>[];
+    }
   }
 
   Future<List<CoachAthlete>> _loadAllUsers() async {

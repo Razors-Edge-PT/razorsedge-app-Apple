@@ -210,13 +210,32 @@ async function applyEntitlementState(targetUid, nextState, {
     });
 
     if (nextState === 'active') {
-      nextCoach.source = source || (coach && coach.source) || 'manual_review';
-      nextCoach.grantedAt = now;
-      nextCoach.grantedBy = actorUid;
-      if (nextCoach.source === 'manual_review') {
-        nextCoach.approvedAt = now;
-        nextCoach.approvedBy = actorUid;
+      // PROVENANCE IS IMMUTABLE. A restore (suspended/revoked -> active) must
+      // never rewrite how this coach originally got Coach Mode: the original
+      // source, grantedAt/By and approvedAt/By are the audit trail of the
+      // first grant. Only a FIRST grant (no prior coach block) sets them.
+      const isFirstGrant = !coach;
+
+      if (isFirstGrant) {
+        nextCoach.source = source || 'manual_review';
+        nextCoach.grantedAt = now;
+        nextCoach.grantedBy = actorUid;
+        if (nextCoach.source === 'manual_review') {
+          nextCoach.approvedAt = now;
+          nextCoach.approvedBy = actorUid;
+        }
+      } else {
+        // Re-activation: keep the original provenance verbatim and record the
+        // restoration separately.
+        nextCoach.source = coach.source || source || 'manual_review';
+        nextCoach.restoredAt = now;
+        nextCoach.restoredBy = actorUid;
+        nextCoach.restoredFrom = from;
+        nextCoach.restoreReason = reason || '';
+        nextCoach.restoreCount = (typeof coach.restoreCount === 'number'
+          ? coach.restoreCount : 0) + 1;
       }
+
       // Clear the terminal-state metadata so a restored coach is not shown
       // with a stale suspension/revocation reason.
       nextCoach.suspendedAt = null;
@@ -664,14 +683,78 @@ const coachModeInviteAthlete = onCall(CALLABLE_OPTS, async (request) => {
 });
 
 /**
+ * Terminates a relationship that exists ONLY in the legacy collections by
+ * writing a terminal canonical link ("tombstone").
+ *
+ * Without this, a coach release or athlete revocation on a legacy-only
+ * relationship would have nothing to act on: there is no canonical link, and
+ * neither party may write `athleteAssignments` from the client (only the
+ * athlete or super admin can, per firestore.rules). The tombstone makes
+ * `hasTerminatedLink()` / `linkIsTerminal()` true, which is exactly what
+ * cancels the stale legacy approval in both the rules and authz.js.
+ *
+ * It never touches `coachAssignments` — a super-admin seed is removed through
+ * the removal-only seeded callable instead.
+ */
+async function writeTerminalTombstone({
+  coachUid, athleteUid, toStatus, actorUid, reason,
+}) {
+  const now = FV.serverTimestamp();
+  const [coachIdentity, athleteIdentity] = await Promise.all([
+    identityFor(coachUid), identityFor(athleteUid),
+  ]);
+  await linkRef(coachUid, athleteUid).set({
+    coachUid,
+    athleteUid,
+    status: toStatus,
+    coachSnapshot: M.buildPartySnapshot(coachIdentity),
+    athleteSnapshot: M.buildPartySnapshot(athleteIdentity),
+    requestedAt: null,
+    requestedBy: null,
+    respondedAt: null,
+    respondedBy: null,
+    endedAt: now,
+    endedBy: actorUid,
+    lastAction: toStatus,
+    lastActorUid: actorUid,
+    reason: reason || null,
+    terminatedLegacyOnly: true,
+    createdAt: now,
+    updatedAt: now,
+  }, { merge: true });
+  return { status: toStatus, changed: true, previousStatus: null, legacyOnly: true };
+}
+
+/**
  * Shared, transactional relationship transition.
  * The caller's role is derived from the link document itself, never from the
  * request, so a coach cannot accept on an athlete's behalf and vice versa.
+ *
+ * When no canonical link exists but a LEGACY source still authorises the
+ * pair, a terminating transition writes a tombstone instead of failing, so
+ * termination genuinely ends access rather than reporting success while the
+ * stale legacy approval keeps authorising.
  */
 async function transitionLink({
   callerUid, coachUid, athleteUid, toStatus, actorRole, reason,
 }) {
   const now = FV.serverTimestamp();
+
+  // Legacy-only termination: no canonical link, but a legacy approval still
+  // authorises this pair. Only the correct actor may do it.
+  const isTerminating = M.LINK_TERMINAL_STATUSES.includes(toStatus);
+  if (isTerminating && M.actorMayDriveLink(toStatus, actorRole)) {
+    const existing = await linkRef(coachUid, athleteUid).get();
+    if (!existing.exists) {
+      const detail = await authz.describeCoachFor(db, coachUid, athleteUid);
+      if (detail.sources.includes(authz.SOURCE_LEGACY_APPROVED)) {
+        return writeTerminalTombstone({
+          coachUid, athleteUid, toStatus, actorUid: callerUid, reason,
+        });
+      }
+    }
+  }
+
   return db.runTransaction(async (tx) => {
     const ref = linkRef(coachUid, athleteUid);
     const snap = await tx.get(ref);
@@ -839,6 +922,100 @@ const coachModeRemoveSeededAthlete = onCall(CALLABLE_OPTS, async (request) => {
 });
 
 /**
+ * SOURCE-AWARE roster removal — the single action the Coach Dashboard uses.
+ *
+ * A pair may be authorised by several sources at once after migration
+ * (canonical link + super-admin seed + stale legacy approval). Removing only
+ * one of them and reporting success would be a lie: the coach would still
+ * reach the athlete's training data.
+ *
+ * This callable removes EVERY source the coach is permitted to remove:
+ *   • canonical link      -> released_by_coach
+ *   • legacy approval     -> terminal tombstone (cancels the stale approval)
+ *   • super-admin seed    -> field-path delete from coachAssignments
+ *
+ * It then RE-EVALUATES authorization from the database and reports the truth:
+ * `stillAuthorized` plus `remainingSources`, so the UI can say what happened
+ * instead of assuming.
+ */
+const coachModeRemoveAthleteFromRoster = onCall(CALLABLE_OPTS, async (request) => {
+  const coachUid = requireAuth(request);
+  const d = request.data || {};
+  let athleteUid;
+  let reason;
+  try {
+    athleteUid = M.requireString(d.athleteUid, 'athleteUid', { max: 128 });
+    reason = optionalReason(d.reason);
+  } catch (err) {
+    throw asHttps(err);
+  }
+
+  const before = await authz.describeCoachFor(db, coachUid, athleteUid);
+  if (!before.sources.length) {
+    throw new HttpsError('not-found', 'This athlete is not on your roster.');
+  }
+
+  const removed = [];
+  const failed = [];
+
+  // 1. Canonical link (or a legacy-only approval, via the tombstone path).
+  if (before.sources.includes(authz.SOURCE_CANONICAL)
+      || before.sources.includes(authz.SOURCE_LEGACY_APPROVED)) {
+    try {
+      await transitionLink({
+        callerUid: coachUid, coachUid, athleteUid,
+        toStatus: 'released_by_coach', actorRole: 'coach', reason,
+      });
+      if (before.sources.includes(authz.SOURCE_CANONICAL)) {
+        removed.push(authz.SOURCE_CANONICAL);
+      }
+      if (before.sources.includes(authz.SOURCE_LEGACY_APPROVED)) {
+        removed.push(authz.SOURCE_LEGACY_APPROVED);
+      }
+    } catch (err) {
+      logger.error('roster removal: link termination failed',
+        { coachUid, athleteUid, error: String(err) });
+      failed.push(authz.SOURCE_CANONICAL);
+    }
+  }
+
+  // 2. Super-admin-seeded assignment — removal only, never an add.
+  if (before.sources.includes(authz.SOURCE_LEGACY_SEEDED)) {
+    try {
+      const ref = db.collection('coachAssignments').doc(coachUid);
+      const didRemove = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) return false;
+        const athletes = (snap.data() || {}).athletes || {};
+        if (athletes[athleteUid] === undefined) return false;
+        tx.update(ref, { ['athletes.' + athleteUid]: FV.delete() });
+        return true;
+      });
+      if (didRemove) removed.push(authz.SOURCE_LEGACY_SEEDED);
+    } catch (err) {
+      logger.error('roster removal: seeded removal failed',
+        { coachUid, athleteUid, error: String(err) });
+      failed.push(authz.SOURCE_LEGACY_SEEDED);
+    }
+  }
+
+  await reevaluateLinkEnrollment(coachUid, athleteUid, 'roster-removed');
+
+  // Re-read the truth rather than inferring it.
+  const after = await authz.describeCoachFor(db, coachUid, athleteUid);
+
+  return {
+    coachUid,
+    athleteUid,
+    removedSources: removed,
+    failedSources: failed,
+    previousSources: before.sources,
+    remainingSources: after.sources,
+    stillAuthorized: after.authorised,
+  };
+});
+
+/**
  * Re-evaluates one relationship's analytics enrollment after a status change.
  * Delegates to the existing reevaluateEnrollment, which disables reporting
  * only when NO authorising source remains and never fabricates, resets or
@@ -921,12 +1098,14 @@ module.exports = {
   coachModeRevokeCoach,
   coachModeReleaseAthlete,
   coachModeRemoveSeededAthlete,
+  coachModeRemoveAthleteFromRoster,
   coachOnCoachAthleteLinkWritten,
   coachOnAccountEntitlementWritten,
   // Exported for tests (not deployed as functions):
   _internals: {
     applyEntitlementState,
     transitionLink,
+    writeTerminalTombstone,
     identityFor,
     uidForEmail,
     syncCoachClaim,

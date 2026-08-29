@@ -396,3 +396,29 @@ test('invite rate limit: malformed stored state degrades safely', () => {
   assert.equal(mixed.allowed, true);
   assert.deepEqual(mixed.retained, [now - 5, now, now]);
 });
+
+// ── Terminal-link detection (corrective pass) ───────────────────────────────
+
+test('linkIsTerminal: only deliberate endings are terminal', () => {
+  for (const s of M.LINK_TERMINAL_STATUSES) {
+    assert.equal(M.linkIsTerminal({ status: s }), true, s + ' is terminal');
+  }
+  // In-flight states are NOT terminal — pending must never cancel a legacy
+  // approval, and active obviously must not.
+  assert.equal(M.linkIsTerminal({ status: 'pending' }), false);
+  assert.equal(M.linkIsTerminal({ status: 'active' }), false);
+  // Missing / malformed never counts as a deliberate termination.
+  assert.equal(M.linkIsTerminal(null), false);
+  assert.equal(M.linkIsTerminal(undefined), false);
+  assert.equal(M.linkIsTerminal({}), false);
+  assert.equal(M.linkIsTerminal({ status: 'bogus' }), false);
+  assert.equal(M.linkIsTerminal({ status: true }), false);
+});
+
+test('linkIsActive and linkIsTerminal are mutually exclusive', () => {
+  for (const s of M.LINK_STATUSES) {
+    const data = { status: s };
+    assert.equal(M.linkIsActive(data) && M.linkIsTerminal(data), false,
+      s + ' cannot be both active and terminal');
+  }
+});

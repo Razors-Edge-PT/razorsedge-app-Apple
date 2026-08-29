@@ -2,24 +2,34 @@
 // repository's real assignment/approval model, matching the Coach Dashboard
 // and the Firestore rules exactly.
 //
-// CANONICAL (new — Coach Mode):
-//   coachAthleteLinks/{coachUid}__{athleteUid}.status == 'active'
-//   AND accountEntitlements/{coachUid}.coach.state == 'active'
-//   Both are required. A suspended or revoked coach loses athlete access even
-//   though the link document still exists.
+// THE RULE — an ACTIVE coach entitlement is MANDATORY for every ordinary
+// authorization source. The hard-coded super admin is the sole unconditional
+// bypass; for everyone else a suspended, revoked, missing or malformed
+// accountEntitlements/{coachUid} denies athlete access outright, even when a
+// legacy assignment exists.
 //
-// LEGACY (still honoured during the compatibility release):
-//   1. Super-admin-seeded roster: coachAssignments/{coachUid}.athletes[athleteUid]
-//      – any non-null entry is a valid seeded assignment. Only the hard-coded
-//        super admin may create these (enforced in rules + callables); an
-//        ordinary coach can no longer seed athletes into their own roster.
-//   2. Athlete-approved flow: athleteAssignments/{athleteUid}
-//        .coaches[coachUid].approved === true
-//      – ONLY an explicit boolean true grants access. Pending requests,
-//        approved:false, malformed entries or mere key presence do not.
+// Given an active entitlement, any ONE of these authorises the pair:
 //
-// Any authorising source alone grants access; all removed ⇒ revoked.
-// Super admin is handled by the hard-coded UID and never needs any document.
+//   CANONICAL:
+//     coachAthleteLinks/{coachUid}__{athleteUid}.status == 'active'
+//
+//   LEGACY (compatibility release only — see docs/coach_mode.md §8):
+//     1. Super-admin-seeded roster: coachAssignments/{coachUid}.athletes[athleteUid]
+//        – any non-null entry. ONLY the hard-coded super admin may create
+//          these; an ordinary coach can no longer seed athletes into their own
+//          roster. Not overridden by a terminal canonical link.
+//     2. Athlete-approved flow: athleteAssignments/{athleteUid}
+//          .coaches[coachUid].approved === true
+//        – ONLY an explicit boolean true. Pending requests, approved:false,
+//          malformed entries or mere key presence do not.
+//        – OVERRIDDEN by a terminal canonical link (declined / cancelled /
+//          revoked_by_athlete / released_by_coach): the link is the newer,
+//          explicit decision, so an athlete revocation or coach release is not
+//          silently undone by the stale approval flag it was migrated from.
+//
+// The legacy collections may narrow WHICH athletes a coach reaches, but they
+// can never confer coach status — historically coachAssignments was
+// self-writable, so trusting it alone was the original vulnerability.
 
 'use strict';
 
@@ -30,6 +40,7 @@ const {
   COL_LINKS,
   entitlementIsActive,
   linkIsActive,
+  linkIsTerminal,
   linkId,
 } = require('./coach_mode_model');
 
@@ -67,10 +78,48 @@ function canonicalAuthorises(entitlementData, linkData) {
 }
 
 /**
- * Pure evaluation over every assignment source's data (any may be null).
- * Used by the db-backed check below and directly by unit tests.
+ * Names the source that authorised (or would authorise) a coach⇄athlete pair.
+ * Returned by evaluateAssignmentDetail so roster removal can be source-aware
+ * and truthful about what still grants access.
+ *
+ *   'super_admin'      the hard-coded super admin — unconditional
+ *   'canonical'        active entitlement + active coachAthleteLinks doc
+ *   'legacy_seeded'    super-admin-seeded coachAssignments entry
+ *   'legacy_approved'  athleteAssignments coaches[uid].approved === true
  */
-function evaluateAssignment({
+const SOURCE_SUPER_ADMIN = 'super_admin';
+const SOURCE_CANONICAL = 'canonical';
+const SOURCE_LEGACY_SEEDED = 'legacy_seeded';
+const SOURCE_LEGACY_APPROVED = 'legacy_approved';
+
+/**
+ * Full pure evaluation over every assignment source's data (any may be null).
+ * Returns { authorised, sources, entitlementActive, linkTerminal } so callers
+ * can both decide access AND explain it.
+ *
+ * THE RULE, in order:
+ *
+ *  1. The hard-coded super admin is the ONLY unconditional bypass.
+ *
+ *  2. Every other account MUST hold an ACTIVE coach entitlement. A suspended,
+ *     revoked, missing or malformed entitlement denies everything — including
+ *     when a legacy seeded assignment or a legacy approved entry exists. The
+ *     legacy collections were never a trustworthy grant of Coach Mode
+ *     (historically `coachAssignments` was self-writable), so they may narrow
+ *     which athletes a coach reaches but can never confer coach status.
+ *
+ *  3. Given an active entitlement, any of these authorises the pair:
+ *       • an ACTIVE canonical link, or
+ *       • a super-admin-seeded assignment, or
+ *       • a legacy approved entry — UNLESS a canonical link records a
+ *         deliberate termination, which is the newer explicit decision and
+ *         wins over the stale approval flag it was migrated from.
+ *
+ *     A seeded assignment is deliberately NOT overridden by a terminal link:
+ *     seeding is an admin-controlled compatibility path that only the super
+ *     admin can create, and this pass does not redesign it.
+ */
+function evaluateAssignmentDetail({
   coachAssignData,
   athleteAssignData,
   entitlementData,
@@ -78,40 +127,87 @@ function evaluateAssignment({
   coachUid,
   athleteUid,
 }) {
-  if (isSuperAdmin(coachUid)) return true;
+  if (isSuperAdmin(coachUid)) {
+    return {
+      authorised: true,
+      sources: [SOURCE_SUPER_ADMIN],
+      entitlementActive: true,
+      linkTerminal: false,
+    };
+  }
 
-  // Canonical first — this is the path all new UI and callables use.
-  if (canonicalAuthorises(entitlementData, linkData)) return true;
+  const entitlementActive = entitlementIsActive(entitlementData);
+  const linkTerminal = linkIsTerminal(linkData);
 
-  // Legacy super-admin-seeded roster.
   const seeded = coachAssignData && coachAssignData.athletes
     ? coachAssignData.athletes[athleteUid] : undefined;
-  if (seededEntryAuthorises(seeded)) return true;
-
-  // Legacy athlete-approved flow.
   const approved = athleteAssignData && athleteAssignData.coaches
     ? athleteAssignData.coaches[coachUid] : undefined;
-  return approvedEntryAuthorises(approved);
+
+  // Which sources WOULD authorise if the entitlement were active. Computed
+  // regardless so removal flows can report what is still present.
+  const sources = [];
+  if (linkIsActive(linkData)) sources.push(SOURCE_CANONICAL);
+  if (seededEntryAuthorises(seeded)) sources.push(SOURCE_LEGACY_SEEDED);
+  // A terminal canonical link cancels a stale legacy approval, but never a
+  // super-admin seed.
+  if (approvedEntryAuthorises(approved) && !linkTerminal) {
+    sources.push(SOURCE_LEGACY_APPROVED);
+  }
+
+  return {
+    // Active entitlement is mandatory for EVERY ordinary source.
+    authorised: entitlementActive && sources.length > 0,
+    sources,
+    entitlementActive,
+    linkTerminal,
+  };
 }
 
-/** Db-backed check used by triggers, scheduler and every athlete-specific
- *  callable at invocation time. */
-async function isCoachFor(db, coachUid, athleteUid) {
-  if (isSuperAdmin(coachUid)) return true; // no assignment reads needed
+/**
+ * Pure boolean evaluation over every assignment source's data.
+ * Used by the db-backed check below and directly by unit tests.
+ */
+function evaluateAssignment(args) {
+  return evaluateAssignmentDetail(args).authorised;
+}
+
+/** Reads all four assignment sources for one pair. */
+async function loadAssignmentData(db, coachUid, athleteUid) {
   const [ca, aa, ent, link] = await Promise.all([
     db.collection('coachAssignments').doc(coachUid).get(),
     db.collection('athleteAssignments').doc(athleteUid).get(),
     db.collection(COL_ENTITLEMENTS).doc(coachUid).get(),
     db.collection(COL_LINKS).doc(linkId(coachUid, athleteUid)).get(),
   ]);
-  return evaluateAssignment({
+  return {
     coachAssignData: ca.exists ? ca.data() : null,
     athleteAssignData: aa.exists ? aa.data() : null,
     entitlementData: ent.exists ? ent.data() : null,
     linkData: link.exists ? link.data() : null,
     coachUid,
     athleteUid,
-  });
+  };
+}
+
+/** Db-backed check used by triggers, scheduler and every athlete-specific
+ *  callable at invocation time. */
+async function isCoachFor(db, coachUid, athleteUid) {
+  if (isSuperAdmin(coachUid)) return true; // no assignment reads needed
+  return evaluateAssignment(await loadAssignmentData(db, coachUid, athleteUid));
+}
+
+/** Db-backed detail used by the source-aware roster-removal callable. */
+async function describeCoachFor(db, coachUid, athleteUid) {
+  if (isSuperAdmin(coachUid)) {
+    return {
+      authorised: true,
+      sources: [SOURCE_SUPER_ADMIN],
+      entitlementActive: true,
+      linkTerminal: false,
+    };
+  }
+  return evaluateAssignmentDetail(await loadAssignmentData(db, coachUid, athleteUid));
 }
 
 /**
@@ -133,6 +229,13 @@ module.exports = {
   approvedEntryAuthorises,
   canonicalAuthorises,
   evaluateAssignment,
+  evaluateAssignmentDetail,
   isCoachFor,
+  describeCoachFor,
+  loadAssignmentData,
   hasActiveCoachEntitlement,
+  SOURCE_SUPER_ADMIN,
+  SOURCE_CANONICAL,
+  SOURCE_LEGACY_SEEDED,
+  SOURCE_LEGACY_APPROVED,
 };

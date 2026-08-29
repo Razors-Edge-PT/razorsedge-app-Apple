@@ -785,27 +785,38 @@ test('invite: the rate limit blocks a burst of invitations', async () => {
 // Legacy compatibility
 // ══════════════════════════════════════════════════════════════════════════
 
-test('legacy: a super-admin-seeded assignment still authorises', async () => {
+test('legacy: a super-admin-seeded assignment authorises WITH an entitlement', async () => {
   const coach = await makeAccount('seededCoach');
   const athlete = await makeAccount('seededAthlete');
   await db.collection('coachAssignments').doc(coach.uid).set({
     athletes: { [athlete.uid]: { email: athlete.email } },
   });
-  // No entitlement, no canonical link — the legacy source alone authorises.
+
+  // An active entitlement is now MANDATORY for every ordinary source: the
+  // seeded assignment alone confers nothing.
   assert.equal(await entitlementState(coach.uid), null);
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+
+  // With the entitlement, the seeded assignment authorises as documented.
+  await grantCoach(coach.uid);
   assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), true);
 });
 
-test('legacy: an athlete-approved assignment still authorises', async () => {
+test('legacy: an athlete-approved assignment authorises WITH an entitlement', async () => {
   const coach = await makeAccount('approvedCoach');
   const athlete = await makeAccount('approvedAthlete');
   await db.collection('athleteAssignments').doc(athlete.uid).set({
     coaches: { [coach.uid]: { approved: true } },
   });
+
+  // Legacy approval alone no longer confers Coach Mode.
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+  await grantCoach(coach.uid);
   assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), true);
 
-  // approved:false and pending entries still grant nothing.
+  // approved:false and pending entries still grant nothing, entitlement or not.
   const pendingCoach = await makeAccount('pendingCoach');
+  await grantCoach(pendingCoach.uid);
   await db.collection('athleteAssignments').doc(athlete.uid).set({
     coaches: {
       [coach.uid]: { approved: true },
@@ -940,4 +951,270 @@ test('enrollment: reporting stays untouched while the relationship is still vali
   // Accepting an invitation must not disturb reporting or bootstrap state.
   const settings = await db.doc(`coachCheckIns/${coach.uid}/athletes/${athlete.uid}`).get();
   assert.equal(settings.data().reportingEnabled, true);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CORRECTIVE PASS
+// ══════════════════════════════════════════════════════════════════════════
+
+test('entitlement: a legacy source alone no longer authorises', async () => {
+  const coach = await makeAccount('legacyNoEnt');
+  const athlete = await makeAccount('legacyNoEntAthlete');
+
+  // Both legacy sources present, NO entitlement.
+  await db.collection('coachAssignments').doc(coach.uid).set({
+    athletes: { [athlete.uid]: { email: athlete.email } },
+  });
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [coach.uid]: { approved: true } },
+  });
+
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false,
+    'legacy data must not confer Coach Mode without an entitlement');
+
+  // Granting the entitlement makes the same legacy data authorise.
+  await grantCoach(coach.uid);
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), true);
+
+  // Suspending removes it again, legacy data untouched.
+  await call(cm.coachModeSetCoachState, SUPER,
+    { targetUid: coach.uid, action: 'suspend', reason: 'hold' });
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('relationship: coach release beats a stale legacy approval', async () => {
+  const coach = await makeAccount('staleReleaseCoach');
+  const athlete = await makeAccount('staleReleaseAthlete');
+  await grantCoach(coach.uid);
+
+  // Post-migration shape: canonical ACTIVE link AND the old approved entry.
+  await call(cm.coachModeInviteAthlete, coach.uid, { athleteEmail: athlete.email });
+  await call(cm.coachModeRespondToInvite, athlete.uid,
+    { coachUid: coach.uid, action: 'accept' });
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [coach.uid]: { approved: true } },
+  });
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), true);
+
+  await call(cm.coachModeReleaseAthlete, coach.uid, { athleteUid: athlete.uid });
+
+  assert.equal(await linkStatus(coach.uid, athlete.uid), 'released_by_coach');
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false,
+    'the stale legacy approval must not resurrect access');
+});
+
+test('relationship: athlete revoke beats a stale legacy approval', async () => {
+  const coach = await makeAccount('staleRevokeCoach');
+  const athlete = await makeAccount('staleRevokeAthlete');
+  await grantCoach(coach.uid);
+  await call(cm.coachModeInviteAthlete, coach.uid, { athleteEmail: athlete.email });
+  await call(cm.coachModeRespondToInvite, athlete.uid,
+    { coachUid: coach.uid, action: 'accept' });
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [coach.uid]: { approved: true } },
+  });
+
+  await call(cm.coachModeRevokeCoach, athlete.uid, { coachUid: coach.uid });
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('relationship: termination works on a LEGACY-ONLY relationship', async () => {
+  // No canonical link at all — only the old approved entry, which neither
+  // party may edit from a client. A tombstone must be written instead.
+  const coach = await makeAccount('legacyOnlyCoach');
+  const athlete = await makeAccount('legacyOnlyAthlete');
+  await grantCoach(coach.uid);
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [coach.uid]: { approved: true } },
+  });
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), true);
+  assert.equal(await linkStatus(coach.uid, athlete.uid), null);
+
+  await call(cm.coachModeReleaseAthlete, coach.uid, { athleteUid: athlete.uid });
+
+  assert.equal(await linkStatus(coach.uid, athlete.uid), 'released_by_coach');
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('relationship: athlete can revoke a LEGACY-ONLY coach', async () => {
+  const coach = await makeAccount('legacyOnlyRevCoach');
+  const athlete = await makeAccount('legacyOnlyRevAthlete');
+  await grantCoach(coach.uid);
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [coach.uid]: { approved: true } },
+  });
+
+  await call(cm.coachModeRevokeCoach, athlete.uid, { coachUid: coach.uid });
+  assert.equal(await linkStatus(coach.uid, athlete.uid), 'revoked_by_athlete');
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('roster removal: truthful when every source is removable', async () => {
+  const coach = await makeAccount('rmAllCoach');
+  const athlete = await makeAccount('rmAllAthlete');
+  await grantCoach(coach.uid);
+
+  // All three sources at once.
+  await call(cm.coachModeInviteAthlete, coach.uid, { athleteEmail: athlete.email });
+  await call(cm.coachModeRespondToInvite, athlete.uid,
+    { coachUid: coach.uid, action: 'accept' });
+  await db.collection('coachAssignments').doc(coach.uid).set({
+    athletes: { [athlete.uid]: { email: athlete.email } },
+  });
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [coach.uid]: { approved: true } },
+  });
+
+  const res = await call(cm.coachModeRemoveAthleteFromRoster, coach.uid,
+    { athleteUid: athlete.uid });
+
+  assert.deepEqual(res.previousSources.slice().sort(),
+    ['canonical', 'legacy_approved', 'legacy_seeded']);
+  assert.deepEqual(res.remainingSources, []);
+  assert.equal(res.stillAuthorized, false);
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('roster removal: removes a seeded-only athlete', async () => {
+  const coach = await makeAccount('rmSeedCoach');
+  const athlete = await makeAccount('rmSeedAthlete');
+  await grantCoach(coach.uid);
+  await db.collection('coachAssignments').doc(coach.uid).set({
+    athletes: { [athlete.uid]: { email: athlete.email } },
+  });
+
+  const res = await call(cm.coachModeRemoveAthleteFromRoster, coach.uid,
+    { athleteUid: athlete.uid });
+  assert.deepEqual(res.removedSources, ['legacy_seeded']);
+  assert.equal(res.stillAuthorized, false);
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('roster removal: removes a legacy-approved-only athlete', async () => {
+  const coach = await makeAccount('rmApprCoach');
+  const athlete = await makeAccount('rmApprAthlete');
+  await grantCoach(coach.uid);
+  await db.collection('athleteAssignments').doc(athlete.uid).set({
+    coaches: { [coach.uid]: { approved: true } },
+  });
+
+  const res = await call(cm.coachModeRemoveAthleteFromRoster, coach.uid,
+    { athleteUid: athlete.uid });
+  assert.deepEqual(res.previousSources, ['legacy_approved']);
+  assert.equal(res.stillAuthorized, false);
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('roster removal: rejects an athlete who is not on the roster', async () => {
+  const coach = await makeAccount('rmNoneCoach');
+  const athlete = await makeAccount('rmNoneAthlete');
+  await grantCoach(coach.uid);
+  await expectHttpsError(
+    call(cm.coachModeRemoveAthleteFromRoster, coach.uid,
+      { athleteUid: athlete.uid }), 'not-found');
+});
+
+test('roster removal: is idempotent', async () => {
+  const coach = await makeAccount('rmIdemCoach');
+  const athlete = await makeAccount('rmIdemAthlete');
+  await grantCoach(coach.uid);
+  await call(cm.coachModeInviteAthlete, coach.uid, { athleteEmail: athlete.email });
+  await call(cm.coachModeRespondToInvite, athlete.uid,
+    { coachUid: coach.uid, action: 'accept' });
+
+  await call(cm.coachModeRemoveAthleteFromRoster, coach.uid,
+    { athleteUid: athlete.uid });
+  // A second removal finds nothing left to remove.
+  await expectHttpsError(
+    call(cm.coachModeRemoveAthleteFromRoster, coach.uid,
+      { athleteUid: athlete.uid }), 'not-found');
+  assert.equal(await authz.isCoachFor(db, coach.uid, athlete.uid), false);
+});
+
+test('roster removal: ends analytics enrollment', async () => {
+  const coach = await makeAccount('rmEnrollCoach');
+  const athlete = await makeAccount('rmEnrollAthlete');
+  await grantCoach(coach.uid);
+  await call(cm.coachModeInviteAthlete, coach.uid, { athleteEmail: athlete.email });
+  await call(cm.coachModeRespondToInvite, athlete.uid,
+    { coachUid: coach.uid, action: 'accept' });
+
+  await db.doc('coachCheckIns/' + coach.uid + '/athletes/' + athlete.uid)
+    .set({ reportingEnabled: true });
+  await db.doc('coachAnalytics/' + athlete.uid).set({
+    enabledBy: { [coach.uid]: true }, bootstrapStatus: 'complete',
+  });
+
+  await call(cm.coachModeRemoveAthleteFromRoster, coach.uid,
+    { athleteUid: athlete.uid });
+
+  const settings = await db.doc(
+    'coachCheckIns/' + coach.uid + '/athletes/' + athlete.uid).get();
+  assert.equal(settings.data().reportingEnabled, false);
+  const analytics = await db.doc('coachAnalytics/' + athlete.uid).get();
+  assert.equal((analytics.data().enabledBy || {})[coach.uid], undefined);
+  assert.equal(analytics.data().bootstrapStatus, 'complete',
+    'analytics must never be rebuilt or reset by a relationship change');
+});
+
+test('entitlement: RESTORE preserves the original provenance', async () => {
+  const a = await makeAccount('provenance');
+
+  // Original grant: manual_review via an approved application.
+  await call(cm.coachModeSubmitApplication, a.uid, VALID_APPLICATION);
+  await call(cm.coachModeReviewApplication, SUPER,
+    { applicantUid: a.uid, action: 'approve', reason: 'first grant' });
+
+  const first = (await db.collection(M.COL_ENTITLEMENTS).doc(a.uid).get()).data().coach;
+  assert.equal(first.source, 'manual_review');
+  assert.ok(first.grantedAt);
+  assert.ok(first.approvedAt);
+  assert.equal(first.approvedBy, SUPER);
+
+  await call(cm.coachModeSetCoachState, SUPER,
+    { targetUid: a.uid, action: 'suspend', reason: 'hold' });
+  await call(cm.coachModeSetCoachState, SUPER,
+    { targetUid: a.uid, action: 'restore', reason: 'cleared' });
+
+  const restored = (await db.collection(M.COL_ENTITLEMENTS).doc(a.uid).get()).data().coach;
+  assert.equal(restored.state, 'active');
+  // Provenance is IMMUTABLE.
+  assert.equal(restored.source, 'manual_review',
+    'restore must not rewrite the original source to super_admin_grant');
+  assert.deepEqual(restored.grantedAt, first.grantedAt,
+    'grantedAt must be preserved');
+  assert.equal(restored.grantedBy, first.grantedBy);
+  assert.deepEqual(restored.approvedAt, first.approvedAt,
+    'approvedAt must be preserved');
+  assert.equal(restored.approvedBy, first.approvedBy);
+  // Restoration is recorded separately.
+  assert.ok(restored.restoredAt, 'restoration is recorded');
+  assert.equal(restored.restoredBy, SUPER);
+  assert.equal(restored.restoredFrom, 'suspended');
+  assert.equal(restored.restoreReason, 'cleared');
+  assert.equal(restored.restoreCount, 1);
+  // Stale suspension metadata is cleared.
+  assert.equal(restored.suspensionReason, null);
+});
+
+test('entitlement: repeated restores increment without rewriting provenance', async () => {
+  const a = await makeAccount('provenance2');
+  await call(cm.coachModeGrantCoach, SUPER,
+    { targetUid: a.uid, reason: 'direct' });
+  const first = (await db.collection(M.COL_ENTITLEMENTS).doc(a.uid).get()).data().coach;
+  assert.equal(first.source, 'super_admin_grant');
+
+  for (let i = 1; i <= 2; i += 1) {
+    await call(cm.coachModeSetCoachState, SUPER,
+      { targetUid: a.uid, action: 'revoke', reason: 'r' + i });
+    await call(cm.coachModeSetCoachState, SUPER,
+      { targetUid: a.uid, action: 'restore' });
+    const now = (await db.collection(M.COL_ENTITLEMENTS).doc(a.uid).get()).data().coach;
+    assert.equal(now.restoreCount, i);
+    assert.equal(now.source, 'super_admin_grant',
+      'a restore must never rewrite the original grant source');
+    assert.deepEqual(now.grantedAt, first.grantedAt);
+    assert.equal(now.restoredFrom, 'revoked');
+    assert.equal(now.revocationReason, null);
+  }
 });

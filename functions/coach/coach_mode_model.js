@@ -166,6 +166,24 @@ function linkIsActive(linkData) {
   return !!(linkData && linkData.status === 'active');
 }
 
+/**
+ * A canonical link recording a DELIBERATE end to the relationship: the
+ * athlete declined or revoked, or the coach cancelled or released.
+ *
+ * This is authoritative over a stale legacy `athleteAssignments.approved`
+ * entry. After migration the two can coexist — the canonical link is the
+ * newer, explicit decision, so an athlete revocation or a coach release takes
+ * effect immediately instead of being silently undone by the old approval
+ * flag it was migrated from.
+ *
+ * It deliberately does NOT override a super-admin-seeded assignment: seeding
+ * is a separate, admin-controlled compatibility path (see evaluateAssignment
+ * in authz.js).
+ */
+function linkIsTerminal(linkData) {
+  return !!(linkData && LINK_TERMINAL_STATUSES.includes(linkData.status));
+}
+
 // ── Validation helpers ──────────────────────────────────────────────────────
 
 class ValidationError extends Error {
@@ -408,6 +426,7 @@ module.exports = {
   linkId,
   parseLinkId,
   linkIsActive,
+  linkIsTerminal,
   ValidationError,
   requireString,
   requireEnum,

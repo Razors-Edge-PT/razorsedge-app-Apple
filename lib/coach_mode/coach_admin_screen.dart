@@ -286,11 +286,11 @@ class _CoachesTabState extends State<_CoachesTab> {
           child: TextField(
             decoration: const InputDecoration(
               prefixIcon: Icon(Icons.search),
-              hintText: 'Search by UID',
+              hintText: 'Search by name, email or UID',
               isDense: true,
               border: OutlineInputBorder(),
             ),
-            onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+            onChanged: (v) => setState(() => _query = v.trim()),
           ),
         ),
         Expanded(
@@ -304,9 +304,7 @@ class _CoachesTabState extends State<_CoachesTab> {
                 return const Center(child: CircularProgressIndicator());
               }
               final all = snap.data!;
-              final coaches = _query.isEmpty
-                  ? all
-                  : all.where((c) => c.uid.toLowerCase().contains(_query)).toList();
+              final coaches = all.where((c) => c.matches(_query)).toList();
               if (coaches.isEmpty) {
                 return _EmptyBox(
                   icon: Icons.people_outline,
@@ -339,13 +337,24 @@ class _CoachesTabState extends State<_CoachesTab> {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
-        title: Text(c.uid, style: const TextStyle(fontSize: 13)),
-        subtitle: Text(
-          c.entitlement.reason.isNotEmpty
-              ? '$source · ${c.entitlement.reason}'
-              : source,
-          style: const TextStyle(fontSize: 12),
+        title: Text(c.label,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (c.email.isNotEmpty && c.email != c.label)
+              Text(c.email, style: const TextStyle(fontSize: 12)),
+            Text(c.uid,
+                style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            Text(
+              c.entitlement.reason.isNotEmpty
+                  ? '$source · ${c.entitlement.reason}'
+                  : source,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
         ),
+        isThreeLine: true,
         trailing: PopupMenuButton<String>(
           onSelected: (v) => _action(c, v),
           itemBuilder: (_) => [
