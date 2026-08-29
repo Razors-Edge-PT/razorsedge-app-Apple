@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../WES2_models.dart';
 import '../periodization_model_utils.dart';
@@ -895,6 +896,11 @@ class _Wes2TimedCell extends StatefulWidget {
 }
 
 class _Wes2TimedCellState extends State<_Wes2TimedCell> {
+  /// Upper bound for the manual scroll-wheel editor: 59 min 59 sec. Matches the
+  /// range of [CupertinoTimerPicker] in minute/second mode and is a generous
+  /// ceiling for any gym timed exercise while staying a safe [int] second count.
+  static const int _kMaxManualSeconds = 59 * 60 + 59;
+
   int _displaySeconds = 0;
   int _centiSeconds = 0;
   bool _active = false;
@@ -976,6 +982,50 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
     widget.onUnfocused(text);
   }
 
+  /// Opens the scroll-wheel picker to manually enter/edit the recorded time.
+  /// Never available while the timer is running (the edit control is disabled),
+  /// so this cannot race an active tick. Cancel changes nothing; Done routes the
+  /// value through the same [onChanged] + [onUnfocused] path used by [_stop].
+  Future<void> _openManualEditor() async {
+    if (_running) return; // safety — control is disabled, but never race a tick
+    final int base = _active
+        ? _displaySeconds
+        : (widget.storedSeconds ?? widget.hintSeconds ?? 0);
+    final picked = await _openWes2ManualTimePicker(
+      context,
+      Duration(seconds: base.clamp(0, _kMaxManualSeconds)),
+    );
+    if (picked == null) return; // Cancel — no state change, no save
+    if (!mounted) return;
+    final total = picked.inSeconds.clamp(0, _kMaxManualSeconds);
+    _ticker?.cancel();
+    _ticker = null;
+    if (total <= 0) {
+      // 0:00 clears the actual value and lets any hint show through again,
+      // matching how an emptied WES2 field behaves.
+      setState(() {
+        _displaySeconds = 0;
+        _centiSeconds = 0;
+        _running = false;
+        _active = false;
+      });
+      widget.onChanged('');
+      widget.onUnfocused('');
+      return;
+    }
+    // Non-zero: land in the same "stopped with a value" state as _stop(), so a
+    // subsequent tap resumes from here and long-press still resets.
+    setState(() {
+      _displaySeconds = total;
+      _centiSeconds = 0;
+      _running = false;
+      _active = true;
+    });
+    final text = total.toString();
+    widget.onChanged(text);
+    widget.onUnfocused(text);
+  }
+
   @override
   void dispose() {
     _ticker?.cancel();
@@ -1034,38 +1084,183 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
         if (_running) _stop();
         setState(() => _active = false);
       },
-      child: GestureDetector(
-        onTap: _onTap,
-        onLongPress: _onLongPress,
-        child: SizedBox(
-          width: widget.width,
-          height: 36,
-          child: Align(
-            alignment: Alignment.bottomLeft,
-            child: Container(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          GestureDetector(
+            onTap: _onTap,
+            onLongPress: _onLongPress,
+            child: SizedBox(
+              width: widget.width,
               height: 36,
-              padding: const EdgeInsets.only(left: 2, bottom: 8),
-              decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(color: borderColor, width: borderWidth),
+              child: Align(
+                alignment: Alignment.bottomLeft,
+                child: Container(
+                  height: 36,
+                  padding: const EdgeInsets.only(left: 2, bottom: 8),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(color: borderColor, width: borderWidth),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Icon(Icons.timer_outlined, size: 12, color: iconColor),
+                      const SizedBox(width: 2),
+                      // Flexible so the intended clip actually engages when the
+                      // running value (m:ss.c) is momentarily wider than the
+                      // fixed cell, instead of overflowing.
+                      Flexible(
+                        child: Text(
+                          displayText,
+                          style: displayStyle,
+                          maxLines: 1,
+                          overflow: TextOverflow.clip,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
+            ),
+          ),
+          // Manual edit control — separate from the Time tap target. Disabled
+          // while the timer runs so it can never race an active tick; stop the
+          // timer first, then edit.
+          SizedBox(
+            width: 26,
+            height: 36,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 24, height: 26),
+                icon: const Icon(Icons.edit_outlined, size: 13),
+                color: Colors.white54,
+                disabledColor: Colors.white12,
+                tooltip: _running ? 'Stop timer to edit time' : 'Edit time',
+                onPressed: _running ? null : _openManualEditor,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Modal scroll-wheel (minutes:seconds) editor for a timed set. Returns the
+/// chosen [Duration] on **Done**, or `null` on **Cancel** / dismissal — callers
+/// must treat `null` as "no change, no save". Opening on a hint value does not,
+/// by itself, persist anything; only a Done with a non-zero value saves.
+Future<Duration?> _openWes2ManualTimePicker(
+  BuildContext context,
+  Duration initial,
+) {
+  return showModalBottomSheet<Duration>(
+    context: context,
+    backgroundColor: const Color(0xFF1C1C1E),
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+    ),
+    builder: (sheetContext) => Wes2ManualTimePickerSheet(
+      initial: initial,
+      onCancel: () => Navigator.of(sheetContext).pop(),
+      onDone: (d) => Navigator.of(sheetContext).pop(d),
+    ),
+  );
+}
+
+/// Sheet body for [_openWes2ManualTimePicker]. Public only so widget tests can
+/// pump it directly; not part of the WES2 public API.
+class Wes2ManualTimePickerSheet extends StatefulWidget {
+  final Duration initial;
+  final VoidCallback onCancel;
+  final ValueChanged<Duration> onDone;
+
+  const Wes2ManualTimePickerSheet({
+    super.key,
+    required this.initial,
+    required this.onCancel,
+    required this.onDone,
+  });
+
+  @override
+  State<Wes2ManualTimePickerSheet> createState() =>
+      _Wes2ManualTimePickerSheetState();
+}
+
+class _Wes2ManualTimePickerSheetState extends State<Wes2ManualTimePickerSheet> {
+  static const Duration _maxDuration = Duration(minutes: 59, seconds: 59);
+
+  late Duration _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.initial.isNegative
+        ? Duration.zero
+        : (widget.initial > _maxDuration ? _maxDuration : widget.initial);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Icon(Icons.timer_outlined, size: 12, color: iconColor),
-                  const SizedBox(width: 2),
-                  Text(
-                    displayText,
-                    style: displayStyle,
-                    maxLines: 1,
-                    overflow: TextOverflow.clip,
+                  TextButton(
+                    onPressed: widget.onCancel,
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                  const Text(
+                    'Edit time',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => widget.onDone(_selected),
+                    child: const Text(
+                      'Done',
+                      style: TextStyle(
+                        color: Colors.lightBlueAccent,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
-          ),
+            SizedBox(
+              height: 200,
+              child: CupertinoTheme(
+                data: const CupertinoThemeData(brightness: Brightness.dark),
+                child: CupertinoTimerPicker(
+                  mode: CupertinoTimerPickerMode.ms,
+                  initialTimerDuration: _selected,
+                  onTimerDurationChanged: (d) => _selected = d,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
