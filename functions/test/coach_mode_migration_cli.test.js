@@ -84,7 +84,7 @@ test('migration CLI: a near-miss project name still exits 2', () => {
 
 test('migration CLI: the blocked report says NO WRITES PERFORMED', () => {
   const res = runCli(['--apply'], { GCLOUD_PROJECT: 'definitely-wrong-project' });
-  assert.match(res.stdout, /BLOCKED — NO WRITES PERFORMED/);
+  assert.match(res.stdout, /BLOCKED - NO WRITES PERFORMED/);
 });
 
 test('migration CLI: --json emits a machine-readable blocked report', () => {

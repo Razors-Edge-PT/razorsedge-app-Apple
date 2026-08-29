@@ -199,6 +199,7 @@ const report = {
     legacyCoachesAlreadyEntitled: 0,
     reviewedCoachesMissing: 0,
     linksSkippedMissingParty: 0,
+    claimsRevoked: 0,
   },
   // false as soon as ANY required read fails. Every count above is then
   // untrustworthy and must not be read as a finding.
@@ -214,6 +215,12 @@ const report = {
   operationalFailures: [],
   // MUTATION failures. Non-empty ⇒ exit 5 and "rerun required".
   applyFailures: [],
+  // True once the mutation phase has BEGUN. Until then the script can prove
+  // that nothing was written; afterwards it cannot, so the report must never
+  // claim zero writes.
+  mutationStarted: false,
+  // How many individual writes actually landed. Kept in step with `applied`.
+  writesPerformed: 0,
   // What actually got written, so a partial run is honestly reportable.
   applied: {
     entitlements: [],
@@ -256,6 +263,12 @@ function applyFailure(kind, detail) {
   report.applyFailures.push(Object.assign({ kind }, detail));
 }
 
+/** Records one write that genuinely landed. */
+function recordWrite(bucket, uid) {
+  report.applied[bucket].push(uid);
+  report.writesPerformed += 1;
+}
+
 // ── Step 1 (PLAN): entitlements for the reviewed coach accounts ─────────────
 //
 // PLANNING IS READ-ONLY. Every write moved into the apply* functions below and
@@ -272,6 +285,17 @@ const plan = {
 const identityCache = new Map();
 // uids confirmed ABSENT from Firebase Auth (a data fact, not a read failure).
 const missingAccounts = new Set();
+
+/**
+ * What planning concluded about each reviewed uid entitlement. The mirrored
+ * `isCoach` claim follows this: a claim is only ever a routing hint, but it
+ * must never contradict a deliberate suspension or revocation.
+ */
+const entitlementDisposition = {
+  alreadyActive: new Set(),      // active at preflight
+  willActivate: new Set(),       // planned for activation this run
+  suspendedOrRevoked: new Set(), // deliberately withheld - claim must be OFF
+};
 
 /**
  * Resolves one account display identity. READ-ONLY, planning phase only.
@@ -351,12 +375,14 @@ async function planEntitlements() {
 
     if (state === 'active') {
       report.counts.entitlementsAlreadyActive += 1;
+      entitlementDisposition.alreadyActive.add(uid);
       act('entitlement-already-active', { uid });
       continue;
     }
 
     if (state === 'suspended' || state === 'revoked') {
       report.counts.entitlementsSkippedNonActive += 1;
+      entitlementDisposition.suspendedOrRevoked.add(uid);
       problem('entitlement-conflict', {
         uid,
         currentState: state,
@@ -385,6 +411,7 @@ async function planEntitlements() {
 
     report.counts.entitlementsCreated += 1;
     act('entitlement-create', { uid, state: 'active', source: 'manual_review' });
+    entitlementDisposition.willActivate.add(uid);
     plan.entitlements.push({ uid, identity });
   }
 }
@@ -444,8 +471,8 @@ async function applyEntitlements() {
         );
       });
 
-      report.applied.entitlements.push(uid);
-      report.applied.profiles.push(uid);
+      recordWrite('entitlements', uid);
+      recordWrite('profiles', uid);
     } catch (err) {
       if (err && err.__skip) {
         // Became active concurrently - the desired end state, not a failure.
@@ -476,14 +503,14 @@ async function planClaims() {
       rec = await admin.auth().getUser(uid);
     } catch (err) {
       // DISTINGUISH the two cases. "This account does not exist" is a DATA
-      // condition — the uid is stale, and blocking on it forever would be
+      // condition - the uid is stale, and blocking on it forever would be
       // wrong. Anything else (expired credentials, permission denied, network)
       // means we could not look, and must fail closed.
       if (err && err.code === 'auth/user-not-found') {
         missingAccounts.add(uid);
         problem('claim-refresh-account-missing', {
           uid,
-          detail: 'No Firebase Auth record for this uid — the account no '
+          detail: 'No Firebase Auth record for this uid - the account no '
             + 'longer exists. No claim can be set; review whether it should '
             + 'still be in the reviewed coach list.',
         });
@@ -494,30 +521,125 @@ async function planClaims() {
       }
       continue;
     }
+
     const existing = rec.customClaims || {};
-    if (existing.isCoach === true) {
+    const hasClaim = existing.isCoach === true;
+
+    // THE CLAIM FOLLOWS THE ENTITLEMENT.
+    //
+    // The mirrored `isCoach` claim is only a routing hint, but it must never
+    // contradict a deliberate suspension or revocation. Previously this
+    // planned `isCoach: true` for every reviewed uid regardless of entitlement
+    // state, so a suspended coach could be handed a claim saying otherwise.
+
+    // 1. Deliberately withheld: the claim must be OFF, not ON.
+    if (entitlementDisposition.suspendedOrRevoked.has(uid)) {
+      if (hasClaim) {
+        // Remove ONLY isCoach; every unrelated custom claim survives.
+        const next = M.mergeCoachClaim(existing, false);
+        report.counts.claimsRevoked += 1;
+        act('claim-revoke', {
+          uid,
+          reason: 'entitlement is suspended or revoked',
+          preservedKeys: Object.keys(next),
+        });
+        plan.claims.push({ uid, next, action: 'revoke' });
+      } else {
+        act('claim-correctly-absent', { uid });
+      }
+      continue;
+    }
+
+    if (hasClaim) {
       act('claim-already-set', { uid });
       continue;
     }
-    // CRITICAL: merge, never replace. Writing a bare { isCoach: true } would
-    // destroy every unrelated claim the account carries.
-    const next = M.mergeCoachClaim(existing, true);
-    report.counts.claimsRefreshed += 1;
-    act('claim-set', { uid, preservedKeys: Object.keys(existing) });
-    plan.claims.push({ uid, next });
+
+    // 2. Entitlement already ACTIVE at preflight: grant, but revalidate at
+    //    mutation time so a concurrent suspension cannot be contradicted.
+    if (entitlementDisposition.alreadyActive.has(uid)) {
+      const next = M.mergeCoachClaim(existing, true);
+      report.counts.claimsRefreshed += 1;
+      act('claim-set', { uid, preservedKeys: Object.keys(existing) });
+      plan.claims.push({
+        uid, next, action: 'grant', revalidateEntitlement: true,
+      });
+      continue;
+    }
+
+    // 3. Entitlement will be ACTIVATED this run: grant only if that
+    //    transaction actually succeeds.
+    if (entitlementDisposition.willActivate.has(uid)) {
+      const next = M.mergeCoachClaim(existing, true);
+      report.counts.claimsRefreshed += 1;
+      act('claim-set', {
+        uid,
+        preservedKeys: Object.keys(existing),
+        conditionalOn: 'entitlement activation succeeding',
+      });
+      plan.claims.push({
+        uid, next, action: 'grant', requiresEntitlementWrite: true,
+      });
+      continue;
+    }
+
+    // 4. No confirmed active entitlement (missing account, unreadable
+    //    entitlement, super admin, ...): never grant a coach claim.
+    act('claim-skipped-no-entitlement', { uid });
   }
 }
 
 async function applyClaims() {
   for (const item of plan.claims) {
+    // A grant conditional on this run activating the entitlement: skip when
+    // that transaction did not succeed. The entitlement failure is already an
+    // apply failure, so this is not double-reported.
+    if (item.action === 'grant' && item.requiresEntitlementWrite
+        && !report.applied.entitlements.includes(item.uid)) {
+      act('claim-skipped-entitlement-not-activated', { uid: item.uid });
+      continue;
+    }
+
+    // A grant against an entitlement that was active at PREFLIGHT: revalidate
+    // now, so a suspension landing in between cannot be contradicted by a
+    // claim. This read happens after mutation has begun, so a failure here is
+    // an APPLY failure (exit 5), never an incomplete-preflight error.
+    if (item.action === 'grant' && item.revalidateEntitlement) {
+      let stillActive;
+      try {
+        const snap = await db.collection(M.COL_ENTITLEMENTS).doc(item.uid).get();
+        const coach = snap.exists ? ((snap.data() || {}).coach || null) : null;
+        stillActive = !!(coach && coach.state === 'active');
+      } catch (err) {
+        applyFailure('claim-entitlement-revalidation-failed', {
+          uid: item.uid,
+          error: String(err),
+          detail: 'Could not confirm the entitlement is still active before '
+            + 'setting the mirrored claim. The claim was NOT set. Rerun.',
+        });
+        continue;
+      }
+      if (!stillActive) {
+        applyFailure('claim-entitlement-conflict', {
+          uid: item.uid,
+          detail: 'The entitlement stopped being active between preflight and '
+            + 'the claim write, so isCoach was NOT set. Rerun.',
+        });
+        continue;
+      }
+    }
+
     try {
       await admin.auth().setCustomUserClaims(item.uid, item.next);
-      report.applied.claims.push(item.uid);
+      recordWrite('claims', item.uid);
     } catch (err) {
-      applyFailure('claim-write-failed', { uid: item.uid, error: String(err) });
+      applyFailure('claim-write-failed', {
+        uid: item.uid, action: item.action, error: String(err),
+      });
     }
   }
 }
+
 
 // ── Step 3 (PLAN): athleteAssignments → canonical coachAthleteLinks ─────────
 
@@ -680,7 +802,7 @@ async function applyRelationships() {
         createdAt: now,
         updatedAt: now,
       });
-      report.applied.links.push(id);
+      recordWrite('links', id);
     } catch (err) {
       const code = err && (err.code === 6 || err.code === 'already-exists');
       if (code) {
@@ -932,6 +1054,8 @@ async function main() {
 
   // == MUTATION - reached only with a COMPLETE preflight and every gate passed
   if (APPLY) {
+    // From here on the script can no longer prove that nothing was written.
+    report.mutationStarted = true;
     await applyEntitlements();
     if (REFRESH_CLAIMS) await applyClaims();
     await applyRelationships();
@@ -944,16 +1068,21 @@ async function main() {
   // idempotent, so a rerun finishes the job.
   if (report.applyFailures.length > 0) {
     report.blocked = true;
-    report.blockedReason =
-      'APPLY INCOMPLETE: ' + report.applyFailures.length + ' write(s) failed. '
-      + 'Applied so far - entitlements: ' + report.applied.entitlements.length
-      + ', profiles: ' + report.applied.profiles.length
-      + ', claims: ' + report.applied.claims.length
-      + ', links: ' + report.applied.links.length + '. '
-      + 'Earlier writes in this run DID land: this migration spans Firestore '
-      + 'and Auth and cannot be globally atomic. Every operation is idempotent, '
-      + 'so RERUN once the underlying cause is fixed - the next preflight will '
-      + 'skip whatever already succeeded. See applyFailures for details.';
+    report.blockedReason = report.writesPerformed > 0
+      ? ('APPLY INCOMPLETE: ' + report.applyFailures.length + ' write(s) failed '
+        + 'AFTER ' + report.writesPerformed + ' write(s) had already landed '
+        + '(entitlements: ' + report.applied.entitlements.length
+        + ', profiles: ' + report.applied.profiles.length
+        + ', claims: ' + report.applied.claims.length
+        + ', links: ' + report.applied.links.length + '). '
+        + 'This migration spans Firestore and Auth and cannot be globally '
+        + 'atomic, so those earlier writes DID land. Every operation is '
+        + 'idempotent, so RERUN once the cause is fixed - the next preflight '
+        + 'will skip whatever already succeeded. See applyFailures.')
+      : ('APPLY FAILED: ' + report.applyFailures.length + ' write(s) failed and '
+        + 'NO writes landed. The preflight completed normally; the failure was '
+        + 'in the mutation phase. Every operation is idempotent, so RERUN once '
+        + 'the cause is fixed. See applyFailures.');
     report.finishedAt = new Date().toISOString();
     emitReport();
     process.stderr.write("\n" + report.blockedReason + "\n");
@@ -978,14 +1107,35 @@ function emitReport() {
   line('  Coach Mode migration — ' + report.mode);
   line('══════════════════════════════════════════════════════════════');
   if (!APPLY) {
-    line('  NOTHING WAS WRITTEN. Rerun with --apply to perform these writes.');
+    line('  DRY RUN - NOTHING WAS WRITTEN. Rerun with --apply to perform these writes.');
     line('');
   }
   line('  Project ............................. ' + (report.projectId || '(unresolved)'));
   line('  Audit complete ...................... ' + (report.auditComplete ? 'yes' : 'NO'));
   if (report.blocked) {
     line('');
-    line('  *** BLOCKED — NO WRITES PERFORMED ***');
+    if (!report.mutationStarted) {
+      // Gate 1/2/3: the blocker fired BEFORE the mutation phase, so the script
+      // can prove nothing was written.
+      line('  *** BLOCKED - NO WRITES PERFORMED ***');
+    } else if (report.writesPerformed > 0) {
+      // Gate 4 after at least one successful write. Never claim zero.
+      line('  *** APPLY INCOMPLETE - PARTIAL WRITES MAY HAVE LANDED ***');
+      line('  *** RERUN REQUIRED ***');
+    } else {
+      // Mutation began but nothing landed. Accurate, and must not imply that
+      // the preflight failed.
+      line('  *** APPLY FAILED - NO WRITES LANDED (preflight was OK) ***');
+      line('  *** RERUN REQUIRED ***');
+    }
+    if (report.mutationStarted) {
+      line('      writes landed: ' + report.writesPerformed
+        + '   (entitlements: ' + report.applied.entitlements.length
+        + ', profiles: ' + report.applied.profiles.length
+        + ', claims: ' + report.applied.claims.length
+        + ', links: ' + report.applied.links.length + ')');
+      line('      writes failed: ' + report.applyFailures.length);
+    }
     line('  ' + report.blockedReason);
     line('');
   }
@@ -993,6 +1143,7 @@ function emitReport() {
   line('  Entitlements already active ......... ' + report.counts.entitlementsAlreadyActive);
   line('  Entitlements skipped (suspended/revoked) ' + report.counts.entitlementsSkippedNonActive);
   line('  Custom claims refreshed ............. ' + report.counts.claimsRefreshed);
+  line('  Stale coach claims to REMOVE ........ ' + report.counts.claimsRevoked);
   line('  athleteAssignments docs scanned ..... ' + report.counts.athleteAssignmentDocsScanned);
   line('  Approved relationships found ........ ' + report.counts.approvedRelationshipsFound);
   line('  Canonical links created ............. ' + report.counts.linksCreated);
@@ -1097,6 +1248,7 @@ module.exports = {
     resolveIdentity,
     identityCache,
     missingAccounts,
+    entitlementDisposition,
     plan,
     report,
   },

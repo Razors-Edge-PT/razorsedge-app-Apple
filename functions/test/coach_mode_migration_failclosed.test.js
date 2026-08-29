@@ -130,7 +130,8 @@ function loadMigration(opts = {}) {
           e.code = authError || 'auth/internal-error';
           throw e;
         }
-        return { uid, customClaims: {}, displayName: 'N', email: 'e@x.y' };
+        const custom = (opts.existingClaims || {})[uid] || {};
+        return { uid, customClaims: custom, displayName: 'N', email: 'e@x.y' };
       },
       setCustomUserClaims: async (uid, claims) => {
         if (fail === 'writeClaims') boom('claim write');
@@ -542,7 +543,12 @@ test('a Firestore write failure returns the apply-failure code', async () => {
   const r = mod._internals.report;
   assert.ok(r.applyFailures.length > 0);
   assert.equal(r.blocked, true);
-  assert.match(r.blockedReason, /APPLY INCOMPLETE/);
+  // EVERY Firestore write failed, so nothing landed. The report must say so
+  // honestly rather than warning about partial writes that do not exist.
+  assert.equal(r.writesPerformed, 0);
+  assert.equal(r.mutationStarted, true);
+  assert.match(r.blockedReason, /APPLY FAILED/);
+  assert.match(r.blockedReason, /NO writes landed/);
   assert.match(r.blockedReason, /RERUN/);
 });
 
@@ -644,4 +650,332 @@ test('reviewed coach set reflects Richard review', () => {
   // The secondary coach account is NOT given a permanent comp membership.
   assert.equal(mig.LEGACY_FREE_MEMBERSHIP_UIDS.includes('LGxzlyBNh5f1zclM1F0l6tl6Py82'),
     false, 'a new coach must need no permanent allowlist entry');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// DEFECT 1 — the human-readable report must match what actually happened
+// ══════════════════════════════════════════════════════════════════════════
+//
+// emitReport() printed "*** BLOCKED - NO WRITES PERFORMED ***" for ANY
+// blocked run. Gate 4 also sets blocked after mutation failures, when earlier
+// writes may genuinely have landed — so the banner flatly contradicted the
+// paragraph beneath it. These assert the RENDERED output, not just the JSON.
+
+/** Runs main() and returns the rendered human report. */
+async function renderHuman(mod) {
+  const { stdout } = await runMain(mod);
+  return stdout;
+}
+
+test('human output: incomplete preflight says NO WRITES PERFORMED', async () => {
+  const { mod, writes } = loadMigration({
+    fail: 'coachAssignments', argv: ['--apply'],
+  });
+  const out = await renderHuman(mod);
+
+  assert.match(out, /BLOCKED - NO WRITES PERFORMED/);
+  assert.doesNotMatch(out, /PARTIAL WRITES MAY HAVE LANDED/);
+  assert.equal(writes.length, 0);
+  assert.equal(mod._internals.report.mutationStarted, false,
+    'a preflight blocker fires before mutation begins');
+  assert.equal(mod._internals.report.writesPerformed, 0);
+});
+
+test('human output: unresolved-coach blocker says NO WRITES PERFORMED', async () => {
+  const { mod, writes } = loadMigration({ argv: ['--apply'] });
+  const out = await renderHuman(mod);
+
+  assert.match(out, /BLOCKED - NO WRITES PERFORMED/);
+  assert.doesNotMatch(out, /PARTIAL WRITES MAY HAVE LANDED/);
+  assert.match(out, /REFUSING TO APPLY/);
+  assert.equal(writes.length, 0);
+  assert.equal(mod._internals.report.mutationStarted, false);
+});
+
+test('human output: apply failure AFTER a successful write never claims zero',
+  async () => {
+    // Firestore writes succeed; the claim write fails. So writes DID land.
+    const { mod } = loadMigration({
+      fail: 'writeClaims', argv: ['--apply', '--claims', '--allow-unresolved'],
+    });
+    const out = await renderHuman(mod);
+    const r = mod._internals.report;
+
+    assert.ok(r.writesPerformed > 0, 'precondition: some writes landed');
+    assert.equal(r.mutationStarted, true);
+
+    assert.doesNotMatch(out, /NO WRITES PERFORMED/,
+      'the banner must never claim zero writes once some have landed');
+    assert.match(out, /APPLY INCOMPLETE - PARTIAL WRITES MAY HAVE LANDED/);
+    assert.match(out, /RERUN REQUIRED/);
+    // The counts are shown.
+    assert.match(out, /writes landed: \d+/);
+    assert.match(out, /writes failed: \d+/);
+  });
+
+test('human output: apply failure BEFORE any write says none landed, not preflight',
+  async () => {
+    // EVERY Firestore write fails, so nothing lands at all.
+    const { mod } = loadMigration({
+      fail: 'writeFirestore', argv: ['--apply', '--allow-unresolved'],
+    });
+    const out = await renderHuman(mod);
+    const r = mod._internals.report;
+
+    assert.equal(r.writesPerformed, 0);
+    assert.equal(r.mutationStarted, true, 'mutation DID begin');
+
+    assert.match(out, /APPLY FAILED - NO WRITES LANDED \(preflight was OK\)/);
+    assert.doesNotMatch(out, /PARTIAL WRITES MAY HAVE LANDED/);
+    // Must not be mistaken for a preflight blocker.
+    assert.doesNotMatch(out, /BLOCKED - NO WRITES PERFORMED/);
+    assert.doesNotMatch(out, /INCOMPLETE AUDIT/);
+    assert.equal(r.auditComplete, true, 'the preflight genuinely succeeded');
+  });
+
+test('JSON and human reports represent the same state', async () => {
+  for (const opts of [
+    { fail: 'coachAssignments', argv: ['--apply'] },
+    { argv: ['--apply'] },
+    { fail: 'writeClaims', argv: ['--apply', '--claims', '--allow-unresolved'] },
+    { fail: 'writeFirestore', argv: ['--apply', '--allow-unresolved'] },
+  ]) {
+    const { mod } = loadMigration(opts);
+    const out = await renderHuman(mod);
+    const r = mod._internals.report;
+
+    // The banner shown must agree with the machine fields.
+    const saysNoWrites = /NO WRITES PERFORMED/.test(out);
+    const saysPartial = /PARTIAL WRITES MAY HAVE LANDED/.test(out);
+    assert.equal(saysNoWrites, !r.mutationStarted,
+      'NO WRITES PERFORMED iff mutation never began');
+    assert.equal(saysPartial, r.mutationStarted && r.writesPerformed > 0,
+      'PARTIAL only when mutation began and something landed');
+    assert.equal(r.writesPerformed,
+      r.applied.entitlements.length + r.applied.profiles.length
+      + r.applied.claims.length + r.applied.links.length,
+      'writesPerformed must equal what applied[] records');
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// DEFECT 2 — the mirrored claim must follow the entitlement
+// ══════════════════════════════════════════════════════════════════════════
+
+const REVIEWED = require('../migrate_coach_mode').LEGACY_COACH_UIDS;
+const TARGET = REVIEWED[0];
+
+/** Store fixture: one reviewed uid holds the given entitlement state. */
+function entStore(uid, state) {
+  const store = {};
+  if (state) store['accountEntitlements/' + uid] = { coach: { state } };
+  return store;
+}
+
+test('suspended entitlement + no claim: no coach claim is granted', async () => {
+  const { mod, writes } = loadMigration({
+    store: entStore(TARGET, 'suspended'),
+    argv: ['--apply', '--claims', '--allow-unresolved'],
+  });
+  await runMain(mod);
+  const r = mod._internals.report;
+
+  assert.ok(r.problems.some(
+    (p) => p.kind === 'entitlement-conflict' && p.uid === TARGET));
+  assert.equal(r.applied.claims.includes(TARGET), false,
+    'a suspended coach must never receive isCoach');
+  assert.equal(
+    writes.some((w) => w.op === 'setCustomUserClaims' && w.uid === TARGET),
+    false);
+});
+
+test('suspended entitlement + stale isCoach: ONLY that claim is removed',
+  async () => {
+    const { mod, writes } = loadMigration({
+      store: entStore(TARGET, 'suspended'),
+      existingClaims: {
+        [TARGET]: { isCoach: true, stripeRole: 'premium', tier: 3 },
+      },
+      argv: ['--apply', '--claims', '--allow-unresolved'],
+    });
+    await runMain(mod);
+    const r = mod._internals.report;
+
+    assert.equal(r.counts.claimsRevoked, 1);
+    const w = writes.find(
+      (x) => x.op === 'setCustomUserClaims' && x.uid === TARGET);
+    assert.ok(w, 'the stale claim must be corrected');
+    assert.equal(w.claims.isCoach, undefined, 'isCoach removed');
+    assert.equal(w.claims.stripeRole, 'premium', 'unrelated claim preserved');
+    assert.equal(w.claims.tier, 3, 'unrelated claim preserved');
+  });
+
+test('revoked entitlement behaves identically', async () => {
+  const { mod, writes } = loadMigration({
+    store: entStore(TARGET, 'revoked'),
+    existingClaims: { [TARGET]: { isCoach: true, stripeRole: 'premium' } },
+    argv: ['--apply', '--claims', '--allow-unresolved'],
+  });
+  await runMain(mod);
+
+  const w = writes.find((x) => x.op === 'setCustomUserClaims' && x.uid === TARGET);
+  assert.ok(w);
+  assert.equal(w.claims.isCoach, undefined);
+  assert.equal(w.claims.stripeRole, 'premium');
+  assert.equal(mod._internals.report.applied.claims.includes(TARGET), true,
+    'the corrective removal is itself a successful write');
+});
+
+test('entitlement/profile transaction failure prevents that coach claim',
+  async () => {
+    const { mod, writes } = loadMigration({
+      fail: 'writeFirestore',
+      argv: ['--apply', '--claims', '--allow-unresolved'],
+    });
+    await runMain(mod);
+    const r = mod._internals.report;
+
+    assert.equal(r.applied.entitlements.length, 0, 'no entitlement landed');
+    assert.equal(
+      writes.some((w) => w.op === 'setCustomUserClaims'), false,
+      'no coach claim may be granted when its entitlement failed');
+    assert.ok(r.actions.some(
+      (a) => a.kind === 'claim-skipped-entitlement-not-activated'));
+  });
+
+test('concurrent suspension during entitlement mutation prevents the claim',
+  async () => {
+    // Preflight sees no entitlement; the transaction then finds it suspended.
+    let reads = 0;
+    const store = {};
+    Object.defineProperty(store, 'accountEntitlements/' + TARGET, {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return reads > 1 ? { coach: { state: 'suspended' } } : null;
+      },
+    });
+
+    const { mod, writes } = loadMigration({
+      store, argv: ['--apply', '--claims', '--allow-unresolved'],
+    });
+    const { code } = await runMain(mod);
+    const r = mod._internals.report;
+
+    assert.equal(code, mod.EXIT_APPLY_FAILED);
+    assert.ok(r.applyFailures.some(
+      (f) => f.kind === 'entitlement-state-conflict' && f.uid === TARGET));
+    assert.equal(r.applied.entitlements.includes(TARGET), false);
+    assert.equal(
+      writes.some((w) => w.op === 'setCustomUserClaims' && w.uid === TARGET),
+      false, 'a concurrently suspended account must not receive isCoach');
+  });
+
+test('an ALREADY-ACTIVE entitlement receives the mirrored claim', async () => {
+  const { mod, writes } = loadMigration({
+    store: entStore(TARGET, 'active'),
+    argv: ['--apply', '--claims', '--allow-unresolved'],
+  });
+  await runMain(mod);
+  const r = mod._internals.report;
+
+  assert.ok(mod._internals.entitlementDisposition.alreadyActive.has(TARGET));
+  const w = writes.find((x) => x.op === 'setCustomUserClaims' && x.uid === TARGET);
+  assert.ok(w, 'an active coach gets the routing hint');
+  assert.equal(w.claims.isCoach, true);
+  assert.equal(r.applied.claims.includes(TARGET), true);
+});
+
+test('a SUCCESSFULLY CREATED entitlement receives the mirrored claim',
+  async () => {
+    const { mod, writes } = loadMigration({
+      argv: ['--apply', '--claims', '--allow-unresolved'],
+    });
+    await runMain(mod);
+    const r = mod._internals.report;
+
+    assert.ok(r.applied.entitlements.length > 0);
+    for (const uid of r.applied.entitlements) {
+      const w = writes.find(
+        (x) => x.op === 'setCustomUserClaims' && x.uid === uid);
+      assert.ok(w, 'newly activated coach ' + uid + ' must get the claim');
+      assert.equal(w.claims.isCoach, true);
+    }
+  });
+
+test('a concurrent suspension between preflight and the CLAIM write is caught',
+  async () => {
+    // Entitlement is active at preflight, so the claim is planned. It then
+    // becomes suspended before applyClaims revalidates.
+    let reads = 0;
+    const store = {};
+    Object.defineProperty(store, 'accountEntitlements/' + TARGET, {
+      enumerable: true,
+      get() {
+        reads += 1;
+        // Preflight + entitlement planning see active; the claim
+        // revalidation (a later read) sees suspended.
+        return reads > 1
+          ? { coach: { state: 'suspended' } }
+          : { coach: { state: 'active' } };
+      },
+    });
+
+    const { mod, writes } = loadMigration({
+      store, argv: ['--apply', '--claims', '--allow-unresolved'],
+    });
+    const { code } = await runMain(mod);
+    const r = mod._internals.report;
+
+    assert.equal(code, mod.EXIT_APPLY_FAILED,
+      'a failed revalidation after mutation began is an APPLY failure');
+    assert.notEqual(code, mod.EXIT_INCOMPLETE_AUDIT,
+      'it must NOT be reported as an incomplete preflight');
+    assert.ok(r.applyFailures.some((f) => f.kind === 'claim-entitlement-conflict'));
+    assert.equal(
+      writes.some((w) => w.op === 'setCustomUserClaims' && w.uid === TARGET),
+      false, 'the claim must not contradict the suspension');
+  });
+
+test('a claim write failure still returns exit 5 and is rerunnable', async () => {
+  const { mod } = loadMigration({
+    fail: 'writeClaims', argv: ['--apply', '--claims', '--allow-unresolved'],
+  });
+  const { code } = await runMain(mod);
+  const r = mod._internals.report;
+
+  assert.equal(code, mod.EXIT_APPLY_FAILED);
+  assert.ok(r.applyFailures.some((f) => f.kind === 'claim-write-failed'));
+  assert.match(r.blockedReason, /RERUN/);
+
+  // Rerun with the cause fixed and the entitlements already in place: the
+  // outstanding claims land and the run completes.
+  const store = {};
+  for (const uid of r.applied.entitlements) {
+    store['accountEntitlements/' + uid] = { coach: { state: 'active' } };
+  }
+  const second = loadMigration({
+    store, argv: ['--apply', '--claims', '--allow-unresolved'],
+  });
+  const r2 = await runMain(second.mod);
+  assert.equal(r2.code, second.mod.EXIT_OK, 'the rerun completes');
+  assert.ok(second.mod._internals.report.applied.claims.length > 0);
+});
+
+test('account decisions are unchanged by this pass', () => {
+  const mig = require('../migrate_coach_mode');
+  assert.ok(mig.LEGACY_COACH_UIDS.includes('ejBDKEZPFfQz2Sdzd7BZlNydxZ33'),
+    'Adam primary is a coach');
+  assert.ok(mig.LEGACY_COACH_UIDS.includes('LGxzlyBNh5f1zclM1F0l6tl6Py82'),
+    'Adam secondary is a coach through the migration entitlement');
+  assert.ok(mig.LEGACY_COACH_UIDS.includes('ykx0RvDMc5OIuZ2R4kqWMhGbrGV2'),
+    'Play reviewer keeps Coach Mode');
+  assert.equal(mig.LEGACY_COACH_UIDS.includes('tlmT17Jlgfe63OYfk8P2IPAs4072'),
+    false, 'Aja is not a coach');
+  assert.equal(mig.LEGACY_COACH_UIDS.includes('SMTEVGPH1MXgOgbcBbJFU1HjU8G3'),
+    false, 'the deleted account is not a coach');
+  // Adam secondary must NOT be on the permanent comp-membership mirror.
+  assert.equal(
+    mig.LEGACY_FREE_MEMBERSHIP_UIDS.includes('LGxzlyBNh5f1zclM1F0l6tl6Py82'),
+    false, 'a coach must need no permanent allowlist entry');
 });

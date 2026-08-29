@@ -485,10 +485,44 @@ permission or network failure therefore cannot strike mid-mutation.
 ### Honest partial-write reporting
 
 This migration spans Firestore **and** Auth, so it cannot be globally atomic
-and does not pretend to be. On exit 5 the report names exactly what landed
-(`applied.entitlements` / `.profiles` / `.claims` / `.links`) and what did not
-(`applyFailures`), and states that a **rerun is required**. Every operation is
-idempotent — the next preflight skips whatever already succeeded.
+and does not pretend to be. Two report fields carry the truth, and the
+human-readable banner is derived from them — not from `blocked`, which is also
+set by the pre-mutation gates:
+
+| Field | Meaning |
+|---|---|
+| `mutationStarted` | the mutation phase began; the script can no longer prove nothing was written |
+| `writesPerformed` | how many individual writes actually landed |
+
+| Situation | Banner |
+|---|---|
+| Gate 1/2/3 (before mutation) | `*** BLOCKED - NO WRITES PERFORMED ***` |
+| Gate 4, `writesPerformed > 0` | `*** APPLY INCOMPLETE - PARTIAL WRITES MAY HAVE LANDED ***` + counts |
+| Gate 4, `writesPerformed == 0` | `*** APPLY FAILED - NO WRITES LANDED (preflight was OK) ***` |
+
+The banner never claims zero writes unless the script can prove mutation never
+began, and the JSON and human reports always describe the same state. On exit 5
+the report names exactly what landed (`applied.entitlements` / `.profiles` /
+`.claims` / `.links`) and what did not (`applyFailures`), and states that a
+**rerun is required**. Every operation is idempotent — the next preflight skips
+whatever already succeeded.
+
+### The mirrored claim follows the entitlement
+
+`isCoach` is only a routing hint, but it must never contradict a deliberate
+suspension or revocation. `planClaims()` therefore decides per uid:
+
+| Entitlement disposition | Claim action |
+|---|---|
+| active at preflight | grant, **revalidated inside `applyClaims`** |
+| will be activated this run | grant **only if** the entitlement transaction succeeded |
+| suspended / revoked | **remove** `isCoach` if a stale one exists; never grant. Unrelated custom claims are preserved (`mergeCoachClaim`) |
+| account missing, entitlement unreadable, super admin | nothing |
+
+The revalidation read in `applyClaims` happens *after* mutation has begun, so a
+failure there is an **apply failure (exit 5)**, never an incomplete-preflight
+error. The entitlement remains the sole authorization source; the claim only
+mirrors it.
 
 ### Deleted and missing accounts
 
