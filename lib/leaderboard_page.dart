@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui' show FontFeature;
 
+import 'profile/ui/live_identity.dart';
+
 enum LeaderboardPeriod { monthly, allTime }
 
 class LeaderboardPage extends StatefulWidget {
@@ -12,7 +14,6 @@ class LeaderboardPage extends StatefulWidget {
   State<LeaderboardPage> createState() => _LeaderboardPageState();
 }
 
-
 class _LeaderboardPageState extends State<LeaderboardPage> {
   LeaderboardPeriod _period = LeaderboardPeriod.allTime;
   late Stream<QuerySnapshot<Map<String, dynamic>>> _stream;
@@ -22,7 +23,6 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
     super.initState();
     _stream = _makeStream();
     debugPrint('🏁 [Leaderboard] initState → period=${_period.name}');
-
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _makeStream() {
@@ -82,12 +82,12 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
             style: ButtonStyle(
               padding: MaterialStateProperty.all(
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 2)),
-              visualDensity:
-              const VisualDensity(horizontal: -3, vertical: -3),
+              visualDensity: const VisualDensity(horizontal: -3, vertical: -3),
               side: MaterialStateProperty.resolveWith((states) {
                 final selected = states.contains(MaterialState.selected);
                 return BorderSide(
-                    color: selected ? Colors.white70 : Colors.white24, width: 1);
+                    color: selected ? Colors.white70 : Colors.white24,
+                    width: 1);
               }),
               backgroundColor: MaterialStateProperty.resolveWith((states) {
                 final selected = states.contains(MaterialState.selected);
@@ -106,7 +106,8 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                 child: CircularProgressIndicator(strokeWidth: 2));
           }
 
-          debugPrint('📊 [Leaderboard] ${_period.name} docs=${snap.data?.docs.length ?? 0}');
+          debugPrint(
+              '📊 [Leaderboard] ${_period.name} docs=${snap.data?.docs.length ?? 0}');
           final docs = snap.data?.docs ?? const [];
 
 // Build local list (even if points missing)
@@ -114,41 +115,47 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
           for (final d in docs) {
             final m = d.data();
 
-            final displayName = (m['displayName'] ?? m['fullName'] ?? 'User') as String;
+            // users_public doc id IS the uid. The stored displayName /
+            // fullName are the fallback; the row resolves the CURRENT username
+            // by uid so a rename reaches the leaderboard without a restart.
+            final fallbackName =
+                (m['displayName'] ?? m['fullName'] ?? '') as String;
             final points = (_period == LeaderboardPeriod.monthly)
                 ? (m['rePointsMonthlyCurrent'] as num?)?.toDouble() ?? 0.0
                 : (m['rePoints'] as num?)?.toDouble() ?? 0.0;
 
             final byLift = (_period == LeaderboardPeriod.monthly)
-                ? Map<String, dynamic>.from(m['rePointsMonthlyByLiftCurrent'] ?? const {})
+                ? Map<String, dynamic>.from(
+                    m['rePointsMonthlyByLiftCurrent'] ?? const {})
                 : Map<String, dynamic>.from(m['rePointsByLift'] ?? const {});
 
             items.add({
-              'name': displayName,
+              'uid': d.id,
+              'name': fallbackName,
               'points': points,
               'byLift': byLift,
             });
           }
 
 // Always show users, even with 0 points
-          items.sort((a, b) => (b['points'] as double).compareTo(a['points'] as double));
+          items.sort((a, b) =>
+              (b['points'] as double).compareTo(a['points'] as double));
 
           if (items.isEmpty) {
             return const Center(
-              child: Text('No users yet', style: TextStyle(color: Colors.white70)),
+              child:
+                  Text('No users yet', style: TextStyle(color: Colors.white70)),
             );
           }
-
-
 
           // Build winners per lift (client-side fallback).
           // Keys must match your canonical keys in stats_snapshot.dart.
 
           const squat = 'Back Squat, Barbell';
           const bench = 'Bench Press, Barbell';
-          const dead  = 'Deadlift, Conventional';
-          const chin  = 'Chin-Up';
-          const ohp   = 'Overhead Dumbbell Press, Unilateral';
+          const dead = 'Deadlift, Conventional';
+          const chin = 'Chin-Up';
+          const ohp = 'Overhead Dumbbell Press, Unilateral';
 
 // Build top-3 unique thresholds per lift (ties allowed)
           const double _eps = 1e-9;
@@ -180,9 +187,9 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
           final top3Thresholds = <String, List<double>>{
             bench: _top3UniqueFor(bench),
             squat: _top3UniqueFor(squat),
-            dead:  _top3UniqueFor(dead),
-            chin:  _top3UniqueFor(chin),
-            ohp:   _top3UniqueFor(ohp),
+            dead: _top3UniqueFor(dead),
+            chin: _top3UniqueFor(chin),
+            ohp: _top3UniqueFor(ohp),
           };
 
 // Return 1,2,3 for medal tier, or null if not in top-3
@@ -191,13 +198,11 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
             if (v <= 0) return null;
             final th = top3Thresholds[lift] ?? const <double>[];
             if (th.isEmpty) return null;
-            if ((v - th[0]).abs() < _eps) return 1;               // gold
+            if ((v - th[0]).abs() < _eps) return 1; // gold
             if (th.length > 1 && (v - th[1]).abs() < _eps) return 2; // silver
             if (th.length > 2 && (v - th[2]).abs() < _eps) return 3; // bronze
             return null;
           }
-
-
 
           return ListView.separated(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
@@ -207,11 +212,10 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
               final row = items[index];
 
               final rank = index + 1;
-              final displayName = row['name'] as String;
+              final uid = row['uid'] as String;
+              final fallbackName = row['name'] as String;
               final points = row['points'] as double;
               final byLift = Map<String, dynamic>.from(row['byLift'] as Map);
-
-
 
               Widget medalChip(String label, int? tier) {
                 const Color _bronze = Color(0xFFCD7F32);
@@ -226,12 +230,16 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                 final bool hasMedal = tier != null;
 
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: hasMedal ? (tierColor ?? Colors.cyanAccent).withOpacity(0.18)
+                    color: hasMedal
+                        ? (tierColor ?? Colors.cyanAccent).withOpacity(0.18)
                         : Colors.transparent,
                     border: Border.all(
-                      color: hasMedal ? (tierColor ?? Colors.cyanAccent) : Colors.white24,
+                      color: hasMedal
+                          ? (tierColor ?? Colors.cyanAccent)
+                          : Colors.white24,
                       width: 1,
                     ),
                     borderRadius: BorderRadius.circular(6),
@@ -240,14 +248,15 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                     label,
                     style: TextStyle(
                       fontSize: 11,
-                      color: hasMedal ? (tierColor ?? Colors.cyanAccent) : Colors.white70,
+                      color: hasMedal
+                          ? (tierColor ?? Colors.cyanAccent)
+                          : Colors.white70,
                       fontWeight: hasMedal ? FontWeight.w700 : FontWeight.w500,
                       letterSpacing: 0.2,
                     ),
                   ),
                 );
               }
-
 
               return Container(
                 decoration: BoxDecoration(
@@ -256,16 +265,15 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                 ),
                 child: ListTile(
                   contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   leading: CircleAvatar(
                     backgroundColor: Colors.white10,
                     child: Text('$rank',
                         style: const TextStyle(color: Colors.white)),
                   ),
-                  title: Text(
-                    displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  title: LiveUserName(
+                    uid: uid,
+                    fallback: fallbackName,
                     style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w600,
@@ -279,11 +287,12 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                       const SizedBox(width: 8),
                       const Text('RE Points',
                           style:
-                          TextStyle(color: Colors.white38, fontSize: 12)),
+                              TextStyle(color: Colors.white38, fontSize: 12)),
                     ],
                   ),
                   trailing: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 160), // tweak 140–200 as needed
+                    constraints: const BoxConstraints(
+                        maxWidth: 160), // tweak 140–200 as needed
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
@@ -291,15 +300,13 @@ class _LeaderboardPageState extends State<LeaderboardPage> {
                         children: [
                           medalChip('S', _tierFor(squat, byLift)),
                           medalChip('B', _tierFor(bench, byLift)),
-                          medalChip('D', _tierFor(dead,  byLift)),
-                          medalChip('C', _tierFor(chin,  byLift)),
-                          medalChip('O', _tierFor(ohp,   byLift)),
+                          medalChip('D', _tierFor(dead, byLift)),
+                          medalChip('C', _tierFor(chin, byLift)),
+                          medalChip('O', _tierFor(ohp, byLift)),
                         ],
-
                       ),
                     ),
                   ),
-
                 ),
               );
             },
@@ -354,16 +361,13 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
     final cyan = Colors.cyanAccent;
     final rowBg = Colors.blueGrey.shade600;
     // ── column widths (compact + more space for Name)
-    const double kHPad = 3;        // page left/right padding
-    const double kGap  = 6;         // gap between columns
-    const double kRankW = 8;       // "#"
-    const double kPtsW  = 56;       // RE pts (narrower to give Name more room)
-    const double kMedalSlotW = 26;  // single medal slot (compact chip)
-    const double kMedalGap   = 0;   // no gaps between medals
+    const double kHPad = 3; // page left/right padding
+    const double kGap = 6; // gap between columns
+    const double kRankW = 8; // "#"
+    const double kPtsW = 56; // RE pts (narrower to give Name more room)
+    const double kMedalSlotW = 26; // single medal slot (compact chip)
+    const double kMedalGap = 0; // no gaps between medals
     const double kMedalsW = (kMedalSlotW * 5); // total medals area width
-
-
-
 
     // Small chip used for medals
     Widget medalChip(String label, int? tier) {
@@ -381,7 +385,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
-          color: hasMedal ? (tierColor ?? Colors.cyanAccent).withOpacity(0.18)
+          color: hasMedal
+              ? (tierColor ?? Colors.cyanAccent).withOpacity(0.18)
               : Colors.transparent,
           border: Border.all(
             color: hasMedal ? (tierColor ?? Colors.cyanAccent) : Colors.white24,
@@ -400,7 +405,6 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
         ),
       );
     }
-
 
     return Container(
       width: double.infinity,
@@ -440,14 +444,15 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                     padding: MaterialStateProperty.all(
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 2)),
                     visualDensity:
-                    const VisualDensity(horizontal: -3, vertical: -3),
+                        const VisualDensity(horizontal: -3, vertical: -3),
                     side: MaterialStateProperty.resolveWith((states) {
                       final selected = states.contains(MaterialState.selected);
                       return BorderSide(
                           color: selected ? Colors.white70 : Colors.white24,
                           width: 1);
                     }),
-                    backgroundColor: MaterialStateProperty.resolveWith((states) {
+                    backgroundColor:
+                        MaterialStateProperty.resolveWith((states) {
                       final selected = states.contains(MaterialState.selected);
                       return selected ? Colors.white12 : Colors.transparent;
                     }),
@@ -474,7 +479,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                       child: Text(
                         '#',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.white54, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: Colors.white54, fontWeight: FontWeight.w600),
                       ),
                     ),
                     const SizedBox(width: kGap),
@@ -485,7 +491,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                         'Name',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: Colors.white70, fontWeight: FontWeight.w600),
                       ),
                     ),
 
@@ -497,7 +504,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                       child: Text(
                         'RE pts',
                         textAlign: TextAlign.right,
-                        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: Colors.white70, fontWeight: FontWeight.w600),
                       ),
                     ),
 
@@ -508,7 +516,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                       width: kMedalsW,
                       child: Text(
                         'Medals',
-                        style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: Colors.white70, fontWeight: FontWeight.w600),
                       ),
                     ),
                   ],
@@ -521,9 +530,9 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                   children: [
                     const SizedBox(width: kRankW),
                     const SizedBox(width: kGap),
-                    const Expanded(child: SizedBox()),      // under Name
+                    const Expanded(child: SizedBox()), // under Name
                     const SizedBox(width: kGap),
-                    const SizedBox(width: kPtsW),           // under RE pts
+                    const SizedBox(width: kPtsW), // under RE pts
                     const SizedBox(width: kGap),
 
                     // 5 evenly-sized labels in the medals area
@@ -531,15 +540,40 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                       width: kMedalsW,
                       child: Row(
                         children: const [
-                          SizedBox(width: kMedalSlotW, child: Text('Sqt', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
+                          SizedBox(
+                              width: kMedalSlotW,
+                              child: Text('Sqt',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Colors.white38, fontSize: 11))),
                           SizedBox(width: kMedalGap),
-                          SizedBox(width: kMedalSlotW, child: Text('Bnch', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
+                          SizedBox(
+                              width: kMedalSlotW,
+                              child: Text('Bnch',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Colors.white38, fontSize: 11))),
                           SizedBox(width: kMedalGap),
-                          SizedBox(width: kMedalSlotW, child: Text('DL',    textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
+                          SizedBox(
+                              width: kMedalSlotW,
+                              child: Text('DL',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Colors.white38, fontSize: 11))),
                           SizedBox(width: kMedalGap),
-                          SizedBox(width: kMedalSlotW, child: Text('C-Up',  textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
+                          SizedBox(
+                              width: kMedalSlotW,
+                              child: Text('C-Up',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Colors.white38, fontSize: 11))),
                           SizedBox(width: kMedalGap),
-                          SizedBox(width: kMedalSlotW, child: Text('ODP',  textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 11))),
+                          SizedBox(
+                              width: kMedalSlotW,
+                              child: Text('ODP',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                      color: Colors.white38, fontSize: 11))),
                         ],
                       ),
                     ),
@@ -552,7 +586,6 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
               ],
             ),
           ),
-
 
           // ----- List -----
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -573,8 +606,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
               final items = <Map<String, dynamic>>[];
               for (final d in docs) {
                 final m = d.data();
-                final name =
-                (m['displayName'] ?? m['fullName'] ?? 'User') as String;
+                final fallbackName =
+                    (m['displayName'] ?? m['fullName'] ?? '') as String;
 
                 final points = (_period == LeaderboardPeriod.monthly)
                     ? (m['rePointsMonthlyCurrent'] as num?)?.toDouble() ?? 0.0
@@ -582,11 +615,16 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
 
                 final byLift = (_period == LeaderboardPeriod.monthly)
                     ? Map<String, dynamic>.from(
-                    m['rePointsMonthlyByLiftCurrent'] ?? const {})
+                        m['rePointsMonthlyByLiftCurrent'] ?? const {})
                     : Map<String, dynamic>.from(
-                    m['rePointsByLift'] ?? const {});
+                        m['rePointsByLift'] ?? const {});
 
-                items.add({'name': name, 'points': points, 'byLift': byLift});
+                items.add({
+                  'uid': d.id,
+                  'name': fallbackName,
+                  'points': points,
+                  'byLift': byLift,
+                });
               }
 
               // Sort by points desc so ranks are stable
@@ -608,9 +646,9 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
               // Canonical lift keys (unchanged)
               const squat = 'Back Squat, Barbell';
               const bench = 'Bench Press, Barbell';
-              const dead  = 'Deadlift, Conventional';
-              const chin  = 'Chin-Up';
-              const ohp   = 'Overhead Dumbbell Press, Unilateral';
+              const dead = 'Deadlift, Conventional';
+              const chin = 'Chin-Up';
+              const ohp = 'Overhead Dumbbell Press, Unilateral';
 
 // Build top-3 unique thresholds per lift (ties allowed)
               const double _eps = 1e-9;
@@ -619,7 +657,8 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                 // collect all values > 0 for this lift
                 final vals = <double>[];
                 for (final row in items) {
-                  final byLift = Map<String, dynamic>.from(row['byLift'] as Map);
+                  final byLift =
+                      Map<String, dynamic>.from(row['byLift'] as Map);
                   final v = (byLift[k] as num?)?.toDouble() ?? 0.0;
                   if (v > 0) vals.add(v);
                 }
@@ -642,9 +681,9 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
               final top3Thresholds = <String, List<double>>{
                 bench: _top3UniqueFor(bench),
                 squat: _top3UniqueFor(squat),
-                dead:  _top3UniqueFor(dead),
-                chin:  _top3UniqueFor(chin),
-                ohp:   _top3UniqueFor(ohp),
+                dead: _top3UniqueFor(dead),
+                chin: _top3UniqueFor(chin),
+                ohp: _top3UniqueFor(ohp),
               };
 
 // Return 1,2,3 for medal tier, or null if not in top-3
@@ -653,12 +692,13 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                 if (v <= 0) return null;
                 final th = top3Thresholds[lift] ?? const <double>[];
                 if (th.isEmpty) return null;
-                if ((v - th[0]).abs() < _eps) return 1;               // gold
-                if (th.length > 1 && (v - th[1]).abs() < _eps) return 2; // silver
-                if (th.length > 2 && (v - th[2]).abs() < _eps) return 3; // bronze
+                if ((v - th[0]).abs() < _eps) return 1; // gold
+                if (th.length > 1 && (v - th[1]).abs() < _eps)
+                  return 2; // silver
+                if (th.length > 2 && (v - th[2]).abs() < _eps)
+                  return 3; // bronze
                 return null;
               }
-
 
               return ListView.builder(
                 shrinkWrap: true,
@@ -668,17 +708,17 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                 itemBuilder: (context, index) {
                   final row = items[index];
                   final rank = index + 1;
-                  final name = row['name'] as String;
+                  final uid = row['uid'] as String;
+                  final fallbackName = row['name'] as String;
                   final pts = row['points'] as double;
                   final byLift =
-                  Map<String, dynamic>.from(row['byLift'] as Map);
+                      Map<String, dynamic>.from(row['byLift'] as Map);
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 6),
                     padding: EdgeInsets.only(right: kHPad, top: 10, bottom: 10),
-
                     decoration: const BoxDecoration(
-                      color: Colors.black,           // black rows; easy to toggle later
+                      color: Colors.black, // black rows; easy to toggle later
                       borderRadius: BorderRadius.zero,
                     ),
                     child: Row(
@@ -690,18 +730,21 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
                           child: Text(
                             '$rank',
                             textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700),
                           ),
                         ),
                         const SizedBox(width: kGap),
 
                         // Name (expands)
                         Expanded(
-                          child: Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                          child: LiveUserName(
+                            uid: uid,
+                            fallback: fallbackName,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600),
                           ),
                         ),
 
@@ -725,24 +768,42 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
 
                         // Medals: 5 fixed slots (aligns perfectly with subheader)
                         SizedBox(
-                          width: (kMedalSlotW * 5), // total width = 5 slots, no extra gaps
+                          width: (kMedalSlotW *
+                              5), // total width = 5 slots, no extra gaps
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              SizedBox(width: kMedalSlotW, child: Center(child: medalChip('S', _tierFor(squat, byLift)))),
-                              SizedBox(width: kMedalSlotW, child: Center(child: medalChip('B', _tierFor(bench, byLift)))),
-                              SizedBox(width: kMedalSlotW, child: Center(child: medalChip('D', _tierFor(dead,  byLift)))),
-                              SizedBox(width: kMedalSlotW, child: Center(child: medalChip('C', _tierFor(chin,  byLift)))),
-                              SizedBox(width: kMedalSlotW, child: Center(child: medalChip('O', _tierFor(ohp,   byLift)))),
+                              SizedBox(
+                                  width: kMedalSlotW,
+                                  child: Center(
+                                      child: medalChip(
+                                          'S', _tierFor(squat, byLift)))),
+                              SizedBox(
+                                  width: kMedalSlotW,
+                                  child: Center(
+                                      child: medalChip(
+                                          'B', _tierFor(bench, byLift)))),
+                              SizedBox(
+                                  width: kMedalSlotW,
+                                  child: Center(
+                                      child: medalChip(
+                                          'D', _tierFor(dead, byLift)))),
+                              SizedBox(
+                                  width: kMedalSlotW,
+                                  child: Center(
+                                      child: medalChip(
+                                          'C', _tierFor(chin, byLift)))),
+                              SizedBox(
+                                  width: kMedalSlotW,
+                                  child: Center(
+                                      child: medalChip(
+                                          'O', _tierFor(ohp, byLift)))),
                             ],
-
                           ),
                         ),
-
                       ],
                     ),
                   );
-
                 },
               );
             },
@@ -751,6 +812,4 @@ class _LeaderboardEmbeddedState extends State<LeaderboardEmbedded> {
       ),
     );
   }
-
 }
-

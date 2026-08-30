@@ -157,8 +157,19 @@ test('not even the owner may forge their own achievement snapshot', async () => 
 test('the owner can still write every other public field', async () => {
   await assertSucceeds(
     as(OWNER).doc(`users_public/${OWNER}`).set(
-      { bio: 'still editable', displayName: 'BenchKing' },
+      { bio: 'still editable', photoURL: 'https://example.invalid/b.jpg' },
       { merge: true },
+    ),
+  );
+});
+
+test('displayName is NOT one of those fields', async () => {
+  // It is the server's mirror of the reserved username, written only by
+  // profileChangeUsername and its reconciler. See identity_authority.spec.js
+  // for the whole identity-authority model.
+  await assertFails(
+    as(OWNER).doc(`users_public/${OWNER}`).set(
+      { displayName: 'BenchKing' }, { merge: true },
     ),
   );
 });
@@ -272,11 +283,24 @@ test('a story must be created with the server publication time', async () => {
       publishedAt: serverTimestamp(),
     }),
   );
+  // A client-CHOSEN time, not the server's. Deliberately a definite one:
+  // `new Date()` occasionally lands in the same millisecond the emulator
+  // stamps request.time with, so asserting on it made this test a coin flip
+  // rather than a statement about the rule.
   await assertFails(
     db.doc(`users/${OWNER}/stories/bad`).set({
       ownerUid: OWNER,
       mediaType: 'image',
-      publishedAt: new Date(),
+      publishedAt: new Date(Date.now() - 60 * 60 * 1000),
+    }),
+  );
+  // And backdating it — the shape that would actually buy someone extra hours
+  // of visibility if the clock were the client's to choose.
+  await assertFails(
+    db.doc(`users/${OWNER}/stories/backdated`).set({
+      ownerUid: OWNER,
+      mediaType: 'image',
+      publishedAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     }),
   );
 });

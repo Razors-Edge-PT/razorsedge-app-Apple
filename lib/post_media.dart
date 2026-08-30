@@ -11,8 +11,8 @@
 // rebuilt page has no post, comment or playback code of its own.
 
 // Dart SDK
-import 'dart:async';          // for unawaited, Futures
-import 'dart:io';             // File, Platform
+import 'dart:async'; // for unawaited, Futures
+import 'dart:io'; // File, Platform
 
 // Flutter
 import 'package:flutter/material.dart';
@@ -25,47 +25,51 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
+// Project-local
+import 'profile/data/media_deletion.dart';
+import 'profile/ui/live_identity.dart';
+
 // Local storage / utils
 
 // Project-local
 
-
 enum VideoStorageMode { local, firestore }
 
 class LiftVideo {
-  final String liftId;      // stable key e.g., 'bench_barbell'
-  final String? localPath;  // file path on device
-  final String? remoteUrl;  // Firestore mode (future)
-  final String? thumbUrl;   // ✅ thumbnail image URL from Storage
+  final String liftId; // stable key e.g., 'bench_barbell'
+  final String? localPath; // file path on device
+  final String? remoteUrl; // Firestore mode (future)
+  final String? thumbUrl; // ✅ thumbnail image URL from Storage
   final DateTime updatedAt;
 
   LiftVideo({
     required this.liftId,
     this.localPath,
     this.remoteUrl,
-    this.thumbUrl,          // ✅ new optional field
+    this.thumbUrl, // ✅ new optional field
     DateTime? updatedAt,
   }) : updatedAt = updatedAt ?? DateTime.now();
 
   bool get hasLocal => (localPath != null && localPath!.isNotEmpty);
   bool get hasRemote => (remoteUrl != null && remoteUrl!.isNotEmpty);
-  bool get hasThumb => (thumbUrl != null && thumbUrl!.isNotEmpty); // ✅ convenience
+  bool get hasThumb =>
+      (thumbUrl != null && thumbUrl!.isNotEmpty); // ✅ convenience
 
   Map<String, dynamic> toJson() => {
-    'liftId': liftId,
-    'localPath': localPath,
-    'remoteUrl': remoteUrl,
-    'thumbUrl': thumbUrl, // ✅ include in JSON
-    'updatedAt': updatedAt.toIso8601String(),
-  };
+        'liftId': liftId,
+        'localPath': localPath,
+        'remoteUrl': remoteUrl,
+        'thumbUrl': thumbUrl, // ✅ include in JSON
+        'updatedAt': updatedAt.toIso8601String(),
+      };
 
   static LiftVideo fromJson(Map<String, dynamic> j) => LiftVideo(
-    liftId: j['liftId'] as String,
-    localPath: j['localPath'] as String?,
-    remoteUrl: j['remoteUrl'] as String?,
-    thumbUrl: j['thumbUrl'] as String?, // ✅ parse from JSON
-    updatedAt: DateTime.tryParse(j['updatedAt'] ?? '') ?? DateTime.now(),
-  );
+        liftId: j['liftId'] as String,
+        localPath: j['localPath'] as String?,
+        remoteUrl: j['remoteUrl'] as String?,
+        thumbUrl: j['thumbUrl'] as String?, // ✅ parse from JSON
+        updatedAt: DateTime.tryParse(j['updatedAt'] ?? '') ?? DateTime.now(),
+      );
 }
 
 class PostDetailPage extends StatelessWidget {
@@ -84,9 +88,6 @@ class PostDetailPage extends StatelessWidget {
     required this.canDelete,
   });
 
-
-
-
   @override
   Widget build(BuildContext context) {
     // For brevity: simple viewer + action row with counts.
@@ -94,14 +95,16 @@ class PostDetailPage extends StatelessWidget {
       backgroundColor: Colors.black, // 👈 add this line
       appBar: AppBar(
           backgroundColor: Colors.black, // 👈 optional, to blend header
-        title: const Text('Post'),
+          title: const Text('Post'),
           actions: [
             if (canDelete)
               IconButton(
                 tooltip: 'Edit caption',
                 icon: const Icon(Icons.edit_outlined),
                 onPressed: () async {
-                  final docRef = FirebaseFirestore.instance.collection('posts').doc(post.id);
+                  final docRef = FirebaseFirestore.instance
+                      .collection('posts')
+                      .doc(post.id);
 
                   // Prefill with current caption (best-effort fetch to get latest)
                   String current = post.caption ?? '';
@@ -123,11 +126,16 @@ class PostDetailPage extends StatelessWidget {
                         keyboardType: TextInputType.multiline,
                         textInputAction: TextInputAction.newline,
                         maxLines: null,
-                        decoration: const InputDecoration(border: OutlineInputBorder()),
+                        decoration:
+                            const InputDecoration(border: OutlineInputBorder()),
                       ),
                       actions: [
-                        TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
-                        TextButton(onPressed: () => Navigator.pop(d, ctrl.text.trim()), child: const Text('Save')),
+                        TextButton(
+                            onPressed: () => Navigator.pop(d),
+                            child: const Text('Cancel')),
+                        TextButton(
+                            onPressed: () => Navigator.pop(d, ctrl.text.trim()),
+                            child: const Text('Save')),
                       ],
                     ),
                   );
@@ -149,7 +157,6 @@ class PostDetailPage extends StatelessWidget {
                   }
                 },
               ),
-
             if (canDelete)
               IconButton(
                 icon: const Icon(Icons.delete_outline),
@@ -159,12 +166,16 @@ class PostDetailPage extends StatelessWidget {
                     context: context,
                     builder: (d) => AlertDialog(
                       title: const Text('Delete post?'),
-                      content: const Text('This will permanently remove the post and its media.'),
+                      content: const Text(
+                          'This will permanently remove the post and its media.'),
                       actions: [
-                        TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Cancel')),
+                        TextButton(
+                            onPressed: () => Navigator.pop(d, false),
+                            child: const Text('Cancel')),
                         TextButton(
                           onPressed: () => Navigator.pop(d, true),
-                          child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                          child: const Text('Delete',
+                              style: TextStyle(color: Colors.red)),
                         ),
                       ],
                     ),
@@ -178,22 +189,19 @@ class PostDetailPage extends StatelessWidget {
                   }
 
                   try {
-                    await FirebaseFirestore.instance.collection('posts').doc(post.id).delete();
-                    try {
-                      await FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(post.ownerUid)
-                          .collection('posts')
-                          .doc(post.id)
-                          .delete();
-                    } catch (_) {}
-                    final folder = FirebaseStorage.instance.ref('users/${post.ownerUid}/posts/${post.id}');
-                    try {
-                      final listing = await folder.listAll();
-                      for (final item in listing.items) {
-                        await item.delete();
-                      }
-                    } catch (_) {}
+                    // ONE deletion path, shared with the profile grid.
+                    // Deleting here used to remove the post and its Storage
+                    // objects and nothing else, which left every
+                    // users/{uid}/proofs pointer that named this post behind —
+                    // still claiming a Big Five record was proved by media
+                    // that no longer existed.
+                    await deletePostEverywhere(
+                      firestore: FirebaseFirestore.instance,
+                      storage: FirebaseStorage.instance,
+                      ownerUid: post.ownerUid,
+                      postId: post.id,
+                      storagePath: post.storagePathOriginal,
+                    );
 
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -212,38 +220,41 @@ class PostDetailPage extends StatelessWidget {
                   }
                 },
               ),
-          ]
-
-
-      ),
+          ]),
       body: Column(
         children: [
           Expanded(
             child: (post.mediaType == 'image')
                 ? FutureBuilder<File>(
-              future: DefaultCacheManager().getSingleFile(post.smallUrl),
-              builder: (ctx, snap) {
-                if (snap.connectionState == ConnectionState.done && snap.hasData) {
-                  return Center(child: Image.file(snap.data!, fit: BoxFit.contain));
-                }
-                return const Center(child: CircularProgressIndicator());
-              },
-            )
+                    future: DefaultCacheManager().getSingleFile(post.smallUrl),
+                    builder: (ctx, snap) {
+                      if (snap.connectionState == ConnectionState.done &&
+                          snap.hasData) {
+                        return Center(
+                            child: Image.file(snap.data!, fit: BoxFit.contain));
+                      }
+                      return const Center(child: CircularProgressIndicator());
+                    },
+                  )
                 : FutureBuilder<String>(
-              future: post.storagePathOriginal.isNotEmpty
-                  ? FirebaseStorage.instance.ref(post.storagePathOriginal).getDownloadURL()
-                  : Future<String>.value(''),
-              builder: (ctx, snap) {
-                if (snap.connectionState != ConnectionState.done) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final url = (snap.data ?? '').trim();
-                if (url.isEmpty) {
-                  return const Center(child: Text('Video unavailable', style: TextStyle(color: Colors.white70)));
-                }
-                return _InAppVideoPlayer.networkUrl(url: url);
-              },
-            ),
+                    future: post.storagePathOriginal.isNotEmpty
+                        ? FirebaseStorage.instance
+                            .ref(post.storagePathOriginal)
+                            .getDownloadURL()
+                        : Future<String>.value(''),
+                    builder: (ctx, snap) {
+                      if (snap.connectionState != ConnectionState.done) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+                      final url = (snap.data ?? '').trim();
+                      if (url.isEmpty) {
+                        return const Center(
+                            child: Text('Video unavailable',
+                                style: TextStyle(color: Colors.white70)));
+                      }
+                      return _InAppVideoPlayer.networkUrl(url: url);
+                    },
+                  ),
           ),
 
 // --- Caption row (optional) ---
@@ -264,8 +275,6 @@ class PostDetailPage extends StatelessWidget {
             height: 160,
             child: _CommentsList(postId: post.id),
           ),
-
-
         ],
       ),
 
@@ -274,7 +283,7 @@ class PostDetailPage extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Divider(height: 1,color: Colors.white70),
+            const Divider(height: 1, color: Colors.white70),
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
               child: _PostActionsBar(
@@ -283,12 +292,10 @@ class PostDetailPage extends StatelessWidget {
                 onToggleGoodLift: onToggleGoodLift,
                 onAddComment: onAddComment,
               ),
-
             ),
           ],
         ),
       ),
-
     );
   }
 }
@@ -304,7 +311,6 @@ class _PostActionsBar extends StatefulWidget {
     required this.onToggleLike,
     required this.onToggleGoodLift,
     required this.onAddComment,
-
   });
 
   @override
@@ -335,8 +341,11 @@ class _PostActionsBarState extends State<_PostActionsBar> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(d, ctrl.text), child: const Text('Post')),
+          TextButton(
+              onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(d, ctrl.text),
+              child: const Text('Post')),
         ],
       ),
     );
@@ -359,7 +368,10 @@ class _PostActionsBarState extends State<_PostActionsBar> {
   @override
   Widget build(BuildContext context) {
     // Live counts from the post doc
-    final postStream = FirebaseFirestore.instance.collection('posts').doc(widget.post.id).snapshots();
+    final postStream = FirebaseFirestore.instance
+        .collection('posts')
+        .doc(widget.post.id)
+        .snapshots();
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: postStream,
@@ -371,7 +383,8 @@ class _PostActionsBarState extends State<_PostActionsBar> {
         if (snap.hasData && snap.data!.data() != null) {
           final d = snap.data!.data()!;
           likeCount = (d['likeCount'] as num?)?.toInt() ?? likeCount;
-          goodLiftCount = (d['goodLiftCount'] as num?)?.toInt() ?? goodLiftCount;
+          goodLiftCount =
+              (d['goodLiftCount'] as num?)?.toInt() ?? goodLiftCount;
           commentCount = (d['commentCount'] as num?)?.toInt() ?? commentCount;
         }
 
@@ -383,19 +396,19 @@ class _PostActionsBarState extends State<_PostActionsBar> {
               onPressed: _liking
                   ? null
                   : () async {
-                setState(() => _liking = true);
-                try {
-                  await widget.onToggleLike(widget.post);
-                } catch (e) {
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Like failed: $e')),
-                    );
-                  }
-                } finally {
-                  if (mounted) setState(() => _liking = false);
-                }
-              },
+                      setState(() => _liking = true);
+                      try {
+                        await widget.onToggleLike(widget.post);
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Like failed: $e')),
+                          );
+                        }
+                      } finally {
+                        if (mounted) setState(() => _liking = false);
+                      }
+                    },
               icon: const Icon(Icons.thumb_up_alt_outlined),
             ),
             Text('$likeCount'),
@@ -409,19 +422,19 @@ class _PostActionsBarState extends State<_PostActionsBar> {
                 onPressed: _glifting
                     ? null
                     : () async {
-                  setState(() => _glifting = true);
-                  try {
-                    await widget.onToggleGoodLift(widget.post);
-                  } catch (e) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Good lift failed: $e')),
-                      );
-                    }
-                  } finally {
-                    if (mounted) setState(() => _glifting = false);
-                  }
-                },
+                        setState(() => _glifting = true);
+                        try {
+                          await widget.onToggleGoodLift(widget.post);
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Good lift failed: $e')),
+                            );
+                          }
+                        } finally {
+                          if (mounted) setState(() => _glifting = false);
+                        }
+                      },
                 icon: const Icon(Icons.check_circle_outline),
               ),
               Text('$goodLiftCount'),
@@ -444,7 +457,6 @@ class _PostActionsBarState extends State<_PostActionsBar> {
   }
 }
 
-
 class _CommentsList extends StatefulWidget {
   final String postId;
   const _CommentsList({required this.postId});
@@ -458,11 +470,11 @@ class _CommentsListState extends State<_CommentsList> {
   final Set<String> _expanded = <String>{};
   final ScrollController _ctrl = ScrollController();
 
-
   @override
   Widget build(BuildContext context) {
     final stream = FirebaseFirestore.instance
-        .collection('posts').doc(widget.postId)
+        .collection('posts')
+        .doc(widget.postId)
         .collection('comments')
         .orderBy('createdAt', descending: true)
         .limit(20)
@@ -473,7 +485,10 @@ class _CommentsListState extends State<_CommentsList> {
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Center(
-            child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+            child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2)),
           );
         }
         final docs = snap.data?.docs ?? const [];
@@ -493,9 +508,14 @@ class _CommentsListState extends State<_CommentsList> {
             final cid = doc.id;
             final text = (d['text'] ?? '') as String;
             final uid = (d['uid'] ?? '') as String;
+            // The name this comment was written under. AUDIT DATA: it records
+            // what the author was called then, not who they are now. It is a
+            // fallback for the first frame and for a cold offline cache, and
+            // never a preference over the live value — preferring it is what
+            // used to leave a renamed athlete's old name on every comment they
+            // had ever written, permanently.
             final storedName = (d['username'] as String?)?.trim();
 
-            // Resolve a display name (stored username > displayName > uid)
             Widget nameAndText(String displayName) {
               final isExpanded = _expanded.contains(cid);
               return InkWell(
@@ -514,11 +534,11 @@ class _CommentsListState extends State<_CommentsList> {
                     }
                   });
                 },
-
                 child: Text(
                   '$displayName: $text',
                   maxLines: isExpanded ? null : 3,
-                  overflow: isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
+                  overflow:
+                      isExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
                 ),
               );
             }
@@ -529,29 +549,10 @@ class _CommentsListState extends State<_CommentsList> {
                 const Icon(Icons.person_outline, size: 16),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: (storedName != null && storedName.isNotEmpty)
-                      ? nameAndText(storedName)
-                      : FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                    future: FirebaseFirestore.instance
-                        .collection('users_public')
-                        .doc(uid)
-                        .get(),
-                    builder: (ctx, snapUser) {
-                      String display = uid; // fallback
-                      if (snapUser.hasData) {
-                        final map = snapUser.data!.data();
-                        if (map != null) {
-                          final u = map['username'];
-                          final dn = map['displayName'];
-                          if (u is String && u.trim().isNotEmpty) {
-                            display = u.trim();
-                          } else if (dn is String && dn.trim().isNotEmpty) {
-                            display = dn.trim();
-                          }
-                        }
-                      }
-                      return nameAndText(display);
-                    },
+                  child: LiveUserName(
+                    uid: uid,
+                    fallback: storedName,
+                    builder: (_, String display) => nameAndText(display),
                   ),
                 ),
               ],
@@ -562,11 +563,6 @@ class _CommentsListState extends State<_CommentsList> {
     );
   }
 }
-
-
-
-
-
 
 class _InAppVideoPlayer extends StatefulWidget {
   final String source;
@@ -583,7 +579,6 @@ class _InAppVideoPlayer extends StatefulWidget {
   State<_InAppVideoPlayer> createState() => _InAppVideoPlayerState();
 }
 
-
 class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
   late VideoPlayerController _controller;
   bool _ready = false;
@@ -599,7 +594,6 @@ class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
       setState(() => _ready = true);
       _controller.play();
     });
-
   }
 
   @override
@@ -617,30 +611,29 @@ class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
         child: Center(
           child: _ready
               ? AspectRatio(
-            aspectRatio: _controller.value.aspectRatio,
-            child: VideoPlayer(_controller),
-          )
+                  aspectRatio: _controller.value.aspectRatio,
+                  child: VideoPlayer(_controller),
+                )
               : const CircularProgressIndicator(),
         ),
       ),
       floatingActionButton: _ready
           ? FloatingActionButton(
-        onPressed: () {
-          setState(() {
-            _controller.value.isPlaying
-                ? _controller.pause()
-                : _controller.play();
-          });
-        },
-        child: Icon(
-          _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-        ),
-      )
+              onPressed: () {
+                setState(() {
+                  _controller.value.isPlaying
+                      ? _controller.pause()
+                      : _controller.play();
+                });
+              },
+              child: Icon(
+                _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+              ),
+            )
           : null,
     );
   }
 }
-
 
 // ===== Profile Posts (grid) =====
 class Post {
@@ -657,10 +650,9 @@ class Post {
   final int commentCount;
   final Timestamp createdAt;
   final String? localThumbPath; // for instant preview before upload completes
-  final bool promoteToHome;     // RE daily: shared to Home feed
-  final List<String> badges;    // RE daily: earned badges list
-  final double dailyTotal;      // RE daily: total RE points scored
-
+  final bool promoteToHome; // RE daily: shared to Home feed
+  final List<String> badges; // RE daily: earned badges list
+  final double dailyTotal; // RE daily: total RE points scored
 
   Post({
     required this.id,
@@ -697,7 +689,8 @@ class Post {
       commentCount: (d['commentCount'] as num?)?.toInt() ?? 0,
       createdAt: (d['createdAt'] as Timestamp?) ?? Timestamp.now(),
       promoteToHome: (d['promoteToHome'] as bool?) == true,
-      badges: ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const [],
+      badges: ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ??
+          const [],
       dailyTotal: (d['dailyTotal'] as num?)?.toDouble() ?? 0.0,
     );
   }
@@ -715,8 +708,8 @@ class Post {
     int? likeCount,
     int? goodLiftCount,
     int? commentCount,
-    Timestamp? createdAt,          // import cloud_firestore for Timestamp
-    String? localThumbPath,        // set a new local preview path
+    Timestamp? createdAt, // import cloud_firestore for Timestamp
+    String? localThumbPath, // set a new local preview path
     bool clearLocalThumbPath = false, // set true to clear local preview
   }) {
     return Post(
@@ -732,12 +725,11 @@ class Post {
       goodLiftCount: goodLiftCount ?? this.goodLiftCount,
       commentCount: commentCount ?? this.commentCount,
       createdAt: createdAt ?? this.createdAt,
-      localThumbPath: clearLocalThumbPath ? null : (localThumbPath ?? this.localThumbPath),
+      localThumbPath:
+          clearLocalThumbPath ? null : (localThumbPath ?? this.localThumbPath),
       promoteToHome: this.promoteToHome,
       badges: this.badges,
       dailyTotal: this.dailyTotal,
     );
   }
-
 }
-

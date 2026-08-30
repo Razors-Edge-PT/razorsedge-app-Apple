@@ -60,6 +60,16 @@ test.before(async () => {
       coach: { state: 'active', source: 'manual_review' },
     });
 
+    // A LIVE story document for s1. Story media is now reachable only through
+    // one — see storage.rules and test-rules/story_expiry_rules.spec.js — so
+    // the social gate below is tested on a story that actually exists.
+    await db.doc(`users/${OWNER}/stories/s1`).set({
+      ownerUid: OWNER,
+      mediaType: 'image',
+      storagePath: `users/${OWNER}/stories/s1/original.jpg`,
+      publishedAt: new Date(),
+    });
+
     const storage = ctx.storage();
     for (const p of [
       `users/${OWNER}/profile/profile.jpg`,
@@ -129,11 +139,19 @@ test('only the owner may upload or delete post media', async () => {
 
 // ── Stories ─────────────────────────────────────────────────────────────────
 
-test('story media follows the same social gate as posts', async () => {
+test('live story media follows the same social gate as posts', async () => {
   await assertSucceeds(read(as(OWNER), `users/${OWNER}/stories/s1/original.jpg`));
   await assertSucceeds(read(as(FRIEND), `users/${OWNER}/stories/s1/original.jpg`));
   await assertFails(read(as(STRANGER), `users/${OWNER}/stories/s1/original.jpg`));
   await assertFails(read(as(COACH), `users/${OWNER}/stories/s1/original.jpg`));
+});
+
+test('story media with no story document is unreachable, friend or not', async () => {
+  // s4 has an object and no record. Requiring the document is what stops a
+  // download URL outliving the story it belonged to.
+  await assertSucceeds(write(as(OWNER), `users/${OWNER}/stories/s4/original.jpg`));
+  await assertFails(read(as(FRIEND), `users/${OWNER}/stories/s4/original.jpg`));
+  await assertFails(read(as(OWNER), `users/${OWNER}/stories/s4/original.jpg`));
 });
 
 test('only the owner may upload a story', async () => {

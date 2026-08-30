@@ -175,6 +175,94 @@ service cloud.firestore {
     }
 
 
+    // ── Identity authority ───────────────────────────────────────────────
+    // `username`, `usernameLower` and `displayName` are owned by the
+    // profileChangeUsername callable, which is the ONLY writer of the
+    // usernames/{sha256(name)} reservation index. A client that could write
+    // these fields directly would bypass the reservation entirely, and
+    // case-insensitive uniqueness would stop being a guarantee: two devices
+    // can both read "free" and both write.
+    //
+    // ── Why this is not a flat deny ──────────────────────────────────────
+    // Installed builds before 1.7.13 stamp username + usernameLower onto both
+    // user documents during signup (OnboardingPageTwo/_finish via
+    // buildIdentityPayloadFields). A flat deny would break account creation
+    // for every one of those installs the moment these rules deployed. So
+    // exactly one client identity write survives, and only until the cutoff:
+    //
+    //   the FIRST username on an account that has none.
+    //
+    // A RENAME is never a client write, at any time, in any build — that is
+    // the case that can steal a name from another account, and the current
+    // app already routes it through the callable.
+    //
+    // Every surviving legacy claim is reconciled against the reservation
+    // index by identityOnPublicProfileWritten (functions/identity/reconcile.js):
+    // a free name is indexed to the claimant, a name another account already
+    // holds is taken back and the claimant is moved to a free variant. So the
+    // compat window costs a reconciliation, never a lost uniqueness guarantee.
+    //
+    // ── Retiring the window ──────────────────────────────────────────────
+    // Move LEGACY_IDENTITY_CLAIM_CUTOFF into the past once the pre-1.7.13
+    // install base is small enough. It is a literal, not a config document,
+    // so flipping it is a reviewed rules change with no extra read per write
+    // and no "config document missing ⇒ fail open" hole.
+    function legacyIdentityClaimWindowOpen() {
+      return request.time < timestamp.date(2027, 3, 1);
+    }
+
+    function identityAffectedKeys() {
+      return request.resource.data
+        .diff(resource == null ? {} : resource.data)
+        .affectedKeys();
+    }
+
+    function touchesIdentityFields() {
+      return identityAffectedKeys()
+        .hasAny(['username', 'usernameLower', 'displayName']);
+    }
+
+    // displayName is a pure server mirror of the reserved username. No client
+    // build has ever written it on these documents, so it is denied outright
+    // and needs no compatibility window.
+    function touchesDisplayName() {
+      return identityAffectedKeys().hasAny(['displayName']);
+    }
+
+    // True when the account has no username yet — the legacy SIGNUP case, as
+    // opposed to a rename.
+    function hasNoUsernameYet() {
+      return resource == null
+        || (resource.data.get('usernameLower', '') == ''
+            && resource.data.get('username', '') == '');
+    }
+
+    // The same 3–22 characters, no whitespace rule the callable enforces, and
+    // usernameLower must actually be the lower-cased username, so a legacy
+    // claim cannot index one name while displaying another.
+    function legacyUsernameShapeOk() {
+      return request.resource.data.get('username', '') is string
+        && request.resource.data.get('usernameLower', '') is string
+        && request.resource.data.get('username', '').size() >= 3
+        && request.resource.data.get('username', '').size() <= 22
+        && !request.resource.data.get('username', '').matches('.*\\s.*')
+        && request.resource.data.get('usernameLower', '')
+             == request.resource.data.get('username', '').lower();
+    }
+
+    // A write that either leaves identity alone, or is a legal first claim
+    // made by a pre-1.7.13 build inside the compatibility window.
+    function identityWriteAllowed() {
+      return !touchesIdentityFields()
+        || (
+             !touchesDisplayName()
+             && hasNoUsernameYet()
+             && legacyIdentityClaimWindowOpen()
+             && legacyUsernameShapeOk()
+           );
+    }
+
+
     // ======================================================
     // USERS PUBLIC (search, avatars, public stats)
     // ======================================================
@@ -191,6 +279,11 @@ service cloud.firestore {
       // never performed, which is precisely what the proof-video feature is
       // meant to make meaningful. The super admin keeps full access, matching
       // the existing hard-coded super-admin behaviour elsewhere in this file.
+      //
+      // username / usernameLower / displayName are EXCLUDED on the same
+      // principle: they are owned by the profileChangeUsername callable and
+      // its reservation index, not by the client. See identityWriteAllowed()
+      // for the one legacy signup write that still survives, and why.
       allow write: if isSuperAdmin()
                    || (
                         isSelf(userId)
@@ -198,6 +291,7 @@ service cloud.firestore {
                               .diff(resource == null ? {} : resource.data)
                               .affectedKeys()
                               .hasAny(['profileShowcaseV1'])
+                        && identityWriteAllowed()
                       );
     }
 
@@ -210,8 +304,12 @@ service cloud.firestore {
       allow read: if isSelf(userId) || isCoachFor(userId) || isSuperAdmin();
 
       // Only self or super admin can write the root profile doc.
-      // Coaches must not edit identity fields.
-      allow write: if isSelf(userId) || isSuperAdmin();
+      // Coaches must not edit identity fields — and neither may the owner:
+      // username / usernameLower / displayName belong to the reservation
+      // service. identityWriteAllowed() keeps the one pre-1.7.13 signup write
+      // alive during the compatibility window and nothing else.
+      allow write: if isSuperAdmin()
+                   || (isSelf(userId) && identityWriteAllowed());
 
       // ---- Lift video metadata ----
       // Social visibility only — coach is NOT a bypass here.
@@ -265,7 +363,60 @@ service cloud.firestore {
       // cannot therefore backdate or extend a story, and an offline-selected
       // story simply never reaches this rule until it genuinely publishes.
       match /stories/{storyId} {
-        allow read: if isSocial(userId);
+        // ── The 24 hours are enforced HERE, not only in the client query ────
+        // A story is readable by a friend for exactly 24 hours from
+        // publication. At EXACTLY publishedAt + 24h it is expired, which is
+        // the same boundary isStoryLive() uses in functions/social/stories.js
+        // and StoryItem.isLiveAt() uses in the app — the strict `<` is what
+        // makes all three agree.
+        //
+        // publishedAt is pinned to request.time on create, so this measures
+        // the SERVER's clock. A device with its clock moved back cannot extend
+        // its own story, and a device with its clock moved forward cannot read
+        // somebody else's expired one.
+        //
+        // Before this, expiry was purely a client-side query filter and a
+        // scheduled sweep: anybody who kept the document id could read an
+        // "expired" story for the up-to-an-hour gap before the sweep ran, and
+        // a patched client could read it indefinitely.
+        //
+        // The OWNER keeps access after expiry. They need it to see and delete
+        // their own story, and it is their own content — the 24 hours are a
+        // promise to the audience, not a lock on the author.
+        // NOTE the shape: publishedAt is compared against a value derived
+        // from request.time, NOT the other way round.
+        //
+        // `resource.data.publishedAt + duration` is fine for a `get`, where
+        // publishedAt is a concrete timestamp, but a `list` evaluates the rule
+        // symbolically — publishedAt is a CONSTRAINT, and the engine refuses
+        // `constraint + duration` outright ("Unsupported operation"). Written
+        // this way the arithmetic is all on request.time, which is always
+        // concrete, and what is left is a plain range constraint on
+        // publishedAt — exactly the shape the app's watchLive() query already
+        // has, so the query is provably within the rule.
+        function storyIsLive() {
+          return resource != null
+                 && resource.data.get('publishedAt', null) != null
+                 && resource.data.publishedAt >
+                      request.time - duration.value(24, 'h');
+        }
+
+        // Fields a client may never write or rewrite. publishedAt and
+        // expiresAt are the clock; ownerUid is who it belongs to; the paths
+        // and URLs are which bytes it points at. Letting a client move any of
+        // them would let it re-point a live story at somebody else's media, or
+        // restart its 24 hours.
+        function storyImmutablesTouched() {
+          return request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny([
+              'publishedAt', 'expiresAt', 'ownerUid',
+              'storagePath', 'thumbPath', 'url', 'thumbUrl'
+            ]);
+        }
+
+        allow read: if isSelf(userId)
+                    || isSuperAdmin()
+                    || (isSocial(userId) && storyIsLive());
 
         allow create: if isSelf(userId)
                       && request.resource.data.ownerUid == userId
@@ -273,10 +424,9 @@ service cloud.firestore {
                       && !('expiresAt' in request.resource.data);
 
         // The owner may correct presentational fields only; the publication
-        // clock is immutable once set.
+        // clock, the owner and the media it points at are immutable once set.
         allow update: if (isSelf(userId) || isSuperAdmin())
-                      && request.resource.data.publishedAt == resource.data.publishedAt
-                      && request.resource.data.ownerUid == resource.data.ownerUid;
+                      && !storyImmutablesTouched();
 
         allow delete: if isSelf(userId) || isSuperAdmin();
       }

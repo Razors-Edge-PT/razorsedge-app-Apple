@@ -18,10 +18,13 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../post_media.dart';
+import '../post_service.dart';
 import '../user_context.dart';
 import 'core/media_models.dart';
 import 'core/showcase_models.dart';
@@ -59,18 +62,39 @@ class _ProfileScreenState extends State<ProfileScreen>
   ProfileController? _controller;
   final ImagePicker _picker = ImagePicker();
   WeightUnits _units = WeightUnits.kilograms;
+  String? _startupError;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => unawaited(_bootstrap()));
   }
 
-  void _bootstrap() {
+  /// Builds the controller once the shared services are open.
+  ///
+  /// AWAITING [ProfileServices.ensureInitialised] rather than reading
+  /// `.instance` is the whole point. `.instance` throws when initialisation
+  /// has not finished, and it has not finished on any of the paths that reach
+  /// this page early: a deep link, a notification tap, or simply opening the
+  /// profile on the first frame of a cold start, while the outbox SQLite file
+  /// is still being opened. app start calls ensureInitialised() too, so in the
+  /// ordinary case this future is already complete and there is no extra
+  /// frame.
+  Future<void> _bootstrap() async {
     if (!mounted || _controller != null) return;
+    // Read the context BEFORE the await: it may not be safe to touch after.
     final UserContext ctx = context.read<UserContext>();
-    final ProfileServices services = ProfileServices.instance;
+
+    final ProfileServices services;
+    try {
+      services = await ProfileServices.ensureInitialised();
+    } catch (e) {
+      if (mounted) setState(() => _startupError = '$e');
+      return;
+    }
+    if (!mounted || _controller != null) return;
 
     // Navigation semantics preserved from the old page:
     //   viewedUid set        → that person's profile (friend, or coach-selected)
@@ -121,10 +145,28 @@ class _ProfileScreenState extends State<ProfileScreen>
   Widget build(BuildContext context) {
     final ProfileController? c = _controller;
     if (c == null) {
-      return const Scaffold(
+      final String? error = _startupError;
+      return Scaffold(
         backgroundColor: ProfilePalette.navy,
+        appBar: error == null
+            ? null
+            : AppBar(
+                backgroundColor: ProfilePalette.navy,
+                elevation: 0,
+                foregroundColor: ProfilePalette.textPrimary,
+              ),
         body: Center(
-          child: CircularProgressIndicator(color: ProfilePalette.action),
+          child: error == null
+              ? const CircularProgressIndicator(color: ProfilePalette.action)
+              : Padding(
+                  padding: const EdgeInsets.all(ProfileSpacing.lg),
+                  child: Text(
+                    'Your profile could not be opened. Close the app and '
+                    'reopen it, and anything still uploading will resume.',
+                    textAlign: TextAlign.center,
+                    style: ProfileText.recordDetail(context),
+                  ),
+                ),
         ),
       );
     }
@@ -214,7 +256,66 @@ class _ProfileScreenState extends State<ProfileScreen>
         ? await _picker.pickVideo(source: ImageSource.gallery)
         : await _pickImage();
     if (picked == null) return;
-    await _guard(() => c.addGridMedia(File(picked.path), choice));
+    if (!mounted) return;
+
+    // The caption is asked for HERE, before the row is queued, so it travels
+    // with the upload and is committed in the same write as the post. Adding
+    // it afterwards would mean a second write, and a caption that is missing
+    // for as long as the upload takes. It can still be edited later from the
+    // post detail page.
+    final String? caption = await _askForCaption();
+    if (caption == null) return; // cancelled
+
+    await _guard(() => c.addGridMedia(
+          File(picked.path),
+          choice,
+          caption: caption.isEmpty ? null : caption,
+        ));
+  }
+
+  /// Asks for an optional caption. Returns null if the user backed out, or the
+  /// (possibly empty) text if they went ahead.
+  Future<String?> _askForCaption({String initial = ''}) async {
+    final TextEditingController field = TextEditingController(text: initial);
+    final String? result = await showDialog<String>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        backgroundColor: ProfilePalette.surface,
+        title: Text('Add a caption', style: ProfileText.liftName(ctx)),
+        content: TextField(
+          controller: field,
+          autofocus: true,
+          maxLines: null,
+          minLines: 1,
+          keyboardType: TextInputType.multiline,
+          textInputAction: TextInputAction.newline,
+          style: ProfileText.bio(ctx),
+          decoration: InputDecoration(
+            hintText: 'Say something about this set (optional)',
+            hintStyle:
+                ProfileText.bio(ctx).copyWith(color: ProfilePalette.textMuted),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel', style: ProfileText.button(ctx)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: Text('Skip', style: ProfileText.button(ctx)),
+          ),
+          FilledButton(
+            style:
+                FilledButton.styleFrom(backgroundColor: ProfilePalette.action),
+            onPressed: () => Navigator.pop(ctx, field.text.trim()),
+            child: Text('Add', style: ProfileText.button(ctx)),
+          ),
+        ],
+      ),
+    );
+    field.dispose();
+    return result;
   }
 
   Future<void> _pickStory(ProfileController c) async {
@@ -232,8 +333,16 @@ class _ProfileScreenState extends State<ProfileScreen>
   Future<void> _pickProof(ProfileController c, ShowcaseRecord record) async {
     final XFile? picked = await _picker.pickVideo(source: ImageSource.gallery);
     if (picked == null) return;
+    if (!mounted) return;
+    final String? caption = await _askForCaption();
+    if (caption == null) return;
     await _guard(
-      () => c.addProof(record, File(picked.path), MediaType.video),
+      () => c.addProof(
+        record,
+        File(picked.path),
+        MediaType.video,
+        caption: caption.isEmpty ? null : caption,
+      ),
     );
     if (!mounted) return;
     _toast(
@@ -353,13 +462,75 @@ class _ProfileScreenState extends State<ProfileScreen>
     await ProfileServices.instance.stories.delete(c.targetUid, story.id);
   }
 
+  /// Opens a grid tile.
+  ///
+  /// A PUBLISHED tile opens the app's real post experience — the same
+  /// PostDetailPage the home feed opens, with caption, likes, GoodLifts,
+  /// comments, caption editing and owner deletion — rather than the thin
+  /// viewer this page used to draw. Tapping your own photo in the grid and
+  /// getting a page with no comments and no like button was the single most
+  /// obvious way the rebuilt profile felt less finished than the feed.
+  ///
+  /// A PENDING tile keeps the simplified local viewer: there is no post
+  /// document to like or comment on yet, and its bytes are still only on this
+  /// device.
   Future<void> _openMedia(ProfileController c, ProfileMediaItem item) async {
+    if (item.pending) {
+      await _openLocalPreview(c, item);
+      return;
+    }
+
+    final Post? post = await _loadPost(item);
+    if (!mounted) return;
+    if (post == null) {
+      // The document could not be read (offline with a cold cache, or it has
+      // just been deleted). The simplified viewer still shows the media rather
+      // than failing the tap outright.
+      await _openLocalPreview(c, item);
+      return;
+    }
+
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PostDetailPage(
+        post: post,
+        onToggleLike: (Post p) => PostService.instance.toggleLike(p.id),
+        onToggleGoodLift: (Post p) => PostService.instance
+            .toggleGoodLift(p.id, isVideo: p.mediaType == MediaType.video),
+        onAddComment: (Post p, String text) => PostService.instance.addComment(
+          p.id,
+          text,
+          usernameFallback: c.displayName,
+        ),
+        canDelete: c.isOwner,
+      ),
+    ));
+  }
+
+  /// Reads the post document behind a grid tile.
+  Future<Post?> _loadPost(ProfileMediaItem item) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance
+              .collection('posts')
+              .doc(item.id)
+              .get();
+      if (!snap.exists) return null;
+      return Post.fromSnap(snap);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The thin viewer, for media with no post document behind it.
+  Future<void> _openLocalPreview(
+      ProfileController c, ProfileMediaItem item) async {
     final String url = item.smallUrl.isNotEmpty ? item.smallUrl : item.thumbUrl;
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => MediaDetailPage(
         title: c.displayName,
         mediaType: item.mediaType,
         url: url,
+        localFilePath: item.pending ? item.localFilePath : null,
         caption: item.caption,
         badge:
             item.isProof ? _proofBadgeText(c, item.proof!.fingerprint) : null,

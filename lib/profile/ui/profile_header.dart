@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import '../data/profile_repository.dart';
 import '../profile_controller.dart';
 import 'bio_text.dart';
+import 'cached_network_image.dart';
 import 'profile_theme.dart';
 
 class ProfileHeader extends StatelessWidget {
@@ -186,27 +187,30 @@ class _Avatar extends StatelessWidget {
       return Image.file(File(pendingPath), fit: BoxFit.cover);
     }
     final String? url = profile.photoURL;
-    if (url == null || url.isEmpty) {
-      return Container(
+    if (url == null || url.isEmpty) return const _AvatarPlaceholder();
+
+    // Persisted to disk, not just to the process's image cache: an avatar seen
+    // once still renders after the app is killed and reopened with no
+    // connection.
+    return CachedProfileImage(
+      url: url,
+      fit: BoxFit.cover,
+      placeholder: const _AvatarPlaceholder(),
+      fallback: const _AvatarPlaceholder(),
+    );
+  }
+}
+
+class _AvatarPlaceholder extends StatelessWidget {
+  const _AvatarPlaceholder();
+
+  @override
+  Widget build(BuildContext context) => Container(
         color: ProfilePalette.surface,
         alignment: Alignment.center,
         child: const Icon(Icons.person_rounded,
             size: 44, color: ProfilePalette.textMuted),
       );
-    }
-    return Image.network(
-      url,
-      fit: BoxFit.cover,
-      // The cached bytes render instantly on a warm reopen; a failed fetch
-      // falls back to the placeholder rather than an error glyph.
-      errorBuilder: (_, __, ___) => Container(
-        color: ProfilePalette.surface,
-        alignment: Alignment.center,
-        child: const Icon(Icons.person_rounded,
-            size: 44, color: ProfilePalette.textMuted),
-      ),
-    );
-  }
 }
 
 class _RoundAction extends StatelessWidget {

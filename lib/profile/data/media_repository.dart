@@ -15,6 +15,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 import '../core/media_models.dart';
+import '../core/media_urls.dart';
+import 'media_deletion.dart';
 import 'media_outbox.dart';
 
 class MediaRepository {
@@ -130,59 +132,32 @@ class MediaRepository {
 
   /// Owner-only deletion of a published item.
   ///
-  /// Order matters and is deliberate:
-  ///   1. any proof pointer that referenced it (so a record never points at
-  ///      media that is about to vanish),
-  ///   2. the Storage objects,
-  ///   3. the post document, LAST.
-  /// A crash part-way leaves the post document present, so the next attempt
-  /// finishes the job — the opposite order would orphan Storage objects with
-  /// nothing left to find them by. Every step tolerates "already gone", so
-  /// repeating it is safe.
-  Future<void> deleteMedia(ProfileMediaItem item) async {
-    final ProofLink? proof = item.proof;
-    if (proof != null) {
-      await _db
-          .collection('users')
-          .doc(item.ownerUid)
-          .collection('proofs')
-          .doc(proof.fingerprint)
-          .delete()
-          .catchError((Object _) {});
-    }
-
-    await _deleteStorageFolder('users/${item.ownerUid}/posts/${item.id}');
-    if (item.storagePath.isNotEmpty) {
-      await _deleteObject(item.storagePath);
-    }
-
-    await _posts.doc(item.id).delete();
-  }
+  /// Delegates to [deletePostEverywhere], which is the single implementation
+  /// the feed's post detail page uses too — so a proof video deleted from the
+  /// feed loses its achievement pointer exactly as one deleted from the grid
+  /// does. See media_deletion.dart for the order and why it is that order.
+  Future<void> deleteMedia(ProfileMediaItem item) => deletePostEverywhere(
+        firestore: _db,
+        storage: _storage,
+        ownerUid: item.ownerUid,
+        postId: item.id,
+        storagePath: item.storagePath,
+      );
 
   /// Cancels a still-pending upload and removes its staged files.
   Future<void> cancelPending(String mediaId) async {
     final OutboxItem? row = await _outbox.byId(mediaId);
     if (row == null) return;
-    // The object may or may not have made it up; deleting is idempotent.
+    // Either object may or may not have made it up; deleting is idempotent.
     await _deleteObject(row.storagePath);
+    final String? thumbPath = thumbnailStoragePathFor(row.storagePath);
+    if (thumbPath != null) await _deleteObject(thumbPath);
     await _deleteLocal(row.localFilePath);
     await _deleteLocal(row.localThumbPath);
     await _outbox.remove(mediaId);
   }
 
   Future<void> retryPending(String mediaId) => _outbox.retry(mediaId);
-
-  Future<void> _deleteStorageFolder(String path) async {
-    try {
-      final ListResult listing = await _storage.ref(path).listAll();
-      for (final Reference item in listing.items) {
-        await item.delete().catchError((Object _) {});
-      }
-    } catch (_) {
-      // Nothing there, or no permission to list. Either way there is nothing
-      // useful to do here, and the caller's next step still runs.
-    }
-  }
 
   Future<void> _deleteObject(String path) async {
     if (path.isEmpty) return;

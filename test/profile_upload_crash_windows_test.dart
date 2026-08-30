@@ -261,7 +261,7 @@ void main() {
     test('a superseded row stays queued for orphan cleanup', () async {
       await queueAvatar('a1');
       await queueAvatar('a2');
-      final List<OutboxItem> orphans = await outbox.superseded();
+      final List<OutboxItem> orphans = await outbox.superseded(owner);
       expect(orphans.map((OutboxItem i) => i.mediaId), <String>['a1']);
       // Its deterministic path is what makes cleaning it up safe: it can only
       // ever be the loser's own object, never the live avatar's.

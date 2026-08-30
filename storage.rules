@@ -79,6 +79,29 @@ service firebase.storage {
       return isSignedIn() && request.auth.uid == ownerUid;
     }
 
+    // ── Story liveness, read from Firestore ──────────────────────────────
+    // Declared at the top level alongside isBuddyOf, which is the form that
+    // is known to resolve firestore.* correctly here.
+    function storyDocExists(ownerUid, storyId) {
+      return firestore.exists(
+        /databases/(default)/documents/users/$(ownerUid)/stories/$(storyId));
+    }
+
+    function storyPublishedAt(ownerUid, storyId) {
+      return firestore.get(
+        /databases/(default)/documents/users/$(ownerUid)/stories/$(storyId))
+        .data.get('publishedAt', null);
+    }
+
+    // The SAME boundary firestore.rules applies: live while
+    // now - publishedAt < 24h, expired at exactly 24h.
+    function storyIsLive(ownerUid, storyId) {
+      return storyDocExists(ownerUid, storyId)
+        && storyPublishedAt(ownerUid, storyId) != null
+        && storyPublishedAt(ownerUid, storyId)
+             > request.time - duration.value(24, 'h');
+    }
+
     function isImage() {
       return request.resource.contentType.matches('^image/.*');
     }
@@ -133,13 +156,31 @@ service firebase.storage {
     // ======================================================
     // STORIES — users/{uid}/stories/{storyId}/{fileName}
     //
-    // 24-hour media. Expiry is enforced by the Firestore document's
-    // server-derived publishedAt and swept by storyCleanupScheduler; Storage
-    // itself has no clock, so these objects are only ever reachable through a
-    // live story document.
+    // 24-hour media, and the 24 hours are enforced HERE too.
+    //
+    // The previous rule said the objects were "only ever reachable through a
+    // live story document" and then did not check for one. A Storage download
+    // URL is a bearer token: anybody who saw a story once — or who read the
+    // `url` field while it was live — kept a working link to the object long
+    // after the Firestore document said it had expired, and the hourly
+    // storyCleanupScheduler left up to an hour of that window even in the
+    // ordinary case.
+    //
+    // So the object now genuinely requires its story document, and applies the
+    // SAME publishedAt + 24h boundary the Firestore rule applies. The owner
+    // keeps access to their own media for as long as the document exists, so
+    // they can still view and delete it; only the audience is on the clock.
+    //
+    // Note the firestore.* prefix: Storage rules have no bare exists()/get().
     // ======================================================
     match /users/{ownerUid}/stories/{storyId}/{fileName} {
-      allow read: if isSocial(ownerUid);
+      allow read: if isSuperAdmin()
+                  || (isOwner(ownerUid) && storyDocExists(ownerUid, storyId))
+                  || (isSocial(ownerUid) && storyIsLive(ownerUid, storyId));
+
+      // The upload necessarily precedes the story document, so create/update
+      // cannot require one. The owner check is what keeps the path private,
+      // and an object with no document is unreadable by anyone above.
       allow create, update: if isOwner(ownerUid) && sizeOk();
       allow delete: if isOwner(ownerUid) || isSuperAdmin();
     }

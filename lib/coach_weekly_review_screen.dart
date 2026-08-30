@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import 'profile/ui/live_identity.dart';
+
 import 'coach_checkins_logic.dart';
 import 'coach_roster.dart';
 import 'user_context.dart';
@@ -33,7 +35,8 @@ class CoachWeeklyReviewScreen extends StatefulWidget {
   const CoachWeeklyReviewScreen({super.key});
 
   @override
-  State<CoachWeeklyReviewScreen> createState() => _CoachWeeklyReviewScreenState();
+  State<CoachWeeklyReviewScreen> createState() =>
+      _CoachWeeklyReviewScreenState();
 }
 
 enum _ReviewFilter { all, ready, needsWeighIn, pbs, noTraining }
@@ -128,7 +131,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
             ));
           }
         } catch (e) {
-          debugPrint('⚠️ [WeeklyReview] settings read failed for ${athlete.uid}: $e');
+          debugPrint(
+              '⚠️ [WeeklyReview] settings read failed for ${athlete.uid}: $e');
         }
       }));
       _rosterSize = roster.length;
@@ -139,7 +143,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       //    device-derived dates, rather than dying with a generic error.
       _contextDegraded = false;
       try {
-        final ctxRes = await _functions.httpsCallable('coachReviewContext').call({
+        final ctxRes =
+            await _functions.httpsCallable('coachReviewContext').call({
           'athleteUids': enabled.map((a) => a.uid).toList(),
         });
         final ctx = Map<String, dynamic>.from(ctxRes.data as Map);
@@ -199,11 +204,13 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
           a.prevReport = results[1].data();
         } catch (e) {
           debugPrint('⚠️ [WeeklyReview] report read failed for ${a.uid}: $e');
-          a.reportLoadError = e is FirebaseException ? (e.code) : e.runtimeType.toString();
+          a.reportLoadError =
+              e is FirebaseException ? (e.code) : e.runtimeType.toString();
         }
       }));
 
-      enabled.sort((a, b) => a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+      enabled.sort((a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
       if (!mounted) return;
       setState(() {
         _athletes = enabled;
@@ -233,7 +240,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     return CoachCheckinsLogic.effectiveCoverage(
       _currentKey,
       previousWasCopied: _prevWasCopied(a),
-      lastFinalizedCoverageEnd: a.settings['lastFinalizedCoverageEnd'] as String?,
+      lastFinalizedCoverageEnd:
+          a.settings['lastFinalizedCoverageEnd'] as String?,
     );
   }
 
@@ -316,7 +324,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     if (_busy.contains(a.uid)) return;
     setState(() => _busy.add(a.uid));
     try {
-      final res = await _functions.httpsCallable('coachPrepareCheckInCopy').call({
+      final res =
+          await _functions.httpsCallable('coachPrepareCheckInCopy').call({
         'athleteUid': a.uid,
         'checkpointKey': _currentKey,
       });
@@ -330,7 +339,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
           ...?a.report,
           'status': CheckInStatus.copied,
           'finalText': text,
-          if (data['coverageStart'] != null) 'coverageStart': data['coverageStart'],
+          if (data['coverageStart'] != null)
+            'coverageStart': data['coverageStart'],
           if (data['coverageEnd'] != null) 'coverageEnd': data['coverageEnd'],
         };
       });
@@ -393,7 +403,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     debugPrint('❌ [WeeklyReview] $action failed: ${e.code} ${e.message}');
     switch (e.code) {
       case 'failed-precondition':
-        return e.message ?? '$action isn\'t possible for this check-in anymore.';
+        return e.message ??
+            '$action isn\'t possible for this check-in anymore.';
       case 'permission-denied':
         return 'You\'re no longer an assigned coach for this athlete.';
       case 'not-found':
@@ -566,7 +577,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                         children: [
                           _filterChip('All', _ReviewFilter.all),
                           _filterChip('Ready', _ReviewFilter.ready),
-                          _filterChip('Needs weigh-in', _ReviewFilter.needsWeighIn),
+                          _filterChip(
+                              'Needs weigh-in', _ReviewFilter.needsWeighIn),
                           _filterChip('PBs', _ReviewFilter.pbs),
                           _filterChip('No training', _ReviewFilter.noTraining),
                         ],
@@ -586,8 +598,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                         child: Text(
                           'Live coach-timezone context is unavailable, so dates below '
                           'come from this device. Tap Refresh to retry.',
-                          style: TextStyle(
-                              color: Colors.amber[200], fontSize: 12),
+                          style:
+                              TextStyle(color: Colors.amber[200], fontSize: 12),
                         ),
                       ),
                     Expanded(
@@ -623,12 +635,14 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                                     const SizedBox(height: 16),
                                     ElevatedButton.icon(
                                       icon: const Icon(Icons.tune, size: 16),
-                                      label: const Text('Open Check-in Athletes'),
+                                      label:
+                                          const Text('Open Check-in Athletes'),
                                       onPressed: () async {
-                                        await Navigator.of(context).push(
-                                            MaterialPageRoute(
+                                        await Navigator.of(context)
+                                            .push(MaterialPageRoute(
                                           builder: (_) =>
-                                              ChangeNotifierProvider<UserContext>.value(
+                                              ChangeNotifierProvider<
+                                                  UserContext>.value(
                                             value: context.read<UserContext>(),
                                             child:
                                                 const CoachCheckinAthletesScreen(),
@@ -644,8 +658,10 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                           : ListView.separated(
                               padding: const EdgeInsets.fromLTRB(8, 6, 8, 24),
                               itemCount: filtered.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 6),
-                              itemBuilder: (context, i) => _athleteCard(filtered[i]),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 6),
+                              itemBuilder: (context, i) =>
+                                  _athleteCard(filtered[i]),
                             ),
                     ),
                   ],
@@ -682,11 +698,11 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     // A set that is both an all-time heaviest lift and a rep-target PB is ONE
     // achievement (the backend praises it once, as the heaviest lift), so the
     // rep-PB evidence list hides the duplicate rather than showing it twice.
-    final maxWeightKeys = maxWeightPBs
-        .map((e) => '${e['exerciseId']}_${e['dateKey']}')
-        .toSet();
+    final maxWeightKeys =
+        maxWeightPBs.map((e) => '${e['exerciseId']}_${e['dateKey']}').toSet();
     final repOnlyPBs = repPBs
-        .where((e) => !maxWeightKeys.contains('${e['exerciseId']}_${e['dateKey']}'))
+        .where((e) =>
+            !maxWeightKeys.contains('${e['exerciseId']}_${e['dateKey']}'))
         .toList();
     final workouts = _workoutsInWindow(a);
     final completion = report?['completion'] as Map<String, dynamic>?;
@@ -698,7 +714,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
 
     final statusByKey = <String, String>{
       if (report != null) _currentKey: status,
-      if (a.prevReport != null) _prevKey: a.prevReport!['status'] as String? ?? 'draft',
+      if (a.prevReport != null)
+        _prevKey: a.prevReport!['status'] as String? ?? 'draft',
     };
     final mutable = CoachCheckinsLogic.canMutate(_currentKey, statusByKey);
 
@@ -741,7 +758,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                       '${maxWeightPBs.length} all-time heaviest'),
                 _fact(Icons.emoji_events,
                     '${repOnlyPBs.length} rep PB${repOnlyPBs.length == 1 ? '' : 's'}'),
-                _fact(Icons.trending_up, '${e1rmPBs.length} E1RM PB${e1rmPBs.length == 1 ? '' : 's'}'),
+                _fact(Icons.trending_up,
+                    '${e1rmPBs.length} E1RM PB${e1rmPBs.length == 1 ? '' : 's'}'),
                 if (rirMatchPBs.isNotEmpty)
                   _fact(Icons.bolt,
                       '${rirMatchPBs.length} PB match, more in reserve'),
@@ -758,11 +776,12 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                     report?['milestoneAwarded'] != null)
                   // milestoneAwarded is phase-scoped ('cut_110@<phase>');
                   // show only the objective boundary part.
-                  _fact(
-                      Icons.celebration,
+                  _fact(Icons.celebration,
                       'Milestone ${(report?['milestoneAwarded'] ?? bodyweight?['newMilestoneId']).toString().split('@').first}'),
                 if (weighStatus != 'ok')
-                  _warn(weighStatus == 'due' ? 'Weigh-in due' : 'Weigh-in overdue'),
+                  _warn(weighStatus == 'due'
+                      ? 'Weigh-in due'
+                      : 'Weigh-in overdue'),
               ],
             ),
             if (fallbackWeek != null && workouts == 0) ...[
@@ -842,7 +861,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                     onPressed: busy || !mutable ? null : () => _copyMessage(a),
                     icon: busy
                         ? const SizedBox(
-                            width: 14, height: 14,
+                            width: 14,
+                            height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.copy, size: 16),
                     label: const Text('Copy Message'),
@@ -856,7 +876,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                   IconButton(
                     tooltip: 'Copy the sent message again',
                     visualDensity: VisualDensity.compact,
-                    icon: const Icon(Icons.copy, size: 16, color: Colors.white70),
+                    icon:
+                        const Icon(Icons.copy, size: 16, color: Colors.white70),
                     onPressed: busy
                         ? null
                         : () => _copyToClipboard(
@@ -1015,7 +1036,8 @@ class _CoachCheckinAthletesScreenState
           final data = s.data();
           if (data != null) _settings[a.uid] = Map<String, dynamic>.from(data);
         } catch (e) {
-          debugPrint('⚠️ [CheckinAthletes] settings read failed for ${a.uid}: $e');
+          debugPrint(
+              '⚠️ [CheckinAthletes] settings read failed for ${a.uid}: $e');
         }
       }));
 
@@ -1025,7 +1047,8 @@ class _CoachCheckinAthletesScreenState
       if (mounted) {
         setState(() {
           _loading = false;
-          _error = 'Couldn\'t load your athlete list. Tap refresh to try again.';
+          _error =
+              'Couldn\'t load your athlete list. Tap refresh to try again.';
         });
       }
     }
@@ -1033,8 +1056,7 @@ class _CoachCheckinAthletesScreenState
 
   Future<void> _save(String uid, Map<String, dynamic> patch) async {
     final name = _roster
-        .firstWhere((a) => a.uid == uid,
-            orElse: () => CoachAthlete(uid: uid))
+        .firstWhere((a) => a.uid == uid, orElse: () => CoachAthlete(uid: uid))
         .label;
     try {
       await _db
@@ -1111,7 +1133,8 @@ class _CoachCheckinAthletesScreenState
             ),
             actions: [
               TextButton(
-                  onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel')),
               TextButton(
                   onPressed: () => Navigator.pop(ctx, local),
                   child: const Text('Save')),
@@ -1162,109 +1185,124 @@ class _CoachCheckinAthletesScreenState
                       ),
                     )
                   : ListView.separated(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
-              itemCount: _roster.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 4),
-              itemBuilder: (context, i) {
-                final athlete = _roster[i];
-                final uid = athlete.uid;
-                final s = _settings[uid] ?? {};
-                final enabled = s['reportingEnabled'] == true;
-                final goal = (s['goal'] as String?) ?? 'maintain';
-                final mode = (s['messageExerciseMode'] as String?) ?? 'automatic';
-                final customCount =
-                    (s['customExerciseIds'] as List<dynamic>? ?? const []).length;
+                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
+                      itemCount: _roster.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 4),
+                      itemBuilder: (context, i) {
+                        final athlete = _roster[i];
+                        final uid = athlete.uid;
+                        final s = _settings[uid] ?? {};
+                        final enabled = s['reportingEnabled'] == true;
+                        final goal = (s['goal'] as String?) ?? 'maintain';
+                        final mode = (s['messageExerciseMode'] as String?) ??
+                            'automatic';
+                        final customCount =
+                            (s['customExerciseIds'] as List<dynamic>? ??
+                                    const [])
+                                .length;
 
-                return Card(
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: Text(
-                            athlete.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600),
-                          ),
-                          subtitle: Text(athlete.email,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white54, fontSize: 12)),
-                          value: enabled,
-                          onChanged: (v) => _save(uid, {
-                            'reportingEnabled': v,
-                            if (v && s['goal'] == null) 'goal': 'maintain',
-                            if (v && s['messageExerciseMode'] == null)
-                              'messageExerciseMode': 'automatic',
-                            if (v) 'enabledAt': DateTime.now().toIso8601String(),
-                          }),
-                        ),
-                        if (enabled)
-                          Row(
-                            children: [
-                              DropdownButton<String>(
-                                value: goal,
-                                dropdownColor:
-                                    Theme.of(context).colorScheme.surface,
-                                items: const [
-                                  DropdownMenuItem(
-                                      value: 'cut', child: Text('Cutting')),
-                                  DropdownMenuItem(
-                                      value: 'bulk', child: Text('Bulking')),
-                                  DropdownMenuItem(
-                                      value: 'maintain',
-                                      child: Text('Maintaining')),
-                                ],
-                                onChanged: (v) {
-                                  if (v == null || v == goal) return;
-                                  // The server stamps the milestone goal
-                                  // phase (goalSetAt) when it sees the goal
-                                  // change — clients cannot manufacture
-                                  // phases to repeat milestone praise.
-                                  _save(uid, {'goal': v});
-                                },
-                              ),
-                              const SizedBox(width: 16),
-                              DropdownButton<String>(
-                                value: mode,
-                                dropdownColor:
-                                    Theme.of(context).colorScheme.surface,
-                                items: const [
-                                  DropdownMenuItem(
-                                      value: 'automatic',
-                                      child: Text('Auto lifts')),
-                                  DropdownMenuItem(
-                                      value: 'custom',
-                                      child: Text('Custom lifts')),
-                                ],
-                                onChanged: (v) => v == null
-                                    ? null
-                                    : _save(uid, {'messageExerciseMode': v}),
-                              ),
-                              const Spacer(),
-                              if (mode == 'custom')
-                                TextButton(
-                                  onPressed: () => _pickCustomExercises(uid),
-                                  child: Text('Lifts ($customCount)'),
+                        return Card(
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SwitchListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  // The athlete's CURRENT username, resolved by uid.
+                                  // athlete.label is denormalised roster data — what
+                                  // they were called when the roster was built — so it
+                                  // is the fallback, never the answer.
+                                  title: LiveUserName(
+                                    uid: athlete.uid,
+                                    fallback: athlete.label,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                  subtitle: Text(athlete.email,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          color: Colors.white54, fontSize: 12)),
+                                  value: enabled,
+                                  onChanged: (v) => _save(uid, {
+                                    'reportingEnabled': v,
+                                    if (v && s['goal'] == null)
+                                      'goal': 'maintain',
+                                    if (v && s['messageExerciseMode'] == null)
+                                      'messageExerciseMode': 'automatic',
+                                    if (v)
+                                      'enabledAt':
+                                          DateTime.now().toIso8601String(),
+                                  }),
                                 ),
-                            ],
+                                if (enabled)
+                                  Row(
+                                    children: [
+                                      DropdownButton<String>(
+                                        value: goal,
+                                        dropdownColor: Theme.of(context)
+                                            .colorScheme
+                                            .surface,
+                                        items: const [
+                                          DropdownMenuItem(
+                                              value: 'cut',
+                                              child: Text('Cutting')),
+                                          DropdownMenuItem(
+                                              value: 'bulk',
+                                              child: Text('Bulking')),
+                                          DropdownMenuItem(
+                                              value: 'maintain',
+                                              child: Text('Maintaining')),
+                                        ],
+                                        onChanged: (v) {
+                                          if (v == null || v == goal) return;
+                                          // The server stamps the milestone goal
+                                          // phase (goalSetAt) when it sees the goal
+                                          // change — clients cannot manufacture
+                                          // phases to repeat milestone praise.
+                                          _save(uid, {'goal': v});
+                                        },
+                                      ),
+                                      const SizedBox(width: 16),
+                                      DropdownButton<String>(
+                                        value: mode,
+                                        dropdownColor: Theme.of(context)
+                                            .colorScheme
+                                            .surface,
+                                        items: const [
+                                          DropdownMenuItem(
+                                              value: 'automatic',
+                                              child: Text('Auto lifts')),
+                                          DropdownMenuItem(
+                                              value: 'custom',
+                                              child: Text('Custom lifts')),
+                                        ],
+                                        onChanged: (v) => v == null
+                                            ? null
+                                            : _save(uid,
+                                                {'messageExerciseMode': v}),
+                                      ),
+                                      const Spacer(),
+                                      if (mode == 'custom')
+                                        TextButton(
+                                          onPressed: () =>
+                                              _pickCustomExercises(uid),
+                                          child: Text('Lifts ($customCount)'),
+                                        ),
+                                    ],
+                                  ),
+                              ],
+                            ),
                           ),
-                      ],
+                        );
+                      },
                     ),
-                  ),
-                );
-              },
-            ),
     );
   }
 }

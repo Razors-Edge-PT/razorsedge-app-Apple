@@ -19,6 +19,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 
 import '../core/media_models.dart';
+import '../core/media_urls.dart';
 import 'media_outbox.dart';
 
 /// Must match the limits in storage.rules, so a file that would be rejected by
@@ -61,10 +62,20 @@ class MediaStaging {
   }
 
   /// Copies (and for images, compresses) [source] into application support.
+  ///
+  /// A video keeps its REAL container. The previous code copied every picked
+  /// video to a `.mp4` name, which does not transcode anything: an iPhone
+  /// QuickTime file staged that way is still MOV bytes, and the only effect of
+  /// the rename is that the Storage object, its Content-Type and every
+  /// consumer downstream are told something untrue about them. Preserving the
+  /// container keeps the name, the bytes and the declared type in agreement —
+  /// and every format we accept plays in video_player on both platforms.
   Future<File> _stage(File source, String mediaId, String mediaType) async {
     final Directory dir = await _stagingDir();
-    final String ext = mediaType == MediaType.video ? '.mp4' : '.jpg';
-    final File target = File(p.join(dir.path, '$mediaId$ext'));
+    final String ext = mediaType == MediaType.video
+        ? storedVideoExtension(source.path)
+        : kStagedImageExtension;
+    final File target = File(p.join(dir.path, '$mediaId.$ext'));
 
     if (mediaType == MediaType.image) {
       final File? compressed = await _compressImage(source, target);
@@ -72,6 +83,15 @@ class MediaStaging {
     }
     return source.copy(target.path);
   }
+
+  /// The Storage object name for staged media of this type.
+  ///
+  /// Mirrors [_stage], so the name the bytes were staged under is the name
+  /// they are uploaded under.
+  static String objectNameFor(String mediaType, String stagedPath) =>
+      mediaType == MediaType.video
+          ? 'original.${storedVideoExtension(stagedPath)}'
+          : 'original.$kStagedImageExtension';
 
   Future<File?> _compressImage(File source, File target) async {
     try {
@@ -141,7 +161,7 @@ class MediaStaging {
       kind: OutboxKind.post,
       mediaType: mediaType,
       storagePath: 'users/$ownerUid/posts/$mediaId/'
-          '${mediaType == MediaType.video ? 'original.mp4' : 'original.jpg'}',
+          '${objectNameFor(mediaType, staged.path)}',
       localFilePath: staged.path,
       localThumbPath: thumb,
       caption: caption,
@@ -173,7 +193,7 @@ class MediaStaging {
       kind: OutboxKind.proof,
       mediaType: mediaType,
       storagePath: 'users/$ownerUid/posts/$mediaId/'
-          '${mediaType == MediaType.video ? 'original.mp4' : 'original.jpg'}',
+          '${objectNameFor(mediaType, staged.path)}',
       localFilePath: staged.path,
       localThumbPath: thumb,
       caption: caption,
@@ -202,7 +222,7 @@ class MediaStaging {
       kind: OutboxKind.story,
       mediaType: mediaType,
       storagePath: 'users/$ownerUid/stories/$mediaId/'
-          '${mediaType == MediaType.video ? 'original.mp4' : 'original.jpg'}',
+          '${objectNameFor(mediaType, staged.path)}',
       localFilePath: staged.path,
       localThumbPath: thumb,
     );

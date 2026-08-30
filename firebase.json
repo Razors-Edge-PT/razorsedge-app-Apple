@@ -14,7 +14,8 @@
         "firebase-debug.*.log",
         "*.local",
         "test",
-        "test-rules"
+        "test-rules",
+        "test-emulator"
       ]
     }
   ],

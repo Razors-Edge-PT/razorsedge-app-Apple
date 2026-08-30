@@ -850,6 +850,14 @@ exports.showcaseOnWorkoutWrite = showcase.showcaseOnWorkoutWrite;
 const identity = require('./identity');
 exports.profileChangeUsername = identity.profileChangeUsername;
 
+// Reconciles the one client identity write firestore.rules still permits — a
+// pre-1.7.13 build stamping its FIRST username during signup — back into the
+// usernames/{sha256(name)} reservation index. See identity/reconcile.js for
+// why the compatibility window is safe and how it converges.
+const identityReconcile = require('./identity/reconcile');
+exports.identityOnPublicProfileWritten =
+  identityReconcile.identityOnPublicProfileWritten;
+
 const stories = require('./social/stories');
 exports.storyOnPublished = stories.storyOnPublished;
 exports.storyCleanupScheduler = stories.storyCleanupScheduler;

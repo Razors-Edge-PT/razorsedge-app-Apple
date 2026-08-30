@@ -8,6 +8,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../profile/ui/live_identity.dart';
+
 import 'coach_mode_models.dart';
 import 'coach_mode_service.dart';
 
@@ -123,7 +125,8 @@ class _PendingApplicationsTab extends StatelessWidget {
 }
 
 class _ApplicationDetailScreen extends StatefulWidget {
-  const _ApplicationDetailScreen({required this.application, required this.service});
+  const _ApplicationDetailScreen(
+      {required this.application, required this.service});
   final CoachApplication application;
   final CoachModeService service;
 
@@ -148,8 +151,8 @@ class _ApplicationDetailScreenState extends State<_ApplicationDetailScreen> {
           _Field('Account', '${a.applicantEmail}\n${a.uid}'),
           _Field('Athletes coached',
               kAthleteCountBandLabels[ans.athleteCountBand] ?? '—'),
-          _Field('Experience',
-              kExperienceBandLabels[ans.experienceBand] ?? '—'),
+          _Field(
+              'Experience', kExperienceBandLabels[ans.experienceBand] ?? '—'),
           _Field(
             'Coaching focus',
             ans.coachingFocus
@@ -337,7 +340,9 @@ class _CoachesTabState extends State<_CoachesTab> {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
-        title: Text(c.label,
+        title: LiveUserName(
+            uid: c.uid,
+            fallback: c.label,
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -667,7 +672,8 @@ class _Field extends StatelessWidget {
 }
 
 class _EmptyBox extends StatelessWidget {
-  const _EmptyBox({required this.icon, required this.title, required this.body});
+  const _EmptyBox(
+      {required this.icon, required this.title, required this.body});
   final IconData icon;
   final String title;
   final String body;
@@ -683,8 +689,8 @@ class _EmptyBox extends StatelessWidget {
             Icon(icon, size: 44, color: Colors.grey),
             const SizedBox(height: 14),
             Text(title,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.bold)),
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 6),
             Text(body,
                 textAlign: TextAlign.center,

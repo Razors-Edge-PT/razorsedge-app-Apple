@@ -9,6 +9,7 @@ import 're_daily.dart'; // for ReDailyPostCard
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
+import 'profile/core/media_urls.dart';
 
 class FeedPostCard extends StatelessWidget {
   final Post post;
@@ -21,7 +22,6 @@ class FeedPostCard extends StatelessWidget {
     required this.onOpenDetail,
     this.isHomeContext = false,
   });
-
 
   @override
   Widget build(BuildContext context) {
@@ -47,34 +47,49 @@ class FeedPostCard extends StatelessWidget {
 
               // Media / Content (tap to open detail)
               if (!isReDaily)
-                _FeedMediaSection(key: ValueKey(post.id), post: post, onTap: onOpenDetail)
+                _FeedMediaSection(
+                    key: ValueKey(post.id), post: post, onTap: onOpenDetail)
               else
-              // Render the RE Daily card in place of media
+                // Render the RE Daily card in place of media
                 GestureDetector(
                   onTap: onOpenDetail,
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(10),
-                    child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                      stream: FirebaseFirestore.instance.collection('posts').doc(post.id).snapshots(),
+                    child:
+                        StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection('posts')
+                          .doc(post.id)
+                          .snapshots(),
                       builder: (context, snap) {
-                        if (snap.connectionState != ConnectionState.active && !snap.hasData) {
+                        if (snap.connectionState != ConnectionState.active &&
+                            !snap.hasData) {
                           return const SizedBox(
                             height: 200,
-                            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                            child: Center(
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2)),
                           );
                         }
-                        final d = snap.data?.data() ?? const <String, dynamic>{};
+                        final d =
+                            snap.data?.data() ?? const <String, dynamic>{};
                         final String dayKey = (d['dayKey'] ?? '') as String;
-                        final double dailyTotal = (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
-                        final double? bodyweightUsedKg = (d['bodyweightUsedKg'] as num?)?.toDouble();
+                        final double dailyTotal =
+                            (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
+                        final double? bodyweightUsedKg =
+                            (d['bodyweightUsedKg'] as num?)?.toDouble();
                         final Map<String, dynamic> perLift =
-                            (d['perLift'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
-                        final List<String> badges =
-                            ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const <String>[];
+                            (d['perLift'] as Map<String, dynamic>?) ??
+                                const <String, dynamic>{};
+                        final List<String> badges = ((d['badges'] as List?)
+                                ?.map((e) => e.toString())
+                                .toList()) ??
+                            const <String>[];
                         final String? caption = (d['caption'] as String?);
 
                         final bool hasBadge = badges.isNotEmpty;
-                        final bool promoted = (d['promoteToHome'] as bool?) == true;
+                        final bool promoted =
+                            (d['promoteToHome'] as bool?) == true;
 
 // In the Home tab, only render RE cards that are promoted AND have ≥1 badge.
 // In the Points tab (isHomeContext == false), render all valid RE cards.
@@ -91,12 +106,10 @@ class FeedPostCard extends StatelessWidget {
                           badges: badges,
                           caption: caption,
                         );
-
                       },
                     ),
                   ),
                 ),
-
 
               // Actions row (snapshot counts)
               const SizedBox(height: 8),
@@ -116,7 +129,6 @@ class FeedPostCard extends StatelessWidget {
         ),
       ),
     );
-
   }
 }
 
@@ -129,7 +141,8 @@ class _ActionRow extends StatelessWidget {
     final svc = PostService.instance;
     final isVideo = post.mediaType == 'video';
 
-    final postDocStream = FirebaseFirestore.instance.collection('posts').doc(post.id).snapshots();
+    final postDocStream =
+        FirebaseFirestore.instance.collection('posts').doc(post.id).snapshots();
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: postDocStream,
@@ -141,7 +154,8 @@ class _ActionRow extends StatelessWidget {
         if (snap.hasData && snap.data!.data() != null) {
           final d = snap.data!.data()!;
           likeCount = (d['likeCount'] as num?)?.toInt() ?? likeCount;
-          goodLiftCount = (d['goodLiftCount'] as num?)?.toInt() ?? goodLiftCount;
+          goodLiftCount =
+              (d['goodLiftCount'] as num?)?.toInt() ?? goodLiftCount;
           commentCount = (d['commentCount'] as num?)?.toInt() ?? commentCount;
         }
 
@@ -150,26 +164,26 @@ class _ActionRow extends StatelessWidget {
             IconButton(
               tooltip: 'Like',
               onPressed: () => svc.toggleLike(post.id).catchError((e) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Like failed: $e')));
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text('Like failed: $e')));
               }),
               icon: const Icon(Icons.thumb_up_alt_outlined),
             ),
             Text('$likeCount'),
-
             const SizedBox(width: 16),
-
             if (isVideo) ...[
               IconButton(
                 tooltip: 'Good lift',
-                onPressed: () => svc.toggleGoodLift(post.id, isVideo: true).catchError((e) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Good lift failed: $e')));
+                onPressed: () =>
+                    svc.toggleGoodLift(post.id, isVideo: true).catchError((e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Good lift failed: $e')));
                 }),
                 icon: const Icon(Icons.check_circle_outline),
               ),
               Text('$goodLiftCount'),
               const SizedBox(width: 16),
             ],
-
             const Icon(Icons.mode_comment_outlined),
             const SizedBox(width: 4),
             Text('$commentCount'),
@@ -189,7 +203,8 @@ class _LastTwoComments extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final q = FirebaseFirestore.instance
-        .collection('posts').doc(postId)
+        .collection('posts')
+        .doc(postId)
         .collection('comments')
         .orderBy('createdAt', descending: true)
         .limit(2);
@@ -198,7 +213,9 @@ class _LastTwoComments extends StatelessWidget {
       future: q.get(),
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
-          return const SizedBox(height: 20, child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
+          return const SizedBox(
+              height: 20,
+              child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
         }
         final docs = snap.data?.docs ?? const [];
         if (docs.isEmpty) {
@@ -212,7 +229,8 @@ class _LastTwoComments extends StatelessWidget {
         }
 
         final children = <Widget>[];
-        for (final d in docs.reversed) { // oldest of the two first
+        for (final d in docs.reversed) {
+          // oldest of the two first
           final m = d.data();
           final user = (m['username'] ?? m['uid'] ?? '').toString();
           final text = (m['text'] ?? '').toString();
@@ -221,8 +239,12 @@ class _LastTwoComments extends StatelessWidget {
             child: RichText(
               text: TextSpan(
                 children: [
-                  TextSpan(text: '$user: ', style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
-                  TextSpan(text: text, style: const TextStyle(color: Colors.white)),
+                  TextSpan(
+                      text: '$user: ',
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w600, color: Colors.white)),
+                  TextSpan(
+                      text: text, style: const TextStyle(color: Colors.white)),
                 ],
               ),
             ),
@@ -232,16 +254,17 @@ class _LastTwoComments extends StatelessWidget {
         children.add(
           Align(
             alignment: Alignment.centerLeft,
-            child: TextButton(onPressed: onViewAll, child: const Text('View all comments')),
+            child: TextButton(
+                onPressed: onViewAll, child: const Text('View all comments')),
           ),
         );
 
-        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: children);
+        return Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: children);
       },
     );
   }
 }
-
 
 // ─── Feed media section ──────────────────────────────────────────────────────
 
@@ -268,8 +291,12 @@ class _FeedMediaSectionState extends State<_FeedMediaSection> {
   void initState() {
     super.initState();
     if (widget.post.mediaType == 'video') {
-      final t = widget.post.thumbUrl;
-      if (t.isNotEmpty) _thumbFuture = DefaultCacheManager().getSingleFile(t);
+      // Only a real IMAGE goes to the image decoder. Posts written before
+      // 1.7.13 stored the video's own download URL in `thumbUrl`, and asking
+      // the cache manager to decode an .mp4 as a poster frame is what made
+      // every video card in this feed render as an empty box.
+      final String? t = safeThumbnailUrl(widget.post.thumbUrl);
+      if (t != null) _thumbFuture = DefaultCacheManager().getSingleFile(t);
       // _initVideo() NOT called here — lazy on visibility
     } else {
       _imageFuture = DefaultCacheManager().getSingleFile(widget.post.smallUrl);
@@ -319,7 +346,8 @@ class _FeedMediaSectionState extends State<_FeedMediaSection> {
         borderRadius: BorderRadius.circular(10),
         child: AspectRatio(
           aspectRatio: 4 / 5,
-          child: widget.post.mediaType == 'video' ? _buildVideo() : _buildImage(),
+          child:
+              widget.post.mediaType == 'video' ? _buildVideo() : _buildImage(),
         ),
       ),
     );
@@ -330,7 +358,8 @@ class _FeedMediaSectionState extends State<_FeedMediaSection> {
       future: _imageFuture,
       builder: (ctx, snap) {
         if (snap.connectionState == ConnectionState.done && snap.hasData) {
-          return Image.file(snap.data!, fit: BoxFit.cover, width: double.infinity);
+          return Image.file(snap.data!,
+              fit: BoxFit.cover, width: double.infinity);
         }
         return const ColoredBox(color: Color(0x11000000));
       },
@@ -360,7 +389,8 @@ class _FeedMediaSectionState extends State<_FeedMediaSection> {
             alignment: Alignment.topRight,
             child: Padding(
               padding: EdgeInsets.all(8),
-              child: Icon(Icons.play_circle_outline, color: Colors.white70, size: 28),
+              child: Icon(Icons.play_circle_outline,
+                  color: Colors.white70, size: 28),
             ),
           ),
         ],
@@ -381,7 +411,8 @@ class _FeedMediaSectionState extends State<_FeedMediaSection> {
         future: _thumbFuture,
         builder: (ctx, snap) {
           if (snap.connectionState == ConnectionState.done && snap.hasData) {
-            return Image.file(snap.data!, fit: BoxFit.cover, width: double.infinity);
+            return Image.file(snap.data!,
+                fit: BoxFit.cover, width: double.infinity);
           }
           return const ColoredBox(color: Color(0x11000000));
         },
@@ -406,29 +437,37 @@ class ReDailyDetailPage extends StatelessWidget {
         title: const Text('Daily RE Points'),
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('posts').doc(postId).snapshots(),
+        stream: FirebaseFirestore.instance
+            .collection('posts')
+            .doc(postId)
+            .snapshots(),
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.active && !snap.hasData) {
-            return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+            return const Center(
+                child: CircularProgressIndicator(strokeWidth: 2));
           }
           final d = snap.data?.data() ?? const <String, dynamic>{};
           final String dayKey = (d['dayKey'] ?? '') as String;
-          final double dailyTotal = (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
-          final double? bodyweightUsedKg = (d['bodyweightUsedKg'] as num?)?.toDouble();
+          final double dailyTotal =
+              (d['dailyTotal'] as num?)?.toDouble() ?? 0.0;
+          final double? bodyweightUsedKg =
+              (d['bodyweightUsedKg'] as num?)?.toDouble();
           final Map<String, dynamic> perLift =
-              (d['perLift'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+              (d['perLift'] as Map<String, dynamic>?) ??
+                  const <String, dynamic>{};
           final List<String> badges =
-              ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ?? const <String>[];
+              ((d['badges'] as List?)?.map((e) => e.toString()).toList()) ??
+                  const <String>[];
           final String? caption = (d['caption'] as String?);
           final bool alreadyPromoted = (d['promoteToHome'] as bool?) == true;
           final bool hasBadge = badges.isNotEmpty;
           final bool canPromote = hasBadge && !alreadyPromoted;
 
-
           final dummyPost = Post(
             id: postId,
             ownerUid: (d['ownerUid'] ?? '') as String,
-            mediaType: (d['mediaType'] ?? 'image') as String, // ignored for daily
+            mediaType:
+                (d['mediaType'] ?? 'image') as String, // ignored for daily
             storagePathOriginal: (d['storagePathOriginal'] ?? '') as String,
             smallUrl: (d['smallUrl'] ?? '') as String,
             thumbUrl: (d['thumbUrl'] ?? '') as String,
@@ -455,7 +494,6 @@ class ReDailyDetailPage extends StatelessWidget {
                       caption: caption,
                     ),
                     const SizedBox(height: 12),
-
                     if (canPromote)
                       Card(
                         color: Colors.blueGrey.shade700,
@@ -466,25 +504,35 @@ class ReDailyDetailPage extends StatelessWidget {
                               const Icon(Icons.campaign, color: Colors.white),
                               const SizedBox(width: 8),
                               const Expanded(
-                                child: Text('Nice! You earned a badge today. Share this to your Home feed?',
+                                child: Text(
+                                    'Nice! You earned a badge today. Share this to your Home feed?',
                                     style: TextStyle(color: Colors.white)),
                               ),
                               TextButton(
                                 onPressed: () async {
                                   try {
-                                    await FirebaseFirestore.instance.collection('posts').doc(postId).update({
+                                    await FirebaseFirestore.instance
+                                        .collection('posts')
+                                        .doc(postId)
+                                        .update({
                                       'promoteToHome': true,
-                                      'promotedAt': FieldValue.serverTimestamp(),
+                                      'promotedAt':
+                                          FieldValue.serverTimestamp(),
                                     });
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('Shared to Home feed')),
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        const SnackBar(
+                                            content:
+                                                Text('Shared to Home feed')),
                                       );
                                     }
                                   } catch (e) {
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('Share failed: $e')),
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                            content: Text('Share failed: $e')),
                                       );
                                     }
                                   }
@@ -495,7 +543,6 @@ class ReDailyDetailPage extends StatelessWidget {
                           ),
                         ),
                       ),
-
                     _ActionRow(post: dummyPost),
                     const SizedBox(height: 12),
                     _LastTwoComments(postId: postId, onViewAll: () {}),

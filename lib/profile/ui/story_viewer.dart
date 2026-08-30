@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/media_models.dart';
+import 'cached_network_image.dart';
 import 'profile_theme.dart';
 
 class StoryViewer extends StatefulWidget {
@@ -38,6 +39,7 @@ class StoryViewer extends StatefulWidget {
 class _StoryViewerState extends State<StoryViewer> {
   int _index = 0;
   Timer? _advance;
+  Timer? _expiry;
   VideoPlayerController? _video;
 
   static const Duration _imageDuration = Duration(seconds: 5);
@@ -55,8 +57,32 @@ class _StoryViewerState extends State<StoryViewer> {
         .toList(growable: false);
   }
 
+  /// Rebuilds at the EXACT instant the story on screen expires.
+  ///
+  /// A viewer can be left open — a long video, a paused phone — across the
+  /// boundary. Without this the story would keep playing after it stopped
+  /// being readable, and the next server read would simply fail. The timer
+  /// makes the viewer drop it at the same moment the rules do.
+  void _scheduleExpiry(StoryItem story) {
+    _expiry?.cancel();
+    _expiry = null;
+    final DateTime? expires = story.expiresAt;
+    if (expires == null) return; // a pending upload has not started its clock
+    final Duration remaining =
+        expires.difference(DateTime.now()) + const Duration(microseconds: 1);
+    if (remaining.isNegative) return;
+    _expiry = Timer(remaining, () {
+      if (!mounted) return;
+      // _visible re-filters on the current time, so a rebuild is all it takes;
+      // _load() then either advances or closes.
+      setState(() {});
+      _load();
+    });
+  }
+
   void _load() {
     _advance?.cancel();
+    _expiry?.cancel();
     unawaited(_video?.dispose());
     _video = null;
 
@@ -67,6 +93,7 @@ class _StoryViewerState extends State<StoryViewer> {
     }
 
     final StoryItem story = items[_index];
+    _scheduleExpiry(story);
     if (story.mediaType == MediaType.video && story.url.isNotEmpty) {
       final VideoPlayerController c =
           VideoPlayerController.networkUrl(Uri.parse(story.url));
@@ -103,6 +130,7 @@ class _StoryViewerState extends State<StoryViewer> {
   @override
   void dispose() {
     _advance?.cancel();
+    _expiry?.cancel();
     _video?.dispose();
     super.dispose();
   }
@@ -213,6 +241,14 @@ class _StoryViewerState extends State<StoryViewer> {
       );
     }
     if (story.url.isEmpty) return const SizedBox.shrink();
-    return Image.network(story.url, fit: BoxFit.contain);
+    // Persisted to disk, so a story already viewed once still shows on a cold
+    // start with no connection — for as long as it is still live.
+    return CachedProfileImage(
+      url: story.url,
+      fit: BoxFit.contain,
+      placeholder: const CircularProgressIndicator(
+        color: ProfilePalette.accent,
+      ),
+    );
   }
 }

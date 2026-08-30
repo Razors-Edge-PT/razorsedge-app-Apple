@@ -45,7 +45,9 @@ class ProfileController extends ChangeNotifier {
     required StoryRepository stories,
     required MediaStaging staging,
     required MediaUploader uploader,
-  })  : _profiles = profiles,
+    DateTime Function()? clock,
+  })  : _now = clock ?? DateTime.now,
+        _profiles = profiles,
         _identity = identity,
         _showcase = showcase,
         _media = media,
@@ -95,10 +97,65 @@ class ProfileController extends ChangeNotifier {
 
   List<StoryItem> _liveStories = const <StoryItem>[];
   List<StoryItem> _pendingStories = const <StoryItem>[];
-  List<StoryItem> get stories =>
-      <StoryItem>[..._liveStories, ..._pendingStories];
+
+  /// Stories to show right now: published ones that are STILL live at this
+  /// instant, plus the owner's own not-yet-published uploads.
+  ///
+  /// The liveness filter is applied here rather than only when the snapshot
+  /// arrived, because a profile can sit open for hours — see
+  /// [_scheduleStoryExpiry] for the timer that repaints at the exact moment
+  /// the answer changes.
+  List<StoryItem> get stories => <StoryItem>[
+        ..._liveStories.where((StoryItem s) => s.isLiveAt(_now())),
+        ..._pendingStories,
+      ];
 
   bool get hasStoryRing => stories.isNotEmpty;
+
+  /// Injectable clock, so expiry behaviour is testable without waiting.
+  final DateTime Function() _now;
+
+  Timer? _storyExpiryTimer;
+
+  /// Repaints at the EXACT instant the next story expires.
+  ///
+  /// Nothing else would. The Firestore listener only fires when a document
+  /// changes, and an expiring story does not change — it just gets older. The
+  /// hourly server sweep does delete it eventually, but until then the ring
+  /// and the viewer would keep offering a story that is already over, for up
+  /// to an hour, and a rebuild triggered by something unrelated would make it
+  /// vanish at an arbitrary moment instead.
+  ///
+  /// One timer, set to the earliest expiry among the live stories, is enough:
+  /// when it fires it rebuilds and schedules the next one.
+  void _scheduleStoryExpiry() {
+    _storyExpiryTimer?.cancel();
+    _storyExpiryTimer = null;
+
+    final DateTime now = _now();
+    DateTime? next;
+    for (final StoryItem s in _liveStories) {
+      final DateTime? expires = s.expiresAt;
+      if (expires == null) continue;
+      if (!expires.isAfter(now)) continue; // already gone
+      if (next == null || expires.isBefore(next)) next = expires;
+    }
+    if (next == null) return;
+
+    // A microsecond past the boundary, so the rebuild happens when the story
+    // is expired rather than in the instant it is still live.
+    final Duration delay =
+        next.difference(now) + const Duration(microseconds: 1);
+    _storyExpiryTimer = Timer(delay, () {
+      // Drop what has expired so the list does not have to be re-filtered
+      // forever, then repaint and arm the next boundary.
+      _liveStories = _liveStories
+          .where((StoryItem s) => s.isLiveAt(_now()))
+          .toList(growable: false);
+      notifyListeners();
+      _scheduleStoryExpiry();
+    });
+  }
 
   String? _pendingAvatarPath;
 
@@ -155,8 +212,11 @@ class ProfileController extends ChangeNotifier {
       notifyListeners();
     }));
 
-    _subs.add(_stories.watchLive(targetUid).listen((List<StoryItem> items) {
+    _subs.add(_stories
+        .watchLive(targetUid, clock: _now)
+        .listen((List<StoryItem> items) {
       _liveStories = items;
+      _scheduleStoryExpiry();
       notifyListeners();
     }));
 
@@ -310,7 +370,11 @@ class ProfileController extends ChangeNotifier {
   }
 
   Future<void> addProof(
-      ShowcaseRecord record, File file, String mediaType) async {
+    ShowcaseRecord record,
+    File file,
+    String mediaType, {
+    String? caption,
+  }) async {
     if (!isOwner) return;
     await _staging.queueProof(
       ownerUid: targetUid,
@@ -318,6 +382,7 @@ class ProfileController extends ChangeNotifier {
       fingerprint: record.fingerprint,
       slot: record.slot,
       mediaType: mediaType,
+      caption: caption,
     );
     unawaited(processOutbox());
   }
@@ -359,6 +424,7 @@ class ProfileController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _storyExpiryTimer?.cancel();
     for (final StreamSubscription<Object?> sub in _subs) {
       unawaited(sub.cancel());
     }

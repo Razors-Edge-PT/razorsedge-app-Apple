@@ -45,19 +45,37 @@ function publicRef(uid) {
 }
 
 /**
- * Buffered Firestore store. Reads go straight through; writes accumulate and
- * are committed by flush() in bounded batches, so one workout write costs one
- * commit rather than one commit per document.
+ * Buffered Firestore store, shared by the plain (batched) and the
+ * TRANSACTIONAL adapters below.
+ *
+ * `reader` abstracts the only difference between them:
+ *   plain        reads go straight to Firestore, writes commit in batches
+ *   transaction  reads go through tx.get / tx.getAll, writes apply to the tx
+ *
+ * ── Why reads are overlaid with the pending buffer ──────────────────────────
+ * Writes accumulate rather than committing one document at a time, so a read
+ * issued AFTER a queued write would otherwise see the pre-write value. That
+ * matters on the rebuild path: applyWorkoutDay writes the changed day
+ * contributions and then calls listDaysForSlot() to re-fold the slot. Without
+ * the overlay that fold reads the days as they were BEFORE the edit, and the
+ * published snapshot lags one workout write behind the day documents it is
+ * supposedly derived from.
+ *
+ * The in-memory store used by the unit tests never had this problem, because
+ * its setDay() writes immediately — which is exactly why the divergence was
+ * invisible to them. The overlay makes both adapters behave identically.
  */
-function firestoreStore(uid) {
+function bufferedStore(uid, reader) {
   const pending = new Map(); // ref path -> { ref, data, op }
+  // dayDocId -> contribution, or null for a queued delete.
+  const dayOverlay = new Map();
   let snapshotCache;
   let snapshotLoaded = false;
   let stateCache;
   let stateLoaded = false;
 
-  function queueSet(ref, data) {
-    pending.set(ref.path, { ref, data, op: 'set' });
+  function queueSet(ref, data, options) {
+    pending.set(ref.path, { ref, data, op: 'set', options: options || { merge: true } });
   }
   function queueDelete(ref) {
     pending.set(ref.path, { ref, op: 'delete' });
@@ -66,7 +84,7 @@ function firestoreStore(uid) {
   return {
     async getState() {
       if (!stateLoaded) {
-        const snap = await stateRef(uid).get();
+        const snap = await reader.get(stateRef(uid));
         stateCache = snap.exists ? snap.data() : null;
         stateLoaded = true;
       }
@@ -84,7 +102,7 @@ function firestoreStore(uid) {
     },
     async getSnapshot() {
       if (!snapshotLoaded) {
-        const snap = await publicRef(uid).get();
+        const snap = await reader.get(publicRef(uid));
         const data = snap.exists ? snap.data() : null;
         snapshotCache = data && data[SNAPSHOT_FIELD] ? data[SNAPSHOT_FIELD] : null;
         snapshotLoaded = true;
@@ -98,44 +116,153 @@ function firestoreStore(uid) {
       payload[SNAPSHOT_FIELD] = Object.assign({}, next, {
         updatedAtMs: Date.now(),
       });
-      queueSet(publicRef(uid), payload);
+      // mergeFields, NOT merge.
+      //
+      // { merge: true } deep-merges maps, so an omitted key survives instead of
+      // being removed. snapshotFromLifts() omits a lift that has no surviving
+      // day, which means a plain merge could never take an achievement DOWN:
+      // delete the last bench workout and the bench record stays on the public
+      // profile forever, proving something the athlete no longer has any data
+      // for.
+      //
+      // mergeFields replaces the WHOLE value at profileShowcaseV1 while
+      // leaving every neighbouring field — rePoints*, avatar, bio, username —
+      // completely untouched, which is the exact semantic this mirror needs.
+      queueSet(publicRef(uid), payload, { mergeFields: [SNAPSHOT_FIELD] });
     },
     async getDaysForDate(dateKey) {
       const refs = SLOT_ORDER.map((slot) => daysCol(uid).doc(dayDocId(slot, dateKey)));
-      const snaps = await db().getAll(...refs);
+      const snaps = await reader.getAll(refs);
       const out = {};
       snaps.forEach((snap, i) => {
         if (snap.exists) out[SLOT_ORDER[i]] = snap.data();
       });
+      // Queued writes win over what is still stored.
+      for (const slot of SLOT_ORDER) {
+        const id = dayDocId(slot, dateKey);
+        if (!dayOverlay.has(id)) continue;
+        const queued = dayOverlay.get(id);
+        if (queued === null) delete out[slot];
+        else out[slot] = queued;
+      }
       return out;
     },
     async listDaysForSlot(slot) {
-      const q = await daysCol(uid).where('slot', '==', slot).get();
-      const out = q.docs.map((d) => d.data());
+      const q = await reader.query(daysCol(uid).where('slot', '==', slot));
+      const byDate = new Map();
+      for (const d of q.docs) byDate.set(d.id, d.data());
+      for (const [id, queued] of dayOverlay) {
+        if (!id.startsWith(`${slot}__`)) continue;
+        if (queued === null) byDate.delete(id);
+        else byDate.set(id, queued);
+      }
+      const out = [...byDate.values()];
       // Deterministic order so the fold cannot depend on Firestore read order.
       out.sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
       return out;
     },
     async setDay(slot, dateKey, day) {
+      dayOverlay.set(dayDocId(slot, dateKey), day);
       queueSet(daysCol(uid).doc(dayDocId(slot, dateKey)), day);
     },
     async deleteDay(slot, dateKey) {
+      dayOverlay.set(dayDocId(slot, dateKey), null);
       queueDelete(daysCol(uid).doc(dayDocId(slot, dateKey)));
     },
     async flush() {
       const ops = [...pending.values()];
       pending.clear();
+      dayOverlay.clear();
+      await reader.commit(ops);
+    },
+  };
+}
+
+/** Reads straight from Firestore; writes commit in bounded batches. */
+function plainReader() {
+  return {
+    get: (ref) => ref.get(),
+    getAll: (refs) => db().getAll(...refs),
+    query: (q) => q.get(),
+    async commit(ops) {
       const CHUNK = 400;
       for (let i = 0; i < ops.length; i += CHUNK) {
         const batch = db().batch();
         for (const op of ops.slice(i, i + CHUNK)) {
           if (op.op === 'delete') batch.delete(op.ref);
-          else batch.set(op.ref, op.data, { merge: true });
+          else batch.set(op.ref, op.data, op.options);
         }
         await batch.commit();
       }
     },
   };
+}
+
+/**
+ * Reads and writes inside ONE Firestore transaction.
+ *
+ * Every read is issued before any write, which is the transaction contract:
+ * applyWorkoutDay only ever queues writes into the buffer, and flush() is what
+ * finally hands them to the transaction.
+ */
+function transactionReader(tx) {
+  return {
+    get: (ref) => tx.get(ref),
+    getAll: (refs) => tx.getAll(...refs),
+    query: (q) => tx.get(q),
+    async commit(ops) {
+      for (const op of ops) {
+        if (op.op === 'delete') tx.delete(op.ref);
+        else tx.set(op.ref, op.data, op.options);
+      }
+    },
+  };
+}
+
+/** The batched, non-transactional store. Used by the offline backfill. */
+function firestoreStore(uid) {
+  return bufferedStore(uid, plainReader());
+}
+
+/** The transactional store. Used by the always-on trigger. */
+function transactionalStore(uid, tx) {
+  return bufferedStore(uid, transactionReader(tx));
+}
+
+/**
+ * Applies ONE workout day to ONE athlete's projection inside a single
+ * Firestore transaction.
+ *
+ * ── Why a transaction and not a batch ───────────────────────────────────────
+ * The projection is a READ-MODIFY-WRITE: the trigger reads the published
+ * snapshot, folds one day into it, and writes the whole snapshot back. A batch
+ * makes the WRITES atomic but does nothing about the read, so two trigger
+ * instances for the same athlete — a squat day and a bench day landing
+ * together, or an original delivery racing its own retry — can both read the
+ * same snapshot, each fold in only their own lift, and each write the result.
+ * The second commit wins and the first athlete's lift is silently gone from
+ * users_public, even though its showcaseDays document is sitting right there.
+ *
+ * A transaction makes the read part of the atomic unit. Firestore aborts and
+ * REPLAYS the losing attempt against the committed state, so the replay folds
+ * its day into a snapshot that already contains the other one and both lifts
+ * survive. Contention is per-athlete, and two workouts for the same athlete in
+ * the same instant is rare, so the retry cost is negligible.
+ *
+ * Idempotency is unchanged and still carries the retry safety: document ids
+ * are deterministic and every value is derived only from the surviving workout
+ * days, so a duplicate delivery converges on the identical result rather than
+ * double-counting.
+ */
+async function applyWorkoutDayTransactionally(uid, dateKey, workoutData) {
+  return db().runTransaction(async (tx) => {
+    const store = transactionalStore(uid, tx);
+    const result = await applyWorkoutDay(store, dateKey, workoutData);
+    // Hands the buffered writes to the transaction. Nothing was written to it
+    // before this point, so every read above happened first.
+    await store.flush();
+    return result;
+  });
 }
 
 /**
@@ -154,12 +281,10 @@ const showcaseOnWorkoutWrite = onDocumentWritten(
     if (!DATE_KEY_RE.test(workoutId)) return; // only date-keyed workout docs
 
     try {
-      const store = firestoreStore(uid);
       const after = event.data && event.data.after && event.data.after.exists
         ? event.data.after.data()
         : null;
-      const result = await applyWorkoutDay(store, workoutId, after);
-      await store.flush();
+      const result = await applyWorkoutDayTransactionally(uid, workoutId, after);
       if (result.changed) {
         logger.info('showcase updated', {
           uid,
@@ -229,7 +354,9 @@ async function pruneStaleDays(uid, keepIds) {
 
 module.exports = {
   showcaseOnWorkoutWrite,
+  applyWorkoutDayTransactionally,
   firestoreStore,
+  transactionalStore,
   rebuildAthlete,
   readPublishedSnapshot,
   pruneStaleDays,

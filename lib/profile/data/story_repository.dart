@@ -26,6 +26,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/media_models.dart';
 import 'media_outbox.dart';
 
+/// How far the live-story query's cutoff is moved forward, to stay inside the
+/// server-enforced 24 hours whatever this device's clock says.
+///
+/// 90 seconds absorbs ordinary NTP drift and a modest manual clock error. A
+/// device further behind than this loses story listing entirely rather than
+/// seeing expired stories — the query is denied and the stream reports empty,
+/// which is the right way for a clock disagreement to fail.
+const Duration kStoryQuerySkewMargin = Duration(seconds: 90);
+
 class StoryRepository {
   StoryRepository({FirebaseFirestore? firestore, required MediaOutbox outbox})
       : _db = firestore ?? FirebaseFirestore.instance,
@@ -42,10 +51,24 @@ class StoryRepository {
   /// The query excludes expired documents at the source, and [StoryItem.isLiveAt]
   /// filters again on the client so a story cannot linger on screen just
   /// because the snapshot arrived a few seconds before it expired.
+  ///
+  /// ── Why the cutoff carries a margin ─────────────────────────────────────
+  /// The security rule now enforces the same 24 hours, measured on the SERVER
+  /// clock. Firestore rules are not filters: if a query's result set contains
+  /// one document the reader may not read, the WHOLE query is denied. So a
+  /// device whose clock is a little slow would ask for a story the server
+  /// considers expired and lose every story on the profile, not just that one.
+  ///
+  /// Moving the cutoff forward by [kStoryQuerySkewMargin] makes the request
+  /// strictly narrower than the rule allows for any device up to that far
+  /// behind. The cost is that a story in its final minute is not listed — a
+  /// minute the viewer was about to lose anyway.
   Stream<List<StoryItem>> watchLive(String ownerUid,
       {DateTime Function()? clock}) {
     final DateTime Function() now = clock ?? DateTime.now;
-    final Timestamp cutoff = Timestamp.fromDate(now().subtract(StoryItem.ttl));
+    final Timestamp cutoff = Timestamp.fromDate(
+      now().subtract(StoryItem.ttl).add(kStoryQuerySkewMargin),
+    );
     return _stories(ownerUid)
         .where('publishedAt', isGreaterThan: cutoff)
         .orderBy('publishedAt')

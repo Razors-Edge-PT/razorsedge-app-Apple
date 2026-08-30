@@ -79,6 +79,28 @@ class UsernameChangeResult {
       outcome == UsernameChangeOutcome.unchanged;
 }
 
+/// What every surface needs about a person, resolved BY UID.
+@immutable
+class PublicIdentity {
+  const PublicIdentity({required this.uid, this.displayName, this.photoURL});
+
+  final String uid;
+
+  /// The person's CURRENT username. Null when nothing has been resolved yet.
+  final String? displayName;
+
+  final String? photoURL;
+
+  static PublicIdentity empty(String uid) => PublicIdentity(uid: uid);
+
+  bool get hasName => displayName != null && displayName!.isNotEmpty;
+}
+
+/// Shown when a uid resolves to nothing at all — no live value, no
+/// denormalised fallback. Better than a raw uid, which means nothing to a
+/// reader and leaks an internal identifier into the UI.
+const String kUnknownAthleteName = 'GoodLift athlete';
+
 class IdentityRepository {
   IdentityRepository({
     FirebaseFirestore? firestore,
@@ -120,7 +142,24 @@ class IdentityRepository {
 
   /// Process-lifetime cache of uid → display name. Backed by Firestore's own
   /// persistent cache, so a miss is still usually offline-answerable.
+  ///
+  /// This is a HINT for the first frame, never an answer that outlives a
+  /// change: [watchPublicIdentity] keeps a live subscription open and
+  /// overwrites this the moment the document changes.
   final Map<String, String> _nameCache = <String, String>{};
+
+  /// Last known full public identity per uid, for the same first-frame reason.
+  final Map<String, PublicIdentity> _identityCache = <String, PublicIdentity>{};
+
+  /// One live channel per uid, shared by every widget showing that person.
+  ///
+  /// Twenty comments by one author cost ONE Firestore listener, not twenty —
+  /// and, more importantly, all twenty update together the instant that author
+  /// renames. The previous per-widget `FutureBuilder` + process-lifetime map
+  /// could not: once a name was cached it was never re-read for the life of
+  /// the process, so a rename simply did not appear until the app restarted.
+  final Map<String, _IdentityChannel> _identityChannels =
+      <String, _IdentityChannel>{};
 
   /// In-flight resolutions, so a grid of twenty comments by one author causes
   /// one read, not twenty.
@@ -133,17 +172,56 @@ class IdentityRepository {
   /// process has never resolved it.
   String? cachedDisplayName(String uid) => _nameCache[uid];
 
+  /// Last known public identity for [uid], for a StreamBuilder's initialData.
+  PublicIdentity? cachedPublicIdentity(String uid) => _identityCache[uid];
+
+  /// Live identity for [uid]: name and avatar, kept current.
+  ///
+  /// Broadcast and shared, so every surface showing this person subscribes to
+  /// ONE Firestore listener and they all rebuild together. Firestore serves
+  /// the first event from its persistent cache, so this is as fast as the old
+  /// in-memory map on a warm start and correct on a rename, which the map
+  /// never was.
+  Stream<PublicIdentity> watchPublicIdentity(String uid) {
+    if (uid.isEmpty) {
+      return Stream<PublicIdentity>.value(PublicIdentity.empty(uid));
+    }
+    final _IdentityChannel channel = _identityChannels.putIfAbsent(
+      uid,
+      () => _IdentityChannel(
+        source: _publicRef(uid).snapshots().map(
+          (DocumentSnapshot<Map<String, dynamic>> snap) {
+            final Map<String, dynamic>? data = snap.data();
+            final PublicIdentity identity = PublicIdentity(
+              uid: uid,
+              displayName: _readName(data),
+              photoURL: _readPhoto(data),
+            );
+            if (identity.hasName) _nameCache[uid] = identity.displayName!;
+            _identityCache[uid] = identity;
+            return identity;
+          },
+        ),
+      ),
+    );
+    return channel.stream;
+  }
+
+  /// True when a live channel is already open for [uid]. For tests, and for
+  /// asserting that N surfaces share ONE Firestore listener.
+  @visibleForTesting
+  bool hasOpenChannel(String uid) => _identityChannels.containsKey(uid);
+
+  String? _readPhoto(Map<String, dynamic>? data) {
+    final Object? url = data?['photoURL'];
+    if (url is String && url.trim().isNotEmpty) return url.trim();
+    return null;
+  }
+
   /// Live username for [uid]. Emits the cached value immediately, then keeps
   /// up with the server.
-  Stream<String?> watchDisplayName(String uid) {
-    return _publicRef(uid).snapshots().map(
-      (DocumentSnapshot<Map<String, dynamic>> snap) {
-        final String? name = _readName(snap.data());
-        if (name != null && name.isNotEmpty) _nameCache[uid] = name;
-        return name;
-      },
-    );
-  }
+  Stream<String?> watchDisplayName(String uid) => watchPublicIdentity(uid)
+      .map((PublicIdentity identity) => identity.displayName);
 
   /// Resolves the CURRENT username for [uid].
   ///
@@ -249,7 +327,15 @@ class IdentityRepository {
       final bool authUpdated = data['authDisplayNameUpdated'] == true;
 
       final String? uid = _authOrNull?.currentUser?.uid;
-      if (uid != null) _nameCache[uid] = username;
+      if (uid != null) {
+        _nameCache[uid] = username;
+        final PublicIdentity? previous = _identityCache[uid];
+        _identityCache[uid] = PublicIdentity(
+          uid: uid,
+          displayName: username,
+          photoURL: previous?.photoURL,
+        );
+      }
 
       return UsernameChangeResult(
         changed
@@ -294,5 +380,61 @@ class IdentityRepository {
           message: kUsernameCheckFailedMessage,
         );
     }
+  }
+}
+
+/// One long-lived Firestore subscription for one uid, fanned out to every
+/// listener.
+///
+/// ── Why not `asBroadcastStream()` ───────────────────────────────────────────
+/// A stream returned by `asBroadcastStream()` cancels its upstream
+/// subscription when its LAST listener leaves, and does not restart it. So a
+/// single `await stream.first` anywhere in the app — a one-shot resolution, a
+/// test, a widget that is disposed — permanently killed the shared channel,
+/// and every surface that subscribed afterwards received nothing. That is the
+/// same "read once and never again" failure the process-lifetime cache had,
+/// arrived at by a different route.
+///
+/// This holds the upstream subscription open for the life of the repository
+/// (one small document per person the user has looked at) and replays the last
+/// known value to each new listener, so a late subscriber renders immediately
+/// instead of waiting for the next change.
+class _IdentityChannel {
+  _IdentityChannel({required Stream<PublicIdentity> source}) : _source = source;
+
+  final Stream<PublicIdentity> _source;
+  final StreamController<PublicIdentity> _out =
+      StreamController<PublicIdentity>.broadcast();
+
+  StreamSubscription<PublicIdentity>? _upstream;
+  PublicIdentity? _last;
+
+  Stream<PublicIdentity> get stream {
+    _subscribe();
+    final PublicIdentity? last = _last;
+    if (last == null) return _out.stream;
+    // Replay, then continue.
+    return _out.stream.transform(
+      StreamTransformer<PublicIdentity, PublicIdentity>.fromBind(
+        (Stream<PublicIdentity> events) async* {
+          yield last;
+          yield* events;
+        },
+      ),
+    );
+  }
+
+  void _subscribe() {
+    if (_upstream != null) return;
+    _upstream = _source.listen(
+      (PublicIdentity identity) {
+        _last = identity;
+        if (!_out.isClosed) _out.add(identity);
+      },
+      // Offline with a cold cache, or a permission error: keep the channel
+      // alive and report what is already known rather than tearing every
+      // subscriber down with an error.
+      onError: (Object _) {},
+    );
   }
 }

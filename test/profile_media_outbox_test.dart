@@ -73,7 +73,7 @@ void main() {
       await first.close();
 
       final MediaOutbox second = openOnDisk();
-      final List<OutboxItem> claimable = await second.claimable();
+      final List<OutboxItem> claimable = await second.claimable(ownerUid: 'u1');
       expect(claimable.map((OutboxItem i) => i.mediaId), <String>['m1']);
       await second.close();
     });
@@ -167,10 +167,10 @@ void main() {
       await enqueueAvatar(outbox, 'a1');
       await enqueueAvatar(outbox, 'a2');
 
-      final List<OutboxItem> claimable = await outbox.claimable();
+      final List<OutboxItem> claimable = await outbox.claimable(ownerUid: 'u1');
       expect(claimable.map((OutboxItem i) => i.mediaId), <String>['a2']);
 
-      final List<OutboxItem> orphans = await outbox.superseded();
+      final List<OutboxItem> orphans = await outbox.superseded('u1');
       expect(orphans.map((OutboxItem i) => i.mediaId), <String>['a1'],
           reason: 'the stale object still has to be cleaned up');
       await outbox.close();

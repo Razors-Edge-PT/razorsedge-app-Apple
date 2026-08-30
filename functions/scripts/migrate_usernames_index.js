@@ -17,9 +17,38 @@
 //   * Reads users_public and users; writes ONLY the usernames collection.
 //
 // Modes:
+//   --reconcile          repair INDEX DRIFT: delete reservations whose stated
+//                        owner no longer displays that name. Combine with
+//                        --apply to actually delete; on its own it reports.
+//
+// DRIFT is what a client write that skipped the reservation service leaves
+// behind. firestore.rules still permits exactly one of those -- a pre-1.7.13
+// build stamping its FIRST username during signup -- and
+// identityOnPublicProfileWritten reconciles each one as it lands. --reconcile
+// is the catch-up pass for everything written before that trigger existed.
+//
+// Reconcile only ever DELETES a reservation whose stated owner has since moved
+// to a different name. It still never renames an account: an account whose
+// displayed name is reserved to somebody else is REPORTED, because deciding
+// which of two real people keeps a name is not a script's call.
+//
 //   (default)  dry-run   — report what would change, write nothing
 //   --apply              — write the reservations
 //   --verify             — assert every account resolves to its own reservation
+//   --reconcile          — repair INDEX DRIFT: delete reservations whose owner
+//                          no longer displays that name. Combine with --apply
+//                          to actually delete; on its own it reports.
+//
+// DRIFT is what a client write that skipped the reservation service leaves
+// behind. firestore.rules still permits exactly one of those — a pre-1.7.13
+// build stamping its FIRST username during signup — and
+// identityOnPublicProfileWritten reconciles each one as it lands. This mode is
+// the catch-up pass for everything written before that trigger existed.
+//
+// Reconcile only ever DELETES a reservation whose stated owner has since moved
+// to a different name. It still never renames an account: an account whose
+// displayed name is reserved to somebody else is REPORTED, because deciding
+// which of two real people keeps a name is not a script's call.
 //
 // Credentials come from GOOGLE_APPLICATION_CREDENTIALS or the ambient service
 // account. Nothing is ever printed that could reveal a credential.
@@ -48,23 +77,34 @@ function usage() {
     'Verify:',
     '  node scripts/migrate_usernames_index.js --project goodlift-us-storage --verify',
     '',
+    'Reconcile index drift (report only; add --apply to delete stale keys):',
+    '  node scripts/migrate_usernames_index.js --project goodlift-us-storage --reconcile',
+    '',
     'A collision is never resolved automatically: both accounts keep their',
     'names and the run reports the clash for a human to settle.',
   ].join('\n');
 }
 
 function parseArgs(argv) {
-  const out = { projectId: DEFAULT_PROJECT_ID, apply: false, verify: false, help: false };
+  const out = {
+    projectId: DEFAULT_PROJECT_ID,
+    apply: false,
+    verify: false,
+    reconcile: false,
+    help: false,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--apply') out.apply = true;
     else if (arg === '--verify') out.verify = true;
+    else if (arg === '--reconcile') out.reconcile = true;
     else if (arg === '--project') out.projectId = argv[++i];
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
   }
   if (!out.projectId) throw new Error('--project requires a value');
   if (out.apply && out.verify) throw new Error('Choose either --apply or --verify, not both');
+  if (out.reconcile && out.verify) throw new Error('Choose either --reconcile or --verify, not both');
   return out;
 }
 
@@ -90,6 +130,95 @@ async function loadAccounts(db) {
   return [...accounts.values()];
 }
 
+/**
+ * Repairs index DRIFT: a reservation whose stated owner has since moved to a
+ * different name, left behind by a client write that never went through the
+ * reservation service.
+ *
+ * Deleting one of these is always safe. The reservation asserts "uid X holds
+ * name N"; X's own documents say X displays something else, so the assertion
+ * is already false, and the only thing the stale key still achieves is keeping
+ * N unclaimable forever.
+ *
+ * The opposite drift — an account DISPLAYING a name the index assigns to
+ * somebody else — is reported and never repaired here. Both parties are real
+ * accounts and resolving it means renaming one of them, which is the
+ * operator's decision rather than this script's.
+ * identityOnPublicProfileWritten resolves that case for every claim made from
+ * now on.
+ */
+async function reconcileDrift(db, accounts, counts, apply) {
+  const displayedLowerByUid = new Map();
+  for (const acct of accounts) {
+    displayedLowerByUid.set(acct.uid, normalizeUsername(acct.username));
+  }
+
+  process.stdout.write('\nDRIFT RECONCILIATION\n');
+
+  const snap = await db.collection(USERNAMES).get();
+
+  const stale = [];
+  const owners = new Map();
+  for (const doc of snap.docs) {
+    const d = doc.data() || {};
+    if (!d.uid) continue; // contested marker — owned by nobody, left alone
+    const reservedLower = normalizeUsername(d.usernameLower || d.username || '');
+    if (!reservedLower) continue;
+    owners.set(reservedLower, d.uid);
+
+    const displayed = displayedLowerByUid.get(d.uid);
+    if (displayed === undefined) {
+      // The account carries no username at all any more (or was deleted). The
+      // reservation is asserting something untrue either way.
+      stale.push({ ref: doc.ref, uid: d.uid, reservedLower, displayed: '(none)' });
+    } else if (displayed !== reservedLower) {
+      stale.push({ ref: doc.ref, uid: d.uid, reservedLower, displayed });
+    }
+  }
+  counts.driftStaleReservations = stale.length;
+
+  for (const item of stale) {
+    process.stdout.write(
+      `  STALE "${item.reservedLower}" reserved to ${item.uid}, which now displays "${item.displayed}"\n`,
+    );
+  }
+
+  if (apply && stale.length) {
+    let batch = db.batch();
+    let batched = 0;
+    for (const item of stale) {
+      batch.delete(item.ref);
+      batched += 1;
+      counts.driftStaleDeleted += 1;
+      if (batched >= 400) {
+        await batch.commit();
+        batch = db.batch();
+        batched = 0;
+      }
+    }
+    if (batched) await batch.commit();
+  }
+
+  // The other direction: an account displaying a name it does not own.
+  for (const acct of accounts) {
+    const lower = normalizeUsername(acct.username);
+    if (!lower) continue;
+    const owner = owners.get(lower);
+    if (owner && owner !== acct.uid) {
+      counts.driftNameHeldByOther += 1;
+      process.stdout.write(
+        `  UNOWNED ${acct.uid} displays "${lower}", reserved to ${owner} — needs a human\n`,
+      );
+    }
+  }
+
+  if (!stale.length && !counts.driftNameHeldByOther) {
+    process.stdout.write('  No drift found.\n');
+  } else if (!apply) {
+    process.stdout.write('  Report only. Add --apply to delete the stale reservations.\n');
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -100,7 +229,13 @@ async function main() {
   admin.initializeApp({ projectId: options.projectId });
   const db = admin.firestore();
 
-  const mode = options.verify ? 'verify' : options.apply ? 'apply' : 'dry-run';
+  const mode = options.verify
+    ? 'verify'
+    : options.reconcile
+      ? (options.apply ? 'reconcile (writing)' : 'reconcile (report only)')
+      : options.apply
+        ? 'apply'
+        : 'dry-run';
   process.stdout.write(`Username index migration — mode: ${mode}\n`);
   process.stdout.write(`Project: ${options.projectId}\n\n`);
 
@@ -141,6 +276,9 @@ async function main() {
     skippedByCollision: 0,
     contestedMarkers: 0,
     contestedWritten: 0,
+    driftStaleReservations: 0,
+    driftStaleDeleted: 0,
+    driftNameHeldByOther: 0,
   };
 
   if (collisions.length) {
@@ -261,6 +399,10 @@ async function main() {
   }
   await commit();
 
+  if (options.reconcile) {
+    await reconcileDrift(db, accounts, counts, options.apply);
+  }
+
   process.stdout.write('\nCOUNTS\n');
   for (const [k, v] of Object.entries(counts)) {
     process.stdout.write(`  ${k}: ${v}\n`);
@@ -279,8 +421,9 @@ async function main() {
   if (!options.apply) {
     process.stdout.write('\nDry run only. Re-run with --apply to write.\n');
   }
-  // A collision is a warning the operator must see, not a silent success.
-  return counts.collisionGroups > 0 ? 2 : 0;
+  // A collision, or a name an account displays but does not own, is a warning
+  // the operator must see -- not a silent success.
+  return counts.collisionGroups > 0 || counts.driftNameHeldByOther > 0 ? 2 : 0;
 }
 
 main()

@@ -11,6 +11,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../core/media_models.dart';
+import '../core/media_urls.dart';
+import 'cached_network_image.dart';
 import 'profile_theme.dart';
 
 class MediaGrid extends StatelessWidget {
@@ -187,23 +189,47 @@ class _Thumbnail extends StatelessWidget {
       return Image.file(File(local), fit: BoxFit.cover);
     }
 
-    final String url = item.thumbUrl.isNotEmpty ? item.thumbUrl : item.smallUrl;
-    if (url.isEmpty) return const ColoredBox(color: ProfilePalette.surface);
+    // `thumbUrl` is only trusted when it names an image. Posts written before
+    // 1.7.13 stored the video's own URL there, and an .mp4 handed to an image
+    // decoder is a broken-image icon, not a poster frame. `smallUrl` is the
+    // playable media, so for a video it is never a fallback thumbnail either —
+    // an honest video placeholder is better than a broken one.
+    final String? url = item.isVideo
+        ? safeThumbnailUrl(item.thumbUrl)
+        : safeThumbnailUrl(
+            item.thumbUrl.isNotEmpty ? item.thumbUrl : item.smallUrl,
+          );
+    if (url == null) return _MediaPlaceholder(isVideo: item.isVideo);
 
-    return Image.network(
-      url,
+    // Disk-persisted, so a previously seen tile still renders after the app is
+    // killed and reopened with no connection.
+    return CachedProfileImage(
+      url: url,
       fit: BoxFit.cover,
-      // Firebase's HTTP cache serves a previously viewed thumbnail without a
-      // network round trip, which is what keeps a warm reopen instant.
-      loadingBuilder: (BuildContext c, Widget child, ImageChunkEvent? p) =>
-          p == null ? child : const ColoredBox(color: ProfilePalette.surface),
-      errorBuilder: (_, __, ___) => const ColoredBox(
-        color: ProfilePalette.surface,
-        child: Icon(Icons.broken_image_outlined,
-            size: 18, color: ProfilePalette.textMuted),
-      ),
+      placeholder: const ColoredBox(color: ProfilePalette.surface),
+      fallback: _MediaPlaceholder(isVideo: item.isVideo),
     );
   }
+}
+
+/// Drawn when a tile has no image to show: a video with no poster frame, or a
+/// thumbnail that could not be fetched.
+class _MediaPlaceholder extends StatelessWidget {
+  const _MediaPlaceholder({required this.isVideo});
+
+  final bool isVideo;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+        color: ProfilePalette.surface,
+        child: Center(
+          child: Icon(
+            isVideo ? Icons.movie_outlined : Icons.image_outlined,
+            size: 20,
+            color: ProfilePalette.textMuted,
+          ),
+        ),
+      );
 }
 
 class _PendingScrim extends StatelessWidget {

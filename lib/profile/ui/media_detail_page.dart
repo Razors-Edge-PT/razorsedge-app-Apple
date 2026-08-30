@@ -1,16 +1,27 @@
-/// Full-screen media viewer for a grid tile or an attached proof video.
+/// Full-screen viewer for media with NO post document behind it.
 ///
-/// Deliberately thin. Likes, GoodLifts, comments and the existing post detail
-/// experience already live in the app's post surfaces — this reuses the app's
-/// PostDetailPage for a real post rather than reimplementing any of it, and
-/// only draws its own player for the cases that have no post behind them
-/// (a proof opened straight from the showcase).
+/// Deliberately thin, and deliberately narrow in scope. Likes, GoodLifts,
+/// comments, caption editing and owner deletion already live in the app's
+/// PostDetailPage, and a PUBLISHED grid tile opens that — see
+/// ProfileScreen._openMedia. This page is only for the cases where there is no
+/// post to open:
+///
+///   * a pending upload, whose bytes are still only on this device,
+///   * a proof opened straight from the showcase,
+///   * a published post whose document could not be read right now.
+///
+/// It used to be what a published tile opened as well, which is why tapping a
+/// photo on your own profile gave you a page with no comments and no like
+/// button while the identical photo in the feed had both.
 library;
+
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/media_models.dart';
+import 'cached_network_image.dart';
 import 'profile_theme.dart';
 
 class MediaDetailPage extends StatefulWidget {
@@ -19,6 +30,7 @@ class MediaDetailPage extends StatefulWidget {
     required this.title,
     required this.mediaType,
     required this.url,
+    this.localFilePath,
     this.caption,
     this.badge,
   });
@@ -26,6 +38,12 @@ class MediaDetailPage extends StatefulWidget {
   final String title;
   final String mediaType;
   final String url;
+
+  /// A staged local copy, for media that has not uploaded yet. Preferred over
+  /// [url] when present — a pending item has no remote URL at all, and its
+  /// owner should still be able to look at what they queued.
+  final String? localFilePath;
+
   final String? caption;
 
   /// Optional achievement line, e.g. "Bench Press, Barbell · 180 kg × 2".
@@ -43,14 +61,19 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   @override
   void initState() {
     super.initState();
-    if (widget.mediaType == MediaType.video && widget.url.isNotEmpty) {
+    final bool hasLocal = widget.localFilePath != null &&
+        File(widget.localFilePath!).existsSync();
+    if (widget.mediaType == MediaType.video &&
+        (hasLocal || widget.url.isNotEmpty)) {
       _initVideo();
     }
   }
 
   Future<void> _initVideo() async {
-    final VideoPlayerController c =
-        VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    final String? local = widget.localFilePath;
+    final VideoPlayerController c = local != null && File(local).existsSync()
+        ? VideoPlayerController.file(File(local))
+        : VideoPlayerController.networkUrl(Uri.parse(widget.url));
     _video = c;
     try {
       await c.initialize();
@@ -141,15 +164,24 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
         ),
       );
     }
+    final String? local = widget.localFilePath;
+    if (local != null && File(local).existsSync()) {
+      return InteractiveViewer(child: Image.file(File(local)));
+    }
     if (widget.url.isEmpty) {
       return Text('This media is still uploading.',
           style: ProfileText.recordDetail(context));
     }
     return InteractiveViewer(
-      child: Image.network(
-        widget.url,
+      // Persisted to disk: an image opened once stays viewable after the app
+      // is killed and reopened with no connection.
+      child: CachedProfileImage(
+        url: widget.url,
         fit: BoxFit.contain,
-        errorBuilder: (_, __, ___) => Text(
+        placeholder: const CircularProgressIndicator(
+          color: ProfilePalette.action,
+        ),
+        fallback: Text(
           'That image could not be loaded.',
           style: ProfileText.recordDetail(context),
         ),

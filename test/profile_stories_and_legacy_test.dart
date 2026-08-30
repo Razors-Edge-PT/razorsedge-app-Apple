@@ -129,12 +129,27 @@ void main() {
       expect(live, hasLength(4));
     });
 
-    test('a story published a hair under 24 hours ago is still returned',
-        () async {
-      await seedStory(
-          'edge', const Duration(hours: 23, minutes: 59, seconds: 30));
+    test('a story just under 24 hours old is still returned', () async {
+      await seedStory('edge', const Duration(hours: 23, minutes: 55));
       final List<StoryItem> live = await stories.watchLive(owner).first;
       expect(live.map((StoryItem s) => s.id), <String>['edge']);
+    });
+
+    test(
+        'the final ${kStoryQuerySkewMargin.inSeconds}s is given up to the '
+        'clock-skew margin', () async {
+      // The security rule now enforces the same 24 hours on the SERVER clock,
+      // and Firestore denies a whole query whose result set contains one
+      // unreadable document. A device whose clock runs slow would otherwise
+      // ask for a story the server calls expired and lose EVERY story on the
+      // profile. Moving the cutoff forward by the margin trades the story's
+      // last minute — which the viewer was about to lose anyway — for that.
+      await seedStory(
+        'lastMinute',
+        StoryItem.ttl - (kStoryQuerySkewMargin ~/ 2),
+      );
+      final List<StoryItem> live = await stories.watchLive(owner).first;
+      expect(live, isEmpty);
     });
 
     test('publishing sends a server timestamp and no client expiry', () async {

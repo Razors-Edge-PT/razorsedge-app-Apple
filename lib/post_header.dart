@@ -1,40 +1,39 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+/// The author line on a feed post: avatar, current username, and how long ago.
+///
+/// ── Why this no longer has a cache of its own ───────────────────────────────
+/// It used to hold a `static Map<String, Future<_UserPublicData>>` and a
+/// comment explaining that `putIfAbsent` guaranteed "exactly one Firestore read
+/// per uid per process lifetime". That was true, and it was the bug: once a
+/// name had been read it was never read again, so renaming yourself left every
+/// post header in the feed — including your own — showing the old name until
+/// the app was killed and reopened.
+///
+/// [LiveUserName] and [LiveUserAvatar] subscribe to `users_public/{uid}`
+/// through the shared IdentityRepository instead. That still costs one
+/// listener per uid however many cards are on screen, Firestore still serves
+/// the first event straight from its persistent cache, and a rename now
+/// reaches every visible header within one snapshot.
+library;
+
 import 'package:flutter/material.dart';
 
-class _UserPublicData {
-  final String display;
-  final String? photoURL;
-  const _UserPublicData({required this.display, this.photoURL});
-}
-
-/// Session-scoped cache: uid → Future<_UserPublicData>.
-/// putIfAbsent ensures exactly one Firestore read per uid per process lifetime.
-/// Safe for coach mode: keyed by uid so different athletes never collide.
-class _UserPublicCache {
-  static final Map<String, Future<_UserPublicData>> _futures = {};
-
-  static Future<_UserPublicData> fetch(String uid) =>
-      _futures.putIfAbsent(uid, () => _load(uid));
-
-  static Future<_UserPublicData> _load(String uid) async {
-    final snap = await FirebaseFirestore.instance
-        .collection('users_public')
-        .doc(uid)
-        .get();
-    final m = snap.data() ?? {};
-    final u = (m['username'] ?? '').toString().trim();
-    final dn = (m['displayName'] ?? '').toString().trim();
-    final display = u.isNotEmpty ? u : (dn.isNotEmpty ? dn : '?');
-    final p = (m['photoURL'] ?? '').toString().trim();
-    return _UserPublicData(display: display, photoURL: p.isEmpty ? null : p);
-  }
-}
+import 'profile/ui/live_identity.dart';
 
 class PostHeader extends StatelessWidget {
   final String ownerUid;
   final DateTime createdAt;
 
-  const PostHeader({super.key, required this.ownerUid, required this.createdAt});
+  /// The name denormalised onto the document this header belongs to, if any.
+  /// Used for the first frame and for a genuinely cold offline cache — never
+  /// in preference to the live value.
+  final String? fallbackName;
+
+  const PostHeader({
+    super.key,
+    required this.ownerUid,
+    required this.createdAt,
+    this.fallbackName,
+  });
 
   String _timeAgo(Duration d) {
     if (d.inMinutes < 1) return 'now';
@@ -48,33 +47,20 @@ class PostHeader extends StatelessWidget {
     final now = DateTime.now();
     final ago = _timeAgo(now.difference(createdAt));
 
-    return FutureBuilder<_UserPublicData>(
-      future: _UserPublicCache.fetch(ownerUid),
-      builder: (ctx, snap) {
-        final String display = snap.data?.display ?? '...';
-        final String? photoURL = snap.data?.photoURL;
-
-        return Row(
-          children: [
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: Colors.grey.shade300,
-              backgroundImage: (photoURL != null && photoURL!.isNotEmpty) ? NetworkImage(photoURL!) : null,
-              child: (photoURL == null || photoURL!.isEmpty) ? const Icon(Icons.person, size: 16) : null,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                display,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-            Text('· $ago', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          ],
-        );
-      },
+    return Row(
+      children: [
+        LiveUserAvatar(uid: ownerUid, radius: 16),
+        const SizedBox(width: 8),
+        Expanded(
+          child: LiveUserName(
+            uid: ownerUid,
+            fallback: fallbackName,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        Text('· $ago',
+            style: const TextStyle(color: Colors.white70, fontSize: 12)),
+      ],
     );
   }
 }

@@ -248,26 +248,67 @@ class MediaOutbox {
             ]))
           .watch();
 
-  /// Work the processor should attempt, oldest first so the queue drains in
-  /// the order the user chose things. Superseded rows are never uploaded.
-  Future<List<OutboxItem>> claimable({int limit = 10}) =>
+  /// Work the processor should attempt for ONE owner, oldest first so the
+  /// queue drains in the order the user chose things. Superseded rows are
+  /// never uploaded.
+  ///
+  /// ── Why the owner is required ───────────────────────────────────────────
+  /// The outbox is one SQLite file on one device, shared by every account that
+  /// signs in on it. An unscoped claim hands the processor another account's
+  /// rows, and the processor then uploads them under the CURRENT credentials —
+  /// to `users/{thatOtherUid}/…`, which Storage rules deny, so the row fails
+  /// four times and dies. If the rules ever were looser, it would publish one
+  /// person's private training video to another person's profile.
+  ///
+  /// Rows belonging to other accounts simply wait. They are claimed again the
+  /// next time their owner signs in, which is exactly the behaviour a durable
+  /// outbox should have.
+  ///
+  /// [offset] pages through a backlog larger than one claim.
+  Future<List<OutboxItem>> claimable({
+    required String ownerUid,
+    int limit = 10,
+    int offset = 0,
+  }) =>
       (_db.select(_db.outboxItems)
-            ..where(($OutboxItemsTable t) => t.state.isIn(<String>[
+            ..where(($OutboxItemsTable t) =>
+                t.ownerUid.equals(ownerUid) &
+                t.state.isIn(<String>[
                   OutboxState.pending,
                   OutboxState.uploading,
                 ]))
             ..orderBy(<OrderingTerm Function($OutboxItemsTable)>[
               ($OutboxItemsTable t) => OrderingTerm(expression: t.createdAtMs),
             ])
-            ..limit(limit))
+            ..limit(limit, offset: offset))
           .get();
+
+  /// How many rows [ownerUid] still has waiting. Used to decide whether the
+  /// processor has more pages to drain.
+  Future<int> claimableCount(String ownerUid) async {
+    final List<OutboxItem> rows = await (_db.select(_db.outboxItems)
+          ..where(($OutboxItemsTable t) =>
+              t.ownerUid.equals(ownerUid) &
+              t.state.isIn(<String>[
+                OutboxState.pending,
+                OutboxState.uploading,
+              ])))
+        .get();
+    return rows.length;
+  }
 
   /// Rows superseded by a newer generation, whose staged files and possibly
   /// uploaded Storage objects still need cleaning up.
-  Future<List<OutboxItem>> superseded() => (_db.select(_db.outboxItems)
-        ..where(
-            ($OutboxItemsTable t) => t.state.equals(OutboxState.superseded)))
-      .get();
+  ///
+  /// Scoped to one owner for the same reason [claimable] is: the cleanup
+  /// deletes Storage objects, and it must only ever delete the signed-in
+  /// account's.
+  Future<List<OutboxItem>> superseded(String ownerUid) =>
+      (_db.select(_db.outboxItems)
+            ..where(($OutboxItemsTable t) =>
+                t.ownerUid.equals(ownerUid) &
+                t.state.equals(OutboxState.superseded)))
+          .get();
 
   Future<void> markUploading(String mediaId) => (_db.update(_db.outboxItems)
             ..where(($OutboxItemsTable t) => t.mediaId.equals(mediaId)))
@@ -287,6 +328,35 @@ class MediaOutbox {
         updatedAtMs: Value<int>(_now()),
       ));
 
+  /// Returns a row to `pending` after a TRANSIENT failure, without touching
+  /// its attempt count.
+  ///
+  /// Being offline, or starting a pass before Firebase Auth has restored the
+  /// session, is not a failed attempt — it is not an attempt at all. Counting
+  /// those was enough to exhaust the four automatic tries during a single
+  /// commute, after which the upload sat marked "failed" waiting for a tap the
+  /// user had no reason to know it needed.
+  Future<void> markDeferred(String mediaId, String reason) =>
+      (_db.update(_db.outboxItems)
+            ..where(($OutboxItemsTable t) => t.mediaId.equals(mediaId)))
+          .write(OutboxItemsCompanion(
+        state: const Value<String>(OutboxState.pending),
+        lastError: Value<String?>(reason),
+        updatedAtMs: Value<int>(_now()),
+      ));
+
+  /// Clears the attempt count. Called when an attempt genuinely succeeds far
+  /// enough to prove the row is workable, and on an explicit user retry, so a
+  /// row that failed three times last month starts again from zero rather than
+  /// dying on its first try today.
+  Future<void> resetAttempts(String mediaId) => (_db.update(_db.outboxItems)
+            ..where(($OutboxItemsTable t) => t.mediaId.equals(mediaId)))
+          .write(OutboxItemsCompanion(
+        attemptCount: const Value<int>(0),
+        lastError: const Value<String?>(null),
+        updatedAtMs: Value<int>(_now()),
+      ));
+
   Future<void> bumpAttempt(String mediaId) async {
     final OutboxItem? row = await byId(mediaId);
     if (row == null) return;
@@ -299,12 +369,15 @@ class MediaOutbox {
   }
 
   /// Retries a failed row. Explicit user action; clears the error so the UI
-  /// stops showing it immediately.
+  /// stops showing it immediately, and RESETS the attempt count — otherwise a
+  /// row already at the limit would fail again on its very first try and the
+  /// retry button would do nothing visible.
   Future<void> retry(String mediaId) => (_db.update(_db.outboxItems)
             ..where(($OutboxItemsTable t) => t.mediaId.equals(mediaId)))
           .write(OutboxItemsCompanion(
         state: const Value<String>(OutboxState.pending),
         lastError: const Value<String?>(null),
+        attemptCount: const Value<int>(0),
         updatedAtMs: Value<int>(_now()),
       ));
 

@@ -42,8 +42,17 @@ class CoachAthlete {
     this.email = '',
   });
 
-  /// Best human label, falling back through the same order the Coach
-  /// Dashboard has always used.
+  /// Best human label from the DENORMALISED roster data.
+  ///
+  /// This is a fallback, not an identity. `coachAssignments` seed entries and
+  /// cached user documents record what an athlete was called when the roster
+  /// was built, so after a rename this keeps returning the old name. Anywhere
+  /// a name is DISPLAYED, wrap it in a `LiveUserName(uid: …, fallback: label)`
+  /// so the current username wins and this only fills the first frame and the
+  /// cold-offline case.
+  ///
+  /// It is still the right thing for sorting and for matching typed search
+  /// text, which must not block on a network read.
   String get label {
     for (final v in [username, displayName, fullName, email]) {
       if (v.trim().isNotEmpty) return v.trim();
@@ -129,11 +138,15 @@ class CoachRoster {
     final links = <CoachAthleteLink>[
       for (final uid in activeLinkAthleteUids)
         CoachAthleteLink(
-            id: uid, coachUid: '', athleteUid: uid,
+            id: uid,
+            coachUid: '',
+            athleteUid: uid,
             status: CoachLinkStatus.active),
       for (final uid in terminalLinkAthleteUids)
         CoachAthleteLink(
-            id: uid, coachUid: '', athleteUid: uid,
+            id: uid,
+            coachUid: '',
+            athleteUid: uid,
             status: CoachLinkStatus.releasedByCoach),
     ];
     return composeAuthorisedAthleteUids(

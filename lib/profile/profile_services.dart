@@ -41,6 +41,11 @@ class ProfileServices {
 
   /// The initialised services. Throws if used before [ensureInitialised]
   /// completes, which would be a wiring bug rather than a runtime condition.
+  ///
+  /// Prefer [ensureInitialised] anywhere the timing is not already guaranteed.
+  /// Opening a profile from a notification, a deep link, or a fast tap on the
+  /// very first frame all reach the page BEFORE the app-start initialisation
+  /// has finished opening the SQLite file, and this getter cannot wait.
   static ProfileServices get instance {
     final ProfileServices? i = _instance;
     if (i == null) {
@@ -62,15 +67,40 @@ class ProfileServices {
   final MediaStaging staging;
   final MediaUploader uploader;
 
-  /// Opens the outbox and builds the repositories. Idempotent, and safe to
-  /// call concurrently — overlapping calls await the same initialisation.
+  /// Opens the outbox and builds the repositories.
+  ///
+  /// Idempotent, and safe to call concurrently: overlapping calls await the
+  /// SAME initialisation, which is what stops two SQLite handles being opened
+  /// on one file. Two handles would let one processor upload a row another
+  /// processor had already committed.
+  ///
+  /// ── Failure is not sticky ───────────────────────────────────────────────
+  /// A failed build clears the in-flight future instead of leaving it cached,
+  /// so a transient failure (the support directory not yet available on a cold
+  /// start, say) can be retried by the next caller. Caching the rejected
+  /// future would make one unlucky moment at launch break the profile page for
+  /// the rest of the session.
   static Future<ProfileServices> ensureInitialised() {
     final ProfileServices? existing = _instance;
     if (existing != null) return Future<ProfileServices>.value(existing);
-    return _initialising ??= _build();
+    final Future<ProfileServices>? inFlight = _initialising;
+    if (inFlight != null) return inFlight;
+    final Future<ProfileServices> started = _build();
+    _initialising = started;
+    return started;
   }
 
   static Future<ProfileServices> _build() async {
+    try {
+      return await _buildInner();
+    } catch (_) {
+      // Let the next caller try again rather than caching the rejection.
+      _initialising = null;
+      rethrow;
+    }
+  }
+
+  static Future<ProfileServices> _buildInner() async {
     final MediaOutboxDatabase db = await MediaOutboxDatabase.open();
     final MediaOutbox outbox = MediaOutbox(db);
 
