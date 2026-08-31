@@ -337,7 +337,7 @@ class OutboxItem extends DataClass implements Insertable<OutboxItem> {
   final int attemptCount;
   final String? lastError;
 
-  /// Identity of a replaceable asset (e.g. 'avatar:<uid>'). Null for
+  /// Identity of a replaceable asset (e.g. `avatar:<uid>`). Null for
   /// append-only media, which is never superseded.
   final String? supersessionKey;
 
