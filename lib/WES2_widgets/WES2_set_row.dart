@@ -4,6 +4,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../WES2_models.dart';
 import '../periodization_model_utils.dart';
+import '../wes2_video/set_video_copy.dart';
 
 class _E1rmDisplay {
   final String text;
@@ -139,6 +140,16 @@ class Wes2SetRow extends StatefulWidget {
   final void Function(Wes2FieldKey fieldKey, String rawText) onFieldUnfocused;
   final VoidCallback? onRemoveSet;
   final VoidCallback? onNoteTap;
+
+  /// Opens the set-video flow. Null hides the control entirely, which is how
+  /// rows that cannot carry footage (a plan preview, a read-only view) opt out.
+  final VoidCallback? onVideoTap;
+
+  /// True when this set already has a recording attached. Drives the icon's
+  /// filled state, its tooltip and its semantic label, so the state is
+  /// announced rather than left to a colour difference alone.
+  final bool hasVideo;
+
   final bool isPlanNoteRead;
   /// Phase 21F: original planned/model RIR hint captured at session load.
   /// Used to compute the green/amber direction cue on the RIR field.
@@ -163,6 +174,8 @@ class Wes2SetRow extends StatefulWidget {
     required this.onFieldUnfocused,
     this.onRemoveSet,
     this.onNoteTap,
+    this.onVideoTap,
+    this.hasVideo = false,
     this.isPlanNoteRead = false,
     this.baselineRirHint,
     this.uid,
@@ -427,6 +440,52 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     return 'Add note';
   }
 
+  Color _videoIconColor() =>
+      widget.hasVideo ? Colors.lightBlueAccent : Colors.white12;
+
+  String _videoTooltip() => widget.hasVideo
+      ? SetVideoCopy.recordedSetTooltip
+      : SetVideoCopy.recordSetTooltip;
+
+  /// The set-video control, rendered immediately to the RIGHT of the note icon
+  /// in every row variant.
+  ///
+  /// Returns an empty box rather than a disabled button when [onVideoTap] is
+  /// null, so a row that cannot carry footage keeps its existing alignment
+  /// instead of showing a dead control.
+  ///
+  /// The tap target is the full 36pt row height while staying 24pt wide: that
+  /// doubles the reachable area versus the note icon beside it without moving
+  /// a single pixel of the row's horizontal layout.
+  Widget _videoIcon() {
+    if (widget.onVideoTap == null) return const SizedBox.shrink();
+    final int setNumber = widget.set.setIndex + 1;
+    return Semantics(
+      button: true,
+      label: widget.hasVideo
+          ? SetVideoCopy.recordedSemanticLabel(setNumber)
+          : SetVideoCopy.recordSemanticLabel(setNumber),
+      child: SizedBox(
+        width: 24,
+        height: 36,
+        child: Align(
+          alignment: Alignment.center,
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 24, height: 36),
+            icon: Icon(
+              widget.hasVideo ? Icons.videocam : Icons.videocam_outlined,
+              size: 16,
+              color: _videoIconColor(),
+            ),
+            tooltip: _videoTooltip(),
+            onPressed: widget.onVideoTap,
+          ),
+        ),
+      ),
+    );
+  }
+
   static const _kFieldStyle = TextStyle(color: Colors.white, fontSize: 12);
   static const _kHintStyle = TextStyle(
     color: Colors.grey,
@@ -563,6 +622,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
               ),
             ),
           ),
+          _videoIcon(),
         ],
       );
 
@@ -868,6 +928,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
               ),
             ),
           ),
+          _videoIcon(),
         ],
       ),
     );
