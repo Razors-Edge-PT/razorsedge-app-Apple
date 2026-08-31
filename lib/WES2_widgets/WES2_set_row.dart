@@ -27,6 +27,16 @@ const double kWes2RowIconSlotWidth = 28;
 /// reserve it would drift out of line exactly when space is tightest.
 const double kWes2RowTrailingWidth = kWes2RowIconSlotWidth * 3;
 
+/// Wraps a row cell in [Flexible], but only where the row's width is bounded.
+///
+/// A [Flexible] inside a [Row] whose incoming width constraints are UNBOUNDED
+/// asserts at layout time — which is exactly what happens when a set row is
+/// placed inside a horizontal scrollable. Where the width is unbounded there is
+/// by definition no shortage of space, so the cell simply keeps its natural
+/// size and nothing needs to yield.
+Widget flexibleWhenBounded({required bool bounded, required Widget child}) =>
+    bounded ? Flexible(child: child) : child;
+
 class _E1rmDisplay {
   final String text;
   final bool isActual; // true → white normal; false → grey
@@ -56,6 +66,13 @@ class Wes2SetColumnHeaders extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints c) =>
+          _build(context, c.maxWidth.isFinite),
+    );
+  }
+
+  Widget _build(BuildContext context, bool bounded) {
     if (entryMode == Wes2ExerciseEntryMode.timedBodyweight) {
       return const Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -83,30 +100,32 @@ class Wes2SetColumnHeaders extends StatelessWidget {
     }
 
     if (entryMode == Wes2ExerciseEntryMode.timedWeighted) {
-      return const Row(
+      return Row(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(width: 40),
-          SizedBox(
+        children: <Widget>[
+          const SizedBox(width: 40),
+          const SizedBox(
             width: 76,
             child: Padding(
               padding: EdgeInsets.only(left: 3),
               child: Text('Weight', style: _kHeaderStyle),
             ),
           ),
-          SizedBox(width: 4),
-          SizedBox(
+          const SizedBox(width: 4),
+          const SizedBox(
             width: 70,
             child: Padding(
               padding: EdgeInsets.only(left: 2),
               child: Text('Time', style: _kHeaderStyle),
             ),
           ),
-          SizedBox(width: 4),
-          Flexible(
-            child: SizedBox(width: 55, child: Text('E1RM', style: _kHeaderStyle)),
+          const SizedBox(width: 4),
+          flexibleWhenBounded(
+            bounded: bounded,
+            child: const SizedBox(
+                width: 55, child: Text('E1RM', style: _kHeaderStyle)),
           ),
-          SizedBox(width: kWes2RowTrailingWidth),
+          const SizedBox(width: kWes2RowTrailingWidth),
         ],
       );
     }
@@ -141,16 +160,18 @@ class Wes2SetColumnHeaders extends StatelessWidget {
         ),
         const SizedBox(width: 4),
         // Mirrors the row: the derived E1RM column is the one that yields.
-        const Flexible(
-          child: SizedBox(
+        flexibleWhenBounded(
+          bounded: bounded,
+          child: const SizedBox(
             width: 55,
             child: Text('E1RM', style: _kHeaderStyle),
           ),
         ),
         if (showVelocity) ...[
           const SizedBox(width: 4),
-          const Flexible(
-            child: SizedBox(
+          flexibleWhenBounded(
+            bounded: bounded,
+            child: const SizedBox(
               width: 45,
               child: Text('Vel.', style: _kHeaderStyle),
             ),
@@ -704,7 +725,8 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     );
   }
 
-  Widget _buildTimedWeightedRow(Wes2SetState s, String? weightHint) {
+  Widget _buildTimedWeightedRow(
+      Wes2SetState s, String? weightHint, bool bounded) {
     final weightBorderColor = _weightBorderColor();
     return Padding(
       padding: const EdgeInsets.only(top: 2),
@@ -733,7 +755,8 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
           ),
           const SizedBox(width: 4),
           // Same rule as the normal row: the derived column yields first.
-          Flexible(
+          flexibleWhenBounded(
+            bounded: bounded,
             child: SizedBox(
             width: 55,
             height: 36,
@@ -783,6 +806,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints c) =>
+          _buildRow(context, c.maxWidth.isFinite),
+    );
+  }
+
+  Widget _buildRow(BuildContext context, bool bounded) {
     final s = widget.set;
     final weightHint =
         s.weight.hintValue != null ? _fmtWeight(s.weight.hintValue!) : null;
@@ -791,7 +821,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
       return _buildTimedBodyweightRow(s);
     }
     if (widget.entryMode == Wes2ExerciseEntryMode.timedWeighted) {
-      return _buildTimedWeightedRow(s, weightHint);
+      return _buildTimedWeightedRow(s, weightHint, bounded);
     }
 
     final repsHint =
@@ -872,11 +902,12 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
           ),
           const SizedBox(width: 4),
           // E1RM — calculated from actuals (or hints when no actuals present).
-          // Flexible so it is the column that yields when the row cannot fit:
-          // it is a DERIVED display, so narrowing it costs the user nothing
-          // they typed, whereas overflowing paints a render error across the
-          // row on every phone 360dp and under.
-          Flexible(
+          // Yields when the row cannot fit: it is a DERIVED display, so
+          // narrowing it costs the user nothing they typed, whereas overflowing
+          // paints a render error across the row on every phone 360dp and
+          // under.
+          flexibleWhenBounded(
+            bounded: bounded,
             child: SizedBox(
             width: 55,
             height: 36,
@@ -922,7 +953,8 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             const SizedBox(width: 4),
             // Optional column: yields alongside E1RM rather than overflowing
             // when it is enabled on the narrowest screens.
-            Flexible(
+            flexibleWhenBounded(
+              bounded: bounded,
               child: _field(
               ctrl: _velocityCtrl,
               focus: _velocityFocus,

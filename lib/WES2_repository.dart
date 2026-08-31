@@ -139,6 +139,55 @@ abstract class Wes2Repository {
     required String uid,
     required DateTime date,
   });
+
+  /// Writes a stable [setId] onto one set, ADDITIVELY.
+  ///
+  /// Every other key on that set — weight, reps, RIR, velocity, notes, timing —
+  /// and every neighbouring set and row is preserved. Used immediately before a
+  /// recording is attached, so the identity the video is filed under is the
+  /// same one the server's record fingerprint will be built from.
+  ///
+  /// A set that already carries `id` or `setId` is left alone: the showcase
+  /// reducers read `s.id ?? s.setId`, and writing a competing value would
+  /// change the fingerprint of an already-scored performance.
+  Future<void> saveSetId({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+    required String setId,
+  });
+
+  /// The performance currently SAVED for one exact set, located by stable
+  /// identity rather than by display index.
+  ///
+  /// Returns null when the day, the row, or a set with that identity cannot be
+  /// found — never a guess. A wrong performance here would produce a
+  /// fingerprint that the server projection will never match, which would
+  /// either publish nothing or, worse, publish against another set.
+  Future<Wes2SavedSetPerformance?> savedPerformanceForSet({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required String setId,
+  });
+}
+
+/// The saved values behind one set, as Firestore currently holds them.
+class Wes2SavedSetPerformance {
+  const Wes2SavedSetPerformance({
+    required this.exerciseId,
+    required this.exerciseName,
+    required this.setId,
+    required this.weight,
+    required this.reps,
+  });
+
+  final String exerciseId;
+  final String exerciseName;
+  final String setId;
+  final double? weight;
+  final int? reps;
 }
 
 /// Concrete Firestore implementation.
@@ -273,6 +322,135 @@ class FirestoreWes2Repository implements Wes2Repository {
       actualValue: v.toInt(),
       origin: FieldOrigin.completed,
     );
+  }
+
+  // ── Stable set identity ────────────────────────────────────────────────────
+
+  @override
+  Future<void> saveSetId({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required int setIndex,
+    required String setId,
+  }) async {
+    final DocumentReference<Map<String, dynamic>> ref = FirebaseFirestore
+        .instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date));
+
+    await FirebaseFirestore.instance.runTransaction((Transaction tx) async {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
+      final Map<String, dynamic> data = snap.data() ?? <String, dynamic>{};
+
+      // Only ever touches exercises[]: a row with no execution values yet lives
+      // in wesPlannedExercises[], and a PLAN carries no set identity. The
+      // identity is written when the row is promoted by a real save.
+      final List<dynamic> rawRows =
+          (data['exercises'] as List<dynamic>?) ?? <dynamic>[];
+      final List<Map<String, dynamic>> rows = rawRows
+          .map((r) => r is Map<String, dynamic>
+              ? Map<String, dynamic>.from(r)
+              : <String, dynamic>{})
+          .toList();
+
+      final int rowIdx =
+          rows.indexWhere((r) => r['exerciseId'] == exerciseId);
+      if (rowIdx == -1) return;
+
+      final Map<String, dynamic> row = Map<String, dynamic>.from(rows[rowIdx]);
+      final List<Map<String, dynamic>> sets =
+          ((row['sets'] as List<dynamic>?) ?? <dynamic>[])
+              .map((x) => x is Map<String, dynamic>
+                  ? Map<String, dynamic>.from(x)
+                  : <String, dynamic>{})
+              .toList();
+
+      // Locate by stored setIndex, falling back to array position for legacy
+      // sets written without the field — the same rule saveFieldPatch uses.
+      int? pos;
+      for (int i = 0; i < sets.length; i++) {
+        final int? stored = (sets[i]['setIndex'] as num?)?.toInt();
+        if (stored != null) {
+          if (stored == setIndex) {
+            pos = i;
+            break;
+          }
+        } else if (i == setIndex) {
+          pos = i;
+          break;
+        }
+      }
+      if (pos == null) {
+        while (sets.length <= setIndex) {
+          sets.add(<String, dynamic>{'setIndex': sets.length});
+        }
+        pos = setIndex;
+      }
+
+      // Never overwrite an identity that already exists: the reducers read
+      // `s.id ?? s.setId`, so replacing one would move an existing record's
+      // fingerprint and detach any proof already attached to it.
+      final String? existing = readStableSetId(sets[pos]);
+      if (existing != null) return;
+
+      sets[pos] = <String, dynamic>{...sets[pos], 'setId': setId};
+      row['sets'] = sets;
+      rows[rowIdx] = row;
+
+      tx.set(ref, <String, dynamic>{'exercises': rows},
+          SetOptions(merge: true));
+    });
+  }
+
+  @override
+  Future<Wes2SavedSetPerformance?> savedPerformanceForSet({
+    required String uid,
+    required DateTime date,
+    required String exerciseId,
+    required String setId,
+  }) async {
+    final String wanted = setId.trim();
+    if (wanted.isEmpty) return null;
+
+    final DocumentSnapshot<Map<String, dynamic>> snap = await FirebaseFirestore
+        .instance
+        .collection('users')
+        .doc(uid)
+        .collection('workouts')
+        .doc(_dateDocId(date))
+        .get();
+
+    final Map<String, dynamic>? data = snap.data();
+    if (data == null) return null;
+
+    for (final dynamic rawRow
+        in (data['exercises'] as List<dynamic>?) ?? <dynamic>[]) {
+      if (rawRow is! Map<String, dynamic>) continue;
+      if (rawRow['exerciseId'] != exerciseId) continue;
+
+      for (final dynamic rawSet
+          in (rawRow['sets'] as List<dynamic>?) ?? <dynamic>[]) {
+        if (rawSet is! Map<String, dynamic>) continue;
+        // Identity only. Deliberately never falls back to the display index:
+        // an index match after a reindex would describe a DIFFERENT
+        // performance, and the fingerprint built from it would be wrong.
+        if (readStableSetId(rawSet) != wanted) continue;
+
+        final Object? w = rawSet['weight'];
+        final Object? r = rawSet['reps'];
+        return Wes2SavedSetPerformance(
+          exerciseId: exerciseId,
+          exerciseName: (rawRow['name'] as String?) ?? '',
+          setId: wanted,
+          weight: w is num ? w.toDouble() : null,
+          reps: r is num ? r.round() : null,
+        );
+      }
+    }
+    return null;
   }
 
   static String _dateDocId(DateTime d) =>

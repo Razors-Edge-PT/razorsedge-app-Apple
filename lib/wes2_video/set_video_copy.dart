@@ -106,6 +106,15 @@ class SetVideoCopy {
 
   static const String detach = 'Remove from achievement';
 
+  /// Shown when the stable identity could not be written locally. Recording is
+  /// refused rather than producing a clip that cannot be re-associated.
+  static const String identityNotSaved =
+      'Could not prepare this set for recording. Try again in a moment.';
+
+  /// The set-video store could not be opened. Logging is unaffected.
+  static const String storeUnavailable =
+      'Set video is unavailable right now. Your workout is still being saved.';
+
   static const String videoDeleted = 'Set video deleted';
   static const String videoSaved = 'Set video saved';
   static const String undo = 'Undo';

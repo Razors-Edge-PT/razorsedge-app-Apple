@@ -13,6 +13,7 @@ library;
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'data/identity_repository.dart';
 import 'data/media_outbox.dart';
@@ -23,6 +24,8 @@ import 'data/profile_repository.dart';
 import 'data/showcase_repository.dart';
 import 'data/story_repository.dart';
 import 'ui/units.dart';
+import '../wes2_video/set_video_publication.dart';
+import '../wes2_video/set_video_service.dart';
 
 class ProfileServices {
   ProfileServices._({
@@ -34,6 +37,7 @@ class ProfileServices {
     required this.stories,
     required this.staging,
     required this.uploader,
+    required this.setVideo,
   });
 
   static ProfileServices? _instance;
@@ -66,6 +70,17 @@ class ProfileServices {
   final StoryRepository stories;
   final MediaStaging staging;
   final MediaUploader uploader;
+
+  /// Set-video store, pipeline and reconciler.
+  ///
+  /// Lives here because this is already the place that guarantees exactly one
+  /// SQLite handle per file, and because the set-video maintenance pass has the
+  /// same triggers as the outbox drain: start, resume, and reconnection.
+  ///
+  /// Nullable: a failure to open the set-video database must never stop the
+  /// profile or the workout logger from working. Everything else keeps going
+  /// and set video is simply unavailable for the session.
+  final SetVideoService? setVideo;
 
   /// Opens the outbox and builds the repositories.
   ///
@@ -103,6 +118,19 @@ class ProfileServices {
   static Future<ProfileServices> _buildInner() async {
     final MediaOutboxDatabase db = await MediaOutboxDatabase.open();
     final MediaOutbox outbox = MediaOutbox(db);
+    final MediaStaging staging = MediaStaging(outbox: outbox);
+
+    // Best-effort: set video is an enhancement, and the profile and the workout
+    // logger must both survive its database failing to open.
+    SetVideoService? setVideo;
+    try {
+      setVideo = await SetVideoService.ensureInitialised(
+        staging: staging,
+        outbox: outbox,
+      );
+    } catch (_) {
+      setVideo = null;
+    }
 
     final ProfileRepository profiles = ProfileRepository();
     final ShowcaseRepository showcase = ShowcaseRepository();
@@ -116,22 +144,53 @@ class ProfileServices {
       showcase: showcase,
       media: media,
       stories: stories,
-      staging: MediaStaging(outbox: outbox),
+      staging: staging,
       uploader: MediaUploader(
         outbox: outbox,
         profiles: profiles,
         showcase: showcase,
         stories: stories,
       ),
+      setVideo: setVideo,
     );
     _instance = services;
     _initialising = null;
     return services;
   }
 
-  /// Drains the outbox. Called at app start; the profile page also calls it on
-  /// open, on resume and when a server snapshot proves the connection is back.
-  Future<void> processOutbox() => uploader.processAll();
+  /// Drains the outbox, then runs the set-video maintenance pass.
+  ///
+  /// Called at app start (main.dart), and by the profile page on open, on
+  /// resume, and when a server snapshot proves the connection is back — which
+  /// is exactly the trigger list set-video reconciliation needs, so the two
+  /// ride together rather than growing a second set of lifecycle hooks.
+  ///
+  /// The outbox drains FIRST: it is what turns a queued upload into a published
+  /// post, and the maintenance pass immediately afterwards is what records that
+  /// outcome against the local set-video record.
+  Future<void> processOutbox({String? actingUid}) async {
+    await uploader.processAll();
+    await runSetVideoMaintenance(actingUid: actingUid);
+  }
+
+  /// Runs one set-video maintenance pass for [actingUid].
+  ///
+  /// Publication requires the acting user to BE the owner, so the actor is
+  /// built with the same uid on both sides here; a coach acting as an athlete
+  /// reaches this with the athlete's uid and is rejected by the gate.
+  Future<void> runSetVideoMaintenance({String? actingUid}) async {
+    final SetVideoService? service = setVideo;
+    final String uid = actingUid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (service == null || uid.isEmpty) return;
+    try {
+      await service.runMaintenance(
+        actor: SetVideoActor(authenticatedUid: uid, actingUid: uid),
+      );
+    } catch (_) {
+      // Maintenance is background work. It must never surface as a failure of
+      // whatever the user was actually doing.
+    }
+  }
 
   /// The display unit for [uid]'s training loads.
   ///
@@ -164,6 +223,7 @@ class ProfileServices {
     StoryRepository? stories,
     MediaStaging? staging,
     MediaUploader? uploader,
+    SetVideoService? setVideo,
   }) {
     final ProfileRepository p = profiles ?? ProfileRepository();
     final ShowcaseRepository s = showcase ?? ShowcaseRepository();
@@ -178,6 +238,7 @@ class ProfileServices {
       staging: staging ?? MediaStaging(outbox: outbox),
       uploader: uploader ??
           MediaUploader(outbox: outbox, profiles: p, showcase: s, stories: st),
+      setVideo: setVideo,
     );
   }
 }

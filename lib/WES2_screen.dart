@@ -13,7 +13,9 @@ import 'WES2_widgets/WES2_app_bar.dart';
 import 'WES2_widgets/WES2_tutorial_banner.dart';
 import 'WES2_controller.dart';
 import 'WES2_models.dart';
+import 'profile/profile_services.dart';
 import 'wes2_video/set_video_coordinator.dart';
+import 'wes2_video/set_video_copy.dart';
 import 'WES2_plan_service.dart';
 import 'WES2_repository.dart';
 import 'WES2_widgets/WES2_day_header.dart';
@@ -1220,6 +1222,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (value != null &&
           (fieldKey == Wes2FieldKey.weight || fieldKey == Wes2FieldKey.reps)) {
         await _checkQualifyingDate(date: date);
+        // A confirmed weight or reps write is what can turn a set into a
+        // personal best, so this is the "after a relevant save" reconciliation
+        // trigger. Only fired when this day already holds footage, so an
+        // ordinary logging session does no extra work at all.
+        unawaited(_maybeReconcileAfterSetSave());
       }
     } catch (_) {
       // Silent failure for Phase 8.
@@ -1950,6 +1957,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   void _performUndo() {
     _controller.undo();
     _saveDraftNow();
+    // Restores the SAME records the structural operation soft-deleted, so the
+    // recovered set shows the footage it always had rather than a new one.
+    // ignore: discarded_futures
+    _videoUndoStructuralDelete();
     // Restore BB3 planned-day structure from the recovered row set.
     // ignore: discarded_futures
     _syncBb3PlannedDayFromCurrentRowsSilently();
@@ -1957,14 +1968,27 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   void _showUndoSnackBar(String label) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(label),
-          action: SnackBarAction(label: 'Undo', onPressed: _performUndo),
-        ),
-      );
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    final ScaffoldFeatureController<SnackBar, SnackBarClosedReason> controller =
+        messenger.showSnackBar(
+      SnackBar(
+        content: Text(label),
+        action: SnackBarAction(label: 'Undo', onPressed: _performUndo),
+      ),
+    );
+
+    // When the bar closes WITHOUT Undo, the window has passed and the soft
+    // deletion becomes final: the maintenance pass unlinks the video and poster
+    // bytes and purges the row. Without this the record stayed soft-deleted
+    // for ever and "Delete" only ever hid it.
+    // ignore: discarded_futures
+    controller.closed.then((SnackBarClosedReason reason) {
+      if (reason == SnackBarClosedReason.action) return;
+      _pendingVideoUndoIds = const <String>[];
+      // ignore: discarded_futures
+      _runSetVideoMaintenance();
+    });
   }
 
   // ── Snackbar / confirm helpers (Phase 13) ─────────────────────────────────
@@ -2440,6 +2464,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     _controller.deleteAllExercises();
     _saveDraftNow();
+    // Nothing survives, so every recording on the day is now an orphan.
+    // ignore: discarded_futures
+    _videoSoftDeleteOrphans();
     _showUndoSnackBar('All exercises deleted');
 
     // ignore: discarded_futures
@@ -2489,8 +2516,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       content: 'Remove "${row.name}" from today\'s workout?',
     );
     if (!confirmed) return;
+    // Every recording on this row, identified before the row goes.
+    await _videoSoftDeleteExercise(row.exerciseId);
     _controller.deleteExercise(row.exerciseId);
     _saveDraftNow();
+    await _refreshSetVideoState();
     if (hadActuals) _showUndoSnackBar('Exercise deleted');
     // ignore: discarded_futures
     _deleteExerciseSilently(
@@ -2518,12 +2548,19 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       titleOverride: 'Replace "${row.name}"',
     );
     if (result == null) return;
+    // The old exerciseId is about to vanish from this day. Its footage is
+    // soft-deleted here rather than left pointing at a row the user can no
+    // longer open.
+    if (result.exerciseId != row.exerciseId) {
+      await _videoSoftDeleteExercise(row.exerciseId);
+    }
     _controller.replaceExercise(
       oldExerciseId: row.exerciseId,
       newExerciseId: result.exerciseId,
       newName: result.name,
     );
     _saveDraftNow();
+    await _refreshSetVideoState();
     // ignore: discarded_futures
     _loadAndApplyHints();
     if (row.hasAnyExecutionValue) _showUndoSnackBar('Exercise replaced');
@@ -2646,8 +2683,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             'This is the only set. Removing it will delete "${currentRow.name}". Continue?',
       );
       if (!confirmed || !mounted) return;
+      await _videoSoftDeleteExercise(currentRow.exerciseId);
       _controller.deleteExercise(currentRow.exerciseId);
       _saveDraftNow();
+      await _refreshSetVideoState();
       if (currentRow.hasAnyExecutionValue)
         _showUndoSnackBar('Exercise deleted');
       // ignore: discarded_futures
@@ -2674,8 +2713,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (!confirmed || !mounted) return;
     }
 
+    // BEFORE the controller renumbers: once compaction runs, the removed set's
+    // identity is unreachable and its footage would be stranded.
+    await _videoSoftDeleteSets(
+        currentRow.exerciseId, _setIdsFor(currentRow, onlySetIndex: setIndex));
+
     _controller.removeSet(currentRow.exerciseId, setIndex);
     _saveDraftNow();
+    await _refreshSetVideoState();
     final hasUserValues = targetSet.hasAnyActual ||
         (targetSet.executionNote?.trim().isNotEmpty ?? false);
     if (hasUserValues) _showUndoSnackBar('Set removed');
@@ -2710,29 +2755,210 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   // ── Set video ─────────────────────────────────────────────────────────────
 
-  /// Opens the set-video flow. The flow itself lives in SetVideoCoordinator;
-  /// this only supplies identity and refreshes the attached state afterwards.
+  /// Opens the set-video flow.
+  ///
+  /// Identity is minted and PERSISTED before the camera can open. Previously
+  /// this only mutated the in-memory controller, so an app termination between
+  /// recording and the next ordinary save left a clip filed under an id that
+  /// existed nowhere on disk — permanently unassociable — and the server could
+  /// never produce a matching record fingerprint for it.
+  ///
+  /// Order here is the fix, and each step guards the next:
+  ///   1. re-read the row/set from the controller (never a stale capture);
+  ///   2. reuse an existing id, or mint one;
+  ///   3. write it into the local draft and WAIT for that;
+  ///   4. write it additively to Firestore, best-effort;
+  ///   5. only then open the camera, with the REFRESHED row.
+  ///
+  /// If step 3 fails the flow stops: recording a clip that cannot be
+  /// re-associated after a restart is worse than not recording it.
   Future<void> _onSetVideoTap(Wes2ExerciseRow row, int setIndex) async {
     final String ownerUid = _controller.actingUid;
     if (ownerUid.isEmpty) return;
 
-    // Identity is minted here, immediately before footage can be attached, and
-    // only for a set that does not already have one.
+    // 1 + 2. Re-read from the controller, then reuse or mint.
     final String? setId = _controller.ensureSetId(row.exerciseId, setIndex);
     if (setId == null) return;
 
-    final SetVideoCoordinator coordinator = await SetVideoCoordinator.instance();
+    // 3. Durable locally BEFORE the camera opens. Awaited deliberately: this is
+    //    the step that makes the association survive a termination.
+    try {
+      await _localStore.saveDraft(
+        uid: ownerUid,
+        date: _controller.selectedDate,
+        rows: _controller.rows.toList(),
+        workoutDurationMs: _currentWorkoutDurationMs(),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(SetVideoCopy.identityNotSaved)),
+      );
+      return;
+    }
+
+    // 4. Additive server write. Allowed to fail: the clip stays device-only
+    //    until a later save carries the id up, and the publication gate will
+    //    not confirm anything the server has not seen.
+    unawaited(_saveSetIdToServer(ownerUid, row.exerciseId, setIndex, setId));
+
+    // 5. The REFRESHED row, so the coordinator sees the minted identity.
+    final Wes2ExerciseRow current = _controller.rows.firstWhere(
+      (Wes2ExerciseRow r) => r.exerciseId == row.exerciseId,
+      orElse: () => row,
+    );
+
+    final SetVideoCoordinator coordinator;
+    try {
+      coordinator = await SetVideoCoordinator.instance();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(SetVideoCopy.storeUnavailable)),
+      );
+      return;
+    }
     if (!mounted) return;
 
     final bool changed = await coordinator.handleTap(
       context,
       ownerUid: ownerUid,
       date: _controller.selectedDate,
-      row: row,
+      row: current,
       setIndex: setIndex,
       setId: setId,
     );
-    if (changed) await _refreshSetVideoState();
+    if (changed) {
+      await _refreshSetVideoState();
+      // A newly saved clip is a publication candidate straight away, so the
+      // pass runs here rather than waiting for the next app start.
+      unawaited(_runSetVideoMaintenance());
+    }
+  }
+
+  /// Writes the stable id to Firestore without disturbing anything else.
+  Future<void> _saveSetIdToServer(
+    String ownerUid,
+    String exerciseId,
+    int setIndex,
+    String setId,
+  ) async {
+    try {
+      await _repository.saveSetId(
+        uid: ownerUid,
+        date: _controller.selectedDate,
+        exerciseId: exerciseId,
+        setIndex: setIndex,
+        setId: setId,
+      );
+    } catch (_) {
+      // Offline or transient. The id is already durable locally, and every
+      // ordinary WES2 save carries it up again, so it reaches the server when
+      // connectivity returns without changing value.
+    }
+  }
+
+  // ── Structural operations: keeping footage with its set ───────────────────
+
+  /// Record ids soft-deleted by the most recent structural operation, so the
+  /// Undo that follows restores exactly those and creates nothing new.
+  List<String> _pendingVideoUndoIds = const <String>[];
+
+  /// Soft-deletes footage for [setIds] on [exerciseId]. Call BEFORE mutating
+  /// the controller: after a removal the surviving sets have been renumbered
+  /// and the removed set's identity is no longer reachable.
+  Future<void> _videoSoftDeleteSets(
+      String exerciseId, Iterable<String> setIds) async {
+    final List<String> ids = setIds.toList();
+    if (ids.isEmpty || _controller.actingUid.isEmpty) return;
+    try {
+      final SetVideoCoordinator c = await SetVideoCoordinator.instance();
+      _pendingVideoUndoIds = await c.softDeleteForSets(
+        ownerUid: _controller.actingUid,
+        date: _controller.selectedDate,
+        exerciseId: exerciseId,
+        setIds: ids,
+      );
+    } catch (_) {
+      // Set video unavailable. Structural editing must not be blocked by it.
+    }
+  }
+
+  /// Soft-deletes every recording for one exercise.
+  Future<void> _videoSoftDeleteExercise(String exerciseId) async {
+    if (_controller.actingUid.isEmpty) return;
+    try {
+      final SetVideoCoordinator c = await SetVideoCoordinator.instance();
+      _pendingVideoUndoIds = await c.softDeleteForExercise(
+        ownerUid: _controller.actingUid,
+        date: _controller.selectedDate,
+        exerciseId: exerciseId,
+      );
+    } catch (_) {
+      // As above.
+    }
+  }
+
+  /// Soft-deletes footage whose exercise no longer exists on this day. Used
+  /// after a wholesale rebuild (template or day replacement).
+  Future<void> _videoSoftDeleteOrphans() async {
+    if (_controller.actingUid.isEmpty) return;
+    try {
+      final SetVideoCoordinator c = await SetVideoCoordinator.instance();
+      await c.softDeleteOrphans(
+        ownerUid: _controller.actingUid,
+        date: _controller.selectedDate,
+        survivingExerciseIds:
+            _controller.rows.map((Wes2ExerciseRow r) => r.exerciseId).toSet(),
+      );
+      await _refreshSetVideoState();
+    } catch (_) {
+      // As above.
+    }
+  }
+
+  /// Restores the footage the last structural operation soft-deleted.
+  Future<void> _videoUndoStructuralDelete() async {
+    final List<String> ids = _pendingVideoUndoIds;
+    _pendingVideoUndoIds = const <String>[];
+    if (ids.isEmpty) return;
+    try {
+      final SetVideoCoordinator c = await SetVideoCoordinator.instance();
+      await c.undoStructuralDelete(ids);
+      await _refreshSetVideoState();
+    } catch (_) {
+      // As above.
+    }
+  }
+
+  /// The stable ids on one set, if any.
+  List<String> _setIdsFor(Wes2ExerciseRow row, {int? onlySetIndex}) =>
+      row.sets
+          .where((Wes2SetState s) =>
+              onlySetIndex == null || s.setIndex == onlySetIndex)
+          .map((Wes2SetState s) => s.setId)
+          .whereType<String>()
+          .toList();
+
+  /// Reconciles after a confirmed set save, but only when this day actually
+  /// has footage — otherwise every keystroke-driven save on every workout
+  /// would wake a pass that has nothing to consider.
+  Future<void> _maybeReconcileAfterSetSave() async {
+    if (_setsWithVideo.isEmpty) return;
+    await _runSetVideoMaintenance();
+  }
+
+  /// Runs one set-video maintenance pass for the acting user.
+  Future<void> _runSetVideoMaintenance() async {
+    if (_controller.actingUid.isEmpty) return;
+    try {
+      final ProfileServices services =
+          await ProfileServices.ensureInitialised();
+      await services.runSetVideoMaintenance(
+          actingUid: _controller.actingUid);
+    } catch (_) {
+      // Background work; never surfaced as a failure of the user's action.
+    }
   }
 
   /// Re-reads which sets currently have footage. Cheap, local, and offline.
@@ -3007,6 +3233,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     _controller.replaceWithTemplateRows(reindexed);
     _saveDraftNow();
+    // A template rebuilds the day wholesale. Anything filmed against an
+    // exercise the template does not carry is now unreachable in the UI, so it
+    // is soft-deleted rather than left occupying storage and still eligible for
+    // publication.
+    // ignore: discarded_futures
+    _videoSoftDeleteOrphans();
     // ignore: discarded_futures
     _loadAndApplyHints();
 
