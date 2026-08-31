@@ -13,6 +13,7 @@ import 'WES2_widgets/WES2_app_bar.dart';
 import 'WES2_widgets/WES2_tutorial_banner.dart';
 import 'WES2_controller.dart';
 import 'WES2_models.dart';
+import 'wes2_video/set_video_coordinator.dart';
 import 'WES2_plan_service.dart';
 import 'WES2_repository.dart';
 import 'WES2_widgets/WES2_day_header.dart';
@@ -51,6 +52,11 @@ class Wes2Screen extends StatefulWidget {
 
 class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   late final Wes2SessionController _controller;
+
+  /// Display indices with attached set footage, per exerciseId. Resolved from
+  /// the durable store by stable setId, refreshed whenever the day changes or
+  /// the video flow reports a change.
+  Map<String, Set<int>> _setsWithVideo = const <String, Set<int>>{};
   final Wes2Repository _repository = FirestoreWes2Repository();
   final Wes2PlanService _planService = FirestoreWes2PlanService();
   final Wes2LocalStore _localStore = IsarWes2LocalStore();
@@ -467,6 +473,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       final mergedRows = _hardened(_applyDraftActuals(
           _mergeRows(completedRows, bb3Rows), draft?.rows));
       _controller.setRows(mergedRows, epoch);
+      // Local, offline, and off the critical path: reopening a day shows the
+      // footage filmed against it without waiting for anything remote.
+      unawaited(_refreshSetVideoState());
       StartupTrace.wes2LoadComplete();
       if (Wes2HintTrace.enabled) {
         Wes2HintTrace.log(
@@ -1737,6 +1746,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             onNotes: () => _showExerciseNoteDialog(row),
             onRemoveSet: (setIndex) => _onRemoveSet(row, setIndex),
             onNoteTap: (setIndex) => _onOpenSetNoteDialog(row, setIndex),
+            onVideoTap: (setIndex) => _onSetVideoTap(row, setIndex),
+            setsWithVideo:
+                _setsWithVideo[row.exerciseId] ?? const <int>{},
             onExerciseDetails: () => _navigateToExerciseDetails(row),
             onTopSets: () => _navigateToTopSets(row),
             isExercisePlanNoteRead:
@@ -2695,6 +2707,51 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   // ── Set notes (Phase 16) ──────────────────────────────────────────────────
+
+  // ── Set video ─────────────────────────────────────────────────────────────
+
+  /// Opens the set-video flow. The flow itself lives in SetVideoCoordinator;
+  /// this only supplies identity and refreshes the attached state afterwards.
+  Future<void> _onSetVideoTap(Wes2ExerciseRow row, int setIndex) async {
+    final String ownerUid = _controller.actingUid;
+    if (ownerUid.isEmpty) return;
+
+    // Identity is minted here, immediately before footage can be attached, and
+    // only for a set that does not already have one.
+    final String? setId = _controller.ensureSetId(row.exerciseId, setIndex);
+    if (setId == null) return;
+
+    final SetVideoCoordinator coordinator = await SetVideoCoordinator.instance();
+    if (!mounted) return;
+
+    final bool changed = await coordinator.handleTap(
+      context,
+      ownerUid: ownerUid,
+      date: _controller.selectedDate,
+      row: row,
+      setIndex: setIndex,
+      setId: setId,
+    );
+    if (changed) await _refreshSetVideoState();
+  }
+
+  /// Re-reads which sets currently have footage. Cheap, local, and offline.
+  Future<void> _refreshSetVideoState() async {
+    final String ownerUid = _controller.actingUid;
+    if (ownerUid.isEmpty) return;
+    try {
+      final SetVideoCoordinator c = await SetVideoCoordinator.instance();
+      final Map<String, Set<int>> next = await c.attachedByExercise(
+        ownerUid: ownerUid,
+        date: _controller.selectedDate,
+        rows: _controller.rows,
+      );
+      if (mounted) setState(() => _setsWithVideo = next);
+    } catch (_) {
+      // Set footage is an enhancement. Failing to read it must never stop the
+      // user logging their workout.
+    }
+  }
 
   Future<void> _onOpenSetNoteDialog(Wes2ExerciseRow row, int setIndex) async {
     // Always re-fetch from controller so we have the latest in-memory state.

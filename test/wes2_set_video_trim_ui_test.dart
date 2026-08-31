@@ -44,8 +44,17 @@ class _FakePlayer extends VideoPlayerController {
   @override
   Future<void> pause() async {}
 
+  // super is invoked so ChangeNotifier tears down properly, but guarded: the
+  // real dispose reaches a platform channel this fake never allocated against,
+  // and there is no plugin registered in a widget test.
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() async {
+    try {
+      await super.dispose();
+    } catch (_) {
+      // No platform side to release.
+    }
+  }
 }
 
 class _FakeFilmstrip implements TrimFilmstripSource {

@@ -69,6 +69,15 @@ class Wes2ExerciseCard extends StatelessWidget {
   final VoidCallback? onNotes;
   final void Function(int setIndex)? onRemoveSet;
   final void Function(int setIndex)? onNoteTap;
+
+  /// Opens the set-video flow for a set. Null hides the control entirely.
+  final void Function(int setIndex)? onVideoTap;
+
+  /// Set indices that already have footage attached, so the control can show
+  /// its recorded state. A set is identified here by its CURRENT display index
+  /// because that is all the row knows; the durable association behind it is
+  /// keyed on the stable setId, not on this.
+  final Set<int> setsWithVideo;
   final VoidCallback? onExerciseDetails;
   final VoidCallback? onTopSets;
   final VoidCallback? onOpenExercisePlanNote;
@@ -97,6 +106,8 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.onNotes,
     this.onRemoveSet,
     this.onNoteTap,
+    this.onVideoTap,
+    this.setsWithVideo = const <int>{},
     this.onExerciseDetails,
     this.onTopSets,
     this.onOpenExercisePlanNote,
@@ -365,6 +376,10 @@ class Wes2ExerciseCard extends StatelessWidget {
                       onNoteTap: onNoteTap == null
                           ? null
                           : () => onNoteTap!(s.setIndex),
+                      onVideoTap: onVideoTap == null
+                          ? null
+                          : () => onVideoTap!(s.setIndex),
+                      hasVideo: setsWithVideo.contains(s.setIndex),
                       isPlanNoteRead:
                           wes2Ctrl.isPlanNoteRead(row.exerciseId, s.setIndex),
                       // Tutorial highlight + reps callback: first set row only.

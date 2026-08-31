@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/WES2_models.dart';
 import 'package:localtest222/WES2_widgets/WES2_set_row.dart';
@@ -158,9 +157,15 @@ void main() {
     testWidgets('it is marked as a button for assistive technology',
         (tester) async {
       await tester.pumpWidget(_row(mode: Wes2ExerciseEntryMode.normal));
-      final SemanticsNode node = tester.getSemantics(
-          find.bySemanticsLabel(SetVideoCopy.recordSemanticLabel(1)));
-      expect(node.hasFlag(SemanticsFlag.isButton), isTrue);
+      // IconButton contributes its own Semantics, so match on the label rather
+      // than on position in the ancestor chain.
+      final Iterable<Semantics> labelled = tester
+          .widgetList<Semantics>(find.byType(Semantics))
+          .where((Semantics w) =>
+              w.properties.label == SetVideoCopy.recordSemanticLabel(1));
+
+      expect(labelled, isNotEmpty);
+      expect(labelled.first.properties.button, isTrue);
     });
 
     for (final double scale in <double>[1.3, 2.0]) {
