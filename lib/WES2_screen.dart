@@ -1017,6 +1017,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // withHint preserves existing actualValue while injecting the hint.
     return Wes2SetState(
       setIndex: setIndex,
+      // Execution identity wins: the BB3 side is a plan hint and carries none.
+      setId: completedSet.setId ?? bb3Set.setId,
       weight: completedSet.weight
           .withHint(bb3Set.weight.hintValue, FieldOrigin.bb3Hint),
       reps: completedSet.reps

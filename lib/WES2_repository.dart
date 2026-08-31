@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'WES2_models.dart';
 import 'progression_history_store.dart';
 
@@ -226,6 +227,18 @@ class FirestoreWes2Repository implements Wes2Repository {
     );
   }
 
+  /// Firestore set decoding, exposed for round-trip tests. The Firestore
+  /// shape is the one place a lost `setId` silently reassigns a video, so it is
+  /// tested directly rather than through a live client.
+  @visibleForTesting
+  static List<Wes2SetState> parseSetsForTest(List<dynamic> rawSets, int count) =>
+      _parseSets(rawSets, count);
+
+  /// Firestore row encoding, exposed for round-trip tests.
+  @visibleForTesting
+  static Map<String, dynamic> buildRowMapForTest(Wes2ExerciseRow row) =>
+      _buildRowMap(row);
+
   static List<Wes2SetState> _parseSets(List<dynamic> rawSets, int count) {
     return List.generate(count, (i) {
       if (i >= rawSets.length || rawSets[i] is! Map<String, dynamic>) {
@@ -234,6 +247,9 @@ class FirestoreWes2Repository implements Wes2Repository {
       final s = rawSets[i] as Map<String, dynamic>;
       return Wes2SetState(
         setIndex: i,
+        // Same precedence the showcase reducers use, so a set loaded back from
+        // Firestore keeps the identity its record fingerprint was built from.
+        setId: readStableSetId(s),
         weight: _parseDouble(s['weight']),
         reps: _parseInt(s['reps']),
         rir: _parseDouble(s['rir']),
@@ -433,6 +449,9 @@ class FirestoreWes2Repository implements Wes2Repository {
     final sets = <Map<String, dynamic>>[];
     for (final s in row.sets) {
       final setMap = <String, dynamic>{'setIndex': s.setIndex};
+      // Written only when the set actually carries one, so rows of sets that
+      // predate stable identity serialise exactly as they always have.
+      if (s.setId != null) setMap['setId'] = s.setId;
       if (s.weight.actualValue != null) setMap['weight'] = s.weight.actualValue;
       if (s.reps.actualValue != null) setMap['reps'] = s.reps.actualValue;
       if (s.rir.actualValue != null) setMap['rir'] = s.rir.actualValue;

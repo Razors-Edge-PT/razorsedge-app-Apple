@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'WES2_hint_service.dart';
 import 'WES2_models.dart';
 import 'wes2_hint_trace.dart';
+import 'wes2_video/set_identity.dart';
 
 enum Wes2LoadState { idle, loading, loaded, empty, error }
 
@@ -411,6 +412,7 @@ class Wes2SessionController extends ChangeNotifier {
           : cs.rir.actualValue;
       return Wes2SetState(
         setIndex: i,
+        setId: cs.setId,
         weight: Wes2FieldState<double>(
           actualValue: weightActual,
           hintValue: bs.weight.hintValue,
@@ -637,6 +639,54 @@ class Wes2SessionController extends ChangeNotifier {
     return flushed;
   }
 
+  // ── Stable set identity ──────────────────────────────────────────────────
+
+  /// Overridable so tests can mint deterministic ids.
+  @visibleForTesting
+  String Function() setIdGenerator = newWes2SetId;
+
+  /// Returns the stable id of the set at [setIndex], minting one if the set
+  /// does not already carry it. Returns null when the row or set is not found.
+  ///
+  /// Identity is minted LAZILY — only here, immediately before a recording is
+  /// attached — rather than for every new set. Minting eagerly would turn every
+  /// future set's showcase `setKey` into a uuid for every user, including those
+  /// who never record a video, and a device still on an older build re-saving
+  /// that workout would drop the field and flip the fingerprint back. Confining
+  /// identity to sets that actually carry a video keeps that blast radius as
+  /// small as the feature allows.
+  ///
+  /// Deliberately does NOT push undo: giving a set its identity is bookkeeping,
+  /// not a user-visible edit, and must not consume an undo slot.
+  String? ensureSetId(String exerciseId, int setIndex) {
+    final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return null;
+    final row = _rows[rowIdx];
+    final i = row.sets.indexWhere((s) => s.setIndex == setIndex);
+    if (i == -1) return null;
+
+    final existing = row.sets[i].setId;
+    if (existing != null && existing.trim().isNotEmpty) return existing;
+
+    final minted = setIdGenerator();
+    final sets = List<Wes2SetState>.from(row.sets);
+    sets[i] = sets[i].copyWith(setId: minted);
+    final newRows = List<Wes2ExerciseRow>.from(_rows);
+    newRows[rowIdx] = row.copyWith(sets: sets);
+    _rows = newRows;
+    notifyListeners();
+    return minted;
+  }
+
+  /// The stable id of a set, or null when it has none yet. Never mints.
+  String? setIdAt(String exerciseId, int setIndex) {
+    final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
+    if (rowIdx == -1) return null;
+    final i = _rows[rowIdx].sets.indexWhere((s) => s.setIndex == setIndex);
+    if (i == -1) return null;
+    return _rows[rowIdx].sets[i].setId;
+  }
+
   // ── Remove Set (Phase 14) ────────────────────────────────────────────────
 
   /// Removes the set at [setIndex] and compacts remaining sets so their
@@ -660,8 +710,12 @@ class Wes2SessionController extends ChangeNotifier {
     final compacted = List<Wes2SetState>.generate(kept.length, (i) {
       final s = kept[i];
       // Construct with updated setIndex; copyWith intentionally omits setIndex.
+      // setId is carried across verbatim: compaction renumbers POSITIONS, and a
+      // set's identity — and therefore any video attached to it — must not move
+      // with them.
       return Wes2SetState(
         setIndex: i,
+        setId: s.setId,
         weight: s.weight,
         reps: s.reps,
         rir: s.rir,
@@ -762,6 +816,7 @@ class Wes2SessionController extends ChangeNotifier {
     // Construct directly to allow clearing (null) without a copyWith sentinel.
     sets[setIndex] = Wes2SetState(
       setIndex: s.setIndex,
+      setId: s.setId,
       weight: s.weight,
       reps: s.reps,
       rir: s.rir,

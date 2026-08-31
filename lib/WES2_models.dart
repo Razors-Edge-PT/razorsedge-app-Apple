@@ -92,10 +92,49 @@ class Wes2FieldState<T> {
       );
 }
 
+/// Reads a set's stable identity out of a decoded set map.
+///
+/// Precedence mirrors BOTH showcase reducers exactly
+/// (`lib/profile/core/showcase_reducer.dart` and `functions/showcase/reducer.js`,
+/// which each read `s.id ?? s.setId`). A document that already carries `id`
+/// therefore keeps `id` as its identity, and no competing `setId` is ever
+/// written for it — the reducers would ignore it, and disagreeing with them is
+/// how a proof video ends up pointing at the wrong performance.
+///
+/// Returns null for a missing, non-string, or blank value.
+String? readStableSetId(Map<String, dynamic> map) {
+  for (final String key in const <String>['id', 'setId']) {
+    final Object? raw = map[key];
+    if (raw is String) {
+      final String t = raw.trim();
+      if (t.isNotEmpty) return t;
+    }
+  }
+  return null;
+}
+
 /// One set within an exercise row.
 /// Identity: date + exerciseId + setIndex.
 class Wes2SetState {
   final int setIndex;
+
+  /// Stable, collision-resistant identity for this set, independent of
+  /// [setIndex]. Null for every set written before this field existed, and for
+  /// placeholder sets, so it is ALWAYS optional.
+  ///
+  /// Why it is not generated in this constructor: `Wes2SetState(setIndex: i)`
+  /// is used as padding by the hint and plan services on ordinary rebuilds. A
+  /// constructor-generated id would mint a NEW identity every rebuild, which is
+  /// the opposite of stable. Identity is therefore assigned only at deliberate
+  /// creation points (a user adding a set) or lazily, immediately before a
+  /// recording is attached to a historical set.
+  ///
+  /// The showcase reducers already prefer `s.id ?? s.setId` over the positional
+  /// `s<n>` fallback on BOTH platforms, so emitting this is additive and needs
+  /// no server change. It is also why it must never be back-filled in bulk: a
+  /// set that GAINS an id changes its setKey, and therefore its record
+  /// fingerprint, which would detach any proof video already attached to it.
+  final String? setId;
   final Wes2FieldState<double> weight;
   final Wes2FieldState<int> reps;
   final Wes2FieldState<double> rir;
@@ -113,6 +152,7 @@ class Wes2SetState {
 
   const Wes2SetState({
     required this.setIndex,
+    this.setId,
     this.weight = const Wes2FieldState<double>(),
     this.reps = const Wes2FieldState<int>(),
     this.rir = const Wes2FieldState<double>(),
@@ -128,6 +168,7 @@ class Wes2SetState {
       weight.hasActual || reps.hasActual || rir.hasActual || velocity.hasActual;
 
   Wes2SetState copyWith({
+    String? setId,
     Wes2FieldState<double>? weight,
     Wes2FieldState<int>? reps,
     Wes2FieldState<double>? rir,
@@ -140,6 +181,7 @@ class Wes2SetState {
   }) {
     return Wes2SetState(
       setIndex: setIndex,
+      setId: setId ?? this.setId,
       weight: weight ?? this.weight,
       reps: reps ?? this.reps,
       rir: rir ?? this.rir,
@@ -157,6 +199,10 @@ class Wes2SetState {
 
   Map<String, dynamic> toJson() => {
         'setIndex': setIndex,
+        // Emitted only when present, so a set that never carried an id keeps
+        // producing byte-identical JSON and no existing draft or workout
+        // document changes shape.
+        if (setId != null) 'setId': setId,
         'weight': weight.toJson(),
         'reps': reps.toJson(),
         'rir': rir.toJson(),
@@ -167,6 +213,7 @@ class Wes2SetState {
 
   static Wes2SetState fromJson(Map<String, dynamic> map) => Wes2SetState(
         setIndex: map['setIndex'] as int,
+        setId: readStableSetId(map),
         weight: Wes2FieldState.doubleFromJson(
           map['weight'] as Map<String, dynamic>,
         ),
