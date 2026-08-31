@@ -27,9 +27,9 @@
 	<key>NSPhotoLibraryUsageDescription</key>
     <string>We need access to your photo library so you can choose an image to upload (for example, a profile picture or training-related photo).</string>
     <key>NSCameraUsageDescription</key>
-    <string>We need access to your camera so you can take and upload photos (for example, a profile picture or training-related photo).</string>
+    <string>GoodLift uses the camera so you can take photos (for example, a profile picture) and record a video of a working set from your workout log. Set videos stay on your device unless a set becomes a qualifying personal best.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>We need access to your microphone only if you record audio while capturing video.</string>
+    <string>GoodLift uses the microphone to record audio with your set videos. You can record without it, and it is used only while a set video is being captured.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>GoodLift only uses location if required by a device or service feature you choose to use.</string>
 

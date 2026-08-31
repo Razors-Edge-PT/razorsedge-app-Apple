@@ -1,6 +1,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.goodlift.razorsedge">
 
+    <!-- Per-set video recording in WES2. Capture is embedded in the app, so
+         only these two are needed: clips are written to app-private storage,
+         which requires no storage permission on any supported API level. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Deliberately NOT required. Recording a set is one optional feature;
+         everything else in GoodLift works without a camera or microphone, and
+         marking these required would hide the app on Play from devices that
+         lack them. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
 
 <application
         android:name="${applicationName}"
