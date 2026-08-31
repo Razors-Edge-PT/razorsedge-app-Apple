@@ -231,10 +231,13 @@ class SetVideoPipeline {
   /// Finalises soft deletions whose Undo window has closed. Idempotent, so it
   /// is safe to run on every startup.
   Future<int> finalizeExpiredDeletions({
+    required String ownerUid,
     Duration undoWindow = const Duration(seconds: 12),
   }) async {
-    final List<SetVideoRecord> due =
-        await _store.finalizable(DateTime.now().subtract(undoWindow));
+    final List<SetVideoRecord> due = await _store.finalizable(
+      ownerUid: ownerUid,
+      before: DateTime.now().subtract(undoWindow),
+    );
     for (final SetVideoRecord r in due) {
       await _files.deleteQuietly(r.localVideoPath);
       await _files.deleteQuietly(r.localPosterPath);

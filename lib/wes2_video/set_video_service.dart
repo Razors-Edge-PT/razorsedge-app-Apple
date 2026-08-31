@@ -293,8 +293,8 @@ class SetVideoService {
       int finalised = 0;
       try {
         swept = await pipeline.sweepTemporary(ownerUid);
-        finalised =
-            await pipeline.finalizeExpiredDeletions(undoWindow: undoWindow);
+        finalised = await pipeline.finalizeExpiredDeletions(
+            ownerUid: ownerUid, undoWindow: undoWindow);
       } catch (_) {
         // Housekeeping is best-effort and must never block publication.
       }

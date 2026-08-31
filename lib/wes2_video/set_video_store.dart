@@ -399,11 +399,19 @@ class SetVideoStore {
         updatedAtMs: Value<int>(_now()),
       ));
 
-  /// Soft-deleted rows whose Undo window has elapsed.
-  Future<List<SetVideoRecord>> finalizable(DateTime before) {
+  /// Soft-deleted rows whose Undo window has elapsed, for ONE owner.
+  ///
+  /// Owner-scoped deliberately. A pass run while one account is signed in must
+  /// never finalise — and therefore unlink the files of — footage belonging to
+  /// another account that has used the same device.
+  Future<List<SetVideoRecord>> finalizable({
+    required String ownerUid,
+    required DateTime before,
+  }) {
     final int cutoff = before.millisecondsSinceEpoch;
     return (_db.select(_db.setVideos)
           ..where(($SetVideosTable t) =>
+              t.ownerUid.equals(ownerUid) &
               t.deletedAtMs.isNotNull() &
               t.deletedAtMs.isSmallerThanValue(cutoff)))
         .get();

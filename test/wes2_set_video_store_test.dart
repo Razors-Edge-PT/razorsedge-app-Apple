@@ -282,16 +282,36 @@ void main() {
       await store.softDelete(r.id);
 
       expect(
-        await store
-            .finalizable(DateTime.now().subtract(const Duration(minutes: 1))),
+        await store.finalizable(
+          ownerUid: _uid,
+          before: DateTime.now().subtract(const Duration(minutes: 1)),
+        ),
         isEmpty,
       );
       expect(
-        (await store
-                .finalizable(DateTime.now().add(const Duration(minutes: 1))))
+        (await store.finalizable(
+          ownerUid: _uid,
+          before: DateTime.now().add(const Duration(minutes: 1)),
+        ))
             .length,
         1,
       );
+    });
+
+    test('finalisation is scoped to one owner', () async {
+      final SetVideoRecord mine = await put(ownerUid: _uid);
+      final SetVideoRecord theirs = await put(ownerUid: _other, setId: 'sid-9');
+      await store.softDelete(mine.id);
+      await store.softDelete(theirs.id);
+
+      final List<SetVideoRecord> due = await store.finalizable(
+        ownerUid: _uid,
+        before: DateTime.now().add(const Duration(minutes: 1)),
+      );
+
+      expect(due.map((r) => r.id), <String>[mine.id],
+          reason: "one account's pass must never unlink another account's "
+              'files on a shared device');
     });
   });
 

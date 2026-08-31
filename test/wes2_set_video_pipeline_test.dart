@@ -287,8 +287,8 @@ void main() {
         setId: 'sid-1',
       );
 
-      final int finalised =
-          await pipeline.finalizeExpiredDeletions(undoWindow: Duration.zero);
+      final int finalised = await pipeline.finalizeExpiredDeletions(
+          ownerUid: _uid, undoWindow: Duration.zero);
 
       expect(finalised, 1);
       expect(File(r.localVideoPath).existsSync(), isFalse);
@@ -303,9 +303,13 @@ void main() {
         exerciseId: 'ex1',
         setId: 'sid-1',
       );
-      expect(await pipeline.finalizeExpiredDeletions(undoWindow: Duration.zero),
+      expect(
+          await pipeline.finalizeExpiredDeletions(
+              ownerUid: _uid, undoWindow: Duration.zero),
           1);
-      expect(await pipeline.finalizeExpiredDeletions(undoWindow: Duration.zero),
+      expect(
+          await pipeline.finalizeExpiredDeletions(
+              ownerUid: _uid, undoWindow: Duration.zero),
           0);
     });
 

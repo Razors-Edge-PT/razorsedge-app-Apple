@@ -408,7 +408,8 @@ class SetVideoCoordinator {
     }
 
     // Unlinks video, poster and any superseded files, then purges the row.
-    await _pipeline.finalizeExpiredDeletions(undoWindow: Duration.zero);
+    await _pipeline.finalizeExpiredDeletions(
+        ownerUid: record.ownerUid, undoWindow: Duration.zero);
   }
 
   Future<bool> _captureAndKeep(
