@@ -11,13 +11,19 @@ Run the whole list on **one current iPhone** and **one current Android device**.
 - Build: `1.7.14+84`
 - Feature branch: `feature/wes2-set-video`
 
-> **iOS note.** The Podfile is generated on first `pod install`. Before the iOS
-> build, add the `permission_handler` preprocessor macros to it so only
-> `PERMISSION_CAMERA` and `PERMISSION_MICROPHONE` are compiled in. Without that,
-> every permission the plugin supports is linked, which App Store review will
-> ask about.
+> **iOS note.** No Podfile configuration step remains. `permission_handler` has
+> been removed: the `camera` plugin already prompts and reports the outcome, so
+> there are no preprocessor macros to set and no permissions linked beyond the
+> two this feature uses. The committed source is complete for a macOS/Xcode
+> build. iOS has still never been compiled — that remains Mac-only work.
 
 ---
+
+> **What changed since the first attempt.** Reconciliation, identity
+> persistence, structural video-awareness and cleanup were not connected to the
+> app at all in `1.7.14+84` as first built. They are now, so sections 4, 5, 6
+> and 8 below are being exercised for the FIRST time on a device — treat them as
+> the highest-risk part of this pass, not as a re-test.
 
 ## 1. Permissions
 
@@ -26,7 +32,9 @@ Run the whole list on **one current iPhone** and **one current Android device**.
 | 1.1 | Fresh install, tap the camera icon on a set | Camera prompt, then microphone prompt |
 | 1.2 | Grant both | Preview appears, rear camera selected |
 | 1.3 | Deny camera | "Camera access needed" pane with **Open Settings** and **Not now**; workout logging still fully usable |
-| 1.4 | Deny camera twice (iOS) / "Don't ask again" (Android) | Permanently-denied wording shown, **Open Settings** opens the app's settings page |
+| 1.4 | Deny camera twice (iOS) | Permanently-denied wording, **Open Settings** opens the app's settings page |
+| 1.4b | "Don't ask again" (Android) | Permanently-denied wording; **no** Open Settings button (Android has no such deep link) and the text says where to go |
+| 1.4c | Restricted by parental controls (iOS) | Restricted wording, and **no** Open Settings button — Settings cannot help |
 | 1.5 | Grant camera, deny microphone | Recording proceeds **silently**; the "records without sound" banner is shown |
 | 1.6 | Revoke camera in Settings while the app is backgrounded, return | No crash; the permission pane appears on the next attempt |
 
