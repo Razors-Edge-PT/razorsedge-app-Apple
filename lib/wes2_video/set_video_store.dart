@@ -413,7 +413,11 @@ class SetVideoStore {
           ..where(($SetVideosTable t) =>
               t.ownerUid.equals(ownerUid) &
               t.deletedAtMs.isNotNull() &
-              t.deletedAtMs.isSmallerThanValue(cutoff)))
+              // Inclusive: an explicit "delete now" finalises with a zero
+              // window, so the deletion timestamp and the cutoff routinely land
+              // in the SAME millisecond. A strict < silently skipped those,
+              // leaving the user's bytes on disk after they asked for deletion.
+              t.deletedAtMs.isSmallerOrEqualValue(cutoff)))
         .get();
   }
 
