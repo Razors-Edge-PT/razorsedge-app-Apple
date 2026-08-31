@@ -9,7 +9,7 @@
     "logs": "firebase functions:log",
     "migrate:planned-blocks": "node scripts/migrate_planned_blocks_to_users.js",
     "test": "node --test",
-    "test:rules": "firebase emulators:exec --only firestore,auth,storage --project rules-test \"node --test --test-concurrency=1 test-rules/rules.spec.js test-rules/coach_mode_rules.spec.js test-rules/integration.spec.js test-rules/coach_mode.spec.js test-rules/profile_showcase_rules.spec.js test-rules/profile_storage_rules.spec.js test-rules/identity_authority.spec.js test-rules/story_expiry_rules.spec.js\"",
+    "test:rules": "firebase emulators:exec --only firestore,auth,storage --project rules-test \"node --test --test-concurrency=1 test-rules/rules.spec.js test-rules/coach_mode_rules.spec.js test-rules/integration.spec.js test-rules/coach_mode.spec.js test-rules/profile_showcase_rules.spec.js test-rules/profile_storage_rules.spec.js test-rules/identity_authority.spec.js test-rules/story_expiry_rules.spec.js test-rules/set_video_paths.spec.js\"",
     "migrate:usernames": "node scripts/migrate_usernames_index.js",
     "backfill:showcase": "node scripts/backfill_profile_showcase.js",
     "test:emulator": "firebase emulators:exec --only firestore,auth,storage --project rules-test \"node --test --test-concurrency=1 test-emulator/showcase_concurrency.spec.js\""

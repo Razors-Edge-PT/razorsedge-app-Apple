@@ -168,15 +168,17 @@ void main() {
           reason: 'it had zero callers against e52184f');
     });
 
-    test('upload completion is recovered from outbox + post, not a callback',
-        () {
+    test('upload completion is recovered durably, not from a callback', () {
       final String body = _method(service, 'Future<int> _recoverQueued(');
       expect(body, contains('_outbox.byId('),
           reason: 'a surviving row means the upload is still owed');
-      expect(body, contains("collection('posts')"),
-          reason: 'the post document is the durable success signal');
+      expect(body, contains("collection('proofs')"),
+          reason: 'the proof pointer carries the published postId');
       expect(body, contains('markLocalOnly('),
           reason: 'dropped work returns to local so it can retry');
+      expect(body, isNot(contains("collection('posts')")),
+          reason: 'reading a MISSING posts/{id} is denied by the rules, not '
+              'not-found — see functions/test-rules/set_video_paths.spec.js');
     });
 
     test('a WES2 set save triggers reconciliation', () {

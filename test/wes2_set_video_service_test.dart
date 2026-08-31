@@ -211,6 +211,23 @@ void main() {
     );
   }
 
+  /// Writes the proof pointer the uploader writes on a successful publish.
+  Future<void> writeProofPointer({
+    required String fingerprint,
+    required String mediaId,
+    String ownerUid = _uid,
+  }) =>
+      firestore
+          .collection('users')
+          .doc(ownerUid)
+          .collection('proofs')
+          .doc(fingerprint)
+          .set(<String, Object?>{
+        'fingerprint': fingerprint,
+        'postId': mediaId,
+        'slot': BigFiveSlot.bench,
+      });
+
   Future<void> publishShowcase(String fingerprint) =>
       firestore.collection('users_public').doc(_uid).set(
         <String, Object?>{'profileShowcaseV1': _showcaseMap(fingerprint)},
@@ -312,15 +329,13 @@ void main() {
           reason: 'work still queued must not be resolved either way');
     });
 
-    test('row gone plus a post document means published', () async {
+    test('row gone plus a proof pointer means published', () async {
       final SetVideoRecord r = await queued();
       final String mediaId = r.mediaId!;
 
-      // Exactly what the uploader does on success.
-      await firestore.collection('posts').doc(mediaId).set(<String, Object?>{
-        'ownerUid': _uid,
-        'mediaType': 'video',
-      });
+      // Exactly what the uploader does on success: proof pointer, then the
+      // outbox row goes.
+      await writeProofPointer(fingerprint: _fp(), mediaId: mediaId);
       await outbox.remove(mediaId);
 
       await buildService().runMaintenance(actor: _self);
@@ -331,7 +346,8 @@ void main() {
           reason: 'the real published identifier, not a guess');
     });
 
-    test('row gone with no post returns it to local so it can retry', () async {
+    test('row gone with no proof pointer returns it to local for retry',
+        () async {
       final SetVideoRecord r = await queued();
       await outbox.remove(r.mediaId!);
 
@@ -348,10 +364,7 @@ void main() {
     test('recovery after a restart needs no prior in-process state', () async {
       final SetVideoRecord r = await queued();
       final String mediaId = r.mediaId!;
-      await firestore
-          .collection('posts')
-          .doc(mediaId)
-          .set(<String, Object?>{'ownerUid': _uid});
+      await writeProofPointer(fingerprint: _fp(), mediaId: mediaId);
       await outbox.remove(mediaId);
 
       // A brand new service instance, as after a cold start.
@@ -361,17 +374,37 @@ void main() {
       expect((await store.byId(r.id))!.state, SetVideoState.published);
     });
 
+    test('a proof pointer for a DIFFERENT media id does not count', () async {
+      final SetVideoRecord r = await queued();
+      await writeProofPointer(fingerprint: _fp(), mediaId: 'some-other-media');
+      await outbox.remove(r.mediaId!);
+
+      await buildService().runMaintenance(actor: _self);
+      expect((await store.byId(r.id))!.state, isNot(SetVideoState.published));
+    });
+
+    test('a record queued without a fingerprint is returned to local',
+        () async {
+      final SetVideoRecord r = await seedClip(setId: 'sid-nofp');
+      await store.markQueued(
+        id: r.id,
+        mediaId: 'm-x',
+        fingerprint: '',
+        liftSlot: BigFiveSlot.bench,
+        generation: r.generation,
+      );
+      await buildService().runMaintenance(actor: _self);
+      expect((await store.byId(r.id))!.state, isNot(SetVideoState.queued));
+    });
+
     test('a superseded fingerprint is not attached, and the clip is kept',
         () async {
       final SetVideoRecord r = await queued();
       final String mediaId = r.mediaId!;
 
       // Beaten while the upload was in flight.
+      await writeProofPointer(fingerprint: _fp(), mediaId: mediaId);
       await publishShowcase(_fp(weight: 200));
-      await firestore
-          .collection('posts')
-          .doc(mediaId)
-          .set(<String, Object?>{'ownerUid': _uid});
       await outbox.remove(mediaId);
 
       await buildService().runMaintenance(actor: _self);

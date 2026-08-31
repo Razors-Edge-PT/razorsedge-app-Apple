@@ -316,13 +316,25 @@ class SetVideoService {
   /// Resolves records stuck in [SetVideoState.queued] from DURABLE state.
   ///
   /// This is what makes upload completion survive process death. The uploader
-  /// publishes a post at `posts/{mediaId}` and then removes the outbox row, so
-  /// after a restart the truth is recoverable without any in-memory callback:
+  /// writes a proof pointer at `users/{uid}/proofs/{fingerprint}` carrying the
+  /// published `postId`, and only then removes the outbox row, so after a
+  /// restart the truth is recoverable with no in-memory callback:
   ///
   ///   outbox row still present  → the upload is still owed; leave it alone.
-  ///   row gone, post exists     → it published; record the real post id.
-  ///   row gone, no post         → the work was dropped; return it to local so
+  ///   row gone, pointer exists  → it published; take the real postId from it.
+  ///   row gone, no pointer      → the work was dropped; return it to local so
   ///                               a later pass can retry without duplicating.
+  ///
+  /// ── Why the proof pointer and not posts/{mediaId} ──────────────────────────
+  /// Reading `posts/{mediaId}` by id looks like the obvious check and is wrong.
+  /// The rule is `allow read: if isSocial(resource.data.ownerUid)`, and on a
+  /// document that does not exist `resource` is null, so the read fails with
+  /// permission-denied rather than returning "not found" — verified against the
+  /// rules emulator in functions/test-rules/set_video_paths.spec.js. The
+  /// "dropped upload" branch would then never fire and a record would stay
+  /// queued for ever. The proof pointer lives under the owner's own tree, is
+  /// readable whether or not it exists, and is the same document the uploader
+  /// itself reads to decide idempotency.
   Future<int> _recoverQueued(SetVideoActor actor) async {
     int resolved = 0;
     final List<SetVideoRecord> all = await store.allFor(actor.actingUid);
@@ -335,18 +347,29 @@ class SetVideoService {
         continue;
       }
 
+      final String? fingerprint = record.fingerprint;
+      if (fingerprint == null || fingerprint.isEmpty) {
+        await store.markLocalOnly(record.id);
+        resolved++;
+        continue;
+      }
+
       try {
         if (await _outbox.byId(mediaId) != null) continue; // still owed
 
-        final DocumentSnapshot<Map<String, dynamic>> post =
-            await _db.collection('posts').doc(mediaId).get();
+        final DocumentSnapshot<Map<String, dynamic>> proof = await _db
+            .collection('users')
+            .doc(record.ownerUid)
+            .collection('proofs')
+            .doc(fingerprint)
+            .get();
 
-        if (post.exists) {
-          // The uploader names the post document with the mediaId, so this IS
-          // the published identifier — not a guess.
+        final String? postId = proof.data()?['postId'] as String?;
+        if (proof.exists && postId == mediaId) {
+          // The published identifier as the uploader recorded it, not a guess.
           final bool ok = await reconciler.confirmPublished(
             recordId: record.id,
-            postId: mediaId,
+            postId: postId!,
             actor: actor,
           );
           if (!ok) await store.markLocalOnly(record.id);
