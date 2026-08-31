@@ -6,6 +6,27 @@ import '../WES2_models.dart';
 import '../periodization_model_utils.dart';
 import '../wes2_video/set_video_copy.dart';
 
+/// Height of the trailing icon slots.
+///
+/// 48 is the platform-recommended minimum touch dimension. The row cannot also
+/// be 48 WIDE per control — six columns at 48 overflows every phone narrower
+/// than a tablet — so the target is 48 on the axis where there is room and
+/// [kWes2RowIconSlotWidth] on the other. That is 28x48 rather than the former
+/// 24x36 — not the full recommendation, but the largest that fits a dense
+/// six-column row, and the whole cluster is NARROWER than the 86pt it replaced,
+/// so the accessibility gain costs no horizontal room.
+const double kWes2RowIconSlotHeight = 48;
+
+/// Width of one trailing icon slot.
+const double kWes2RowIconSlotWidth = 28;
+
+/// Total width the trailing icon cluster reserves (remove + note + camera).
+///
+/// The column headers reserve the SAME width so the two stay aligned when the
+/// flexible E1RM column narrows on a small screen. A header that did not
+/// reserve it would drift out of line exactly when space is tightest.
+const double kWes2RowTrailingWidth = kWes2RowIconSlotWidth * 3;
+
 class _E1rmDisplay {
   final String text;
   final bool isActual; // true → white normal; false → grey
@@ -55,6 +76,8 @@ class Wes2SetColumnHeaders extends StatelessWidget {
               child: Text('Time', style: _kHeaderStyle),
             ),
           ),
+          Spacer(),
+          SizedBox(width: kWes2RowTrailingWidth),
         ],
       );
     }
@@ -80,7 +103,10 @@ class Wes2SetColumnHeaders extends StatelessWidget {
             ),
           ),
           SizedBox(width: 4),
-          SizedBox(width: 55, child: Text('E1RM', style: _kHeaderStyle)),
+          Flexible(
+            child: SizedBox(width: 55, child: Text('E1RM', style: _kHeaderStyle)),
+          ),
+          SizedBox(width: kWes2RowTrailingWidth),
         ],
       );
     }
@@ -114,17 +140,23 @@ class Wes2SetColumnHeaders extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 4),
-        const SizedBox(
-          width: 55,
-          child: Text('E1RM', style: _kHeaderStyle),
+        // Mirrors the row: the derived E1RM column is the one that yields.
+        const Flexible(
+          child: SizedBox(
+            width: 55,
+            child: Text('E1RM', style: _kHeaderStyle),
+          ),
         ),
         if (showVelocity) ...[
           const SizedBox(width: 4),
-          const SizedBox(
-            width: 45,
-            child: Text('Vel.', style: _kHeaderStyle),
+          const Flexible(
+            child: SizedBox(
+              width: 45,
+              child: Text('Vel.', style: _kHeaderStyle),
+            ),
           ),
         ],
+        const SizedBox(width: kWes2RowTrailingWidth),
       ],
     );
   }
@@ -466,13 +498,15 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
           ? SetVideoCopy.recordedSemanticLabel(setNumber)
           : SetVideoCopy.recordSemanticLabel(setNumber),
       child: SizedBox(
-        width: 24,
-        height: 36,
+        width: kWes2RowIconSlotWidth,
+        height: kWes2RowIconSlotHeight,
         child: Align(
           alignment: Alignment.center,
           child: IconButton(
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 24, height: 36),
+            constraints: const BoxConstraints.tightFor(
+                width: kWes2RowIconSlotWidth,
+                height: kWes2RowIconSlotHeight),
             icon: Icon(
               widget.hasVideo ? Icons.videocam : Icons.videocam_outlined,
               size: 16,
@@ -581,16 +615,16 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (widget.onRemoveSet != null) ...[
-            const SizedBox(width: 6),
             SizedBox(
-              width: 28,
-              height: 36,
+              width: kWes2RowIconSlotWidth,
+              height: kWes2RowIconSlotHeight,
               child: Align(
-                alignment: Alignment.centerRight,
+                alignment: Alignment.center,
                 child: IconButton(
                   padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints.tightFor(width: 28, height: 28),
+                  constraints: const BoxConstraints.tightFor(
+                      width: kWes2RowIconSlotWidth,
+                      height: kWes2RowIconSlotHeight),
                   icon: const Icon(
                     Icons.remove_circle_outline,
                     size: 16,
@@ -602,16 +636,16 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
               ),
             ),
           ],
-          const SizedBox(width: 4),
           SizedBox(
-            width: 24,
-            height: 36,
+            width: kWes2RowIconSlotWidth,
+            height: kWes2RowIconSlotHeight,
             child: Align(
               alignment: Alignment.center,
               child: IconButton(
                 padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 24, height: 24),
+                constraints: const BoxConstraints.tightFor(
+                    width: kWes2RowIconSlotWidth,
+                    height: kWes2RowIconSlotHeight),
                 icon: Icon(
                   Icons.sticky_note_2,
                   size: 16,
@@ -698,7 +732,9 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             onUnfocused: (t) => widget.onFieldUnfocused(Wes2FieldKey.reps, t),
           ),
           const SizedBox(width: 4),
-          SizedBox(
+          // Same rule as the normal row: the derived column yields first.
+          Flexible(
+            child: SizedBox(
             width: 55,
             height: 36,
             child: Align(
@@ -737,6 +773,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
                 },
               ),
             ),
+          ),
           ),
           _removeAndNoteIcons(),
         ],
@@ -834,8 +871,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             onDoubleTap: () => _acceptHint(_rirCtrl, Wes2FieldKey.rir, rirHint),
           ),
           const SizedBox(width: 4),
-          // E1RM — calculated from actuals (or hints when no actuals present)
-          SizedBox(
+          // E1RM — calculated from actuals (or hints when no actuals present).
+          // Flexible so it is the column that yields when the row cannot fit:
+          // it is a DERIVED display, so narrowing it costs the user nothing
+          // they typed, whereas overflowing paints a render error across the
+          // row on every phone 360dp and under.
+          Flexible(
+            child: SizedBox(
             width: 55,
             height: 36,
             child: Align(
@@ -874,10 +916,14 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
                 },
               ),
             ),
+            ),
           ),
           if (widget.showVelocity) ...[
             const SizedBox(width: 4),
-            _field(
+            // Optional column: yields alongside E1RM rather than overflowing
+            // when it is enabled on the narrowest screens.
+            Flexible(
+              child: _field(
               ctrl: _velocityCtrl,
               focus: _velocityFocus,
               fieldKey: Wes2FieldKey.velocity,
@@ -885,18 +931,19 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
               width: 45,
               decimal: true,
             ),
+            ),
           ],
           if (widget.onRemoveSet != null) ...[
-            const SizedBox(width: 6),
             SizedBox(
-              width: 28,
-              height: 36,
+              width: kWes2RowIconSlotWidth,
+              height: kWes2RowIconSlotHeight,
               child: Align(
-                alignment: Alignment.centerRight,
+                alignment: Alignment.center,
                 child: IconButton(
                   padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints.tightFor(width: 28, height: 28),
+                  constraints: const BoxConstraints.tightFor(
+                      width: kWes2RowIconSlotWidth,
+                      height: kWes2RowIconSlotHeight),
                   icon: const Icon(
                     Icons.remove_circle_outline,
                     size: 16,
@@ -908,16 +955,16 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
               ),
             ),
           ],
-          const SizedBox(width: 4),
           SizedBox(
-            width: 24,
-            height: 36,
+            width: kWes2RowIconSlotWidth,
+            height: kWes2RowIconSlotHeight,
             child: Align(
               alignment: Alignment.center,
               child: IconButton(
                 padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 24, height: 24),
+                constraints: const BoxConstraints.tightFor(
+                    width: kWes2RowIconSlotWidth,
+                    height: kWes2RowIconSlotHeight),
                 icon: Icon(
                   Icons.sticky_note_2,
                   size: 16,

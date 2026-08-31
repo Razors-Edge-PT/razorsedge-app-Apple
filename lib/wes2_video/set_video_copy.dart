@@ -38,6 +38,12 @@ class SetVideoCopy {
       'Camera access is turned off for GoodLift. You can turn it back on in '
       'Settings. Logging your workout works without it.';
 
+  /// Parental controls or an MDM policy. Settings will not help, so the pane
+  /// does not offer it.
+  static const String cameraRestrictedBody =
+      'Camera access is restricted on this device, so a set cannot be '
+      'recorded. Logging your workout works as normal.';
+
   static const String microphoneDeniedBody =
       'Without microphone access the set will record without sound.';
 

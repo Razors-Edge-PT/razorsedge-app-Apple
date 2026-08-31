@@ -21,7 +21,7 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart' as ph;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../set_video_copy.dart';
 import '../set_video_pipeline.dart';
@@ -37,39 +37,96 @@ class CaptureResult {
   final String? message;
 }
 
-/// Permission checks, injected so the flow can be driven in tests.
-abstract class SetVideoPermissions {
-  /// Requests camera access. Returns the resulting status.
-  Future<ph.PermissionStatus> requestCamera();
+/// How a camera authorisation failure should be presented.
+///
+/// The `camera` plugin already owns authorisation on both platforms: it
+/// prompts, and reports the outcome as a [CameraException] whose code
+/// distinguishes a fresh refusal from one the OS will not re-prompt for. A
+/// second permissions package duplicates that, declares permissions this
+/// feature does not need, and — in permission_handler's case — forced the whole
+/// app onto a newer compileSdk and an extra iOS Podfile configuration step for
+/// no behavioural gain.
+enum CameraDenialKind {
+  /// Refused this time. The OS will ask again on the next attempt.
+  denied,
 
-  /// Requests microphone access. A refusal is NOT fatal — the set still
-  /// records, silently.
-  Future<ph.PermissionStatus> requestMicrophone();
+  /// Refused before; the OS will not prompt again. Settings is the only route.
+  permanentlyDenied,
 
-  Future<bool> openAppSettings();
+  /// Blocked by policy (parental controls). Settings will not help.
+  restricted,
+
+  /// Not an authorisation problem at all.
+  other,
 }
 
-class RuntimeSetVideoPermissions implements SetVideoPermissions {
-  const RuntimeSetVideoPermissions();
+/// Classifies a [CameraException] raised while opening the camera.
+///
+/// Pure, so every branch is testable without a device. The codes are those the
+/// camera plugin documents and both platform implementations raise.
+CameraDenialKind classifyCameraError(Object error) {
+  if (error is! CameraException) return CameraDenialKind.other;
+  switch (error.code) {
+    case 'CameraAccessDeniedWithoutPrompt':
+    case 'AudioAccessDeniedWithoutPrompt':
+      return CameraDenialKind.permanentlyDenied;
+    case 'CameraAccessRestricted':
+    case 'AudioAccessRestricted':
+      return CameraDenialKind.restricted;
+    case 'CameraAccessDenied':
+    case 'AudioAccessDenied':
+      return CameraDenialKind.denied;
+    default:
+      return CameraDenialKind.other;
+  }
+}
+
+/// The message to show for a denial kind.
+String messageForDenial(CameraDenialKind kind) {
+  switch (kind) {
+    case CameraDenialKind.permanentlyDenied:
+      return SetVideoCopy.cameraPermanentlyDeniedBody;
+    case CameraDenialKind.restricted:
+      return SetVideoCopy.cameraRestrictedBody;
+    case CameraDenialKind.denied:
+      return SetVideoCopy.cameraDeniedBody;
+    case CameraDenialKind.other:
+      return SetVideoCopy.recordingUnavailable;
+  }
+}
+
+/// Opens the OS settings page for this app, where that is possible.
+///
+/// iOS exposes a documented URL scheme. Android has no equivalent URL, and is
+/// also the platform that re-prompts, so the pane there explains where to go
+/// rather than offering a button that cannot work.
+abstract class AppSettingsOpener {
+  bool get isSupported;
+  Future<bool> open();
+}
+
+class RuntimeAppSettingsOpener implements AppSettingsOpener {
+  const RuntimeAppSettingsOpener();
 
   @override
-  Future<ph.PermissionStatus> requestCamera() => ph.Permission.camera.request();
+  bool get isSupported => Platform.isIOS;
 
   @override
-  Future<ph.PermissionStatus> requestMicrophone() =>
-      ph.Permission.microphone.request();
-
-  // Prefixed deliberately: an unprefixed openAppSettings() inside a class that
-  // declares a method of the same name resolves to itself and recurses.
-  @override
-  Future<bool> openAppSettings() => ph.openAppSettings();
+  Future<bool> open() async {
+    if (!isSupported) return false;
+    try {
+      return await launchUrl(Uri.parse('app-settings:'));
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 class SetVideoCaptureScreen extends StatefulWidget {
   const SetVideoCaptureScreen({
     super.key,
     required this.tempDirectory,
-    this.permissions = const RuntimeSetVideoPermissions(),
+    this.settingsOpener = const RuntimeAppSettingsOpener(),
     this.availableCamerasOverride,
   });
 
@@ -77,7 +134,7 @@ class SetVideoCaptureScreen extends StatefulWidget {
   /// deletes it once the trimmed result is committed.
   final Directory tempDirectory;
 
-  final SetVideoPermissions permissions;
+  final AppSettingsOpener settingsOpener;
 
   /// Injected camera list, for tests.
   final Future<List<CameraDescription>> Function()? availableCamerasOverride;
@@ -94,8 +151,9 @@ class _SetVideoCaptureScreenState extends State<SetVideoCaptureScreen>
 
   bool _initialising = true;
   bool _recording = false;
-  bool _micGranted = false;
+  bool _micGranted = true;
   String? _fatal;
+  CameraDenialKind _denial = CameraDenialKind.other;
   DateTime? _startedAt;
   Timer? _ticker;
   Duration _elapsed = Duration.zero;
@@ -138,25 +196,8 @@ class _SetVideoCaptureScreenState extends State<SetVideoCaptureScreen>
   }
 
   Future<void> _bootstrap() async {
-    final ph.PermissionStatus camera = await widget.permissions.requestCamera();
-    if (!mounted) return;
-
-    if (!camera.isGranted) {
-      setState(() {
-        _initialising = false;
-        _fatal = camera.isPermanentlyDenied
-            ? SetVideoCopy.cameraPermanentlyDeniedBody
-            : SetVideoCopy.cameraDeniedBody;
-      });
-      return;
-    }
-
-    // Microphone is requested separately and its refusal is tolerated: a silent
-    // set video is far better than no set video.
-    final ph.PermissionStatus mic =
-        await widget.permissions.requestMicrophone();
-    _micGranted = mic.isGranted;
-
+    // No pre-flight permission request: CameraController.initialize() prompts
+    // and reports the outcome itself, so asking first would prompt twice.
     try {
       final List<CameraDescription> cams =
           await (widget.availableCamerasOverride ?? availableCameras)();
@@ -174,21 +215,22 @@ class _SetVideoCaptureScreenState extends State<SetVideoCaptureScreen>
           cams.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
       if (_cameraIndex < 0) _cameraIndex = 0;
       await _startController(_cameraIndex);
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _initialising = false;
-        _fatal = SetVideoCopy.recordingUnavailable;
+        _denial = classifyCameraError(e);
+        _fatal = messageForDenial(_denial);
       });
     }
   }
 
-  Future<void> _startController(int index) async {
+  Future<void> _startController(int index, {bool withAudio = true}) async {
     if (index < 0 || index >= _cameras.length) return;
     final CameraController c = CameraController(
       _cameras[index],
       ResolutionPreset.high,
-      enableAudio: _micGranted,
+      enableAudio: withAudio,
     );
     try {
       await c.initialize();
@@ -199,15 +241,28 @@ class _SetVideoCaptureScreenState extends State<SetVideoCaptureScreen>
       setState(() {
         _controller = c;
         _cameraIndex = index;
+        _micGranted = withAudio;
         _initialising = false;
         _fatal = null;
+        _denial = CameraDenialKind.other;
       });
-    } catch (_) {
+    } catch (e) {
       await c.dispose();
       if (!mounted) return;
+
+      // A MICROPHONE refusal must not cost the user the recording: retry once
+      // without audio. A camera refusal is genuinely fatal to this screen.
+      if (e is CameraException &&
+          e.code.startsWith('AudioAccess') &&
+          withAudio) {
+        await _startController(index, withAudio: false);
+        return;
+      }
+
       setState(() {
         _initialising = false;
-        _fatal = SetVideoCopy.recordingUnavailable;
+        _denial = classifyCameraError(e);
+        _fatal = messageForDenial(_denial);
       });
     }
   }
@@ -217,7 +272,8 @@ class _SetVideoCaptureScreenState extends State<SetVideoCaptureScreen>
     final CameraController? old = _controller;
     setState(() => _controller = null);
     await old?.dispose();
-    await _startController((_cameraIndex + 1) % _cameras.length);
+    await _startController((_cameraIndex + 1) % _cameras.length,
+        withAudio: _micGranted);
   }
 
   Future<void> _startRecording() async {
@@ -334,7 +390,11 @@ class _SetVideoCaptureScreenState extends State<SetVideoCaptureScreen>
         child: _fatal != null
             ? _PermissionPane(
                 message: _fatal!,
-                onOpenSettings: () => widget.permissions.openAppSettings(),
+                // Only offered where a settings deep link actually exists.
+                onOpenSettings: widget.settingsOpener.isSupported &&
+                        _denial != CameraDenialKind.restricted
+                    ? () => widget.settingsOpener.open()
+                    : null,
                 onDismiss: () => Navigator.of(context)
                     .pop(const CaptureResult(CaptureOutcome.denied)),
               )
@@ -492,7 +552,11 @@ class _PermissionPane extends StatelessWidget {
   });
 
   final String message;
-  final VoidCallback onOpenSettings;
+
+  /// Null where the platform has no settings deep link (Android), which is
+  /// also the platform that re-prompts anyway.
+  final VoidCallback? onOpenSettings;
+
   final VoidCallback onDismiss;
 
   @override
@@ -528,11 +592,13 @@ class _PermissionPane extends StatelessWidget {
                   child: const Text(SetVideoCopy.notNow,
                       style: TextStyle(color: Colors.white70)),
                 ),
-                const SizedBox(width: 12),
-                FilledButton(
-                  onPressed: onOpenSettings,
-                  child: const Text(SetVideoCopy.openSettings),
-                ),
+                if (onOpenSettings != null) ...<Widget>[
+                  const SizedBox(width: 12),
+                  FilledButton(
+                    onPressed: onOpenSettings,
+                    child: const Text(SetVideoCopy.openSettings),
+                  ),
+                ],
               ],
             ),
           ],
