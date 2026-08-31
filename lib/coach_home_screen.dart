@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import 'user_context.dart';
@@ -852,6 +853,7 @@ class _CoachHomeScreenState extends State<CoachHomeScreen>
                         uid;
 
                 final emailText = pick(a['email']);
+                final usernameText = pick(a['username']);
                 final subtitleText = (emailText != null && emailText != titleText)
                     ? emailText
                     : null;
@@ -905,13 +907,10 @@ class _CoachHomeScreenState extends State<CoachHomeScreen>
                       size: 22, // slightly smaller to match tighter rows
                     ),
 
-                    trailing: IconButton(
-                      visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                      icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 22),
-                      onPressed: _busy ? null : () => _removeAthlete(uid),
-                      tooltip: 'Remove athlete',
+                    trailing: CoachAthleteActions(
+                      email: emailText,
+                      username: usernameText,
+                      onRemove: _busy ? null : () => _removeAthlete(uid),
                     ),
 
                     onTap: () {
@@ -1007,6 +1006,83 @@ class _CoachEmptyState extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Trailing actions for a single athlete row on the coach dashboard: an
+/// overflow menu that copies the athlete's email or username, plus the
+/// existing remove-athlete button.
+///
+/// Kept as its own widget so the shipped menu can be widget-tested directly;
+/// [CoachHomeScreen] itself cannot be mounted in a test because its roster
+/// load reaches Firestore, Auth and UserContext.
+class CoachAthleteActions extends StatelessWidget {
+  const CoachAthleteActions({
+    super.key,
+    required this.email,
+    required this.username,
+    required this.onRemove,
+  });
+
+  /// Athlete email, already trimmed by the caller; null when absent or blank.
+  final String? email;
+
+  /// Athlete username, already trimmed by the caller; null when absent or blank.
+  final String? username;
+
+  /// Null disables removal (the dashboard is busy).
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        PopupMenuButton<String>(
+          padding: EdgeInsets.zero,
+          iconSize: 22,
+          icon: const Icon(Icons.more_vert, color: Colors.white70),
+          tooltip: 'More actions',
+          onSelected: (value) async {
+            // Resolved before the await so no BuildContext crosses the gap.
+            final messenger = ScaffoldMessenger.of(context);
+            final email = this.email;
+            final username = this.username;
+            if (value == 'copy_email' && email != null) {
+              await Clipboard.setData(ClipboardData(text: email));
+              messenger.showSnackBar(
+                const SnackBar(content: Text('Email copied')),
+              );
+            } else if (value == 'copy_username' && username != null) {
+              await Clipboard.setData(ClipboardData(text: username));
+              messenger.showSnackBar(
+                const SnackBar(content: Text('Username copied')),
+              );
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem<String>(
+              value: 'copy_email',
+              enabled: email != null,
+              child: const Text('Copy email'),
+            ),
+            PopupMenuItem<String>(
+              value: 'copy_username',
+              enabled: username != null,
+              child: const Text('Copy username'),
+            ),
+          ],
+        ),
+        IconButton(
+          visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          icon: const Icon(Icons.delete_outline, color: Colors.white70, size: 22),
+          onPressed: onRemove,
+          tooltip: 'Remove athlete',
+        ),
+      ],
     );
   }
 }
