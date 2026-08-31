@@ -81,7 +81,7 @@ dependencies:
   path: ^1.9.1
   sqlite3: ^3.5.2
   camera: ^0.12.0+2
-  permission_handler: ^13.0.1
+  permission_handler: 12.0.3
   flutter_native_video_trimmer: ^1.1.9
 
 dev_dependencies:
