@@ -415,6 +415,62 @@ class SetVideoStore {
       (_db.delete(_db.setVideos)..where(($SetVideosTable t) => t.id.equals(id)))
           .go();
 
+  /// Suppresses the local record behind a published proof, by fingerprint.
+  ///
+  /// The bridge between a removal made on the PROFILE and the local footage
+  /// that produced it. Without it, detaching or deleting a PB video on the
+  /// profile would be undone by the next reconciliation pass, which would find
+  /// the clip still local, still a PB, and queue it again.
+  ///
+  /// Returns the number of records suppressed. Idempotent.
+  Future<int> suppressByFingerprint({
+    required String ownerUid,
+    required String fingerprint,
+  }) async {
+    if (fingerprint.trim().isEmpty) return 0;
+    return (_db.update(_db.setVideos)
+          ..where(($SetVideosTable t) =>
+              t.ownerUid.equals(ownerUid) & t.fingerprint.equals(fingerprint)))
+        .write(SetVideosCompanion(
+      suppressed: const Value<bool>(true),
+      updatedAtMs: Value<int>(_now()),
+    ));
+  }
+
+  /// Suppresses the local record behind a published post, by post id.
+  ///
+  /// Used when the user deletes the media itself rather than detaching it.
+  /// Returns the number of records suppressed. Idempotent.
+  Future<int> suppressByPostId({
+    required String ownerUid,
+    required String postId,
+  }) async {
+    if (postId.trim().isEmpty) return 0;
+    return (_db.update(_db.setVideos)
+          ..where(($SetVideosTable t) =>
+              t.ownerUid.equals(ownerUid) & t.postId.equals(postId)))
+        .write(SetVideosCompanion(
+      suppressed: const Value<bool>(true),
+      updatedAtMs: Value<int>(_now()),
+    ));
+  }
+
+  /// Suppresses by the media id the outbox knows it as, for a deletion that
+  /// happens before the post document exists. Idempotent.
+  Future<int> suppressByMediaId({
+    required String ownerUid,
+    required String mediaId,
+  }) async {
+    if (mediaId.trim().isEmpty) return 0;
+    return (_db.update(_db.setVideos)
+          ..where(($SetVideosTable t) =>
+              t.ownerUid.equals(ownerUid) & t.mediaId.equals(mediaId)))
+        .write(SetVideosCompanion(
+      suppressed: const Value<bool>(true),
+      updatedAtMs: Value<int>(_now()),
+    ));
+  }
+
   /// Every record for an owner, including soft-deleted ones. For account
   /// teardown and diagnostics.
   Future<List<SetVideoRecord>> allFor(String ownerUid) =>

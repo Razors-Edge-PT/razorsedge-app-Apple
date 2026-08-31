@@ -24,6 +24,8 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 
+import '../wes2_video/set_video_coordinator.dart';
+
 import 'core/media_models.dart';
 import 'core/showcase_models.dart';
 import 'data/identity_repository.dart';
@@ -390,6 +392,33 @@ class ProfileController extends ChangeNotifier {
   Future<void> removeProof(String fingerprint) async {
     if (!isOwner) return;
     await _showcase.detachProof(targetUid, fingerprint);
+    // Detaching here must also stop the WES2 reconciler re-attaching it: it
+    // would otherwise find the clip still local, still a live PB, and queue it
+    // again on the next pass. Best-effort — a profile action must not fail
+    // because a local database could not be opened.
+    unawaited(_suppressLocalSetVideo(fingerprint: fingerprint));
+  }
+
+  /// Marks the local set-video record behind a published proof as suppressed,
+  /// so automatic republication does not undo an explicit choice.
+  Future<void> _suppressLocalSetVideo({
+    String? fingerprint,
+    String? postId,
+  }) async {
+    try {
+      final SetVideoCoordinator c = await SetVideoCoordinator.instance();
+      if (fingerprint != null) {
+        await c.store.suppressByFingerprint(
+            ownerUid: targetUid, fingerprint: fingerprint);
+      }
+      if (postId != null) {
+        await c.store
+            .suppressByPostId(ownerUid: targetUid, postId: postId);
+      }
+    } catch (_) {
+      // No local footage on this device, or the store is unavailable. Nothing
+      // to suppress, and nothing that should surface to the user.
+    }
   }
 
   /// Attaches an EXISTING gallery item as proof, with no re-upload. This is
@@ -411,9 +440,16 @@ class ProfileController extends ChangeNotifier {
     if (!isOwner) return;
     if (item.pending) {
       await _media.cancelPending(item.id);
+      unawaited(_suppressLocalSetVideo(postId: item.id));
       return;
     }
     await _media.deleteMedia(item);
+    // An explicit deletion suppresses automatic resurrection. Only a new
+    // recording or an explicit replace clears it again.
+    unawaited(_suppressLocalSetVideo(
+      postId: item.id,
+      fingerprint: item.proof?.fingerprint,
+    ));
   }
 
   Future<void> retryMedia(String mediaId) async {
