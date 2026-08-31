@@ -125,6 +125,24 @@ String? safeThumbnailUrl(String? url) {
   return value;
 }
 
+/// The URL to hand a VIDEO player, or null when there is nothing playable.
+///
+/// The mirror of [safeThumbnailUrl]. A URL that names a still image is
+/// REJECTED: from 1.7.13 `thumbUrl` is a poster JPEG, and handing that to
+/// VideoPlayerController produces a player that initialises against an image
+/// and never starts. Returning null lets the caller say so rather than show a
+/// spinner for ever.
+///
+/// A URL with no recognisable extension is ACCEPTED, for the same reason
+/// [safeThumbnailUrl] accepts one: signed CDN URLs and older Storage paths are
+/// frequently extensionless and play perfectly well.
+String? safeVideoSource(String? url) {
+  if (url == null) return null;
+  final String t = url.trim();
+  if (t.isEmpty) return null;
+  return isImageUrl(t) ? null : t;
+}
+
 /// The extension a picked video should be STORED under.
 ///
 /// The source extension is preserved when we recognise it. Renaming a

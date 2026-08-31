@@ -480,7 +480,7 @@ class _ProfileScreenState extends State<ProfileScreen>
       return;
     }
 
-    final Post? post = await _loadPost(item);
+    final Post? post = await _loadPostById(item.id);
     if (!mounted) return;
     if (post == null) {
       // The document could not be read (offline with a cold cache, or it has
@@ -506,13 +506,14 @@ class _ProfileScreenState extends State<ProfileScreen>
     ));
   }
 
-  /// Reads the post document behind a grid tile.
-  Future<Post?> _loadPost(ProfileMediaItem item) async {
+  /// Reads the post document behind a grid tile or a proof.
+  Future<Post?> _loadPostById(String postId) async {
+    if (postId.trim().isEmpty) return null;
     try {
       final DocumentSnapshot<Map<String, dynamic>> snap =
           await FirebaseFirestore.instance
               .collection('posts')
-              .doc(item.id)
+              .doc(postId)
               .get();
       if (!snap.exists) return null;
       return Post.fromSnap(snap);
@@ -538,13 +539,40 @@ class _ProfileScreenState extends State<ProfileScreen>
     ));
   }
 
+  /// Opens the performance behind a showcase record.
+  ///
+  /// This used to hand `proof.thumbUrl` to [MediaDetailPage] as though it were
+  /// the media itself. Since 1.7.13 `thumbUrl` is the POSTER image, so a video
+  /// proof was handing a JPEG to VideoPlayerController and never played.
+  ///
+  /// A proof and its grid tile are the same upload, so the proof carries the
+  /// [ProofRecord.postId] of the post that actually holds the playable media.
+  /// Resolving through that post is what makes the video play, and it gives the
+  /// same viewer — comments, likes — that opening the tile from the grid does.
   Future<void> _openProof(ProfileController c, ProofRecord proof) async {
+    final Post? post = await _loadPostById(proof.postId);
+    if (!mounted) return;
+
+    if (post == null) {
+      // Offline with a cold cache, or the post has been deleted. There is no
+      // playable source to offer: falling back to thumbUrl here would just
+      // reintroduce the defect, so say so instead of opening a dead player.
+      _toast('That video could not be opened right now.');
+      return;
+    }
+
     await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => MediaDetailPage(
-        title: c.displayName,
-        mediaType: proof.mediaType,
-        url: proof.thumbUrl,
-        badge: _proofBadgeText(c, proof.fingerprint),
+      builder: (_) => PostDetailPage(
+        post: post,
+        onToggleLike: (Post p) => PostService.instance.toggleLike(p.id),
+        onToggleGoodLift: (Post p) => PostService.instance
+            .toggleGoodLift(p.id, isVideo: p.mediaType == MediaType.video),
+        onAddComment: (Post p, String text) => PostService.instance.addComment(
+          p.id,
+          text,
+          usernameFallback: c.displayName,
+        ),
+        canDelete: c.isOwner,
       ),
     ));
   }

@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../core/media_models.dart';
+import '../core/media_urls.dart';
 import 'cached_network_image.dart';
 import 'profile_theme.dart';
 
@@ -63,17 +64,32 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     super.initState();
     final bool hasLocal = widget.localFilePath != null &&
         File(widget.localFilePath!).existsSync();
-    if (widget.mediaType == MediaType.video &&
-        (hasLocal || widget.url.isNotEmpty)) {
+    if (widget.mediaType != MediaType.video) return;
+
+    if (hasLocal) {
       _initVideo();
+      return;
     }
+
+    // A poster URL is not a video. Callers have handed one here before — a
+    // showcase proof's `thumbUrl` — and the player then initialised against a
+    // JPEG and spun for ever. Refuse it at the boundary so no caller can
+    // reintroduce that, and say plainly that there is nothing to play.
+    final String? playable = safeVideoSource(widget.url);
+    if (playable == null) {
+      if (widget.url.trim().isNotEmpty) {
+        _error = 'That video could not be played.';
+      }
+      return;
+    }
+    _initVideo(playable);
   }
 
-  Future<void> _initVideo() async {
+  Future<void> _initVideo([String? remote]) async {
     final String? local = widget.localFilePath;
     final VideoPlayerController c = local != null && File(local).existsSync()
         ? VideoPlayerController.file(File(local))
-        : VideoPlayerController.networkUrl(Uri.parse(widget.url));
+        : VideoPlayerController.networkUrl(Uri.parse(remote ?? widget.url));
     _video = c;
     try {
       await c.initialize();
