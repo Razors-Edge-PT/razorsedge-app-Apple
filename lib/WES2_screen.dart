@@ -1344,25 +1344,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   void _onToggleMarkedDone(String exerciseId, bool isDone) {
-    // Drop focus FIRST — the same sequencing [Wes2ExitCoordinator] uses on
-    // exit. Tapping a button does not unfocus a TextField on its own, so a
-    // field the athlete was still editing when they pressed Done would
-    // otherwise never fire its onFieldUnfocused save. Dropping focus makes the
-    // still-mounted Wes2SetRow listener fire exactly once with the latest
-    // text, which starts the ordinary field patch.
-    //
-    // No delay is added and nothing is awaited: the controller already holds
-    // the typed value (synchronous onChanged), so the finalisation below sees
-    // it regardless of which Firestore transaction commits first, and the two
-    // transactions serialise against each other.
-    FocusManager.instance.primaryFocus?.unfocus();
     _controller.toggleMarkedDone(exerciseId, isDone);
     final rowIdx =
         _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
     if (rowIdx == -1) return;
     final row = _controller.rows[rowIdx];
-    // Keep the local draft in step with the Done state for offline reopen.
-    _saveDraftNow();
     // ignore: discarded_futures
     _setMarkedDoneSilently(
       uid: _controller.actingUid,

@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'WES2_finalisation.dart';
 import 'WES2_models.dart';
 import 'progression_history_store.dart';
 
@@ -195,21 +194,12 @@ class Wes2SavedSetPerformance {
 /// Phase 3: loadDay only. saveFieldPatch implemented in Phase 8.
 /// Other write methods throw UnimplementedError until a later phase.
 class FirestoreWes2Repository implements Wes2Repository {
-  /// Injectable for tests; null means the app-wide instance. Resolved lazily
-  /// through [_db] so constructing the repository never touches Firebase.
-  final FirebaseFirestore? _firestore;
-
-  FirestoreWes2Repository({FirebaseFirestore? firestore})
-      : _firestore = firestore;
-
-  FirebaseFirestore get _db => _firestore ?? FirebaseFirestore.instance;
-
   @override
   Future<List<Wes2ExerciseRow>> loadDay({
     required String uid,
     required DateTime date,
   }) async {
-    final snap = await _db
+    final snap = await FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
@@ -351,7 +341,7 @@ class FirestoreWes2Repository implements Wes2Repository {
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((Transaction tx) async {
+    await FirebaseFirestore.instance.runTransaction((Transaction tx) async {
       final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       final Map<String, dynamic> data = snap.data() ?? <String, dynamic>{};
 
@@ -495,13 +485,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -664,81 +654,6 @@ class FirestoreWes2Repository implements Wes2Repository {
     return rowMap;
   }
 
-  // ── Finalisation on Done ──────────────────────────────────────────────────
-
-  /// Position of the set carrying [setIndex] inside a Firestore `sets` array.
-  ///
-  /// Prefers the stored `setIndex` key and falls back to the array position
-  /// for legacy sets written without one — the same rule [_patchSetInRow]
-  /// uses, so both writers agree on which map is which set.
-  static int? _locateSetPos(List<Map<String, dynamic>> sets, int setIndex) {
-    for (int i = 0; i < sets.length; i++) {
-      final int? stored = (sets[i]['setIndex'] as num?)?.toInt();
-      if (stored != null) {
-        if (stored == setIndex) return i;
-      } else if (i == setIndex) {
-        return i;
-      }
-    }
-    return null;
-  }
-
-  /// Writes the finalised execution values for the performed sets in
-  /// [finalised] into a copy of [rowMap], and returns the copy.
-  ///
-  /// Strictly gap-filling. A key the stored set map ALREADY holds is never
-  /// touched: a concurrent field patch — including one still in flight for a
-  /// value typed a moment before Done — is the authority for the field it
-  /// owns, and this must not roll it back. Everything the row already carries
-  /// (setId/id, notes, velocity, unrelated sets, unrelated rows) survives
-  /// untouched, and a set with no entry in [finalised] is not modified at all.
-  static Map<String, dynamic> _finaliseSetsInRow(
-    Map<String, dynamic> rowMap,
-    List<Wes2FinalisedSet> finalised,
-  ) {
-    final result = Map<String, dynamic>.from(rowMap);
-    if (finalised.isEmpty) return result;
-
-    final sets = ((result['sets'] as List<dynamic>?) ?? const <dynamic>[])
-        .map((x) => x is Map<String, dynamic>
-            ? Map<String, dynamic>.from(x)
-            : <String, dynamic>{})
-        .toList();
-
-    int highestIndex = -1;
-    for (final Wes2FinalisedSet f in finalised) {
-      int? pos = _locateSetPos(sets, f.setIndex);
-      if (pos == null) {
-        // The performed set has not reached the document yet (its own field
-        // patch has not committed). Pad to it rather than dropping the value.
-        while (sets.length <= f.setIndex) {
-          sets.add(<String, dynamic>{'setIndex': sets.length});
-        }
-        pos = f.setIndex;
-      }
-      final Map<String, dynamic> setMap = Map<String, dynamic>.from(sets[pos]);
-      if (setMap['weight'] is! num) setMap['weight'] = f.weight;
-      if (setMap['reps'] is! num) setMap['reps'] = f.reps;
-      // The one value the bug is about: RIR is materialised whether it was
-      // typed or merely displayed and accepted. An explicit 0.0 is a real
-      // value and is written like any other.
-      if (setMap['rir'] is! num && f.rir != null) setMap['rir'] = f.rir;
-      if (setMap['velocity'] is! num && f.velocity != null) {
-        setMap['velocity'] = f.velocity;
-      }
-      sets[pos] = setMap;
-      if (f.setIndex > highestIndex) highestIndex = f.setIndex;
-    }
-
-    result['sets'] = sets;
-    // setCount is only ever increased, never decreased.
-    final existingCount = (result['setCount'] as num?)?.toInt() ?? 0;
-    if (highestIndex + 1 > existingCount) {
-      result['setCount'] = highestIndex + 1;
-    }
-    return result;
-  }
-
   /// Builds a minimal Firestore map for a wesPlannedExercises[] row.
   /// Intentionally omits isMarkedDone (lives only on exercises[]) and all
   /// hint/model values (never persisted to Firestore).
@@ -771,22 +686,6 @@ class FirestoreWes2Repository implements Wes2Repository {
   }) =>
       throw UnimplementedError('savePlannedRows not implemented yet');
 
-  /// Finalises the performed sets and writes `isMarkedDone` in ONE
-  /// transaction.
-  ///
-  /// Finalisation exists because the RIR the athlete watched on the row — and
-  /// that WES2's own E1RM was computed from — may live only in `hintValue`
-  /// when they simply accepted it, and `_buildRowMap` persists actualValues
-  /// only. Without this step the completed workout stored `rir: null` for a
-  /// set logged at RIR 2.0, and Top Sets/PBs/progression all read it back as
-  /// RIR 0. See [wes2FinalisedPerformedSets] for the rule.
-  ///
-  /// Only sets that carry BOTH an actual weight and actual reps are touched,
-  /// so a planned set holding nothing but hints is never turned into
-  /// execution data. The write is gap-filling: a key the document already
-  /// holds is left exactly as it stands (a concurrent field patch is
-  /// authoritative), and every unrelated field, set, row, setId, note and
-  /// neighbouring exercise is preserved.
   @override
   Future<void> setMarkedDone({
     required String uid,
@@ -799,19 +698,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    // Computed from the in-memory row, which the synchronous onChanged path
-    // keeps ahead of Firestore — so a value typed a moment before Done is
-    // already here even if its own field patch has not committed yet.
-    // Un-marking finalises nothing: it must never rewrite execution values.
-    final List<Wes2FinalisedSet> finalised =
-        isDone ? wes2FinalisedPerformedSets(row) : const <Wes2FinalisedSet>[];
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -831,21 +724,17 @@ class FirestoreWes2Repository implements Wes2Repository {
       final wpIdx = wesPlanned.indexWhere((m) => m['exerciseId'] == exerciseId);
 
       if (exIdx != -1) {
-        // Surgical patch: finalise the performed sets, then set
-        // isMarkedDone. Every other field/set/row is preserved.
-        exercises[exIdx] = _finaliseSetsInRow(exercises[exIdx], finalised)
+        // Surgical patch of top-level isMarkedDone — preserves all other fields/sets.
+        exercises[exIdx] = Map<String, dynamic>.from(exercises[exIdx])
           ..['isMarkedDone'] = isDone;
       } else if (wpIdx != -1) {
         // Promote wesPlanned row to exercises[] with isMarkedDone set.
-        // Actual values only — _buildRowMap never writes hintValues — plus
-        // the accepted RIR each performed set was completed with.
-        exercises.add(_finaliseSetsInRow(_buildRowMap(row), finalised)
-          ..['isMarkedDone'] = isDone);
+        // Actual values only — _buildRowMap never writes hintValues.
+        exercises.add(_buildRowMap(row)..['isMarkedDone'] = isDone);
         wesPlanned.removeAt(wpIdx);
       } else if (isDone) {
-        // BB3-planned or new row — create in exercises[] using actual values.
-        exercises.add(_finaliseSetsInRow(_buildRowMap(row), finalised)
-          ..['isMarkedDone'] = isDone);
+        // BB3-planned or new row — create in exercises[] using actual values only.
+        exercises.add(_buildRowMap(row)..['isMarkedDone'] = isDone);
       }
       // isDone == false and row not found → no-op (nothing to un-mark).
 
@@ -881,13 +770,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -953,13 +842,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -1011,13 +900,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1102,13 +991,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1159,13 +1048,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1242,13 +1131,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     required int setIndex,
     required String? note,
   }) async {
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1354,13 +1243,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     required String exerciseId,
     required String? note,
   }) async {
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1421,7 +1310,7 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
@@ -1451,7 +1340,7 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
@@ -1482,13 +1371,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = _db
+    final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await _db.runTransaction((txn) async {
+    await FirebaseFirestore.instance.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
