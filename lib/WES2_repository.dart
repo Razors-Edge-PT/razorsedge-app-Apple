@@ -72,11 +72,19 @@ abstract class Wes2Repository {
   /// Remove one set from exercises[] or wesPlannedExercises[], compact
   /// remaining sets, and decrement setCount.
   /// No-op if the row has only one set — screen routes that to deleteExercise.
+  ///
+  /// [expectedSetCountBefore] makes a REPLAY safe. Removal is the one WES2
+  /// operation whose repetition is destructive: applying it twice would delete
+  /// whichever set slid into the gap. When supplied, the removal is skipped
+  /// unless the stored setCount still matches — which is exactly the state a
+  /// successful first application leaves behind. Null keeps the original
+  /// unguarded behaviour for live callers.
   Future<void> removeSet({
     required String uid,
     required DateTime date,
     required String exerciseId,
     required int setIndex,
+    int? expectedSetCountBefore,
   });
 
   /// Remove an exercise from both exercises[] and wesPlannedExercises[].
@@ -194,12 +202,21 @@ class Wes2SavedSetPerformance {
 /// Phase 3: loadDay only. saveFieldPatch implemented in Phase 8.
 /// Other write methods throw UnimplementedError until a later phase.
 class FirestoreWes2Repository implements Wes2Repository {
+  /// Injectable for tests; null means the app-wide instance. Resolved lazily
+  /// through [_db] so constructing the repository never touches Firebase.
+  final FirebaseFirestore? _firestore;
+
+  FirestoreWes2Repository({FirebaseFirestore? firestore})
+      : _firestore = firestore;
+
+  FirebaseFirestore get _db => _firestore ?? FirebaseFirestore.instance;
+
   @override
   Future<List<Wes2ExerciseRow>> loadDay({
     required String uid,
     required DateTime date,
   }) async {
-    final snap = await FirebaseFirestore.instance
+    final snap = await _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
@@ -341,7 +358,7 @@ class FirestoreWes2Repository implements Wes2Repository {
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((Transaction tx) async {
+    await _db.runTransaction((Transaction tx) async {
       final DocumentSnapshot<Map<String, dynamic>> snap = await tx.get(ref);
       final Map<String, dynamic> data = snap.data() ?? <String, dynamic>{};
 
@@ -485,13 +502,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -698,13 +715,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -770,13 +787,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -842,13 +859,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       final data = snap.exists
           ? (snap.data() ?? <String, dynamic>{})
@@ -894,19 +911,20 @@ class FirestoreWes2Repository implements Wes2Repository {
     required DateTime date,
     required String exerciseId,
     required int setIndex,
+    int? expectedSetCountBefore,
   }) async {
     // Any write to this day can change progression history for
     // this athlete. Mark the day dirty so the next history
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -933,6 +951,13 @@ class FirestoreWes2Repository implements Wes2Repository {
 
       final storedSetCount = (rowMap['setCount'] as num?)?.toInt() ?? 0;
       if (storedSetCount <= 1) return; // screen handles delete exercise
+      // Replay guard. A queued removal that already succeeded finds a count
+      // one lower than it recorded, and stops rather than removing the set
+      // that took the removed one's place.
+      if (expectedSetCountBefore != null &&
+          storedSetCount != expectedSetCountBefore) {
+        return;
+      }
 
       final rawSets = (rowMap['sets'] as List<dynamic>? ?? [])
           .whereType<Map<String, dynamic>>()
@@ -991,13 +1016,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1048,13 +1073,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1131,13 +1156,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     required int setIndex,
     required String? note,
   }) async {
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1243,13 +1268,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     required String exerciseId,
     required String? note,
   }) async {
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};
@@ -1310,7 +1335,7 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
@@ -1340,7 +1365,7 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
@@ -1371,13 +1396,13 @@ class FirestoreWes2Repository implements Wes2Repository {
     // hydration re-reads ONE document instead of everything.
     ProgressionHistoryStore.instance
         .markDayDirty(uid: uid, date: date);
-    final docRef = FirebaseFirestore.instance
+    final docRef = _db
         .collection('users')
         .doc(uid)
         .collection('workouts')
         .doc(_dateDocId(date));
 
-    await FirebaseFirestore.instance.runTransaction((txn) async {
+    await _db.runTransaction((txn) async {
       final snap = await txn.get(docRef);
       if (!snap.exists) return;
       final data = snap.data() ?? <String, dynamic>{};

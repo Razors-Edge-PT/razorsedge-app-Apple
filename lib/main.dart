@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'profile/profile_services.dart';
+import 'wes2_sync/wes2_sync_services.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -930,6 +931,12 @@ void main() async {
       debugPrint('Profile media outbox could not start: $e');
     }),
   );
+
+  // Durable WES2 workout outbox. Same reasoning as the media outbox above, and
+  // the same deliberate lack of an await: a set logged offline yesterday
+  // reaches Firestore on this launch without the athlete reopening the workout,
+  // but the first frame never waits on SQLite or the network.
+  unawaited(Wes2SyncServices.initialiseAndDrain());
 
   StartupTrace.runAppCalled();
   runApp(

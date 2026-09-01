@@ -38,6 +38,11 @@ import 'app_check_ready.dart';
 import 'startup_route_service.dart';
 import 'startup_trace.dart';
 import 'wes2_exit_coordinator.dart';
+import 'wes2_sync/wes2_mutation.dart';
+import 'wes2_sync/wes2_mutation_outbox.dart';
+import 'wes2_sync/wes2_pending_overlay.dart';
+import 'wes2_sync/wes2_sync_engine.dart';
+import 'wes2_sync/wes2_sync_services.dart';
 import 'wes2_hint_trace.dart';
 
 /// WES2 beta route shell.
@@ -72,6 +77,25 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // _exitDirectlyToHome). Holds the re-entrancy guard so repeated back/logo
   // taps cannot double-pop or create duplicate Home routes.
   final Wes2ExitCoordinator _exitCoordinator = Wes2ExitCoordinator();
+
+  /// Local-durability barrier for the deliberate-exit paths.
+  ///
+  /// Every mutation's DURABLE LOCAL write is tracked here so Back/Home can wait
+  /// for SQLite (milliseconds) without ever waiting for the network. This is
+  /// what makes "type the last RIR, tap Back immediately" safe: the widget is
+  /// torn down only after the intent is on disk.
+  final Set<Future<void>> _durableWrites = <Future<void>>{};
+
+  /// Monotonic per-session counter for mutations whose repetition is
+  /// meaningful (remove set, delete all, template replace) and which therefore
+  /// must never coalesce with an earlier one.
+  int _localMutationSeq = 0;
+
+  /// Live queue depth, for the unobtrusive status line in the day header.
+  Wes2SyncStatus _syncStatus = const Wes2SyncStatus(pending: 0, blocked: 0);
+  StreamSubscription<Wes2SyncStatus>? _syncStatusSub;
+  StreamSubscription<Wes2MutationRow>? _syncConfirmedSub;
+
   String? _athleteUsername;
   String? _athleteGreeting;
   String? _fetchedForUid;
@@ -246,6 +270,33 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     final raw = widget.initialDate ?? DateTime.now();
     _controller = Wes2SessionController(raw);
+    // Opening the logger is a retry trigger in its own right: whatever failed
+    // to sync on the last visit gets another attempt before the athlete has
+    // done anything.
+    unawaited(_attachSyncEngine());
+  }
+
+  /// Opens the durable outbox (idempotent) and subscribes to it.
+  Future<void> _attachSyncEngine() async {
+    try {
+      final Wes2SyncServices services =
+          await Wes2SyncServices.ensureInitialised();
+      if (!mounted) return;
+      _syncStatusSub = services.engine.status.listen((Wes2SyncStatus st) {
+        if (!mounted) return;
+        if (st == _syncStatus) return;
+        setState(() => _syncStatus = st);
+      });
+      _syncConfirmedSub =
+          services.engine.confirmed.listen(_onMutationConfirmed);
+      final Wes2SyncStatus initial = await services.engine.currentStatus();
+      if (mounted && initial != _syncStatus) {
+        setState(() => _syncStatus = initial);
+      }
+      await services.engine.processNow();
+    } catch (e) {
+      debugPrint('[WES2SYNC] could not attach engine: $e');
+    }
   }
 
   @override
@@ -280,6 +331,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _timerTicker?.cancel();
     _pauseWorkoutDurationSegment();
     _saveDraftNow();
+    unawaited(_syncStatusSub?.cancel());
+    unawaited(_syncConfirmedSub?.cancel());
+    _syncStatusSub = null;
+    _syncConfirmedSub = null;
     WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     super.dispose();
@@ -291,6 +346,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       _pauseWorkoutDurationSegment();
       _saveDraftNow();
     } else if (state == AppLifecycleState.resumed) {
+      // Coming back is the most likely moment for connectivity to have
+      // returned, so anything queued is retried immediately rather than
+      // waiting out a backoff set while the phone was in a pocket.
+      unawaited(Wes2SyncServices.processNow());
       // Workouts may have been logged on another device while we were away.
       // Mark the history snapshot stale so the next hint pass refreshes it in
       // the background; the current (valid) hints stay on screen meanwhile.
@@ -472,9 +531,28 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         date: _controller.selectedDate,
       );
       if (!mounted) return;
-      final mergedRows = _hardened(_applyDraftActuals(
-          _mergeRows(completedRows, bb3Rows), draft?.rows));
+      // Reconciliation, in order of authority:
+      //   1. server + plan merge — Firestore is canonical for CONFIRMED data;
+      //   2. the local draft may FILL a field the server does not hold, but
+      //      never overrides a confirmed value (a stale draft used to win
+      //      unconditionally, which is what hid the missing writes);
+      //   3. genuinely pending mutations override the server, because they are
+      //      newer intent the server has not accepted yet. They are removed
+      //      only once confirmed, so this covers exactly the unsynced gap.
+      final pending = await _loadPendingChanges();
+      if (!mounted) return;
+      final mergedRows = _hardened(wes2ApplyPendingOverlay(
+        wes2ApplyDraftWithoutOverridingServer(
+          _mergeRows(completedRows, bb3Rows),
+          draft?.rows,
+        ),
+        pending,
+      ));
       _controller.setRows(mergedRows, epoch);
+      // A successful read proves the server is reachable, so anything still
+      // queued is retried now instead of waiting out a backoff set while there
+      // was no signal.
+      unawaited(Wes2SyncServices.processNow());
       // Local, offline, and off the critical path: reopening a day shows the
       // footage filmed against it without waiting for anything remote.
       unawaited(_refreshSetVideoState());
@@ -522,7 +600,66 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // customer. The UI renders a polished error state instead.
       debugPrint('[WES2] _loadDay failed: $e\n$st');
       if (!mounted) return;
+      // Offline fallback: the server could not be read, but this device may
+      // still hold the athlete's own work. Showing the draft with pending
+      // intent applied lets them keep logging instead of facing an error page
+      // over a day they already filled in. Nothing is fabricated — only what
+      // was genuinely stored locally is used.
+      final recovered = await _offlineRowsFromLocalState();
+      if (!mounted) return;
+      if (recovered != null && recovered.isNotEmpty) {
+        _controller.setRows(recovered, epoch);
+        // ignore: discarded_futures
+        _loadAndApplyHints();
+        return;
+      }
       _controller.setLoadError(e.toString(), epoch);
+    }
+  }
+
+  /// The pending mutations for the day currently on screen, reduced to what the
+  /// overlay needs.
+  Future<List<Wes2PendingChange>> _loadPendingChanges() async {
+    final String actorUid = _actorUidForMutations;
+    if (actorUid.isEmpty) return const <Wes2PendingChange>[];
+    try {
+      final Wes2SyncServices services =
+          await Wes2SyncServices.ensureInitialised();
+      final List<Wes2MutationRow> rows = await services.outbox.pendingForDay(
+        actorUid: actorUid,
+        athleteUid: _controller.actingUid,
+        dateKey: wes2DateKey(_controller.selectedDate),
+      );
+      return rows
+          .map((Wes2MutationRow r) => Wes2PendingChange(
+                seq: r.seq,
+                kind: r.kind,
+                exerciseId: r.exerciseId,
+                setIndex: r.setIndex,
+                payload: Wes2Mutation.decodePayload(r.payloadJson),
+              ))
+          .toList();
+    } catch (e) {
+      debugPrint('[WES2SYNC] could not read pending mutations: $e');
+      return const <Wes2PendingChange>[];
+    }
+  }
+
+  /// Rows to show when the server is unreachable: the local draft with pending
+  /// intent applied. Null when there is nothing stored locally either.
+  Future<List<Wes2ExerciseRow>?> _offlineRowsFromLocalState() async {
+    try {
+      final draft = await _localStore.loadDraft(
+        uid: _controller.actingUid,
+        date: _controller.selectedDate,
+      );
+      final List<Wes2ExerciseRow> rows = draft?.rows ?? const <Wes2ExerciseRow>[];
+      if (rows.isEmpty) return null;
+      final pending = await _loadPendingChanges();
+      return _hardened(wes2ApplyPendingOverlay(rows, pending));
+    } catch (e) {
+      debugPrint('[WES2SYNC] offline fallback failed: $e');
+      return null;
     }
   }
 
@@ -1042,73 +1179,6 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
   }
 
-  /// Overlays local draft actualValues onto the server/BB3 merged row list.
-  /// Server/BB3 is structural authority: row presence, names, circuitIndex,
-  /// orderIndex, source, and hintValues are always preserved from [merged].
-  /// Draft rows not present in [merged] are dropped (orphan guard).
-  /// draft actualValues and isMarkedDone are the only things restored.
-  static List<Wes2ExerciseRow> _applyDraftActuals(
-    List<Wes2ExerciseRow> merged,
-    List<Wes2ExerciseRow>? draft,
-  ) {
-    if (draft == null || draft.isEmpty) return merged;
-    final draftMap = <String, Wes2ExerciseRow>{
-      for (final r in draft) r.exerciseId: r,
-    };
-    return merged.map((row) {
-      final d = draftMap[row.exerciseId];
-      if (d == null) return row;
-      // Highest setIndex in draft that carries any actual value.
-      // Using index rather than count handles sparse/higher-index edited sets
-      // (e.g. set at index 4 typed without Add Set — count=1 but span=5).
-      final highestDraftActualIdx = d.sets.fold(
-        -1,
-        (int m, Wes2SetState s) =>
-            s.hasAnyActual && s.setIndex > m ? s.setIndex : m,
-      );
-      // effectiveCount = max of server setCount, draft setCount (preserves
-      // blank added sets), and span required to reach the highest actual.
-      final effectiveCount = [
-        row.setCount,
-        d.setCount,
-        highestDraftActualIdx + 1,
-      ].reduce((a, b) => a > b ? a : b);
-      final overlaidSets = List.generate(effectiveCount, (i) {
-        final serverSet =
-            i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
-        final draftSet = i < d.sets.length ? d.sets[i] : null;
-        if (draftSet == null) return serverSet;
-        // Overlay draft actualValues and executionNote.
-        // server/BB3 hintValues and planNote are preserved from serverSet.
-        // executionNote: non-null draft value wins; null draft defers to server.
-        return serverSet.copyWith(
-          weight: draftSet.weight.hasActual
-              ? serverSet.weight.withActual(draftSet.weight.actualValue)
-              : serverSet.weight,
-          reps: draftSet.reps.hasActual
-              ? serverSet.reps.withActual(draftSet.reps.actualValue)
-              : serverSet.reps,
-          rir: draftSet.rir.hasActual
-              ? serverSet.rir.withActual(draftSet.rir.actualValue)
-              : serverSet.rir,
-          velocity: draftSet.velocity.hasActual
-              ? serverSet.velocity.withActual(draftSet.velocity.actualValue)
-              : serverSet.velocity,
-          executionNote: draftSet.executionNote,
-        );
-      });
-      return row.copyWith(
-        sets: overlaidSets,
-        setCount: effectiveCount,
-        isMarkedDone: d.isMarkedDone,
-        exerciseExecutionNote: d.exerciseExecutionNote,
-        // null draft defers to server — identical to per-set executionNote.
-        // A draft cleared offline will reappear from the server until
-        // Firestore confirms the delete. Accepted pre-existing limitation.
-      );
-    }).toList();
-  }
-
   /// Deduplicates rows by exerciseId (completedServer wins over planned/manual)
   /// and normalizes any zero-setCount ghost rows. Applied at all row entry points.
   static List<Wes2ExerciseRow> _hardened(List<Wes2ExerciseRow> rows) {
@@ -1197,10 +1267,106 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
   }
 
-  /// Calls [_repository.saveFieldPatch] and silently swallows any error.
-  /// UI state and local draft are intentionally left intact on failure.
-  /// After a confirmed write, checks whether this is the first real set
-  /// (weight > 0 AND reps > 0 on the same set) and writes the paywall flag.
+  /// Makes one athlete mutation DURABLE, then lets the engine sync it.
+  ///
+  /// This replaced thirteen `catch (_) {}` wrappers. Each of those attempted a
+  /// Firestore transaction and discarded the failure, so a lift logged with no
+  /// signal existed on screen, in the controller and in the draft — and nowhere
+  /// on the server, with nothing queued to try again. Now the local write comes
+  /// FIRST and the network attempt is a retry of something already safe.
+  ///
+  /// The returned future covers the local write only. Callers on the hot path
+  /// (a field losing focus) do not await it; the exit paths await
+  /// [_awaitDurableWrites], which waits for SQLite and never for the network.
+  Future<void> _submitMutation(Wes2Mutation mutation) async {
+    final Future<void> write = _submitMutationInner(mutation);
+    _durableWrites.add(write);
+    try {
+      await write;
+    } finally {
+      _durableWrites.remove(write);
+    }
+  }
+
+  Future<void> _submitMutationInner(Wes2Mutation mutation) async {
+    try {
+      final Wes2SyncServices services =
+          await Wes2SyncServices.ensureInitialised();
+      await services.engine.submit(mutation);
+    } catch (e, st) {
+      // The outbox itself could not be written. Nothing else can be done here,
+      // but this is a real defect rather than an expected offline condition, so
+      // it is logged loudly instead of being swallowed.
+      debugPrint('[WES2SYNC] durable enqueue FAILED '
+          'kind=${mutation.kind} ex=${mutation.exerciseId}: $e'
+          '\n$st');
+    }
+  }
+
+  /// A one-line, non-intrusive account of anything not yet on the server.
+  ///
+  /// Renders nothing at all in the overwhelmingly common case, so an ordinary
+  /// online session looks exactly as it always has. It exists because silence
+  /// is what made the original bug invisible: the athlete had no way to tell a
+  /// saved lift from a lost one.
+  Widget _buildSyncStatusLine() {
+    if (_syncStatus.isIdle) return const SizedBox.shrink();
+    final bool issue = _syncStatus.hasIssue;
+    final String text = issue
+        ? 'Sync issue - tap to retry'
+        : 'Saved on device - syncing';
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 12, bottom: 2),
+      child: GestureDetector(
+        onTap: issue
+            ? () => unawaited(Wes2SyncServices.retryBlockedNow())
+            : null,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(
+              issue ? Icons.sync_problem : Icons.cloud_queue,
+              size: 12,
+              color: issue ? Colors.amberAccent : Colors.white38,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 11,
+                color: issue ? Colors.amberAccent : Colors.white38,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Waits for every in-flight LOCAL durability write. Never waits on network.
+  ///
+  /// Used by the deliberate-exit paths so navigation stays instant while the
+  /// last thing the athlete typed is guaranteed to be on disk before the field
+  /// widgets are destroyed.
+  Future<void> _awaitDurableWrites() async {
+    if (_durableWrites.isEmpty) return;
+    await Future.wait<void>(List<Future<void>>.from(_durableWrites))
+        .timeout(const Duration(seconds: 3), onTimeout: () => const <void>[]);
+  }
+
+  String get _actorUidForMutations {
+    final String fromAuth = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (fromAuth.isNotEmpty) return fromAuth;
+    // Coach mode still routes through the authenticated account; the controller
+    // actor is the fallback for the brief window before auth has surfaced.
+    return _controller.actorUid;
+  }
+
+  /// Queues one set-field edit or clear.
+  ///
+  /// [value] null is an explicit CLEAR and is queued as such, so a value the
+  /// athlete deleted offline does not reappear from the server at the next
+  /// merge.
   Future<void> _saveFieldSilently({
     required String uid,
     required DateTime date,
@@ -1209,29 +1375,43 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required Wes2FieldKey fieldKey,
     required dynamic value,
   }) async {
-    try {
-      await _repository.saveFieldPatch(
-        uid: uid,
-        date: date,
-        row: row,
-        setIndex: setIndex,
-        fieldKey: fieldKey,
-        value: value,
-      );
-      // Paywall qualifying-date check: runs after every confirmed weight/reps save.
-      if (value != null &&
-          (fieldKey == Wes2FieldKey.weight || fieldKey == Wes2FieldKey.reps)) {
+    await _submitMutation(Wes2Mutation.fieldPatch(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      row: row,
+      setIndex: setIndex,
+      fieldKey: fieldKey,
+      value: value,
+    ));
+  }
+
+  /// Post-confirmation side effects for one synced mutation.
+  ///
+  /// Runs when the SERVER has accepted the write, which may be minutes after
+  /// the athlete typed it, or on a later launch entirely. Both effects are
+  /// idempotent: [_checkQualifyingDate] is guarded by the per-date key in the
+  /// membership document, and set-video reconciliation is a no-op for a day
+  /// with no footage — so a replay after a crash cannot double-count a
+  /// qualifying day or republish a proof.
+  void _onMutationConfirmed(Wes2MutationRow row) {
+    if (!mounted) return;
+    if (row.kind != Wes2MutationKind.field) return;
+    final Map<String, dynamic> payload =
+        Wes2Mutation.decodePayload(row.payloadJson);
+    if (payload['value'] == null) return;
+    final Wes2FieldKey? key = Wes2Mutation.fieldKeyFrom(payload);
+    if (key != Wes2FieldKey.weight && key != Wes2FieldKey.reps) return;
+    if (row.athleteUid != _controller.actingUid) return;
+    final DateTime date = wes2DateFromKey(row.dateKey);
+    unawaited(() async {
+      try {
         await _checkQualifyingDate(date: date);
-        // A confirmed weight or reps write is what can turn a set into a
-        // personal best, so this is the "after a relevant save" reconciliation
-        // trigger. Only fired when this day already holds footage, so an
-        // ordinary logging session does no extra work at all.
-        unawaited(_maybeReconcileAfterSetSave());
+        await _maybeReconcileAfterSetSave();
+      } catch (e) {
+        debugPrint('[WES2SYNC] post-confirm side effect failed: $e');
       }
-    } catch (_) {
-      // Silent failure for Phase 8.
-      // Retry queue and error indicator deferred to a future phase.
-    }
+    }());
   }
 
   /// Fetches the membership doc once per session and populates the local
@@ -1358,22 +1538,24 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
   }
 
+  /// Queues the completion checkmark, and NOTHING else.
+  ///
+  /// The mutation carries `isDone` plus the row for the repository's existing
+  /// create/promote path, which serialises actualValues only. No hint of any
+  /// kind can become execution data by way of Done.
   Future<void> _setMarkedDoneSilently({
     required String uid,
     required DateTime date,
     required Wes2ExerciseRow row,
     required bool isDone,
   }) async {
-    try {
-      await _repository.setMarkedDone(
-        uid: uid,
-        date: date,
-        row: row,
-        isDone: isDone,
-      );
-    } catch (e, st) {
-      debugPrint('[WES2] setMarkedDone FAILED: $e\n$st');
-    }
+    await _submitMutation(Wes2Mutation.markDone(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      row: row,
+      isDone: isDone,
+    ));
   }
 
   // ── Add Set (Phase 10) ────────────────────────────────────────────────────
@@ -1415,16 +1597,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required Wes2ExerciseRow row,
     required int setCount,
   }) async {
-    try {
-      await _repository.saveSetCount(
-        uid: uid,
-        date: date,
-        row: row,
-        setCount: setCount,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves setCount for next reopen.
-    }
+    await _submitMutation(Wes2Mutation.setCount(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      row: row,
+      setCount: setCount,
+    ));
   }
 
   /// Parses [text] into the correct Dart type for [fieldKey].
@@ -1460,6 +1639,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   Future<void> _exitToPreviousRoute() {
     return _exitCoordinator.exitToPreviousRoute(
       dropFocus: () => FocusManager.instance.primaryFocus?.unfocus(),
+      awaitDurableWrites: _awaitDurableWrites,
       isMounted: () => mounted,
       markHomeActive: () => unawaited(
         StartupRouteService.markHomeActive(
@@ -1480,6 +1660,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   Future<void> _exitDirectlyToHome() {
     return _exitCoordinator.exitDirectlyToHome(
       dropFocus: () => FocusManager.instance.primaryFocus?.unfocus(),
+      awaitDurableWrites: _awaitDurableWrites,
       isMounted: () => mounted,
       markHomeActive: () => unawaited(
         StartupRouteService.markHomeActive(
@@ -1573,6 +1754,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                         onPrevDay: _onPrevDay,
                         onNextDay: _onNextDay,
                       ),
+                      _buildSyncStatusLine(),
                       const Divider(height: 1),
                       Expanded(child: _buildBody(context, controller)),
                     ],
@@ -1902,15 +2084,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required DateTime date,
     required Wes2ExerciseRow row,
   }) async {
-    try {
-      await _repository.saveManualExercise(
-        uid: uid,
-        date: date,
-        row: row,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves the row for next reopen.
-    }
+    await _submitMutation(Wes2Mutation.manualExercise(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      row: row,
+    ));
   }
 
   // ── Date navigation (Phase 13) ────────────────────────────────────────────
@@ -2495,11 +2674,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required String uid,
     required DateTime date,
   }) async {
-    try {
-      await _repository.deleteAllExercisesForDay(uid: uid, date: date);
-    } catch (_) {
-      // Silent failure; local draft preserves empty state for next reopen.
-    }
+    await _submitMutation(Wes2Mutation.deleteAllForDay(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      localSeq: ++_localMutationSeq,
+    ));
   }
 
   // ── Structural exercise actions (Phase 13) ────────────────────────────────
@@ -2611,15 +2791,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required DateTime date,
     required String exerciseId,
   }) async {
-    try {
-      await _repository.deleteExercise(
-        uid: uid,
-        date: date,
-        exerciseId: exerciseId,
-      );
-    } catch (_) {
-      // Silent failure; row already removed from local state and draft.
-    }
+    await _submitMutation(Wes2Mutation.deleteExercise(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      exerciseId: exerciseId,
+    ));
   }
 
   Future<void> _replaceExerciseSilently({
@@ -2629,17 +2806,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required String newExerciseId,
     required String newName,
   }) async {
-    try {
-      await _repository.replaceExercise(
-        uid: uid,
-        date: date,
-        oldExerciseId: oldExerciseId,
-        newExerciseId: newExerciseId,
-        newName: newName,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves updated row.
-    }
+    await _submitMutation(Wes2Mutation.replaceExercise(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      oldExerciseId: oldExerciseId,
+      newExerciseId: newExerciseId,
+      newName: newName,
+    ));
   }
 
   Future<void> _moveExerciseToCircuitSilently({
@@ -2648,16 +2822,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required String exerciseId,
     required int targetCircuitIndex,
   }) async {
-    try {
-      await _repository.moveExerciseToCircuit(
-        uid: uid,
-        date: date,
-        exerciseId: exerciseId,
-        targetCircuitIndex: targetCircuitIndex,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves circuit assignment.
-    }
+    await _submitMutation(Wes2Mutation.moveCircuit(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      exerciseId: exerciseId,
+      targetCircuitIndex: targetCircuitIndex,
+    ));
   }
 
   // ── Remove Set (Phase 14) ─────────────────────────────────────────────────
@@ -2718,6 +2889,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     await _videoSoftDeleteSets(
         currentRow.exerciseId, _setIdsFor(currentRow, onlySetIndex: setIndex));
 
+    // Captured BEFORE the controller compacts: this is the stored count the
+    // queued removal expects to find, and the guard that makes a replay after
+    // a crash a no-op rather than a second, wrong deletion.
+    final int setCountBeforeRemoval = currentRow.setCount;
+
     _controller.removeSet(currentRow.exerciseId, setIndex);
     _saveDraftNow();
     await _refreshSetVideoState();
@@ -2730,25 +2906,30 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       date: _controller.selectedDate,
       exerciseId: currentRow.exerciseId,
       setIndex: setIndex,
+      expectedSetCountBefore: setCountBeforeRemoval,
     );
   }
 
+  /// Queues one set removal.
+  ///
+  /// [expectedSetCountBefore] travels with the mutation so a replay after a
+  /// crash is a no-op rather than deleting whichever set moved into the gap.
   Future<void> _removeSetSilently({
     required String uid,
     required DateTime date,
     required String exerciseId,
     required int setIndex,
+    required int expectedSetCountBefore,
   }) async {
-    try {
-      await _repository.removeSet(
-        uid: uid,
-        date: date,
-        exerciseId: exerciseId,
-        setIndex: setIndex,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves current set state.
-    }
+    await _submitMutation(Wes2Mutation.removeSet(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      exerciseId: exerciseId,
+      setIndex: setIndex,
+      expectedSetCountBefore: expectedSetCountBefore,
+      localSeq: ++_localMutationSeq,
+    ));
   }
 
   // ── Set notes (Phase 16) ──────────────────────────────────────────────────
@@ -2836,26 +3017,23 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
-  /// Writes the stable id to Firestore without disturbing anything else.
+  /// Queues the stable id, which is written additively and never overwrites
+  /// an identity that already exists — so a replay leaves an attached proof
+  /// video pointing at exactly the same performance.
   Future<void> _saveSetIdToServer(
     String ownerUid,
     String exerciseId,
     int setIndex,
     String setId,
   ) async {
-    try {
-      await _repository.saveSetId(
-        uid: ownerUid,
-        date: _controller.selectedDate,
-        exerciseId: exerciseId,
-        setIndex: setIndex,
-        setId: setId,
-      );
-    } catch (_) {
-      // Offline or transient. The id is already durable locally, and every
-      // ordinary WES2 save carries it up again, so it reaches the server when
-      // connectivity returns without changing value.
-    }
+    await _submitMutation(Wes2Mutation.stableSetId(
+      actorUid: _actorUidForMutations,
+      athleteUid: ownerUid,
+      date: _controller.selectedDate,
+      exerciseId: exerciseId,
+      setIndex: setIndex,
+      setId: setId,
+    ));
   }
 
   // ── Structural operations: keeping footage with its set ───────────────────
@@ -3093,17 +3271,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required int setIndex,
     required String? note,
   }) async {
-    try {
-      await _repository.saveExecutionNote(
-        uid: uid,
-        date: date,
-        exerciseId: exerciseId,
-        setIndex: setIndex,
-        note: note,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves the note for next reopen.
-    }
+    await _submitMutation(Wes2Mutation.setNote(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      exerciseId: exerciseId,
+      setIndex: setIndex,
+      note: note,
+    ));
   }
 
   Future<void> _saveExerciseExecutionNoteSilently({
@@ -3112,16 +3287,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required String exerciseId,
     required String? note,
   }) async {
-    try {
-      await _repository.saveExerciseExecutionNote(
-        uid: uid,
-        date: date,
-        exerciseId: exerciseId,
-        note: note,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves the note for next reopen.
-    }
+    await _submitMutation(Wes2Mutation.exerciseNote(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      exerciseId: exerciseId,
+      note: note,
+    ));
   }
 
   // ── Floating timer widget (Phase 17) ──────────────────────────────────────
@@ -3276,15 +3448,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     required DateTime date,
     required List<Wes2ExerciseRow> rows,
   }) async {
-    try {
-      await _repository.replaceAllWithTemplateRows(
-        uid: uid,
-        date: date,
-        rows: rows,
-      );
-    } catch (_) {
-      // Silent failure; local draft preserves the template rows.
-    }
+    await _submitMutation(Wes2Mutation.templateReplaceAll(
+      actorUid: _actorUidForMutations,
+      athleteUid: uid,
+      date: date,
+      rows: rows,
+      localSeq: ++_localMutationSeq,
+    ));
   }
 
   // ── BB3 planned-day sync (Phase 20) ──────────────────────────────────────

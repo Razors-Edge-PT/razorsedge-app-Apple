@@ -181,12 +181,29 @@ void main() {
               'not-found — see functions/test-rules/set_video_paths.spec.js');
     });
 
-    test('a WES2 set save triggers reconciliation', () {
+    test('a CONFIRMED WES2 set save triggers reconciliation', () {
       expect(screen, contains('_maybeReconcileAfterSetSave()'));
-      final String saveBody =
-          _method(screen, 'Future<void> _saveFieldSilently(');
-      expect(saveBody, contains('_maybeReconcileAfterSetSave()'),
+      // The call site moved out of the optimistic save and into the durable
+      // queue's confirmation handler. A weight/reps write may now land minutes
+      // after it was typed, or on a later launch; reconciling at the moment the
+      // SERVER accepts it is what makes an offline PB publishable at all.
+      final String confirmed =
+          _method(screen, 'void _onMutationConfirmed(');
+      expect(confirmed, contains('_maybeReconcileAfterSetSave()'),
           reason: 'a confirmed weight/reps write is what creates a PB');
+      expect(confirmed, contains('Wes2FieldKey.weight'));
+      expect(confirmed, contains('Wes2FieldKey.reps'));
+      // And it is genuinely subscribed to the engine, not merely declared.
+      expect(screen, contains('confirmed.listen(_onMutationConfirmed)'),
+          reason: 'an unsubscribed handler is a cut wire');
+    });
+
+    test('the durable queue is what performs the set-id and field writes', () {
+      final String engine = _source('lib/wes2_sync/wes2_sync_engine.dart');
+      expect(engine, contains('_repository.saveSetId('));
+      expect(engine, contains('_repository.saveFieldPatch('));
+      expect(engine, contains('_confirmed.add(row)'),
+          reason: 'confirmation must be announced only after a real success');
     });
 
     test('the app start path drains the outbox, which now reconciles', () {
@@ -226,8 +243,13 @@ void main() {
 
     test('it is also written additively to Firestore', () {
       expect(tap, contains('_saveSetIdToServer('));
+      // The write now goes through the durable queue rather than straight to
+      // the repository, so an identity minted with no signal is no longer
+      // dropped — it is replayed until the server has it. The engine performs
+      // the additive saveSetId; the assertion for that lives in blocker 1.
       final String server = _method(screen, 'Future<void> _saveSetIdToServer(');
-      expect(server, contains('_repository.saveSetId('));
+      expect(server, contains('Wes2Mutation.stableSetId('));
+      expect(server, contains('_submitMutation('));
     });
 
     test('the coordinator receives the REFRESHED row, not a stale capture', () {

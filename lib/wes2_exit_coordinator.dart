@@ -42,7 +42,12 @@ enum Wes2ExitAction {
 ///      keyboard before the route subtree is torn down.
 ///   2. One event-loop turn is yielded so that queued focus-loss notification
 ///      reaches the listener before route navigation begins.
-///   3. After re-checking mount, Home is marked active and navigation is
+///   3. `awaitDurableWrites`, when supplied, waits for the LOCAL durability
+///      write that the focus loss started — SQLite, never the network. This is
+///      what makes "type the last RIR, tap Back immediately" safe: the field
+///      widgets are not torn down until the intent is on disk. It is bounded,
+///      so a stuck write can never trap the athlete on the screen.
+///   4. After re-checking mount, Home is marked active and navigation is
 ///      performed exactly once by the per-intent decision.
 ///
 /// The [_isExiting] guard prevents repeated back/logo taps from double-popping
@@ -63,6 +68,7 @@ class Wes2ExitCoordinator {
     required bool Function() isMounted,
     required VoidCallback markHomeActive,
     required NavigatorState? Function() navigatorOf,
+    Future<void> Function()? awaitDurableWrites,
     String homeRouteName = '/home',
   }) {
     return _run(
@@ -70,6 +76,7 @@ class Wes2ExitCoordinator {
       isMounted: isMounted,
       markHomeActive: markHomeActive,
       navigatorOf: navigatorOf,
+      awaitDurableWrites: awaitDurableWrites,
       navigate: (navigator) {
         if (navigator.canPop()) {
           navigator.pop();
@@ -92,6 +99,7 @@ class Wes2ExitCoordinator {
     required bool Function() isMounted,
     required VoidCallback markHomeActive,
     required NavigatorState? Function() navigatorOf,
+    Future<void> Function()? awaitDurableWrites,
     String homeRouteName = '/home',
   }) {
     return _run(
@@ -99,6 +107,7 @@ class Wes2ExitCoordinator {
       isMounted: isMounted,
       markHomeActive: markHomeActive,
       navigatorOf: navigatorOf,
+      awaitDurableWrites: awaitDurableWrites,
       navigate: (navigator) {
         if (navigator.canPop()) {
           // Pop back to the existing named Home route, recording whether it was
@@ -134,6 +143,7 @@ class Wes2ExitCoordinator {
     required VoidCallback markHomeActive,
     required NavigatorState? Function() navigatorOf,
     required Wes2ExitAction Function(NavigatorState navigator) navigate,
+    Future<void> Function()? awaitDurableWrites,
   }) async {
     if (_isExiting) return Wes2ExitAction.skippedAlreadyExiting;
     _isExiting = true;
@@ -143,6 +153,17 @@ class Wes2ExitCoordinator {
       // Yield one event-loop turn so the queued focus-loss notification reaches
       // the still-mounted field listener before route navigation begins.
       await Future<void>.delayed(Duration.zero);
+
+      // Wait for the local durability write that focus loss just started —
+      // never for the network. Bounded and failure-tolerant: an exit must not
+      // be blocked by storage trouble, and the queued row survives regardless.
+      if (awaitDurableWrites != null) {
+        try {
+          await awaitDurableWrites();
+        } catch (e) {
+          debugPrint('[WES2] durable-write barrier failed on exit: $e');
+        }
+      }
 
       if (!isMounted()) return Wes2ExitAction.skippedUnmounted;
 
