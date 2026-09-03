@@ -227,17 +227,32 @@ void main() {
       expect(item.storagePath, 'users/$owner/posts/legacy/original.jpg');
     });
 
-    test('a legacy re_daily card is preserved and not mistaken for an upload',
+    test('an RE Daily record is not gallery media and never takes a slot',
         () async {
+      // This used to assert the opposite - that an RE Daily card belongs in the
+      // grid. It does not. RE Daily writes a summary record into `posts` on
+      // every training day with no media of any kind (see `_upsertDailyPost` in
+      // re_daily.dart): no mediaType, no smallUrl, no thumbUrl. Each one
+      // rendered as a blank image placeholder, and because the eligibility test
+      // ran on the CLIENT after limit(60), enough of them pushed the owner's
+      // real photos out of the query window entirely.
       await db.collection('posts').doc('daily').set(<String, Object?>{
         'ownerUid': owner,
-        'mediaType': 'image',
         'type': PostKind.reDaily,
+        'dayKey': '2026-09-01',
+        'dailyTotal': 12.5,
         'createdAt': Timestamp.now(),
       });
-      final ProfileMediaItem item = (await media.watchGrid(owner).first).single;
-      expect(item.kind, PostKind.reDaily);
-      expect(item.isProof, isFalse);
+      await db.collection('posts').doc('realPhoto').set(<String, Object?>{
+        'ownerUid': owner,
+        'mediaType': 'image',
+        'smallUrl': 'https://example.invalid/real.jpg',
+        'createdAt': Timestamp.fromDate(DateTime(2024, 1, 1)),
+      });
+
+      final List<ProfileMediaItem> grid = await media.watchGrid(owner).first;
+
+      expect(grid.map((ProfileMediaItem i) => i.id), <String>['realPhoto']);
     });
 
     test('a legacy video post is recognised as a video', () async {

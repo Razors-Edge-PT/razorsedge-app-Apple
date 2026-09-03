@@ -12,7 +12,6 @@
 
 // Dart SDK
 import 'dart:async'; // for unawaited, Futures
-import 'dart:io'; // File, Platform
 
 // Flutter
 import 'package:flutter/material.dart';
@@ -23,7 +22,6 @@ import 'package:firebase_storage/firebase_storage.dart';
 
 // Media / cache
 import 'package:video_player/video_player.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 // Project-local
 import 'profile/core/media_identity.dart';
@@ -292,10 +290,9 @@ class PostDetailPage extends StatelessWidget {
 /// Every state now resolves: media, a bounded wait, or a stated failure with a
 /// retry that starts a genuinely fresh attempt.
 class _PostMediaView extends StatefulWidget {
-  const _PostMediaView({required this.post, this.resolver});
+  const _PostMediaView({required this.post});
 
   final Post post;
-  final VideoSourceResolver? resolver;
 
   @override
   State<_PostMediaView> createState() => _PostMediaViewState();
@@ -306,7 +303,7 @@ class _PostMediaViewState extends State<_PostMediaView> {
 
   VideoSourceResolver? _ownResolver;
   VideoSourceResolver get _resolver =>
-      widget.resolver ?? (_ownResolver ??= VideoSourceResolver());
+      _ownResolver ??= VideoSourceResolver();
 
   Post get _post => widget.post;
 

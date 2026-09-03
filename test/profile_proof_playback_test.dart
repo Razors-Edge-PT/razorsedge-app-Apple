@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:video_player/video_player.dart';
 import 'package:localtest222/profile/core/media_models.dart';
 import 'package:localtest222/profile/core/media_urls.dart';
 import 'package:localtest222/profile/ui/media_detail_page.dart';
@@ -72,10 +73,16 @@ void main() {
           badge: 'Bench Press, Barbell · 180 kg × 2',
         ),
       ));
-      await tester.pump();
+      // Resolving the source is asynchronous now - the cache is asked before
+      // anything is handed to a player - so settle before asserting.
+      await tester.pumpAndSettle();
 
-      // No VideoPlayer was ever built, and the user is told plainly.
-      expect(find.text('That video could not be played.'), findsOneWidget);
+      // No VideoPlayer was ever built, and the user is told plainly. The
+      // wording moved into MediaFailureView so that "unplayable", "offline" and
+      // "timed out" read consistently wherever the user meets them.
+      expect(find.text('There is nothing to play here.'), findsOneWidget);
+      expect(find.byType(VideoPlayer), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
     });
 
     test('the proof badge still describes the record', () {
