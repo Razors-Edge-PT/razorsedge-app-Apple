@@ -37,6 +37,7 @@ import 'block_exercise_defaults_repository.dart';
 import 'app_check_ready.dart';
 import 'startup_route_service.dart';
 import 'startup_trace.dart';
+import 'wes2_done_coordinator.dart';
 import 'wes2_exit_coordinator.dart';
 import 'wes2_sync/wes2_mutation.dart';
 import 'wes2_sync/wes2_mutation_outbox.dart';
@@ -78,13 +79,19 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // taps cannot double-pop or create duplicate Home routes.
   final Wes2ExitCoordinator _exitCoordinator = Wes2ExitCoordinator();
 
-  /// Local-durability barrier for the deliberate-exit paths.
+  /// Owns the "let the focused field finish its ordinary save first" ordering
+  /// for the Done checkmark, plus the repeat-tap guard. See
+  /// [Wes2DoneCoordinator] for why Done has to wait on the field path.
+  final Wes2DoneCoordinator _doneCoordinator = Wes2DoneCoordinator();
+
+  /// Local-durability barrier for the deliberate-exit paths AND for Done.
   ///
-  /// Every mutation's DURABLE LOCAL write is tracked here so Back/Home can wait
-  /// for SQLite (milliseconds) without ever waiting for the network. This is
-  /// what makes "type the last RIR, tap Back immediately" safe: the widget is
-  /// torn down only after the intent is on disk.
-  final Set<Future<void>> _durableWrites = <Future<void>>{};
+  /// Every mutation's DURABLE LOCAL write is tracked here so Back/Home and the
+  /// "Completed?" checkmark can wait for SQLite (milliseconds) without ever
+  /// waiting for the network. This is what makes "type the last RIR, tap Back
+  /// immediately" — and "type the last RIR, tap Completed? immediately" — safe:
+  /// the field widgets are torn down only after the intent is on disk.
+  final Wes2DurableWriteBarrier _durableWrites = Wes2DurableWriteBarrier();
 
   /// Monotonic per-session counter for mutations whose repetition is
   /// meaningful (remove set, delete all, template replace) and which therefore
@@ -1276,17 +1283,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// FIRST and the network attempt is a retry of something already safe.
   ///
   /// The returned future covers the local write only. Callers on the hot path
-  /// (a field losing focus) do not await it; the exit paths await
-  /// [_awaitDurableWrites], which waits for SQLite and never for the network.
-  Future<void> _submitMutation(Wes2Mutation mutation) async {
-    final Future<void> write = _submitMutationInner(mutation);
-    _durableWrites.add(write);
-    try {
-      await write;
-    } finally {
-      _durableWrites.remove(write);
-    }
-  }
+  /// (a field losing focus) do not await it; the deliberate actions — leaving
+  /// the screen, and the Done checkmark — await [_awaitDurableWrites], which
+  /// waits for SQLite and never for the network.
+  Future<void> _submitMutation(Wes2Mutation mutation) =>
+      _durableWrites.track(_submitMutationInner(mutation));
 
   Future<void> _submitMutationInner(Wes2Mutation mutation) async {
     try {
@@ -1345,14 +1346,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   /// Waits for every in-flight LOCAL durability write. Never waits on network.
   ///
-  /// Used by the deliberate-exit paths so navigation stays instant while the
-  /// last thing the athlete typed is guaranteed to be on disk before the field
-  /// widgets are destroyed.
-  Future<void> _awaitDurableWrites() async {
-    if (_durableWrites.isEmpty) return;
-    await Future.wait<void>(List<Future<void>>.from(_durableWrites))
-        .timeout(const Duration(seconds: 3), onTimeout: () => const <void>[]);
-  }
+  /// Used by the deliberate-exit paths and by Done, so navigation and the
+  /// checkmark stay instant while the last thing the athlete typed is
+  /// guaranteed to be on disk before the field widgets are destroyed.
+  Future<void> _awaitDurableWrites() => _durableWrites.settle();
 
   String get _actorUidForMutations {
     final String fromAuth = FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -1523,14 +1520,39 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
+  /// "Completed?" / "Mark as not done".
+  ///
+  /// Done is a checkmark and nothing else — it never accepts, materialises or
+  /// infers a value. What it now does is WAIT for the field the athlete is
+  /// still typing in to finish its OWN ordinary save first.
+  ///
+  /// Without that wait, "type RIR, tap Completed? immediately" lost the RIR:
+  /// toggling `isMarkedDone` re-keys the card's ExpansionTile, every
+  /// `Wes2SetRow` is disposed, and `dispose()` removes the focus listeners
+  /// before the nodes ever report the focus loss — so the field patch was
+  /// never created, while the Done mutation went through. See
+  /// [Wes2DoneCoordinator] for the full ordering contract.
   void _onToggleMarkedDone(String exerciseId, bool isDone) {
-    _controller.toggleMarkedDone(exerciseId, isDone);
+    unawaited(_doneCoordinator.toggleMarkedDone(
+      exerciseId: exerciseId,
+      dropFocus: () => FocusManager.instance.primaryFocus?.unfocus(),
+      awaitDurableWrites: _awaitDurableWrites,
+      commitDone: () => _commitMarkedDone(exerciseId, isDone),
+    ));
+  }
+
+  /// The ordinary Done work, run only once the focused field's mutation is on
+  /// disk: flip the controller, then queue the completion checkmark.
+  Future<void> _commitMarkedDone(String exerciseId, bool isDone) async {
+    // The barrier is awaited above, so the screen may have been left in the
+    // meantime; the controller is disposed with it and must not be notified.
+    // The durable mutation is still queued, so the tap is never lost.
+    if (mounted) _controller.toggleMarkedDone(exerciseId, isDone);
     final rowIdx =
         _controller.rows.indexWhere((r) => r.exerciseId == exerciseId);
     if (rowIdx == -1) return;
     final row = _controller.rows[rowIdx];
-    // ignore: discarded_futures
-    _setMarkedDoneSilently(
+    await _setMarkedDoneSilently(
       uid: _controller.actingUid,
       date: _controller.selectedDate,
       row: row,
