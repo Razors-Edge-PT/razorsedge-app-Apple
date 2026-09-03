@@ -29,7 +29,6 @@ import 'profile/core/media_timeouts.dart';
 import 'profile/core/media_models.dart';
 import 'profile/data/media_cache_sweeper.dart';
 import 'profile/data/media_deletion.dart';
-import 'profile/data/media_url_refresh.dart';
 import 'profile/data/media_video_source.dart';
 import 'profile/ui/cached_network_image.dart';
 import 'profile/ui/live_identity.dart';

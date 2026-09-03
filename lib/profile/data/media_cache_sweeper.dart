@@ -187,6 +187,7 @@ class ProfileMediaCacheSweeper {
     this.ceilingBytes = kDefaultCeilingBytes,
     this.smallEntryBytes = kSmallEntryBytes,
     this.minimumInterval = const Duration(minutes: 5),
+    this.writeGrace = kWriteGrace,
     DateTime Function()? clock,
   }) : _now = clock ?? DateTime.now;
 
@@ -206,10 +207,25 @@ class ProfileMediaCacheSweeper {
   /// as a last resort.
   static const int kSmallEntryBytes = 512 * 1024;
 
+  /// How recently a file must have been touched to be considered still in the
+  /// middle of being written.
+  ///
+  /// A background fill writes straight to the entry's final path, so a sweep
+  /// that fired mid-download could delete a file the downloader is still
+  /// appending to — leaving a truncated entry that the next open would have to
+  /// discover and discard. Anything touched inside this window is left alone.
+  /// It costs nothing: a file written seconds ago is the newest thing in the
+  /// store and would be the LAST thing least-recently-used eviction chose
+  /// anyway. It only ever matters when everything is recent, and then finishing
+  /// a sweep still over the ceiling is the right answer — the next one, five
+  /// minutes later, takes it.
+  static const Duration kWriteGrace = Duration(minutes: 2);
+
   final CacheVolume volume;
   final int ceilingBytes;
   final int smallEntryBytes;
   final Duration minimumInterval;
+  final Duration writeGrace;
   final DateTime Function() _now;
 
   DateTime? _lastSweep;
@@ -270,11 +286,14 @@ class ProfileMediaCacheSweeper {
     // Large entries first, each group least-recently-used first. One stale
     // video reclaims more than every thumbnail on the device, so the gallery
     // keeps rendering while the disk comes back under the ceiling.
+    final DateTime tooNew = _now().subtract(writeGrace);
     final List<CacheFileStat> large = <CacheFileStat>[];
     final List<CacheFileStat> small = <CacheFileStat>[];
     int skippedPinned = 0;
     for (final CacheFileStat e in entries) {
-      if (pinned.contains(e.path)) {
+      // Pinned: something is reading it right now.
+      // Too new: something may still be WRITING it right now.
+      if (pinned.contains(e.path) || e.lastAccess.isAfter(tooNew)) {
         skippedPinned++;
         continue;
       }
