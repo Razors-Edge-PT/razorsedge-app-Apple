@@ -170,42 +170,26 @@ class CacheManagerImageStore implements ProfileImageStore {
   Future<File?> cached(String url, {String? key}) async {
     final String id = key ?? url;
     final FileInfo? hit = await _manager.getFileFromCache(id);
+    // package:file's File implements dart:io's File, so this widens cleanly.
     final File? file = hit?.file;
-    if (file != null && !file.existsSync()) {
+    if (file != null && !isUsableCacheFile(file)) {
       // The record outlived its bytes — the disk sweep took them, or the OS
       // reclaimed the cache directory. Drop the record so it stops shadowing a
       // real fetch, then report the miss honestly.
       await _forget(id);
       return null;
     }
-    // package:file's File implements dart:io's File, so this widens cleanly.
     return file;
   }
 
-  /// Downloads [url] under [key], recovering from a STALE record.
-  ///
-  /// `getSingleFile` returns the recorded file whenever the record is still
-  /// within its `validTill`, and it does NOT check that the file is still on
-  /// disk. After [ProfileMediaCacheSweeper] reclaims bytes, the record can
-  /// outlive them by up to the stale period — so without this, a download would
-  /// hand back a path to nothing and the image would fail instead of being
-  /// re-fetched. Forgetting the record forces a real download; one retry, never
-  /// a loop.
   @override
-  Future<File> download(String url, {String? key}) async {
+  Future<File> download(String url, {String? key}) {
     final String id = key ?? url;
-    final File first = await _manager.getSingleFile(url, key: id);
-    if (first.existsSync() && first.lengthSync() > 0) return first;
-
-    await _forget(id);
-    final File second = await _manager.getSingleFile(url, key: id);
-    if (second.existsSync() && second.lengthSync() > 0) return second;
-
-    // Two attempts and still nothing on disk — the record could not be
-    // forgotten, or the fetch produced an empty file. Say so plainly rather
-    // than handing back a path to nothing and leaving the image decoder to
-    // discover it.
-    throw FileSystemException('cached media is missing after refetch', id);
+    return fetchWithStaleRecovery(
+      key: id,
+      fetch: () => _manager.getSingleFile(url, key: id),
+      forget: () => _forget(id),
+    );
   }
 
   @override
@@ -220,6 +204,54 @@ class CacheManagerImageStore implements ProfileImageStore {
       // Already gone, or the index is unavailable. Nothing to do.
     }
   }
+}
+
+/// True when [file] is bytes the app can actually use.
+///
+/// A record is not bytes. `CacheManager` hands back whatever its index says
+/// without asking the filesystem, so "the cache has it" has to be checked
+/// against the disk before it means anything.
+bool isUsableCacheFile(File? file) {
+  if (file == null) return false;
+  try {
+    return file.existsSync() && file.lengthSync() > 0;
+  } catch (_) {
+    // Unreadable is unusable.
+    return false;
+  }
+}
+
+/// Fetches through a cache that may hold a record whose bytes are gone.
+///
+/// `CacheManager.getSingleFile` returns the recorded file whenever the record
+/// is still within its `validTill`, and it does NOT check that the file is
+/// still on disk. After [ProfileMediaCacheSweeper] reclaims bytes the record
+/// outlives them by up to the stale period, so without this a download hands
+/// back a path to nothing: no re-fetch, and the failure surfaces later, inside
+/// an image decoder, as though the media were corrupt.
+///
+/// So: fetch, and if what comes back is not usable, FORGET the record and fetch
+/// once more — which now has no record to short-circuit on and must do real
+/// work. Exactly one retry. If the second attempt is still unusable (the record
+/// could not be forgotten, or the fetch produced an empty file) this throws,
+/// so the caller reaches its own error state rather than being handed a path to
+/// nothing.
+///
+/// Written against callbacks rather than [BaseCacheManager] so the rule is
+/// testable on its own, with ordinary `dart:io` files.
+Future<File> fetchWithStaleRecovery({
+  required String key,
+  required Future<File> Function() fetch,
+  required Future<void> Function() forget,
+}) async {
+  final File first = await fetch();
+  if (isUsableCacheFile(first)) return first;
+
+  await forget();
+  final File second = await fetch();
+  if (isUsableCacheFile(second)) return second;
+
+  throw FileSystemException('cached media is missing after refetch', key);
 }
 
 /// The store profile media is persisted in.

@@ -147,16 +147,21 @@ void main() {
       // each arrival the sweeper runs, and the store never ends up over.
       List<CacheFileStat> current = <CacheFileStat>[];
       final _FakeVolume v = _FakeVolume(current);
+      // A fixed clock, and arrivals that are already older than the write
+      // grace: this test is about the ceiling, not about protecting a download
+      // still in flight (which profile_media_cache_consistency_test covers).
       final ProfileMediaCacheSweeper sweeper = ProfileMediaCacheSweeper(
         volume: v,
         ceilingBytes: 512 * kMiB,
+        clock: () => DateTime(2026, 9, 1),
       );
 
       int peak = 0;
       for (int i = 0; i < 20; i++) {
         current = <CacheFileStat>[
           ...v.entries,
-          entry('/c/clip$i.mp4', 100 * kMiB, -i),
+          // Newest arrival last, but every one settled: 20 days ago down to 1.
+          entry('/c/clip$i.mp4', 100 * kMiB, 20 - i),
         ];
         v.entries = current;
         final SweepResult r = await sweeper.sweep();

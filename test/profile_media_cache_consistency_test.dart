@@ -3,110 +3,29 @@
 /// [ProfileMediaCacheSweeper] reclaims bytes by deleting FILES from the store's
 /// directory. The cache manager's index lives somewhere else entirely — its
 /// database is written under `getApplicationSupportDirectory()`, while the
-/// files it describes live under `getTemporaryDirectory()/<cacheKey>` — so a
-/// sweep can never damage the index, but it can certainly outlive it: a record
-/// stays valid for the store's stale period whether or not its bytes are still
-/// there.
+/// files it describes live under `getTemporaryDirectory()/<cacheKey>`, and
+/// staged uploads live under `getApplicationSupportDirectory()/media_outbox`.
+/// So a sweep can never damage the index, the staging area, or anything else
+/// the app owns — but the index can certainly OUTLIVE the bytes it describes.
 ///
 /// That matters because `CacheManager.getSingleFile` returns the recorded file
-/// whenever the record is inside `validTill` and does NOT check that the file
-/// exists. Left alone, a swept entry would be handed back as a path to nothing
-/// and the image would fail instead of being re-fetched. These tests pin the
-/// recovery: a record that outlived its bytes is forgotten, and the fetch is
-/// real.
+/// whenever the record is inside `validTill` and does not check that the file
+/// exists. Left alone, a swept entry would be handed back as a path to nothing:
+/// no re-fetch, and the failure surfacing later inside an image decoder as
+/// though the media were corrupt. These tests pin the recovery.
 library;
 
-import 'dart:async';
 import 'dart:io';
 
-import 'package:file/file.dart' as fs;
-import 'package:file/local.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/profile/data/media_cache_sweeper.dart';
 import 'package:localtest222/profile/ui/cached_network_image.dart';
 
-/// A cache manager whose index and bytes the test can desynchronise on purpose.
-///
-/// Only the four members [CacheManagerImageStore] uses are implemented;
-/// everything else on the very wide [BaseCacheManager] surface would be noise.
-class _FakeManager implements BaseCacheManager {
-  _FakeManager(this.dir);
-
-  final Directory dir;
-
-  /// key -> the file the INDEX believes is on disk. Deliberately allowed to
-  /// disagree with reality, which is exactly what a sweep produces.
-  final Map<String, fs.File> records = <String, fs.File>{};
-
-  final List<String> singleFileCalls = <String>[];
-  final List<String> removed = <String>[];
-
-  /// Keys whose next getSingleFile should actually write bytes.
-  final Set<String> downloadable = <String>{};
-
-  /// Set to make removeFile throw, modelling an unavailable index.
-  bool removeThrows = false;
-
-  /// package:file's File, which is what BaseCacheManager deals in. It implements
-  /// dart:io's File, which is why the store can hand it straight to callers.
-  fs.File _fileFor(String key) => const LocalFileSystem()
-      .file('${dir.path}/${key.replaceAll(RegExp(r'[^A-Za-z0-9]'), '_')}.bin');
-
-  fs.File writeBytes(String key, {int bytes = 64}) {
-    final fs.File f = _fileFor(key)..createSync(recursive: true);
-    f.writeAsBytesSync(List<int>.filled(bytes, 1));
-    records[key] = f;
-    return f;
-  }
-
-  @override
-  Future<FileInfo?> getFileFromCache(String key,
-      {bool ignoreMemCache = false}) async {
-    final fs.File? f = records[key];
-    if (f == null) return null;
-    // Exactly what the real store does: it hands back the record without ever
-    // asking the filesystem whether the file is still there.
-    return FileInfo(
-      f,
-      FileSource.Cache,
-      DateTime.now().add(const Duration(days: 30)),
-      'https://example.invalid/$key',
-    );
-  }
-
-  @override
-  Future<fs.File> getSingleFile(String url,
-      {String? key, Map<String, String>? headers}) async {
-    final String id = key ?? url;
-    singleFileCalls.add(id);
-    final fs.File? recorded = records[id];
-    if (recorded != null) return recorded;
-    if (downloadable.contains(id)) return writeBytes(id);
-    throw const HttpException('no bytes and no record');
-  }
-
-  @override
-  Future<void> removeFile(String key) async {
-    if (removeThrows) throw StateError('index unavailable');
-    removed.add(key);
-    records.remove(key);
-  }
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      throw UnimplementedError('${invocation.memberName} is not used here');
-}
-
 void main() {
   late Directory tmp;
-  late _FakeManager manager;
-  late CacheManagerImageStore store;
 
   setUp(() async {
     tmp = await Directory.systemTemp.createTemp('gl_cache_consistency');
-    manager = _FakeManager(tmp);
-    store = CacheManagerImageStore(manager);
     MediaCachePins.reset();
   });
 
@@ -115,85 +34,121 @@ void main() {
     if (tmp.existsSync()) await tmp.delete(recursive: true);
   });
 
+  File withBytes(String name, {int bytes = 64}) {
+    final File f = File('${tmp.path}/$name')..createSync(recursive: true);
+    f.writeAsBytesSync(List<int>.filled(bytes, 1));
+    return f;
+  }
+
+  group('a record is not bytes', () {
+    test('a file that exists with content is usable', () {
+      expect(isUsableCacheFile(withBytes('good.bin')), isTrue);
+    });
+
+    test('a file the sweep deleted is not', () {
+      final File f = withBytes('gone.bin')..deleteSync();
+      expect(isUsableCacheFile(f), isFalse);
+    });
+
+    test('a zero-length file is not', () {
+      final File empty = File('${tmp.path}/empty.bin')..createSync();
+      expect(isUsableCacheFile(empty), isFalse);
+    });
+
+    test('null is not', () {
+      expect(isUsableCacheFile(null), isFalse);
+    });
+  });
+
   group('a record that outlived its bytes recovers cleanly', () {
-    test('a cache read reports a miss and forgets the dead record', () async {
-      final fs.File f = manager.writeBytes('k1');
-      f.deleteSync(); // the sweep took the bytes; the record survives
+    test('a stale record is forgotten and the fetch is made real', () async {
+      // The first call models CacheManager returning its stale record: a path
+      // to a file the sweep already deleted. The second models the real
+      // download that happens once the record is gone.
+      final File ghost = File('${tmp.path}/ghost.bin');
+      int fetches = 0;
+      int forgets = 0;
 
-      final File? hit = await store.cached('https://x/1.jpg', key: 'k1');
-
-      expect(hit, isNull, reason: 'a record is not bytes');
-      expect(manager.removed, <String>['k1'],
-          reason: 'the dead record must stop shadowing a real fetch');
-    });
-
-    test('a live record is returned untouched', () async {
-      manager.writeBytes('k1');
-      final File? hit = await store.cached('https://x/1.jpg', key: 'k1');
-      expect(hit, isNotNull);
-      expect(manager.removed, isEmpty);
-    });
-
-    test('a download through a stale record forces a REAL fetch', () async {
-      // This is the defect the sweeper would otherwise create: getSingleFile
-      // hands back the recorded path without checking it, so the caller gets a
-      // File that is not there.
-      final fs.File f = manager.writeBytes('k1');
-      f.deleteSync();
-      manager.downloadable.add('k1');
-
-      final File got = await store.download('https://x/1.jpg', key: 'k1');
+      final File got = await fetchWithStaleRecovery(
+        key: 'k1',
+        fetch: () async {
+          fetches++;
+          return fetches == 1 ? ghost : withBytes('real.bin');
+        },
+        forget: () async => forgets++,
+      );
 
       expect(got.existsSync(), isTrue);
       expect(got.lengthSync(), greaterThan(0));
-      expect(manager.removed, <String>['k1']);
-      expect(manager.singleFileCalls, <String>['k1', 'k1'],
-          reason: 'exactly one retry, never a loop');
+      expect(forgets, 1, reason: 'the dead record must stop shadowing a fetch');
+      expect(fetches, 2, reason: 'exactly one retry, never a loop');
     });
 
-    test('a zero-length entry is treated as missing', () async {
-      final fs.File empty = manager._fileFor('k1')..createSync(recursive: true);
-      manager.records['k1'] = empty;
-      manager.downloadable.add('k1');
+    test('a healthy first fetch neither retries nor forgets anything',
+        () async {
+      int fetches = 0;
+      int forgets = 0;
 
-      final File got = await store.download('https://x/1.jpg', key: 'k1');
+      await fetchWithStaleRecovery(
+        key: 'k1',
+        fetch: () async {
+          fetches++;
+          return withBytes('fine.bin');
+        },
+        forget: () async => forgets++,
+      );
+
+      expect(fetches, 1);
+      expect(forgets, 0);
+    });
+
+    test('an empty result is treated as stale, not as success', () async {
+      int fetches = 0;
+      final File got = await fetchWithStaleRecovery(
+        key: 'k1',
+        fetch: () async {
+          fetches++;
+          return fetches == 1
+              ? (File('${tmp.path}/empty.bin')..createSync())
+              : withBytes('real.bin');
+        },
+        forget: () async {},
+      );
 
       expect(got.lengthSync(), greaterThan(0));
-      expect(manager.removed, <String>['k1']);
+      expect(fetches, 2);
     });
 
-    test('a healthy download does not retry or forget anything', () async {
-      manager.writeBytes('k1');
-      await store.download('https://x/1.jpg', key: 'k1');
-      expect(manager.singleFileCalls, <String>['k1']);
-      expect(manager.removed, isEmpty);
-    });
-
-    test('an index that will not forget still surfaces the real failure',
+    test('a second unusable result throws rather than returning a dead path',
         () async {
-      final fs.File f = manager.writeBytes('k1');
-      f.deleteSync();
-      manager.removeThrows = true;
-
-      // Forgetting is best-effort, so the second attempt still meets the same
-      // stale record. What must NOT happen is handing back a path to nothing
-      // and leaving the image decoder to discover it: the caller gets a plain
-      // failure and shows its error state.
+      // The record could not be forgotten, so the retry meets it again. What
+      // must NOT happen is handing back a path to nothing and leaving an image
+      // decoder to discover it: the caller gets a plain failure and shows its
+      // own error state.
+      int fetches = 0;
       await expectLater(
-        store.download('https://x/1.jpg', key: 'k1'),
+        fetchWithStaleRecovery(
+          key: 'k1',
+          fetch: () async {
+            fetches++;
+            return File('${tmp.path}/never.bin');
+          },
+          forget: () async {},
+        ),
         throwsA(isA<FileSystemException>()),
       );
+      expect(fetches, 2, reason: 'bounded: two attempts and no more');
     });
 
-    test('an index that will not forget still answers the cache read',
-        () async {
-      final fs.File f = manager.writeBytes('k1');
-      f.deleteSync();
-      manager.removeThrows = true;
-
-      // Forgetting is best-effort. A record that cannot be dropped costs one
-      // wasted fetch later; it must never turn a cache lookup into a throw.
-      expect(await store.cached('https://x/1.jpg', key: 'k1'), isNull);
+    test('a genuine fetch failure propagates unchanged', () async {
+      await expectLater(
+        fetchWithStaleRecovery(
+          key: 'k1',
+          fetch: () async => throw const SocketException('offline'),
+          forget: () async {},
+        ),
+        throwsA(isA<SocketException>()),
+      );
     });
   });
 
@@ -222,7 +177,7 @@ void main() {
       expect(r.skippedPinned, 1, reason: 'the in-flight write was skipped');
     });
 
-    test('once the write is old enough it becomes evictable again', () async {
+    test('once the write has settled it becomes evictable again', () async {
       final _Volume v = _Volume(<CacheFileStat>[
         at('/c/finished.mp4', 300 * 1024 * 1024, const Duration(minutes: 10)),
       ]);
@@ -258,11 +213,11 @@ void main() {
   });
 
   group('the sweeper only ever looks inside its own store', () {
-    test('it is constructed against the ProfileMediaCache directory alone', () {
-      // The store's files live under getTemporaryDirectory()/<cacheKey>. Its
-      // SQLite index lives under getApplicationSupportDirectory(), and staged
-      // uploads live under getApplicationSupportDirectory()/media_outbox — so
-      // neither is reachable from the directory the sweeper walks.
+    test('the store it sweeps is the profile-media cache', () {
+      // Its files live under getTemporaryDirectory()/<kCacheKey>. The cache
+      // index lives under getApplicationSupportDirectory(), and staged uploads
+      // under getApplicationSupportDirectory()/media_outbox — neither is
+      // reachable from the directory the sweeper walks.
       expect(ProfileMediaCache.kCacheKey, 'goodliftProfileMedia');
     });
 
@@ -275,6 +230,11 @@ void main() {
       final SweepResult r =
           await ProfileMediaCacheSweeper(volume: v, ceilingBytes: 1).sweep();
       expect(r.evicted, 0);
+    });
+
+    test('a null directory sweeps to a clean no-op', () async {
+      final DirectoryCacheVolume v = DirectoryCacheVolume(() async => null);
+      expect(await v.list(), isEmpty);
     });
 
     test('a real directory is measured by real file sizes', () async {
@@ -295,6 +255,26 @@ void main() {
             .reduce((int a, int b) => a + b),
         3000,
       );
+    });
+
+    test('only files are listed, and a real one really is deleted', () async {
+      final Directory cacheDir = Directory('${tmp.path}/store2')
+        ..createSync(recursive: true);
+      Directory('${cacheDir.path}/nested').createSync();
+      final File f = File('${cacheDir.path}/nested/c.bin')
+        ..writeAsBytesSync(List<int>.filled(50, 0));
+
+      final DirectoryCacheVolume v = DirectoryCacheVolume(() async => cacheDir);
+      final List<CacheFileStat> listed = await v.list();
+
+      // Compared by basename: the listing reports platform-native separators.
+      expect(listed, hasLength(1), reason: 'directories are not entries');
+      expect(listed.single.path, endsWith('c.bin'));
+
+      await v.remove(listed.single);
+      expect(f.existsSync(), isFalse);
+      // Removing something already gone is not an error.
+      await v.remove(listed.single);
     });
   });
 }
