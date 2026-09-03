@@ -16,6 +16,8 @@ library;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'media_identity.dart';
+
 /// What a media document is for.
 class MediaType {
   static const String image = 'image';
@@ -66,6 +68,7 @@ class ProfileMediaItem {
     required this.mediaType,
     required this.kind,
     this.storagePath = '',
+    this.thumbStoragePath,
     this.thumbUrl = '',
     this.smallUrl = '',
     this.caption,
@@ -92,6 +95,11 @@ class ProfileMediaItem {
   final String kind;
 
   final String storagePath;
+
+  /// Where the poster object lives, when the writer recorded it. Only used to
+  /// key the cache; the thumbnail is still fetched from [thumbUrl].
+  final String? thumbStoragePath;
+
   final String thumbUrl;
   final String smallUrl;
   final String? caption;
@@ -119,6 +127,30 @@ class ProfileMediaItem {
   bool get isVideo => mediaType == MediaType.video;
   bool get isProof => kind == PostKind.proof && proof != null;
 
+  /// True when this item's `mediaType` is one the app can actually render.
+  ///
+  /// False for a record with the field missing or set to something unknown.
+  /// Those used to be indistinguishable from images — [fromSnapshot] defaulted
+  /// the field — which is how a video with a dropped `mediaType`, and an RE
+  /// Daily record with no media at all, both ended up in the image decoder.
+  bool get isSupported => isSupportedMediaType(mediaType);
+
+  /// The stable cache identity of one rendition of this item.
+  ///
+  /// Derived from the owner and the object's own Storage path, so it survives
+  /// download-token rotation and changes when the content is genuinely
+  /// replaced — every upload gets a fresh `mediaId`, and therefore a fresh
+  /// path. See media_identity.dart.
+  String cacheKey(String variant) => profileMediaCacheKey(
+        ownerUid: ownerUid,
+        variant: variant,
+        storagePath: variant == MediaVariant.thumb
+            ? (thumbStoragePath ?? '')
+            : storagePath,
+        mediaId: id,
+        url: variant == MediaVariant.thumb ? thumbUrl : smallUrl,
+      );
+
   static ProfileMediaItem fromSnapshot(
     DocumentSnapshot<Map<String, dynamic>> snap,
   ) {
@@ -127,10 +159,15 @@ class ProfileMediaItem {
     return ProfileMediaItem(
       id: snap.id,
       ownerUid: (d['ownerUid'] as String?) ?? '',
-      mediaType: (d['mediaType'] as String?) ?? MediaType.image,
+      // NOT defaulted to `image`. A record with the field missing is not an
+      // image — it is a record this build cannot render, and saying so is what
+      // keeps a video URL out of the image decoder and an RE Daily summary out
+      // of the gallery. See ProfileMediaItem.isSupported.
+      mediaType: (d['mediaType'] as String?)?.trim().toLowerCase() ?? '',
       // Legacy uploads carry no `type` at all.
       kind: (d['type'] as String?) ?? PostKind.upload,
       storagePath: (d['storagePathOriginal'] as String?) ?? '',
+      thumbStoragePath: d['thumbStoragePath'] as String?,
       thumbUrl: (d['thumbUrl'] as String?) ?? '',
       smallUrl: (d['smallUrl'] as String?) ?? '',
       caption: d['caption'] as String?,
@@ -193,6 +230,9 @@ class StoryItem {
     return StoryItem(
       id: snap.id,
       ownerUid: (d['ownerUid'] as String?) ?? '',
+      // Stories are written only by the current publisher, which always sets
+      // this. Left defaulted deliberately: the gallery's eligibility rules are
+      // about `posts`, and a story is not a post.
       mediaType: (d['mediaType'] as String?) ?? MediaType.image,
       url: (d['url'] as String?) ?? '',
       thumbUrl: (d['thumbUrl'] as String?) ?? '',

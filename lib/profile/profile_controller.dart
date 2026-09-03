@@ -181,62 +181,197 @@ class ProfileController extends ChangeNotifier {
   /// server.
   bool get isOffline => _identityState.isFromCache;
 
-  final List<StreamSubscription<Object?>> _subs =
-      <StreamSubscription<Object?>>[];
+  /// Live subscriptions, by name, so a failed one can be REPLACED rather than
+  /// added to. A retry that appended would leave the dead subscription in the
+  /// list and, after a few retries, deliver every snapshot several times over.
+  final Map<String, StreamSubscription<Object?>> _subs =
+      <String, StreamSubscription<Object?>>{};
+
+  /// How to (re-)establish each subscription, for [retryGrid] and [onResumed].
+  final Map<String, StreamSubscription<Object?> Function()> _binders =
+      <String, StreamSubscription<Object?> Function()>{};
+
+  /// Names of subscriptions that ended in an error and have not been re-bound.
+  final Set<String> _failed = <String>{};
+
   bool _sawServerSnapshot = false;
+
+  static const String _kGrid = 'grid';
+  static const String _kProfile = 'profile';
+  static const String _kShowcase = 'showcase';
+  static const String _kStories = 'stories';
+  static const String _kPending = 'pending';
+  static const String _kPendingStories = 'pendingStories';
+  static const String _kPendingAvatar = 'pendingAvatar';
+
+  String? _gridError;
+
+  /// Set when the gallery listener FAILED - a rules change, a missing index, a
+  /// dropped stream.
+  ///
+  /// Deliberately not the same thing as having no content: [grid] still holds
+  /// whatever last arrived, so a refresh failure never blanks a gallery that is
+  /// already on screen, and "could not refresh" stays distinguishable from
+  /// "nothing shared yet".
+  String? get gridError => _gridError;
+
+  /// True when the gallery could not be refreshed.
+  bool get gridFailed => _gridError != null;
+
+  /// Re-establishes the gallery listener after a failure.
+  ///
+  /// User-triggered. There is no automatic retry timer on purpose: a listener
+  /// that fails because of a rules change or a missing index fails again
+  /// immediately, and a timer wrapped around that is a retry storm against
+  /// production. Reconnect and resume go through [onResumed] instead, which
+  /// are real signals rather than a guess.
+  void retryGrid() => _rebind(_kGrid);
+
+  /// Called when the app returns to the foreground, and when the server answers
+  /// again after a period offline.
+  ///
+  /// Re-binds only what actually failed, so an ordinary resume does not churn
+  /// healthy listeners.
+  void onResumed() {
+    if (_failed.isEmpty) return;
+    for (final String name in _failed.toList()) {
+      _rebind(name);
+    }
+  }
+
+  /// Subscribes under [name], remembering how, and replacing any existing
+  /// subscription of that name.
+  void _bind(String name, StreamSubscription<Object?> Function() subscribe) {
+    _binders[name] = subscribe;
+    _rebind(name);
+  }
+
+  void _rebind(String name) {
+    final StreamSubscription<Object?> Function()? make = _binders[name];
+    if (make == null) return;
+    final StreamSubscription<Object?>? existing = _subs.remove(name);
+    if (existing != null) unawaited(existing.cancel());
+    _failed.remove(name);
+    if (name == _kGrid) _gridError = null;
+    _subs[name] = make();
+    notifyListeners();
+  }
+
+  /// The shared failure path for every listener.
+  ///
+  /// A Firestore stream that errors is finished - nothing more arrives on it -
+  /// so the subscription is dropped and the name recorded as re-bindable. What
+  /// is NOT done here matters as much: no cached list is cleared, no state is
+  /// reset, and nothing rethrows. Losing a refresh must never lose the content
+  /// the user is already looking at, and a gallery that cannot refresh must
+  /// never take the profile page down with it.
+  void _onStreamError(String name, Object error) {
+    _failed.add(name);
+    unawaited(_subs.remove(name)?.cancel());
+    if (name == _kGrid) {
+      _gridError = error.toString();
+    } else {
+      _lastError = error.toString();
+    }
+    notifyListeners();
+  }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+  /// Opens every listener the page needs.
+  ///
+  /// Every one of them registers an `onError`. Without one, a stream failure -
+  /// a rules change, a missing composite index, a dropped connection - escapes
+  /// to the zone as an unhandled error and the subscription simply stops: the
+  /// page keeps rendering, the gallery stays exactly as it was, and nothing
+  /// anywhere says it will never update again. A gallery in that state is
+  /// indistinguishable from a profile that has no media.
   void start() {
     _identityState = ProfileIdentity.empty(targetUid);
 
-    _subs.add(_profiles.watch(targetUid).listen((ProfileIdentity next) {
-      _identityState = next;
-      _loaded = true;
-      _syncEditors(next);
-      _onSnapshotConnectivity(fromCache: next.isFromCache);
-      notifyListeners();
-    }));
+    _bind(
+      _kProfile,
+      () => _profiles.watch(targetUid).listen(
+            (ProfileIdentity next) {
+              _identityState = next;
+              _loaded = true;
+              _syncEditors(next);
+              _onSnapshotConnectivity(fromCache: next.isFromCache);
+              notifyListeners();
+            },
+            onError: (Object e) => _onStreamError(_kProfile, e),
+          ),
+    );
 
-    _subs.add(_showcase.watchProofs(targetUid).listen(
-      (Map<String, ProofRecord> proofs) {
-        _showcaseView = ShowcaseView(
-          showcase: _identityState.showcase,
-          proofsByFingerprint: proofs,
-        );
-        notifyListeners();
-      },
-    ));
+    _bind(
+      _kShowcase,
+      () => _showcase.watchProofs(targetUid).listen(
+            (Map<String, ProofRecord> proofs) {
+              _showcaseView = ShowcaseView(
+                showcase: _identityState.showcase,
+                proofsByFingerprint: proofs,
+              );
+              notifyListeners();
+            },
+            onError: (Object e) => _onStreamError(_kShowcase, e),
+          ),
+    );
 
-    _subs
-        .add(_media.watchGrid(targetUid).listen((List<ProfileMediaItem> items) {
-      _published = items;
-      notifyListeners();
-    }));
+    _bind(
+      _kGrid,
+      () => _media.watchGrid(targetUid).listen(
+            (List<ProfileMediaItem> items) {
+              _published = items;
+              _gridError = null;
+              notifyListeners();
+            },
+            onError: (Object e) => _onStreamError(_kGrid, e),
+          ),
+    );
 
-    _subs.add(_stories
-        .watchLive(targetUid, clock: _now)
-        .listen((List<StoryItem> items) {
-      _liveStories = items;
-      _scheduleStoryExpiry();
-      notifyListeners();
-    }));
+    _bind(
+      _kStories,
+      () => _stories.watchLive(targetUid, clock: _now).listen(
+            (List<StoryItem> items) {
+              _liveStories = items;
+              _scheduleStoryExpiry();
+              notifyListeners();
+            },
+            onError: (Object e) => _onStreamError(_kStories, e),
+          ),
+    );
 
     if (isOwner) {
-      _subs.add(
-          _media.watchPending(targetUid).listen((List<ProfileMediaItem> items) {
-        _pending = items;
-        notifyListeners();
-      }));
-      _subs
-          .add(_stories.watchPending(targetUid).listen((List<StoryItem> items) {
-        _pendingStories = items;
-        notifyListeners();
-      }));
-      _subs.add(_media.watchPendingAvatarPath(targetUid).listen((String? path) {
-        _pendingAvatarPath = path;
-        notifyListeners();
-      }));
+      _bind(
+        _kPending,
+        () => _media.watchPending(targetUid).listen(
+              (List<ProfileMediaItem> items) {
+                _pending = items;
+                notifyListeners();
+              },
+              onError: (Object e) => _onStreamError(_kPending, e),
+            ),
+      );
+      _bind(
+        _kPendingStories,
+        () => _stories.watchPending(targetUid).listen(
+              (List<StoryItem> items) {
+                _pendingStories = items;
+                notifyListeners();
+              },
+              onError: (Object e) => _onStreamError(_kPendingStories, e),
+            ),
+      );
+      _bind(
+        _kPendingAvatar,
+        () => _media.watchPendingAvatarPath(targetUid).listen(
+              (String? path) {
+                _pendingAvatarPath = path;
+                notifyListeners();
+              },
+              onError: (Object e) => _onStreamError(_kPendingAvatar, e),
+            ),
+      );
       // App start / page open is one of the four moments the outbox drains.
       unawaited(processOutbox());
     }
@@ -261,6 +396,10 @@ class ProfileController extends ChangeNotifier {
     }
     if (!_sawServerSnapshot) {
       _sawServerSnapshot = true;
+      // The server answering is the reconnect signal: anything that died while
+      // the connection was down gets one attempt, now that there is something
+      // to attempt against.
+      onResumed();
       if (isOwner) unawaited(processOutbox());
     }
   }
@@ -461,10 +600,12 @@ class ProfileController extends ChangeNotifier {
   @override
   void dispose() {
     _storyExpiryTimer?.cancel();
-    for (final StreamSubscription<Object?> sub in _subs) {
+    for (final StreamSubscription<Object?> sub in _subs.values) {
       unawaited(sub.cancel());
     }
     _subs.clear();
+    _binders.clear();
+    _failed.clear();
     bioController.dispose();
     bioFocus.dispose();
     super.dispose();

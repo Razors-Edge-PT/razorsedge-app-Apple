@@ -130,6 +130,10 @@ class _ProfileScreenState extends State<ProfileScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // App resume is one of the four moments the outbox drains.
     if (state == AppLifecycleState.resumed) {
+      // A listener that died while the app was backgrounded — most often
+      // because the connection went with it — gets one attempt now. Only the
+      // ones that actually failed are re-bound.
+      _controller?.onResumed();
       unawaited(_controller?.processOutbox());
     }
   }
@@ -229,6 +233,12 @@ class _ProfileScreenState extends State<ProfileScreen>
               onOpen: (ProfileMediaItem i) => _openMedia(c, i),
               onRetry: (ProfileMediaItem i) => c.retryMedia(i.id),
               onDelete: (ProfileMediaItem i) => c.deleteMedia(i),
+              // A gallery that could not be refreshed says so instead of
+              // looking like a profile with nothing on it. Anything already
+              // loaded still renders — the failure state is only reached when
+              // there is nothing cached to show.
+              failed: c.gridFailed,
+              onRetryGallery: c.retryGrid,
             ),
             const SliverToBoxAdapter(
                 child: SizedBox(height: ProfileSpacing.xxl)),
@@ -531,6 +541,12 @@ class _ProfileScreenState extends State<ProfileScreen>
         title: c.displayName,
         mediaType: item.mediaType,
         url: url,
+        // Stable cache identity, so what the viewer reads and what the grid
+        // wrote are the same entry — and a rotated Storage token does not send
+        // it back to the network for bytes already on disk.
+        ownerUid: item.ownerUid,
+        mediaId: item.id,
+        storagePath: item.storagePath,
         localFilePath: item.pending ? item.localFilePath : null,
         caption: item.caption,
         badge:

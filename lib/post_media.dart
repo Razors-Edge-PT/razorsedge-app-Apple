@@ -26,8 +26,14 @@ import 'package:video_player/video_player.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 // Project-local
+import 'profile/core/media_identity.dart';
+import 'profile/core/media_timeouts.dart';
+import 'profile/core/media_models.dart';
 import 'profile/data/media_deletion.dart';
+import 'profile/data/media_video_source.dart';
+import 'profile/ui/cached_network_image.dart';
 import 'profile/ui/live_identity.dart';
+import 'profile/ui/media_detail_page.dart';
 
 // Local storage / utils
 
@@ -223,39 +229,7 @@ class PostDetailPage extends StatelessWidget {
           ]),
       body: Column(
         children: [
-          Expanded(
-            child: (post.mediaType == 'image')
-                ? FutureBuilder<File>(
-                    future: DefaultCacheManager().getSingleFile(post.smallUrl),
-                    builder: (ctx, snap) {
-                      if (snap.connectionState == ConnectionState.done &&
-                          snap.hasData) {
-                        return Center(
-                            child: Image.file(snap.data!, fit: BoxFit.contain));
-                      }
-                      return const Center(child: CircularProgressIndicator());
-                    },
-                  )
-                : FutureBuilder<String>(
-                    future: post.storagePathOriginal.isNotEmpty
-                        ? FirebaseStorage.instance
-                            .ref(post.storagePathOriginal)
-                            .getDownloadURL()
-                        : Future<String>.value(''),
-                    builder: (ctx, snap) {
-                      if (snap.connectionState != ConnectionState.done) {
-                        return const Center(child: CircularProgressIndicator());
-                      }
-                      final url = (snap.data ?? '').trim();
-                      if (url.isEmpty) {
-                        return const Center(
-                            child: Text('Video unavailable',
-                                style: TextStyle(color: Colors.white70)));
-                      }
-                      return _InAppVideoPlayer.networkUrl(url: url);
-                    },
-                  ),
-          ),
+          Expanded(child: _PostMediaView(post: post)),
 
 // --- Caption row (optional) ---
           if ((post.caption ?? '').isNotEmpty)
@@ -295,6 +269,232 @@ class PostDetailPage extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The media half of [PostDetailPage].
+///
+/// Replaces two FutureBuilders that between them produced the two worst
+/// failures this screen had:
+///
+///   * the IMAGE branch drew a spinner for every state that was not
+///     `done && hasData`. An error, a missing Storage object, an empty
+///     `smallUrl`, a 404 or an offline cache miss all landed in that same
+///     branch, so the page spun for as long as it stayed open and there was
+///     nothing to tap.
+///   * the VIDEO branch called `getDownloadURL()` on every open. The post
+///     document already carries the playable URL, so that round trip bought
+///     nothing — and it failed outright offline, which is exactly when a clip
+///     already cached on the device should still play.
+///
+/// Every state now resolves: media, a bounded wait, or a stated failure with a
+/// retry that starts a genuinely fresh attempt.
+class _PostMediaView extends StatefulWidget {
+  const _PostMediaView({required this.post, this.resolver});
+
+  final Post post;
+  final VideoSourceResolver? resolver;
+
+  @override
+  State<_PostMediaView> createState() => _PostMediaViewState();
+}
+
+class _PostMediaViewState extends State<_PostMediaView> {
+  static const TextStyle _text = TextStyle(color: Colors.white70);
+
+  VideoSourceResolver? _ownResolver;
+  VideoSourceResolver get _resolver =>
+      widget.resolver ?? (_ownResolver ??= VideoSourceResolver());
+
+  Post get _post => widget.post;
+
+  String _cacheKey(String variant, String url) => profileMediaCacheKey(
+        ownerUid: _post.ownerUid,
+        variant: variant,
+        storagePath: _post.storagePathOriginal,
+        mediaId: _post.id,
+        url: url,
+      );
+
+  // ── Video ──────────────────────────────────────────────────────────────────
+
+  VideoPlayerController? _video;
+  bool _ready = false;
+  MediaLoadFailure? _failure;
+  int _attempt = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_post.mediaType == MediaType.video) unawaited(_openVideo());
+  }
+
+  @override
+  void dispose() {
+    _attempt++; // Nothing in flight may touch state after this point.
+    _video?.dispose();
+    super.dispose();
+  }
+
+  bool _current(int attempt) => mounted && attempt == _attempt;
+
+  Future<void> _openVideo() async {
+    final int attempt = ++_attempt;
+    final VideoPlayerController? previous = _video;
+    _video = null;
+    unawaited(previous?.dispose().catchError((Object _) {}));
+    if (mounted) {
+      setState(() {
+        _ready = false;
+        _failure = null;
+      });
+    }
+
+    // The stored URL first. Storage is asked for one only when the document
+    // has none, which is the only case where the round trip buys anything.
+    String source = _post.smallUrl.trim();
+    if (source.isEmpty && _post.storagePathOriginal.isNotEmpty) {
+      try {
+        source = (await FirebaseStorage.instance
+                .ref(_post.storagePathOriginal)
+                .getDownloadURL())
+            .trim();
+      } catch (e) {
+        if (!_current(attempt)) return;
+        setState(() => _failure = isConnectivityFailure(e)
+            ? MediaLoadFailure.offline
+            : MediaLoadFailure.unavailable);
+        return;
+      }
+    }
+    if (!_current(attempt)) return;
+
+    final String key = _cacheKey(MediaVariant.original, source);
+    final VideoSource resolved =
+        await _resolver.resolve(url: source, cacheKey: key);
+    if (!_current(attempt)) return;
+
+    if (!resolved.isPlayable) {
+      setState(
+          () => _failure = resolved.failure ?? MediaLoadFailure.unavailable);
+      return;
+    }
+
+    final VideoPlayerController c = resolved.file != null
+        ? VideoPlayerController.file(resolved.file!)
+        : VideoPlayerController.networkUrl(Uri.parse(resolved.url!));
+    _video = c;
+    try {
+      await c.initialize().timeout(kVideoInitTimeout);
+      await c.setLooping(true);
+      await c.play();
+      if (!_current(attempt)) return;
+      setState(() => _ready = true);
+    } on TimeoutException {
+      if (!_current(attempt)) return;
+      setState(() => _failure = MediaLoadFailure.timedOut);
+      return;
+    } catch (e) {
+      if (!_current(attempt)) return;
+      setState(() => _failure = isConnectivityFailure(e)
+          ? MediaLoadFailure.offline
+          : MediaLoadFailure.unavailable);
+      return;
+    }
+
+    final String? fill = resolved.fillFromUrl;
+    if (fill != null && resolved.file == null) {
+      unawaited(_resolver.fill(url: fill, cacheKey: key));
+    }
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    // Not defaulted to image. A post whose `mediaType` is missing or unknown
+    // is a record this build cannot render, and pushing it into the image
+    // decoder is how a video became a broken still.
+    if (!isSupportedMediaType(_post.mediaType)) {
+      return const Center(
+        child: MediaFailureView(
+          failure: MediaLoadFailure.unusableSource,
+          isVideo: false,
+          textStyle: _text,
+        ),
+      );
+    }
+    return Center(
+      child: _post.mediaType == MediaType.video ? _videoBody() : _imageBody(),
+    );
+  }
+
+  Widget _imageBody() {
+    final String url = _post.smallUrl.trim().isNotEmpty
+        ? _post.smallUrl.trim()
+        : _post.thumbUrl.trim();
+    if (url.isEmpty) {
+      return const MediaFailureView(
+        failure: MediaLoadFailure.unusableSource,
+        isVideo: false,
+        textStyle: _text,
+      );
+    }
+    return CachedProfileImage(
+      url: url,
+      cacheKey: _cacheKey(MediaVariant.small, url),
+      fit: BoxFit.contain,
+      placeholder: const CircularProgressIndicator(),
+      errorBuilder: (
+        BuildContext context,
+        MediaLoadFailure failure,
+        VoidCallback retry,
+      ) =>
+          MediaFailureView(
+        failure: failure,
+        isVideo: false,
+        onRetry: retry,
+        textStyle: _text,
+      ),
+    );
+  }
+
+  Widget _videoBody() {
+    final MediaLoadFailure? failure = _failure;
+    if (failure != null) {
+      return MediaFailureView(
+        failure: failure,
+        isVideo: true,
+        textStyle: _text,
+        onRetry:
+            failure == MediaLoadFailure.unusableSource ? null : _openVideo,
+      );
+    }
+    final VideoPlayerController? c = _video;
+    if (c == null || !_ready) {
+      return const CircularProgressIndicator();
+    }
+    return Container(
+      color: Colors.black,
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          AspectRatio(
+            aspectRatio:
+                c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio,
+            child: VideoPlayer(c),
+          ),
+          GestureDetector(
+            onTap: () =>
+                setState(() => c.value.isPlaying ? c.pause() : c.play()),
+            child: Container(color: Colors.transparent),
+          ),
+          if (!c.value.isPlaying)
+            const Icon(Icons.play_circle_fill_rounded,
+                size: 64, color: Colors.white70),
+        ],
       ),
     );
   }
@@ -560,77 +760,6 @@ class _CommentsListState extends State<_CommentsList> {
           },
         );
       },
-    );
-  }
-}
-
-class _InAppVideoPlayer extends StatefulWidget {
-  final String source;
-  final bool isNetwork;
-
-  // The old profile page also played local files here; the rebuilt page
-  // stages local media through the outbox and previews it with Image.file /
-  // its own player, so only the network constructor is still used.
-  const _InAppVideoPlayer.networkUrl({required String url})
-      : source = url,
-        isNetwork = true;
-
-  @override
-  State<_InAppVideoPlayer> createState() => _InAppVideoPlayerState();
-}
-
-class _InAppVideoPlayerState extends State<_InAppVideoPlayer> {
-  late VideoPlayerController _controller;
-  bool _ready = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = widget.isNetwork
-        ? VideoPlayerController.networkUrl(Uri.parse(widget.source))
-        : VideoPlayerController.file(File(widget.source));
-
-    _controller.initialize().then((_) {
-      setState(() => _ready = true);
-      _controller.play();
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Container(
-        color: Colors.black,
-        child: Center(
-          child: _ready
-              ? AspectRatio(
-                  aspectRatio: _controller.value.aspectRatio,
-                  child: VideoPlayer(_controller),
-                )
-              : const CircularProgressIndicator(),
-        ),
-      ),
-      floatingActionButton: _ready
-          ? FloatingActionButton(
-              onPressed: () {
-                setState(() {
-                  _controller.value.isPlaying
-                      ? _controller.pause()
-                      : _controller.play();
-                });
-              },
-              child: Icon(
-                _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-              ),
-            )
-          : null,
     );
   }
 }

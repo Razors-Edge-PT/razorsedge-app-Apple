@@ -231,19 +231,30 @@ class _FakeStore implements ProfileImageStore {
 
   int downloads = 0;
 
+  /// Records the keys the widget asked for, so a test can assert that identity
+  /// is what the caller chose rather than whatever the URL happened to be.
+  final List<String> requestedKeys = <String>[];
+
   @override
-  Future<File?> cached(String url) async {
-    final File f = _store.fileFor(url);
+  Future<File?> cached(String url, {String? key}) async {
+    requestedKeys.add(key ?? url);
+    final File f = _store.fileFor(key ?? url);
     return f.existsSync() ? f : null;
   }
 
   @override
-  Future<File> download(String url) async {
+  Future<File> download(String url, {String? key}) async {
     if (!online) throw const SocketException('No connection');
     downloads++;
-    final File f = _store.fileFor(url);
+    final File f = _store.fileFor(key ?? url);
     await f.writeAsBytes(_onePixelJpeg);
     return f;
+  }
+
+  @override
+  Future<void> evict(String key) async {
+    final File f = _store.fileFor(key);
+    if (f.existsSync()) await f.delete();
   }
 }
 

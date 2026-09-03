@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../core/media_identity.dart';
 import '../core/media_models.dart';
 import '../core/media_urls.dart';
 import 'cached_network_image.dart';
@@ -23,6 +24,8 @@ class MediaGrid extends StatelessWidget {
     required this.onOpen,
     required this.onRetry,
     required this.onDelete,
+    this.failed = false,
+    this.onRetryGallery,
   });
 
   final List<ProfileMediaItem> items;
@@ -30,6 +33,16 @@ class MediaGrid extends StatelessWidget {
   final void Function(ProfileMediaItem item) onOpen;
   final void Function(ProfileMediaItem item) onRetry;
   final void Function(ProfileMediaItem item) onDelete;
+
+  /// True when the gallery listener FAILED, as opposed to answering with
+  /// nothing. The two look identical without this and they mean opposite
+  /// things: one is a profile with no media yet, the other is media that exists
+  /// and could not be read.
+  final bool failed;
+
+  /// Re-establishes the gallery listener. Non-blocking: whatever was already
+  /// loaded stays on screen above it.
+  final VoidCallback? onRetryGallery;
 
   @override
   Widget build(BuildContext context) {
@@ -41,14 +54,16 @@ class MediaGrid extends StatelessWidget {
             vertical: ProfileSpacing.xxl,
           ),
           child: Center(
-            child: Text(
-              isOwner
-                  ? 'Add a photo or video from your training.'
-                  : 'Nothing shared yet.',
-              style: ProfileText.recordDetail(context)
-                  .copyWith(color: ProfilePalette.textMuted),
-              textAlign: TextAlign.center,
-            ),
+            child: failed
+                ? _GalleryError(onRetry: onRetryGallery)
+                : Text(
+                    isOwner
+                        ? 'Add a photo or video from your training.'
+                        : 'Nothing shared yet.',
+                    style: ProfileText.recordDetail(context)
+                        .copyWith(color: ProfilePalette.textMuted),
+                    textAlign: TextAlign.center,
+                  ),
           ),
         ),
       );
@@ -182,6 +197,13 @@ class _Thumbnail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A record whose `mediaType` is missing or unknown is not an image with a
+    // broken URL — it is a record this build cannot render. Saying so is what
+    // keeps a video out of the image decoder, and it isolates the malformed
+    // record: this tile shows a placeholder, every neighbouring tile renders
+    // exactly as it did.
+    if (!item.isSupported) return const _UnsupportedMediaPlaceholder();
+
     // A pending item has no remote URL yet, so the locally generated thumbnail
     // is what the owner sees — instantly, and without a network round trip.
     final String? local = item.localThumbPath ?? item.localFilePath;
@@ -194,17 +216,24 @@ class _Thumbnail extends StatelessWidget {
     // decoder is a broken-image icon, not a poster frame. `smallUrl` is the
     // playable media, so for a video it is never a fallback thumbnail either —
     // an honest video placeholder is better than a broken one.
+    final bool usesPoster = item.isVideo || item.thumbUrl.isNotEmpty;
     final String? url = item.isVideo
         ? safeThumbnailUrl(item.thumbUrl)
-        : safeThumbnailUrl(
-            item.thumbUrl.isNotEmpty ? item.thumbUrl : item.smallUrl,
-          );
+        : safeThumbnailUrl(usesPoster ? item.thumbUrl : item.smallUrl);
     if (url == null) return _MediaPlaceholder(isVideo: item.isVideo);
 
     // Disk-persisted, so a previously seen tile still renders after the app is
-    // killed and reopened with no connection.
+    // killed and reopened with no connection. Keyed by the item's stable
+    // identity rather than the URL, so a rotated Storage token does not orphan
+    // the entry and re-download bytes that are already on disk.
+    //
+    // No error affordance on a tile on purpose: a quiet placeholder is right
+    // for a dense three-column grid, and the retry that matters lives on the
+    // detail page the tile opens.
     return CachedProfileImage(
       url: url,
+      cacheKey:
+          item.cacheKey(usesPoster ? MediaVariant.thumb : MediaVariant.small),
       fit: BoxFit.cover,
       placeholder: const ColoredBox(color: ProfilePalette.surface),
       fallback: _MediaPlaceholder(isVideo: item.isVideo),
@@ -259,4 +288,52 @@ class _ProofBadge extends StatelessWidget {
           size: 13, color: ProfilePalette.accent),
     );
   }
+}
+
+/// Drawn for a record whose media type the app does not recognise.
+///
+/// Deliberately distinct from [_MediaPlaceholder]: "we could not fetch this
+/// picture" and "this record is not media we can render" are different
+/// problems, and a support conversation goes better when the screen says which.
+class _UnsupportedMediaPlaceholder extends StatelessWidget {
+  const _UnsupportedMediaPlaceholder();
+
+  @override
+  Widget build(BuildContext context) => const ColoredBox(
+        color: ProfilePalette.surface,
+        child: Center(
+          child: Icon(
+            Icons.help_outline_rounded,
+            size: 20,
+            color: ProfilePalette.textMuted,
+          ),
+        ),
+      );
+}
+
+/// Shown in place of the empty-gallery message when the listener FAILED.
+class _GalleryError extends StatelessWidget {
+  const _GalleryError({this.onRetry});
+
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            'Your gallery could not be loaded.',
+            style: ProfileText.recordDetail(context)
+                .copyWith(color: ProfilePalette.textMuted),
+            textAlign: TextAlign.center,
+          ),
+          if (onRetry != null) ...<Widget>[
+            const SizedBox(height: ProfileSpacing.sm),
+            TextButton(
+              onPressed: onRetry,
+              child: Text('Try again', style: ProfileText.button(context)),
+            ),
+          ],
+        ],
+      );
 }
