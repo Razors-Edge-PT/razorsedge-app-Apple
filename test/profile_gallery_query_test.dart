@@ -46,7 +46,7 @@ void main() {
         'ownerUid': owner,
         'mediaType': mediaType,
         if (type != null) 'type': type,
-        if (showInGrid != null) 'showInGrid': showInGrid,
+        'showInGrid': showInGrid ?? true,
         'smallUrl': 'https://example.invalid/$id.jpg',
         'thumbUrl': 'https://example.invalid/$id-thumb.jpg',
         'storagePathOriginal': 'users/$owner/posts/$id/original.jpg',
@@ -97,6 +97,45 @@ void main() {
       expect(grid, hasLength(1));
     });
 
+    test('more than 60 newer HIDDEN documents cannot hide older real media',
+        () async {
+      // The sharper form of the same defect. These carry a valid mediaType, so
+      // filtering on type alone does not stop them: only `showInGrid == true`
+      // in the query keeps them from spending the 60-document window before
+      // eligibility is ever considered.
+      await seedMedia('realPhoto', createdAt: DateTime(2025, 1, 1));
+      for (int i = 0; i < 75; i++) {
+        await seedMedia(
+          'hidden$i',
+          mediaType: i.isEven ? MediaType.image : MediaType.video,
+          showInGrid: false,
+          createdAt: DateTime(2026, 1, 1).add(Duration(days: i)),
+        );
+      }
+
+      final List<ProfileMediaItem> grid = await media.watchGrid(owner).first;
+
+      expect(grid.map((ProfileMediaItem i) => i.id), <String>['realPhoto']);
+    });
+
+    test('a mixed flood of hidden and non-media records still cannot bury it',
+        () async {
+      await seedMedia('realPhoto', createdAt: DateTime(2025, 1, 1));
+      for (int i = 0; i < 40; i++) {
+        await seedMedia(
+          'hidden$i',
+          showInGrid: false,
+          createdAt: DateTime(2026, 1, 1).add(Duration(days: i)),
+        );
+        await seedReDaily(
+            'daily$i', DateTime(2026, 6, 1).add(Duration(days: i)));
+      }
+
+      final List<ProfileMediaItem> grid = await media.watchGrid(owner).first;
+
+      expect(grid.map((ProfileMediaItem i) => i.id), <String>['realPhoto']);
+    });
+
     test('a record with no mediaType at all is excluded', () async {
       await db.collection('posts').doc('shapeless').set(<String, Object?>{
         'ownerUid': owner,
@@ -112,16 +151,35 @@ void main() {
   });
 
   group('genuine media is never excluded', () {
-    test('a pre-1.7.13 post with no showInGrid still appears', () async {
-      // This is why the server-side clause is mediaType and not showInGrid:
-      // showInGrid did not exist before 1.7.13, and every post written before
-      // then would vanish from its owner gallery.
+    test('a pre-1.7.13 post with no showInGrid is deliberately absent',
+        () async {
+      // Gallery eligibility is decided by the SERVER now, before the
+      // limit is spent, and `showInGrid` is the field that decides it.
+      // Posts written before 1.7.13 carry no such field, so they are
+      // deliberately absent: the alternative was leaving the clause on the
+      // client, where sixty hidden or non-media documents swallow the whole
+      // 60-document window and bury genuine media. Correctness of the
+      // current system wins. Nothing is migrated to compensate.
       await db.collection('posts').doc('legacy').set(<String, Object?>{
         'ownerUid': owner,
         'type': PostKind.upload,
         'mediaType': MediaType.image,
         'smallUrl': 'https://example.invalid/legacy.jpg',
         'thumbUrl': 'https://example.invalid/legacy.jpg',
+        'createdAt': Timestamp.fromDate(DateTime(2024, 5, 1)),
+      });
+      expect(await media.watchGrid(owner).first, isEmpty);
+    });
+
+    test('the same post appears the moment it carries showInGrid', () async {
+      // The exclusion is about the FIELD, not about the age of the document -
+      // there is no separate legacy code path, and nothing is special-cased.
+      await db.collection('posts').doc('legacy').set(<String, Object?>{
+        'ownerUid': owner,
+        'type': PostKind.upload,
+        'mediaType': MediaType.image,
+        'showInGrid': true,
+        'smallUrl': 'https://example.invalid/legacy.jpg',
         'createdAt': Timestamp.fromDate(DateTime(2024, 5, 1)),
       });
       expect(
@@ -171,6 +229,7 @@ void main() {
       await db.collection('posts').doc('theirs').set(<String, Object?>{
         'ownerUid': 'someoneElse',
         'mediaType': MediaType.image,
+        'showInGrid': true,
         'createdAt': Timestamp.now(),
       });
       expect(

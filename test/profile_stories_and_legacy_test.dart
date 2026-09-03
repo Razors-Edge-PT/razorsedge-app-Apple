@@ -191,19 +191,41 @@ void main() {
     });
   });
 
-  group('existing posts stay compatible', () {
+  group('gallery eligibility, and what still reads as it did', () {
     late MediaRepository media;
 
     setUp(() {
       media = MediaRepository(firestore: db, outbox: outbox);
     });
 
-    test('a legacy post with no type and no showInGrid still appears',
+    test('a post with no showInGrid is deliberately out of the gallery',
         () async {
+      // Gallery eligibility is decided by the SERVER now, ahead of the limit,
+      // and `showInGrid` is the field that decides it. Posts written before
+      // 1.7.13 carry no such field and are therefore absent. The alternative
+      // was leaving the clause on the client, where sixty hidden or non-media
+      // documents swallow the whole 60-document window and bury genuine media
+      // - see MediaRepository.watchGrid. Nothing is migrated to compensate.
       await db.collection('posts').doc('legacy').set(<String, Object?>{
         'ownerUid': owner,
         'mediaType': 'image',
         'storagePathOriginal': 'users/$owner/posts/legacy/original.jpg',
+        'smallUrl': 'https://example.invalid/small.jpg',
+        'createdAt': Timestamp.fromDate(DateTime(2024, 6, 1)),
+      });
+
+      expect(await media.watchGrid(owner).first, isEmpty);
+    });
+
+    test('an eligible post is still read field-for-field, as it always was',
+        () async {
+      // Nothing about the CONTENT model narrowed: captions, counters, storage
+      // paths and an absent `type` all still read exactly as before.
+      await db.collection('posts').doc('post1').set(<String, Object?>{
+        'ownerUid': owner,
+        'mediaType': 'image',
+        'showInGrid': true,
+        'storagePathOriginal': 'users/$owner/posts/post1/original.jpg',
         'smallUrl': 'https://example.invalid/small.jpg',
         'thumbUrl': 'https://example.invalid/thumb.jpg',
         'caption': 'An old caption',
@@ -218,13 +240,12 @@ void main() {
       final ProfileMediaItem item = grid.single;
       expect(item.kind, PostKind.upload);
       expect(item.showInGrid, isTrue);
-      // Everything the old page displayed is still read.
       expect(item.caption, 'An old caption');
       expect(item.likeCount, 3);
       expect(item.goodLiftCount, 2);
       expect(item.commentCount, 5);
       expect(item.smallUrl, 'https://example.invalid/small.jpg');
-      expect(item.storagePath, 'users/$owner/posts/legacy/original.jpg');
+      expect(item.storagePath, 'users/$owner/posts/post1/original.jpg');
     });
 
     test('an RE Daily record is not gallery media and never takes a slot',
@@ -246,6 +267,7 @@ void main() {
       await db.collection('posts').doc('realPhoto').set(<String, Object?>{
         'ownerUid': owner,
         'mediaType': 'image',
+        'showInGrid': true,
         'smallUrl': 'https://example.invalid/real.jpg',
         'createdAt': Timestamp.fromDate(DateTime(2024, 1, 1)),
       });
@@ -255,10 +277,11 @@ void main() {
       expect(grid.map((ProfileMediaItem i) => i.id), <String>['realPhoto']);
     });
 
-    test('a legacy video post is recognised as a video', () async {
+    test('a video post with no type is recognised as a video', () async {
       await db.collection('posts').doc('vid').set(<String, Object?>{
         'ownerUid': owner,
         'mediaType': 'video',
+        'showInGrid': true,
         'createdAt': Timestamp.now(),
       });
       expect((await media.watchGrid(owner).first).single.isVideo, isTrue);
@@ -268,11 +291,13 @@ void main() {
       await db.collection('posts').doc('mine').set(<String, Object?>{
         'ownerUid': owner,
         'mediaType': 'image',
+        'showInGrid': true,
         'createdAt': Timestamp.now(),
       });
       await db.collection('posts').doc('theirs').set(<String, Object?>{
         'ownerUid': 'someoneElse',
         'mediaType': 'image',
+        'showInGrid': true,
         'createdAt': Timestamp.now(),
       });
       expect(

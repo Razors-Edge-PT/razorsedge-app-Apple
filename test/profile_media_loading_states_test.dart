@@ -20,6 +20,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/profile/core/media_models.dart';
+import 'package:localtest222/profile/data/media_url_refresh.dart';
 import 'package:localtest222/profile/ui/cached_network_image.dart';
 import 'package:localtest222/profile/ui/media_detail_page.dart';
 import 'package:localtest222/profile/ui/media_grid.dart';
@@ -42,9 +43,12 @@ class _ScriptedStore implements ProfileImageStore {
     return handler == null ? null : handler(key ?? url);
   }
 
+  final List<String> downloadUrls = <String>[];
+
   @override
   Future<File> download(String url, {String? key}) {
     downloadKeys.add(key ?? url);
+    downloadUrls.add(url);
     final Future<File> Function(String)? handler = onDownload;
     if (handler == null) throw StateError('no download scripted');
     return handler(key ?? url);
@@ -312,6 +316,149 @@ void main() {
     });
   });
 
+
+  group('a revoked access token is recovered from, once', () {
+    // A Firebase download URL embeds an access token that can be REVOKED. The
+    // object is still there and the user is still allowed to see it; the URL
+    // stored in the post document just no longer opens it. Asking Storage for
+    // a fresh one is the honest response - bounded to a single attempt, and
+    // without disturbing the cache entry the bytes belong to.
+    const String storagePath = 'users/athlete1/posts/m1/original.jpg';
+    const String stableKey = 'glmedia|athlete1|small|$storagePath';
+
+    testWidgets('a 403 is retried once with a fresh URL, under the SAME key',
+        (WidgetTester t) async {
+      final _ScriptedStore store = _ScriptedStore(
+        onCached: (_) async => null,
+        onDownload: (_) => throw const _HttpStatus(403),
+      );
+      // The second attempt succeeds; scripted after construction so the first
+      // failure is unambiguous.
+      int attempts = 0;
+      store.onDownload = (_) async {
+        attempts++;
+        if (attempts == 1) throw const _HttpStatus(403);
+        return writeJpeg('refreshed.jpg');
+      };
+
+      await t.pumpWidget(_wrap(CachedProfileImage(
+        url: '$url?alt=media&token=revoked',
+        cacheKey: stableKey,
+        storagePath: storagePath,
+        urlRefresher:
+            StorageUrlRefresher(lookup: (_) async => '$url?alt=media&token=new'),
+        store: store,
+        errorBuilder: (BuildContext c, MediaLoadFailure f, VoidCallback retry) =>
+            MediaFailureView(failure: f, isVideo: false, onRetry: retry),
+      )));
+      await t.pumpAndSettle();
+
+      expect(attempts, 2, reason: 'exactly one retry');
+      expect(store.downloadUrls.last, contains('token=new'));
+      expect(store.downloadKeys, <String>[stableKey, stableKey],
+          reason: 'a refreshed URL is the same media, so the same cache entry');
+      expect(find.byType(Image), findsOneWidget);
+    });
+
+    testWidgets('a 404 is NOT retried - the object is genuinely gone',
+        (WidgetTester t) async {
+      int lookups = 0;
+      final _ScriptedStore store = _ScriptedStore(
+        onCached: (_) async => null,
+        onDownload: (_) => throw const _HttpStatus(404),
+      );
+
+      await t.pumpWidget(_wrap(CachedProfileImage(
+        url: url,
+        cacheKey: stableKey,
+        storagePath: storagePath,
+        urlRefresher: StorageUrlRefresher(lookup: (_) async {
+          lookups++;
+          return '$url?token=new';
+        }),
+        store: store,
+        errorBuilder: (BuildContext c, MediaLoadFailure f, VoidCallback retry) =>
+            MediaFailureView(failure: f, isVideo: false, onRetry: retry),
+      )));
+      await t.pumpAndSettle();
+
+      expect(lookups, 0, reason: 'no Storage call is spent on a missing object');
+      expect(store.downloadKeys, hasLength(1));
+      expect(find.textContaining('could not be loaded'), findsOneWidget);
+    });
+
+    testWidgets('a refreshed URL that also fails reaches a clear error state',
+        (WidgetTester t) async {
+      int attempts = 0;
+      final _ScriptedStore store = _ScriptedStore(onCached: (_) async => null);
+      store.onDownload = (_) async {
+        attempts++;
+        throw const _HttpStatus(403);
+      };
+
+      await t.pumpWidget(_wrap(CachedProfileImage(
+        url: url,
+        cacheKey: stableKey,
+        storagePath: storagePath,
+        urlRefresher: StorageUrlRefresher(lookup: (_) async => '$url?token=new'),
+        store: store,
+        errorBuilder: (BuildContext c, MediaLoadFailure f, VoidCallback retry) =>
+            MediaFailureView(failure: f, isVideo: false, onRetry: retry),
+      )));
+      await t.pumpAndSettle();
+
+      expect(attempts, 2, reason: 'two attempts and no more: never a loop');
+      expect(find.textContaining('could not be loaded'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets('with no storagePath there is nothing to refresh from',
+        (WidgetTester t) async {
+      int attempts = 0;
+      final _ScriptedStore store = _ScriptedStore(onCached: (_) async => null);
+      store.onDownload = (_) async {
+        attempts++;
+        throw const _HttpStatus(403);
+      };
+
+      await t.pumpWidget(_wrap(CachedProfileImage(
+        url: url,
+        cacheKey: stableKey,
+        store: store,
+        errorBuilder: (BuildContext c, MediaLoadFailure f, VoidCallback retry) =>
+            MediaFailureView(failure: f, isVideo: false, onRetry: retry),
+      )));
+      await t.pumpAndSettle();
+
+      expect(attempts, 1);
+      expect(find.textContaining('could not be loaded'), findsOneWidget);
+    });
+
+    testWidgets('a cached copy is served without any refresh at all',
+        (WidgetTester t) async {
+      int lookups = 0;
+      final _ScriptedStore store =
+          _ScriptedStore(onCached: (_) async => writeJpeg('cached.jpg'));
+
+      await t.pumpWidget(_wrap(CachedProfileImage(
+        url: '$url?alt=media&token=long-since-revoked',
+        cacheKey: stableKey,
+        storagePath: storagePath,
+        urlRefresher: StorageUrlRefresher(lookup: (_) async {
+          lookups++;
+          return 'x';
+        }),
+        store: store,
+      )));
+      await t.pumpAndSettle();
+
+      expect(store.downloadKeys, isEmpty);
+      expect(lookups, 0,
+          reason: 'token rotation is irrelevant to bytes already on disk');
+      expect(find.byType(Image), findsOneWidget);
+    });
+  });
+
   group('the gallery grid', () {
     ProfileMediaItem item({
       required String id,
@@ -425,3 +572,11 @@ final Uint8List _onePixelJpeg = Uint8List.fromList(<int>[
   0x10, 0x05, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
   0xD2, 0xCF, 0x20, 0xFF, 0xD9,
 ]);
+
+/// Models flutter_cache_manager's HttpExceptionWithStatus without importing it.
+class _HttpStatus implements Exception {
+  const _HttpStatus(this.statusCode);
+  final int statusCode;
+  @override
+  String toString() => 'HttpException: Invalid statusCode: $statusCode';
+}

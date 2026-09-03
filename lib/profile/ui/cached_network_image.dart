@@ -37,10 +37,14 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../core/media_identity.dart';
 import '../core/media_timeouts.dart';
 import '../core/media_urls.dart';
+import '../data/media_cache_sweeper.dart';
+import '../data/media_url_refresh.dart';
 
 /// The disk store profile media is persisted in, with an EXPLICIT eviction
 /// policy rather than an inherited one.
@@ -52,15 +56,22 @@ import '../core/media_urls.dart';
 ///
 /// The policy, stated once so it can be reasoned about:
 ///
-///   * at most [kMaxCachedObjects] objects, evicted least-recently-used first;
-///   * an object untouched for [kStalePeriod] is dropped;
-///   * eviction is by COUNT, not by byte budget — that is what the package
-///     offers — so the ceiling is deliberately modest given a cached video is
-///     far larger than a thumbnail.
+///   * at most [ProfileMediaCacheSweeper.kDefaultCeilingBytes] on disk — the
+///     bound that actually matters, and the only one of the three that is
+///     stated in bytes;
+///   * at most [kMaxCachedObjects] objects;
+///   * an object untouched for [kStalePeriod] is dropped.
+///
+/// The byte ceiling is enforced by [ProfileMediaCacheSweeper], not by the
+/// package. `flutter_cache_manager` bounds a store by age and object COUNT
+/// only, and a count is not a bound when the objects are videos: 600 entries is
+/// a few megabytes of thumbnails or tens of gigabytes of clips, and the
+/// configuration cannot tell the difference.
 ///
 /// A separate store from `DefaultCacheManager` on purpose: the feed and the
 /// post detail page share that one, and profile media should not be able to
-/// evict their entries or be evicted by them.
+/// evict their entries or be evicted by them. It is also what makes a
+/// directory-level sweep safe — nothing else writes into this folder.
 class ProfileMediaCache {
   ProfileMediaCache._();
 
@@ -79,6 +90,41 @@ class ProfileMediaCache {
           maxNrOfCacheObjects: kMaxCachedObjects,
         ),
       );
+
+  /// The store's directory, or null when it cannot be resolved.
+  ///
+  /// Never throws: under the test binding path_provider has no implementation,
+  /// and a sweep that cannot find the directory simply does nothing.
+  static Future<Directory?> resolveDirectory() async {
+    try {
+      final Directory base = await getTemporaryDirectory();
+      final Directory dir = Directory(p.join(base.path, kCacheKey));
+      return dir.existsSync() ? dir : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static ProfileMediaCacheSweeper? _sweeper;
+
+  /// The sweeper that keeps this store under its byte ceiling.
+  static ProfileMediaCacheSweeper get sweeper => _sweeper ??=
+      ProfileMediaCacheSweeper(volume: DirectoryCacheVolume(resolveDirectory));
+
+  /// Replaces the sweeper. For tests.
+  static set sweeper(ProfileMediaCacheSweeper value) => _sweeper = value;
+
+  /// Starts a throttled sweep and returns immediately.
+  ///
+  /// Called AFTER media is already on screen, never before, and its result is
+  /// never awaited by anything the user is waiting on. A cache that cannot be
+  /// tidied is a disk-space problem; it is never a reason for a photo not to
+  /// appear or a clip not to play.
+  static void tidyInBackground() {
+    unawaited(
+      sweeper.maybeSweep().catchError((Object _) => null),
+    );
+  }
 }
 
 /// The operations the profile needs from a persistent media store.
@@ -191,6 +237,8 @@ class CachedProfileImage extends StatefulWidget {
     super.key,
     required this.url,
     this.cacheKey,
+    this.storagePath = '',
+    this.urlRefresher,
     this.fit = BoxFit.cover,
     this.width,
     this.height,
@@ -208,6 +256,17 @@ class CachedProfileImage extends StatefulWidget {
   /// a caller that has nothing better, but every profile surface passes a
   /// [profileMediaCacheKey] so token rotation does not orphan the entry.
   final String? cacheKey;
+
+  /// The Storage object behind [url], when the caller knows it.
+  ///
+  /// Only used for recovery: if the stored URL is refused because its access
+  /// token was revoked, a fresh one is fetched for this path and the download
+  /// is retried ONCE. The cache key does not change — the URL is transport, the
+  /// key is identity. Leave empty and a dead URL is simply reported as such.
+  final String storagePath;
+
+  /// Overrides the URL refresher. For tests.
+  final StorageUrlRefresher? urlRefresher;
 
   final BoxFit fit;
   final double? width;
@@ -315,8 +374,7 @@ class _CachedProfileImageState extends State<CachedProfileImage> {
 
     // 2. Miss: download, and persist for next time — including next launch.
     try {
-      final File downloaded =
-          await _store.download(url, key: key).timeout(widget.downloadTimeout);
+      final File downloaded = await _download(url, key);
       if (!_stillCurrent(attempt, url)) return;
       setState(() => _file = downloaded);
     } on TimeoutException {
@@ -327,6 +385,41 @@ class _CachedProfileImageState extends State<CachedProfileImage> {
       setState(() => _failure = isConnectivityFailure(e)
           ? MediaLoadFailure.offline
           : MediaLoadFailure.unavailable);
+    }
+  }
+
+  /// Downloads [url] under [key], recovering ONCE from a revoked access token.
+  ///
+  /// The retry is deliberately narrow. It happens only when the failure looks
+  /// like an authorization refusal rather than a missing object, only when a
+  /// `storagePath` is available to look the object up by, and only when Storage
+  /// returns a URL that actually differs from the one that just failed. There
+  /// is no second retry and no loop: a fresh URL that also fails is reported.
+  Future<File> _download(String url, String key) async {
+    try {
+      final File f =
+          await _store.download(url, key: key).timeout(widget.downloadTimeout);
+      // New bytes just landed, so this is the moment to check the ceiling.
+      // Started, never awaited: the image is already about to be shown.
+      ProfileMediaCache.tidyInBackground();
+      return f;
+    } catch (e) {
+      if (e is TimeoutException ||
+          widget.storagePath.isEmpty ||
+          !isAuthorizationFailure(e)) {
+        rethrow;
+      }
+      final StorageUrlRefresher refresher =
+          widget.urlRefresher ?? profileUrlRefresher;
+      final String? fresh =
+          await refresher.replacementFor(widget.storagePath, url);
+      if (fresh == null) rethrow;
+      // Same key on purpose: the bytes are the same object, so the refreshed
+      // fetch fills the entry the first attempt was going to fill.
+      final File f =
+          await _store.download(fresh, key: key).timeout(widget.downloadTimeout);
+      ProfileMediaCache.tidyInBackground();
+      return f;
     }
   }
 

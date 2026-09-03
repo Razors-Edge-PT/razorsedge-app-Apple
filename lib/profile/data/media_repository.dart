@@ -44,39 +44,44 @@ class MediaRepository {
 
   /// Published grid media for [ownerUid], newest first.
   ///
-  /// ── Why `mediaType` is the server-side eligibility test ────────────────────
+  /// ── Why eligibility is decided by the SERVER ───────────────────────────────
   /// `posts` is not a gallery collection. RE Daily writes a summary record into
-  /// it every training day — `type: 're_daily'`, an `ownerUid` and a
-  /// `createdAt`, and NO media of any kind (see `_upsertDailyPost` in
-  /// re_daily.dart). Filtering those out on the client meant the `limit` was
-  /// spent BEFORE the filter ran: a user with sixty daily records since their
-  /// last upload got sixty invisible rows and an empty gallery, and until then a
-  /// grid of blank image placeholders.
+  /// it on every training day - `type: 're_daily'`, an `ownerUid` and a
+  /// `createdAt`, and NO media of any kind (`_upsertDailyPost` in re_daily.dart,
+  /// and the same shape again in functions/index.js). Anything else that lands
+  /// in `posts` without belonging in a gallery has the same effect.
   ///
-  /// So the filter has to be in the query. The field it tests is `mediaType`,
-  /// and the choice matters:
+  /// Deciding on the CLIENT meant `limit` was spent before the decision was
+  /// made. Sixty daily records since the last upload produced an empty gallery;
+  /// sixty posts hidden with `showInGrid: false` did exactly the same thing,
+  /// and those carry a perfectly valid `mediaType`, so filtering on type alone
+  /// did not save them. Both clauses have to be in the query, ahead of the
+  /// limit.
   ///
-  ///   * `mediaType` is written by EVERY writer that has ever created gallery
-  ///     media — the current uploader (media_uploader.dart) and the pre-1.7.13
-  ///     profile page alike — so no genuine photo or video is excluded.
-  ///   * RE Daily has never written it, so every one of those records is
-  ///     excluded by the SERVER and cannot consume a result slot.
-  ///   * It doubles as type validation: a record with a missing or unknown
-  ///     `mediaType` never reaches the grid at all, so nothing malformed is
-  ///     handed to an image decoder on the strength of a defaulted field.
+  ///   * `showInGrid == true` is the direct statement of gallery eligibility.
+  ///     Every current publication path writes it explicitly - the post, proof
+  ///     and image/video branches of `MediaUploader.commitMetadata` - and no
+  ///     non-gallery writer writes it at all.
+  ///   * `mediaType in [image, video]` is type validation at the query level: a
+  ///     record with a missing or unknown type never reaches the grid, so
+  ///     nothing malformed is handed to an image decoder on the strength of a
+  ///     defaulted field.
   ///
-  /// `showInGrid == true` would have been the more direct statement of intent,
-  /// but it was introduced in 1.7.13 and no document written before that
-  /// carries it. As a server-side clause it would exclude every pre-1.7.13
-  /// post — the bulk of every existing user's gallery — so it stays a
-  /// client-side test, where an ABSENT field can keep meaning "yes". It can
-  /// only ever remove rows, never let a non-media record take one.
+  /// ── What this deliberately gives up ────────────────────────────────────────
+  /// `showInGrid` was introduced in 1.7.13, so posts written before it carry no
+  /// such field and are now ABSENT from the gallery. That is a chosen trade,
+  /// not an oversight: correctness of the current system comes first, and the
+  /// alternative - a second query, or a client-side merge that reintroduces the
+  /// pre-limit problem for the sake of old records - would put the defect back.
+  /// Nothing is migrated and no legacy document is modified to compensate.
   ///
-  /// Requires the composite index `ownerUid ASC, mediaType ASC, createdAt DESC`
+  /// Requires the composite index
+  /// `ownerUid ASC, showInGrid ASC, mediaType ASC, createdAt DESC`
   /// declared in firestore.indexes.json.
   Stream<List<ProfileMediaItem>> watchGrid(String ownerUid, {int limit = 60}) {
     return _posts
         .where('ownerUid', isEqualTo: ownerUid)
+        .where('showInGrid', isEqualTo: true)
         .where('mediaType', whereIn: kSupportedMediaTypes.toList())
         .orderBy('createdAt', descending: true)
         .limit(limit)
@@ -87,13 +92,11 @@ class MediaRepository {
             .toList(growable: false));
   }
 
-  /// Proof media and ordinary uploads both belong in the grid; a story does
-  /// not (it is not a post at all), anything explicitly hidden does not, and
-  /// neither does a record whose `mediaType` the app cannot render.
+  /// The same eligibility test the query applies, repeated in Dart.
   ///
-  /// The type check is a belt-and-braces repeat of the query's own clause: it
-  /// keeps [mergeGrid] and every non-Firestore caller honest, and it is what a
-  /// malformed document meets if it ever reaches here by another route.
+  /// Not redundant: [mergeGrid] folds in optimistic outbox tiles that never
+  /// went through the query, and a malformed record reaching here by any other
+  /// route meets the same rule rather than a defaulted one.
   bool _belongsInGrid(ProfileMediaItem item) =>
       item.showInGrid && isSupportedMediaType(item.mediaType);
 

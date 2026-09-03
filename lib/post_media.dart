@@ -27,7 +27,9 @@ import 'package:video_player/video_player.dart';
 import 'profile/core/media_identity.dart';
 import 'profile/core/media_timeouts.dart';
 import 'profile/core/media_models.dart';
+import 'profile/data/media_cache_sweeper.dart';
 import 'profile/data/media_deletion.dart';
+import 'profile/data/media_url_refresh.dart';
 import 'profile/data/media_video_source.dart';
 import 'profile/ui/cached_network_image.dart';
 import 'profile/ui/live_identity.dart';
@@ -322,6 +324,17 @@ class _PostMediaViewState extends State<_PostMediaView> {
   MediaLoadFailure? _failure;
   int _attempt = 0;
 
+  /// The cached file this player is reading, pinned so a disk sweep cannot
+  /// delete it mid-playback. Released in dispose, and on every fresh attempt.
+  String? _pinnedPath;
+
+  void _pin(String? path) {
+    if (_pinnedPath == path) return;
+    if (_pinnedPath != null) MediaCachePins.unpin(_pinnedPath!);
+    _pinnedPath = path;
+    if (path != null) MediaCachePins.pin(path);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -331,6 +344,7 @@ class _PostMediaViewState extends State<_PostMediaView> {
   @override
   void dispose() {
     _attempt++; // Nothing in flight may touch state after this point.
+    _pin(null);
     _video?.dispose();
     super.dispose();
   }
@@ -341,6 +355,7 @@ class _PostMediaViewState extends State<_PostMediaView> {
     final int attempt = ++_attempt;
     final VideoPlayerController? previous = _video;
     _video = null;
+    _pin(null);
     unawaited(previous?.dispose().catchError((Object _) {}));
     if (mounted) {
       setState(() {
@@ -379,31 +394,68 @@ class _PostMediaViewState extends State<_PostMediaView> {
       return;
     }
 
-    final VideoPlayerController c = resolved.file != null
-        ? VideoPlayerController.file(resolved.file!)
-        : VideoPlayerController.networkUrl(Uri.parse(resolved.url!));
+    // Pinned BEFORE the controller is built: from here until dispose, the
+    // sweeper must not delete the bytes underneath it.
+    _pin(resolved.file?.path);
+
+    if (!await _start(resolved, attempt, key)) return;
+
+    final String? fill = _playingUrl;
+    if (fill != null) {
+      unawaited(_resolver.fill(url: fill, cacheKey: key));
+    }
+  }
+
+  /// The remote URL actually playing, or null when playing from a file.
+  String? _playingUrl;
+
+  /// Builds a controller and initialises it, recovering ONCE from a URL whose
+  /// access token has been revoked. See MediaDetailPage._start for why the
+  /// failure is not classified: a single fresh URL that genuinely differs is
+  /// the bounded, loop-free way to handle it.
+  Future<bool> _start(VideoSource source, int attempt, String key,
+      {bool allowRefresh = true}) async {
+    _pin(source.file?.path);
+    _playingUrl = source.file == null ? source.url : null;
+
+    final VideoPlayerController c = source.file != null
+        ? VideoPlayerController.file(source.file!)
+        : VideoPlayerController.networkUrl(Uri.parse(source.url!));
     _video = c;
     try {
       await c.initialize().timeout(kVideoInitTimeout);
       await c.setLooping(true);
       await c.play();
-      if (!_current(attempt)) return;
+      if (!_current(attempt)) return false;
       setState(() => _ready = true);
+      return true;
     } on TimeoutException {
-      if (!_current(attempt)) return;
+      if (!_current(attempt)) return false;
       setState(() => _failure = MediaLoadFailure.timedOut);
-      return;
+      return false;
     } catch (e) {
-      if (!_current(attempt)) return;
+      if (!_current(attempt)) return false;
+
+      final String? failedUrl = source.url;
+      if (allowRefresh &&
+          failedUrl != null &&
+          _post.storagePathOriginal.isNotEmpty) {
+        final String? fresh = await _resolver.refreshedSource(
+          storagePath: _post.storagePathOriginal,
+          failedUrl: failedUrl,
+        );
+        if (!_current(attempt)) return false;
+        if (fresh != null) {
+          unawaited(c.dispose().catchError((Object _) {}));
+          return _start(VideoSource.network(fresh), attempt, key,
+              allowRefresh: false);
+        }
+      }
+
       setState(() => _failure = isConnectivityFailure(e)
           ? MediaLoadFailure.offline
           : MediaLoadFailure.unavailable);
-      return;
-    }
-
-    final String? fill = resolved.fillFromUrl;
-    if (fill != null && resolved.file == null) {
-      unawaited(_resolver.fill(url: fill, cacheKey: key));
+      return false;
     }
   }
 
@@ -442,6 +494,9 @@ class _PostMediaViewState extends State<_PostMediaView> {
     return CachedProfileImage(
       url: url,
       cacheKey: _cacheKey(MediaVariant.small, url),
+      // Lets a revoked access token be recovered from once, without changing
+      // the cache entry the bytes belong to.
+      storagePath: _post.storagePathOriginal,
       fit: BoxFit.contain,
       placeholder: const CircularProgressIndicator(),
       errorBuilder: (

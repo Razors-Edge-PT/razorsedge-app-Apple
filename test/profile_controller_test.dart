@@ -423,19 +423,24 @@ void main() {
   });
 
   group('the grid', () {
-    test('includes legacy posts that carry no type or showInGrid', () async {
+    test('includes a post that carries no type, as long as it is eligible',
+        () async {
+      // `type` is still optional - an upload written without one is an
+      // ordinary upload. `showInGrid` is not optional any more: it is the
+      // server-side gallery eligibility clause, and a post without it is
+      // deliberately absent. See MediaRepository.watchGrid.
       await seedProfile();
-      await db.collection('posts').doc('legacy').set(<String, Object?>{
+      await db.collection('posts').doc('noType').set(<String, Object?>{
         'ownerUid': owner,
         'mediaType': 'image',
-        'thumbUrl': 'https://example.invalid/legacy.jpg',
+        'showInGrid': true,
+        'thumbUrl': 'https://example.invalid/noType.jpg',
         'createdAt': Timestamp.fromDate(DateTime(2024, 1, 1)),
-        // No `type`, no `showInGrid` — exactly how older builds wrote them.
       });
       final ProfileController c =
           controllerFor(targetUid: owner, actorUid: owner)..start();
       await settle();
-      expect(c.grid.map((ProfileMediaItem i) => i.id), contains('legacy'));
+      expect(c.grid.map((ProfileMediaItem i) => i.id), contains('noType'));
       expect(c.grid.single.kind, PostKind.upload);
       c.dispose();
     });
@@ -479,6 +484,7 @@ void main() {
       await db.collection('posts').doc('published').set(<String, Object?>{
         'ownerUid': owner,
         'mediaType': 'image',
+        'showInGrid': true,
         'createdAt': Timestamp.fromDate(DateTime(2024, 1, 1)),
       });
       await outbox.enqueue(

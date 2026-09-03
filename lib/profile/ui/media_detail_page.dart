@@ -30,6 +30,8 @@ import 'package:video_player/video_player.dart';
 import '../core/media_identity.dart';
 import '../core/media_models.dart';
 import '../core/media_timeouts.dart';
+import '../data/media_cache_sweeper.dart';
+import '../data/media_url_refresh.dart';
 import '../data/media_video_source.dart';
 import 'cached_network_image.dart';
 import 'profile_theme.dart';
@@ -47,6 +49,7 @@ class MediaDetailPage extends StatefulWidget {
     this.caption,
     this.badge,
     this.resolver,
+    this.urlRefresher,
     this.initTimeout = kVideoInitTimeout,
   });
 
@@ -75,6 +78,9 @@ class MediaDetailPage extends StatefulWidget {
   final VideoSourceResolver? resolver;
   final Duration initTimeout;
 
+  /// Overrides the URL refresher used to recover from a revoked token.
+  final StorageUrlRefresher? urlRefresher;
+
   @override
   State<MediaDetailPage> createState() => _MediaDetailPageState();
 }
@@ -87,6 +93,17 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   /// Identifies the live attempt. A retry bumps it, so a slow or failed earlier
   /// attempt can neither land its result nor touch a disposed widget.
   int _attempt = 0;
+
+  /// The cached file this player is reading, pinned so a disk sweep cannot
+  /// delete it mid-playback. Released in dispose, and on every fresh attempt.
+  String? _pinnedPath;
+
+  void _pin(String? path) {
+    if (_pinnedPath == path) return;
+    if (_pinnedPath != null) MediaCachePins.unpin(_pinnedPath!);
+    _pinnedPath = path;
+    if (path != null) MediaCachePins.pin(path);
+  }
 
   VideoSourceResolver get _resolver =>
       widget.resolver ?? (_ownResolver ??= VideoSourceResolver());
@@ -115,6 +132,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
     final int attempt = ++_attempt;
     final VideoPlayerController? previous = _video;
     _video = null;
+    _pin(null);
     unawaited(previous?.dispose().catchError((Object _) {}));
 
     if (mounted) {
@@ -136,6 +154,38 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       return;
     }
 
+    // Pinned BEFORE the controller is built: from here until dispose, the
+    // sweeper must not delete the bytes underneath it.
+    _pin(source.file?.path);
+
+    if (!await _start(source, attempt)) return;
+
+    // Playing from the network leaves nothing on disk, so the next open would
+    // be exactly as network-dependent as this one. Fill the cache behind the
+    // playing video: nothing waits on it, it runs at most once per clip, and a
+    // failure is invisible.
+    final String? fill = _playingUrl;
+    if (fill != null) {
+      unawaited(_resolver.fill(url: fill, cacheKey: _videoCacheKey));
+    }
+  }
+
+  /// The remote URL actually playing, or null when playing from a file.
+  String? _playingUrl;
+
+  /// Builds a controller for [source] and initialises it, recovering ONCE from
+  /// a URL whose access token has been revoked.
+  ///
+  /// A revoked token reaches Flutter as a PlatformException whose text is
+  /// whatever the platform player chose to say, so nothing is classified here.
+  /// Instead a single fresh URL is requested, and only used when Storage
+  /// returns something genuinely different from what just failed — which is
+  /// what makes this one retry rather than a loop.
+  Future<bool> _start(VideoSource source, int attempt,
+      {bool allowRefresh = true}) async {
+    _pin(source.file?.path);
+    _playingUrl = source.file == null ? source.url : null;
+
     final VideoPlayerController c = source.file != null
         ? VideoPlayerController.file(source.file!)
         : VideoPlayerController.networkUrl(Uri.parse(source.url!));
@@ -145,27 +195,36 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
       await c.initialize().timeout(widget.initTimeout);
       await c.setLooping(true);
       await c.play();
-      if (!_current(attempt)) return;
+      if (!_current(attempt)) return false;
       setState(() => _ready = true);
+      return true;
     } on TimeoutException {
-      if (!_current(attempt)) return;
+      if (!_current(attempt)) return false;
       setState(() => _failure = MediaLoadFailure.timedOut);
-      return;
+      return false;
     } catch (e) {
-      if (!_current(attempt)) return;
+      if (!_current(attempt)) return false;
+
+      final String? failedUrl = source.url;
+      if (allowRefresh && failedUrl != null && widget.storagePath.isNotEmpty) {
+        final String? fresh = await _resolver.refreshedSource(
+          storagePath: widget.storagePath,
+          failedUrl: failedUrl,
+          refresher: widget.urlRefresher,
+        );
+        if (!_current(attempt)) return false;
+        if (fresh != null) {
+          unawaited(c.dispose().catchError((Object _) {}));
+          // Same cache key: a new URL for the same object is the same media.
+          return _start(VideoSource.network(fresh), attempt,
+              allowRefresh: false);
+        }
+      }
+
       setState(() => _failure = isConnectivityFailure(e)
           ? MediaLoadFailure.offline
           : MediaLoadFailure.unavailable);
-      return;
-    }
-
-    // Playing from the network leaves nothing on disk, so the next open would
-    // be exactly as network-dependent as this one. Fill the cache behind the
-    // playing video: nothing waits on it, it runs at most once per clip, and a
-    // failure is invisible.
-    final String? fill = source.fillFromUrl;
-    if (fill != null && source.file == null) {
-      unawaited(_resolver.fill(url: fill, cacheKey: _videoCacheKey));
+      return false;
     }
   }
 
@@ -176,6 +235,7 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
   void dispose() {
     // Explicit teardown; nothing is saved or uploaded from here.
     _attempt++; // Nothing in flight may touch state after this point.
+    _pin(null);
     _video?.dispose();
     super.dispose();
   }
@@ -259,6 +319,10 @@ class _MediaDetailPageState extends State<MediaDetailPage> {
           mediaId: widget.mediaId,
           url: widget.url,
         ),
+        // Lets a revoked access token be recovered from once, without changing
+        // the cache entry the bytes belong to.
+        storagePath: widget.storagePath,
+        urlRefresher: widget.urlRefresher,
         fit: BoxFit.contain,
         placeholder: const CircularProgressIndicator(
           color: ProfilePalette.action,

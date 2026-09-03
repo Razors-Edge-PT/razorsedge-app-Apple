@@ -107,6 +107,10 @@
           "order": "ASCENDING"
         },
         {
+          "fieldPath": "showInGrid",
+          "order": "ASCENDING"
+        },
+        {
           "fieldPath": "mediaType",
           "order": "ASCENDING"
         },
