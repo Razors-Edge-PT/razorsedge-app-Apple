@@ -130,6 +130,95 @@ class CoachCheckinsLogic {
     return checkpointOnOrBefore(deviceNow);
   }
 
+  // ── Current-week adherence (Monday → Sunday) ─────────────────────────────
+  //
+  // The server is authoritative: `report['currentWeekAdherence']` carries the
+  // fixed calendar week, its target and its per-day facts. These helpers only
+  // RENDER that payload, and degrade safely when it is absent (historical or
+  // copied reports generated before the field existed).
+
+  static const List<String> weekdayLabels = [
+    'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
+  ];
+
+  /// The `N done · week X/Y planned` fact line.
+  ///
+  /// [workoutsInCoverage] is the rolling CHECK-IN coverage count and
+  /// [adherence] the fixed Monday→Sunday week — they intentionally describe
+  /// different date ranges. [legacyCompletion] is the pre-adherence
+  /// `completion` map, used only when the new payload is missing.
+  static String adherenceFactLabel({
+    required int workoutsInCoverage,
+    Map<String, dynamic>? adherence,
+    Map<String, dynamic>? legacyCompletion,
+  }) {
+    final done = '$workoutsInCoverage done';
+    if (adherence != null) {
+      final completed = _asInt(adherence['completedCount']) ?? 0;
+      final planned = (adherence['plannedKnown'] == true)
+          ? _asInt(adherence['plannedCount'])
+          : null;
+      if (planned == null) {
+        return '$done · $completed this week · no weekly target';
+      }
+      return '$done · week $completed/$planned planned';
+    }
+    if (legacyCompletion != null) {
+      final completed = _asInt(legacyCompletion['completedCount']) ?? 0;
+      final planned = _asInt(legacyCompletion['plannedCount']);
+      if (planned != null) return '$done · week $completed/$planned planned';
+      return '$done · week $completed';
+    }
+    return '$workoutsInCoverage workouts';
+  }
+
+  /// The compact Monday–Sunday strip, as two rows (`Mon — · Tue — · Wed — ·
+  /// Thu ✓5` / `Fri — · Sat — · Sun —`).
+  ///
+  /// `✓N` is N distinct exercises with at least one valid completed set that
+  /// calendar day; `—` is no valid training. Returns an empty list when the
+  /// report carries no adherence payload, so the card simply omits the strip.
+  static List<String> weekStripRows(Map<String, dynamic>? adherence) {
+    final cells = weekStripCells(adherence);
+    if (cells.isEmpty) return const [];
+    return [cells.take(4).join(' · '), cells.skip(4).join(' · ')];
+  }
+
+  /// One `Mon —` / `Thu ✓5` label per weekday, Monday first. Always seven
+  /// entries, or empty when there is nothing authoritative to render.
+  static List<String> weekStripCells(Map<String, dynamic>? adherence) {
+    if (adherence == null) return const [];
+    final raw = adherence['days'];
+    if (raw is! List || raw.isEmpty) return const [];
+
+    // Index by the server's weekday label so a short, reordered or partial
+    // days[] can never shift the strip.
+    final byWeekday = <String, Map<String, dynamic>>{};
+    for (final d in raw) {
+      if (d is Map) {
+        final wd = d['weekday'];
+        if (wd is String) byWeekday[wd] = Map<String, dynamic>.from(d);
+      }
+    }
+    if (byWeekday.isEmpty) return const [];
+
+    return [
+      for (final wd in weekdayLabels) '$wd ${_dayMark(byWeekday[wd])}',
+    ];
+  }
+
+  static String _dayMark(Map<String, dynamic>? day) {
+    if (day == null || day['trained'] != true) return '—';
+    final n = _asInt(day['exerciseCount']) ?? 0;
+    return '✓$n';
+  }
+
+  static int? _asInt(Object? v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return null;
+  }
+
   /// The message text the card must display. When a report is copied this is
   /// the server-frozen finalText — the exact string the callable returned and
   /// the client put on the clipboard — otherwise the live draft preview.

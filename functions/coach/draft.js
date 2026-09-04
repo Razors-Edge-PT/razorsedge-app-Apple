@@ -27,13 +27,23 @@ function eligibleEvents({ events, coverageStart, coverageEnd, e1rmPraiseFloorKey
   return { maxWeightEvents, repEvents, e1rmEvents, rirMatchEvents };
 }
 
+/** plannedCount is null whenever the weekly target is genuinely unknown (no
+ *  active block, or a failed template read). An unknown or zero target can
+ *  never satisfy "completed every planned workout" — praise.js also requires
+ *  planned > 0, and this keeps the two ends of the contract explicit. */
+function plannedOrNull(completion) {
+  const n = Number(completion.plannedCount);
+  return Number.isFinite(n) ? n : null;
+}
+
 function completionInputFrom(completion, settings) {
   if (!completion) return null;
   const praisedWeeks = (settings && settings.praisedWeeks) || {};
+  const planned = plannedOrNull(completion);
   return {
-    completedAll: !!completion.completedAll,
+    completedAll: !!completion.completedAll && planned > 0,
     count: completion.completedCount,
-    planned: completion.plannedCount,
+    planned,
     weekAlreadyPraised: Object.prototype.hasOwnProperty.call(praisedWeeks, completion.weekKey),
   };
 }
@@ -91,15 +101,16 @@ function computePraisedWeekKey(report, settings, coverage) {
     coverageEnd: coverage.end,
     e1rmPraiseFloorKey: report.e1rmPraiseFloorKey || null,
   });
+  const planned = plannedOrNull(completion);
   const { usedCompletion } = selectPraise({
     maxWeightEvents,
     repEvents,
     e1rmEvents,
     rirMatchEvents,
     completion: {
-      completedAll: !!completion.completedAll,
+      completedAll: !!completion.completedAll && planned > 0,
       count: completion.completedCount,
-      planned: completion.plannedCount,
+      planned,
       weekAlreadyPraised: false,
     },
     allowedExerciseIds: allowedExercisesFrom(settings),

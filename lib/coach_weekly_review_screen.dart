@@ -279,6 +279,14 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
         .length;
   }
 
+  /// Defensive map cast: a report field written by an older server build (or
+  /// a malformed document) must degrade to "absent", never throw inside build.
+  static Map<String, dynamic>? _mapOf(Object? v) {
+    if (v is Map<String, dynamic>) return v;
+    if (v is Map) return Map<String, dynamic>.from(v);
+    return null;
+  }
+
   /// Server-derived (coach-timezone) staleness; falls back to the report's
   /// generation-time status when the context omitted this athlete.
   String _liveWeighInStatus(_AthleteReview a) =>
@@ -706,6 +714,11 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
         .toList();
     final workouts = _workoutsInWindow(a);
     final completion = report?['completion'] as Map<String, dynamic>?;
+    // Fixed Monday→Sunday adherence (server-computed). Absent on reports
+    // generated before this field existed — the card then falls back to the
+    // legacy completion map and omits the week strip.
+    final adherence = _mapOf(report?['currentWeekAdherence']);
+    final weekStrip = CoachCheckinsLogic.weekStripRows(adherence);
     final bodyweight = report?['bodyweight'] as Map<String, dynamic>?;
     final fallbackWeek = report?['fallbackWeek'] as Map<String, dynamic>?;
     final weighStatus = _liveWeighInStatus(a);
@@ -765,9 +778,11 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                       '${rirMatchPBs.length} PB match, more in reserve'),
                 _fact(
                   Icons.fitness_center,
-                  completion != null
-                      ? '$workouts done · week ${completion['completedCount']}/${completion['plannedCount']} planned'
-                      : '$workouts workouts',
+                  CoachCheckinsLogic.adherenceFactLabel(
+                    workoutsInCoverage: workouts,
+                    adherence: adherence,
+                    legacyCompletion: completion,
+                  ),
                 ),
                 if (bodyweight?['currentAvg'] != null)
                   _fact(Icons.monitor_weight,
@@ -784,6 +799,15 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                       : 'Weigh-in overdue'),
               ],
             ),
+            if (weekStrip.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              for (final row in weekStrip)
+                Text(
+                  row,
+                  style: const TextStyle(
+                      color: Colors.white54, fontSize: 12, height: 1.35),
+                ),
+            ],
             if (fallbackWeek != null && workouts == 0) ...[
               const SizedBox(height: 6),
               Text(

@@ -19,6 +19,7 @@ const crypto = require('crypto');
 
 const { E1RM_FORMULA_VERSION } = require('./e1rm');
 const cov = require('./coverage');
+const adh = require('./adherence');
 const bwx = require('./bodyweight');
 const { buildDraftText } = require('./draft');
 const enrollment = require('./enrollment');
@@ -26,6 +27,7 @@ const authz = require('./authz');
 const {
   dayDocId, applyWorkoutDay, bulkRebuild,
 } = require('./analytics_store');
+const { summarizeWorkoutDay } = require('./pb_engine');
 const {
   TxnError, copyTransaction, undoTransaction, skipTransaction,
 } = require('./checkin_txns');
@@ -644,20 +646,48 @@ function hasCompletedSets(data) {
   return false;
 }
 
-/** Which of the dateKeys have a completed workout doc. Bounded direct gets. */
-async function completedWorkoutDays(athleteUid, dateKeys) {
+/**
+ * Per-day training facts for a bounded list of date keys. ONE source of
+ * truth, shared by the coverage count and the calendar-week adherence:
+ *
+ *   trained       – the existing completed-workout-day rule (hasCompletedSets,
+ *                   identical to HomeV2CalendarService).
+ *   exerciseCount – distinct exercises with at least one VALID completed set
+ *                   on that date, from pb_engine.summarizeWorkoutDay (whose
+ *                   keys are the case-folded stable exercise ids). Multiple
+ *                   sets of one exercise, and two sessions merged into the
+ *                   same date document, therefore collapse correctly.
+ *
+ * Bounded direct gets — one per date key.
+ */
+async function workoutDayStats(athleteUid, dateKeys) {
+  const stats = {};
+  if (dateKeys.length === 0) return stats;
   const refs = dateKeys.map((k) =>
     db.collection('users').doc(athleteUid).collection('workouts').doc(k));
-  if (refs.length === 0) return [];
   const snaps = await db.getAll(...refs);
-  const out = [];
   snaps.forEach((snap, i) => {
-    if (snap.exists && hasCompletedSets(snap.data())) out.push(dateKeys[i]);
+    if (!snap.exists) return;
+    const data = snap.data();
+    if (!hasCompletedSets(data)) return;
+    stats[dateKeys[i]] = {
+      trained: true,
+      exerciseCount: Object.keys(summarizeWorkoutDay(data)).length,
+    };
   });
-  return out;
+  return stats;
 }
 
-/** Active block meta ({blockId, startKey, endKey}) or null. */
+/** Which of the dateKeys have a completed workout doc. */
+async function completedWorkoutDays(athleteUid, dateKeys) {
+  const stats = await workoutDayStats(athleteUid, dateKeys);
+  return dateKeys.filter((k) => stats[k] && stats[k].trained);
+}
+
+/** Active block meta ({blockId, name, startKey, endKey}) or null.
+ *  A missing/unparseable startDate no longer discards the block: the weekly
+ *  target comes from the block's TEMPLATES, not from its start date, so only
+ *  the block-start-derived fields go null. */
 async function activeBlock(athleteUid, tz) {
   const q = await db.collection('users').doc(athleteUid)
     .collection('planned_blocks')
@@ -666,34 +696,43 @@ async function activeBlock(athleteUid, tz) {
     .get();
   if (q.empty) return null;
   const doc = q.docs[0];
-  const d = doc.data();
+  const d = doc.data() || {};
   const start = d.startDate && typeof d.startDate.toDate === 'function' ? d.startDate.toDate() : null;
   const end = d.endDate && typeof d.endDate.toDate === 'function' ? d.endDate.toDate() : null;
-  if (!start) return null;
   return {
     blockId: doc.id,
-    startKey: cov.localDateKey(start, safeTz(tz)),
+    name: typeof d.name === 'string' ? d.name : null,
+    startKey: start ? cov.localDateKey(start, safeTz(tz)) : null,
     endKey: end ? cov.localDateKey(end, safeTz(tz)) : null,
   };
 }
 
-/** Planned-workout day count for a block-anchored training week. */
-async function plannedCountForWeek(athleteUid, block, weekIndex) {
-  const refs = [];
-  for (let i = 0; i < 7; i++) {
-    refs.push(db.collection('users').doc(athleteUid)
-      .collection('planned_blocks').doc(block.blockId)
-      .collection('weeks').doc(`week_${weekIndex}`)
-      .collection('days').doc(`day_${i}`));
+/**
+ * The athlete's weekly training TARGET: how many workout templates are
+ * assigned to their currently-active block — the same set the Workout
+ * Planner lists under that block (association rules in adherence.js, mirrored
+ * from lib/templates.dart).
+ *
+ * Never collapses an unknown target to 0: no active block or a failed read
+ * yields count=null/known=false, so it can never be mistaken for
+ * "completed every planned workout".
+ */
+async function plannedTargetForBlock(athleteUid, block) {
+  if (!block) return adh.plannedTarget(null, adh.PLANNED_SOURCE.noActiveBlock);
+  try {
+    const snap = await db.collection('users').doc(athleteUid)
+      .collection('templates').get();
+    const templates = snap.docs.map((doc) => {
+      const t = doc.data() || {};
+      return { id: doc.id, blockId: t.blockId, blockAssignment: t.blockAssignment };
+    });
+    return adh.plannedFromTemplates(templates, block);
+  } catch (err) {
+    logger.error('template read failed; weekly target left unknown', {
+      athleteUid, blockId: block.blockId, error: err,
+    });
+    return adh.plannedTarget(null, adh.PLANNED_SOURCE.unavailable);
   }
-  const snaps = await db.getAll(...refs);
-  let count = 0;
-  for (const snap of snaps) {
-    if (!snap.exists) continue;
-    const ex = snap.data().exercises;
-    if (Array.isArray(ex) && ex.length > 0) count += 1;
-  }
-  return count;
 }
 
 function rangeKeys(startKey, endKeyExclusive) {
@@ -702,32 +741,53 @@ function rangeKeys(startKey, endKeyExclusive) {
   return out;
 }
 
-/** Weekly-completion candidate (block-anchored week; never split by Mon/Thu
- *  message windows; eligible at the first checkpoint after it is known). */
-async function completionCandidate(athleteUid, block, checkpointKey) {
+/**
+ * Current calendar-week adherence (Monday inclusive → following Monday
+ * exclusive) for the checkpoint's own week. NOT anchored to the block start
+ * and NOT the check-in coverage window — see adherence.js for why the two
+ * numbers may legitimately disagree on a Thursday.
+ */
+async function currentWeekAdherence(athleteUid, block, planned, checkpointKey) {
+  const week = adh.calendarWeekOf(checkpointKey);
+  const dayStats = await workoutDayStats(athleteUid, adh.weekDateKeys(week.weekStart));
+  return adh.buildWeekAdherence({
+    weekStart: week.weekStart,
+    planned,
+    dayStats,
+    blockId: block ? block.blockId : null,
+    blockName: block ? block.name : null,
+  });
+}
+
+/**
+ * Weekly-completion candidate for praise, on CALENDAR weeks against the
+ * active block's template target.
+ *
+ * The two-candidate shape (this week, previous week) is unchanged from the
+ * block-anchored version it replaces: a week that finishes between two
+ * checkpoints is still praised at the first checkpoint after it is known, and
+ * settings.praisedWeeks (keyed by the Monday) still prevents praising it
+ * twice. Only the WEEK BOUNDARIES and the TARGET have changed.
+ *
+ * The previous week is scored against the current template target — the
+ * per-week planned documents that used to supply a historic target are
+ * exactly the source this change removes.
+ */
+async function completionCandidate(athleteUid, block, planned, currentWeek) {
   if (!block) return null;
-  const current = cov.trainingWeekOf(block.startKey, cov.addDaysKey(checkpointKey, -1));
-  if (!current) return null;
 
-  const evaluate = async (week) => {
-    const planned = await plannedCountForWeek(athleteUid, block, week.weekIndex);
-    const doneDays = await completedWorkoutDays(athleteUid, rangeKeys(week.weekStart, week.weekEnd));
-    return {
-      weekKey: week.weekStart,
-      weekStart: week.weekStart,
-      weekEnd: week.weekEnd,
-      weekIndex: week.weekIndex,
-      plannedCount: planned,
-      completedCount: doneDays.length,
-      completedAll: planned > 0 && doneDays.length >= planned,
-    };
-  };
+  const candidates = [adh.completionFromWeek(currentWeek)];
 
-  const candidates = [await evaluate(current)];
-  if (current.weekIndex > 0) {
-    const prevWeek = cov.trainingWeekOf(block.startKey, cov.addDaysKey(current.weekStart, -1));
-    if (prevWeek) candidates.push(await evaluate(prevWeek));
-  }
+  const prevStart = cov.addDaysKey(currentWeek.weekStart, -7);
+  const prevStats = await workoutDayStats(athleteUid, adh.weekDateKeys(prevStart));
+  candidates.push(adh.completionFromWeek(adh.buildWeekAdherence({
+    weekStart: prevStart,
+    planned,
+    dayStats: prevStats,
+    blockId: block.blockId,
+    blockName: block.name,
+  })));
+
   const qualifies = (c) => c.completedAll || c.completedCount >= 3;
   const qualifying = candidates.filter(qualifies).sort((a, b) => {
     if (a.completedAll !== b.completedAll) return a.completedAll ? -1 : 1;
@@ -742,7 +802,7 @@ async function completionCandidate(athleteUid, block, checkpointKey) {
  *  Derived from the bounded exerciseDays analytics (dateKey desc, limit 1) —
  *  reports only generate on ready analytics, so this is authoritative and
  *  avoids scanning raw workout history. */
-async function lastTrainedWeek(athleteUid, block, beforeKey) {
+async function lastTrainedWeek(athleteUid, beforeKey) {
   const q = await analyticsRef(athleteUid).collection('exerciseDays')
     .where('dateKey', '<', beforeKey)
     .orderBy('dateKey', 'desc')
@@ -750,12 +810,11 @@ async function lastTrainedWeek(athleteUid, block, beforeKey) {
     .get();
   if (q.empty) return null;
   const lastKey = q.docs[0].data().dateKey;
-  if (block) {
-    const wk = cov.trainingWeekOf(block.startKey, lastKey);
-    if (wk) {
-      const days = await completedWorkoutDays(athleteUid, rangeKeys(wk.weekStart, wk.weekEnd));
-      return { weekStart: wk.weekStart, weekEnd: wk.weekEnd, workoutDates: days };
-    }
+  const wk = adh.calendarWeekOf(lastKey);
+  const days = await completedWorkoutDays(
+    athleteUid, rangeKeys(wk.weekStart, wk.weekEnd));
+  if (days.length > 0) {
+    return { weekStart: wk.weekStart, weekEnd: wk.weekEnd, workoutDates: days };
   }
   return { weekStart: lastKey, weekEnd: cov.addDaysKey(lastKey, 1), workoutDates: [lastKey] };
 }
@@ -801,9 +860,11 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     athleteUid, rangeKeys(maxStartKey, checkpointKey));
 
   const block = await activeBlock(athleteUid, tz);
-  const completion = await completionCandidate(athleteUid, block, checkpointKey);
+  const planned = await plannedTargetForBlock(athleteUid, block);
+  const weekAdherence = await currentWeekAdherence(athleteUid, block, planned, checkpointKey);
+  const completion = await completionCandidate(athleteUid, block, planned, weekAdherence);
   const fallbackWeek = workoutDates.length === 0
-    ? await lastTrainedWeek(athleteUid, block, checkpointKey)
+    ? await lastTrainedWeek(athleteUid, checkpointKey)
     : null;
 
   // Bodyweight state at the checkpoint. Milestone suppression is per-coach
@@ -852,6 +913,7 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     events,
     workoutDates,
     completion: completion || null,
+    currentWeekAdherence: weekAdherence,
     fallbackWeek: fallbackWeek || null,
     blockStartKey: block ? block.startKey : null,
     bodyweight,

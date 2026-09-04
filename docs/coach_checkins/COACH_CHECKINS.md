@@ -100,12 +100,64 @@ athlete identity, not the caller-supplied path).
   read-only: `athleteUid`, `checkpointKey`, `weekday`, `status`
   (`draft|copied|skipped|expired`), `variantSeed`, `gender`, `firstName`,
   `displayName`, `prevCheckpointKey`, `maxStartKey`, embedded `events[]`
-  (max window), `workoutDates[]`, `completion`, `fallbackWeek`,
+  (max window), `workoutDates[]`, `completion`, `currentWeekAdherence`,
+  `fallbackWeek`,
   `blockStartKey`, `bodyweight`, `e1rmPraiseFloorKey`, `draftIfPrevCopied`,
   `draftIfPrevNotCopied`, versions; after copy: `copiedAtMs`,
   `coverageStart/End`, `finalText`, `liveBodyweight`, `praisedWeekKey`,
   `milestoneAwarded`, `prevLastFinalizedCoverageEnd` (undo support).
   `copiedAtMs` is the stand-in for a future `sentAt`.
+
+### Coverage window vs current-week adherence
+
+Two deliberately separate concepts; the numbers on a card may disagree and
+that is correct.
+
+- **Check-in coverage** (`coverage.js`) — rolling, checkpoint-anchored
+  (Mon↔Thu, widened to the same weekday 7 days back when the previous
+  check-in was not copied, then clamped forward past the last finalised
+  copy). Governs PB events, the `"$n done"` count and the
+  copied/skipped/undo state machine. Unchanged.
+- **Current-week adherence** (`adherence.js`) — a FIXED calendar week,
+  Monday inclusive → the following Monday exclusive. Never anchored to the
+  block start date.
+
+So a Thursday card can read `3 done · week 1/4 planned`: three training
+dates inside the rolling coverage window (which reaches back into last
+week), but only one calendar training day since Monday. That must not earn
+consistency praise off the coverage count.
+
+`currentWeekAdherence` (server-computed, the UI is a pure renderer):
+
+```
+{ weekStart, weekEnd,            // 'YYYY-MM-DD', weekEnd EXCLUSIVE
+  plannedCount,                  // number | null — NEVER 0 when unknown
+  plannedKnown,                  // false ⇒ no target may be inferred
+  plannedSource,                 // activeBlockTemplates | noActiveBlock | unavailable
+  blockId, blockName,
+  completedCount,                // unique calendar training DAYS
+  days: [ { dateKey, weekday, trained, exerciseCount } ] }  // 7, Mon first
+```
+
+The weekly **target** is the number of workout templates assigned to the
+athlete's active block — `template.blockId == block id`, plus the legacy
+`template.blockAssignment == block.name` fallback still present in
+production data, deduplicated by template document id. It is NOT derived
+from `planned_blocks/{blockId}/weeks/week_N/days/day_M`, which many athletes
+never populate (that source is what produced `week 4/0 planned`).
+
+`completedCount` counts unique calendar DAYS with genuine completed work
+(`hasCompletedSets`, the HomeV2CalendarService rule) — two sessions on one
+date are one day. `exerciseCount` is the distinct exercises with ≥1 valid
+completed set on that date, keyed on `pb_engine.canonicalExerciseId`, so
+repeated sets, repeated sessions and mixed id casings collapse to one.
+
+`plannedCount: null` (no active block, or a failed/malformed template read)
+and `plannedCount: 0` (an active block genuinely holding no templates) both
+fail closed: `completedAll` requires a KNOWN, POSITIVE target, so neither
+can be praised as "completed every planned workout". Reports generated
+before this field existed simply omit it; the client falls back to the
+legacy `completion` map and hides the week strip.
 
 ## Analytics engine
 

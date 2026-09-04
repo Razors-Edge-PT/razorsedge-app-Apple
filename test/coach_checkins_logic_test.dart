@@ -189,6 +189,155 @@ void main() {
     });
   });
 
+  group('current-week adherence rendering', () {
+    // Mirrors the server payload written by functions/coach/index.js
+    // (currentWeekAdherence). The client only renders it.
+    Map<String, dynamic> day(String wd, String dateKey,
+            {bool trained = false, int exerciseCount = 0}) =>
+        {
+          'dateKey': dateKey,
+          'weekday': wd,
+          'trained': trained,
+          'exerciseCount': exerciseCount,
+        };
+
+    Map<String, dynamic> adherence({
+      int completedCount = 0,
+      int? plannedCount = 4,
+      bool plannedKnown = true,
+      List<Map<String, dynamic>>? days,
+    }) =>
+        {
+          'weekStart': '2026-09-07',
+          'weekEnd': '2026-09-14',
+          'plannedCount': plannedCount,
+          'plannedKnown': plannedKnown,
+          'plannedSource': 'activeBlockTemplates',
+          'completedCount': completedCount,
+          'days': days ??
+              [
+                day('Mon', '2026-09-07'),
+                day('Tue', '2026-09-08'),
+                day('Wed', '2026-09-09'),
+                day('Thu', '2026-09-10'),
+                day('Fri', '2026-09-11'),
+                day('Sat', '2026-09-12'),
+                day('Sun', '2026-09-13'),
+              ],
+        };
+
+    test('Thursday line separates coverage count from the current week', () {
+      // 3 workouts in the rolling check-in window, 1 training day since Monday.
+      expect(
+        CoachCheckinsLogic.adherenceFactLabel(
+          workoutsInCoverage: 3,
+          adherence: adherence(completedCount: 1),
+        ),
+        '3 done · week 1/4 planned',
+      );
+    });
+
+    test('unknown target never renders as a 0 planned target', () {
+      expect(
+        CoachCheckinsLogic.adherenceFactLabel(
+          workoutsInCoverage: 3,
+          adherence: adherence(
+              completedCount: 2, plannedCount: null, plannedKnown: false),
+        ),
+        '3 done · 2 this week · no weekly target',
+      );
+    });
+
+    test('historical report without the adherence payload still renders', () {
+      // Copied/older reports carry only the legacy completion map…
+      expect(
+        CoachCheckinsLogic.adherenceFactLabel(
+          workoutsInCoverage: 3,
+          legacyCompletion: {'completedCount': 2, 'plannedCount': 3},
+        ),
+        '3 done · week 2/3 planned',
+      );
+      // …and a report with neither degrades to the plain count.
+      expect(
+        CoachCheckinsLogic.adherenceFactLabel(workoutsInCoverage: 3),
+        '3 workouts',
+      );
+      expect(CoachCheckinsLogic.weekStripRows(null), isEmpty);
+      expect(CoachCheckinsLogic.weekStripRows(const {}), isEmpty);
+      expect(CoachCheckinsLogic.weekStripRows(const {'days': []}), isEmpty);
+      expect(
+          CoachCheckinsLogic.weekStripRows(const {'days': 'nonsense'}), isEmpty);
+    });
+
+    test('strip is two compact rows, Monday first, dash for no training', () {
+      final rows = CoachCheckinsLogic.weekStripRows(adherence(
+        completedCount: 1,
+        days: [
+          day('Mon', '2026-09-07'),
+          day('Tue', '2026-09-08'),
+          day('Wed', '2026-09-09'),
+          day('Thu', '2026-09-10', trained: true, exerciseCount: 5),
+          day('Fri', '2026-09-11'),
+          day('Sat', '2026-09-12'),
+          day('Sun', '2026-09-13'),
+        ],
+      ));
+      expect(rows, [
+        'Mon — · Tue — · Wed — · Thu ✓5',
+        'Fri — · Sat — · Sun —',
+      ]);
+    });
+
+    test('Sunday training shows in the current week strip', () {
+      final rows = CoachCheckinsLogic.weekStripRows(adherence(
+        completedCount: 1,
+        days: [
+          day('Mon', '2026-09-07'),
+          day('Tue', '2026-09-08'),
+          day('Wed', '2026-09-09'),
+          day('Thu', '2026-09-10'),
+          day('Fri', '2026-09-11'),
+          day('Sat', '2026-09-12'),
+          day('Sun', '2026-09-13', trained: true, exerciseCount: 2),
+        ],
+      ));
+      expect(rows.last, 'Fri — · Sat — · Sun ✓2');
+    });
+
+    test('a trained day with no countable exercises shows a zero, not a dash',
+        () {
+      final cells = CoachCheckinsLogic.weekStripCells(adherence(
+        completedCount: 1,
+        days: [day('Mon', '2026-09-07', trained: true, exerciseCount: 0)],
+      ));
+      // A partial days[] is padded by weekday label, never shifted.
+      expect(cells.length, 7);
+      expect(cells.first, 'Mon ✓0');
+      expect(cells[1], 'Tue —');
+    });
+
+    test('two same-day sessions read as one day with the aggregate count', () {
+      final adh = adherence(
+        completedCount: 2,
+        days: [
+          day('Mon', '2026-09-07', trained: true, exerciseCount: 4),
+          day('Tue', '2026-09-08'),
+          day('Wed', '2026-09-09', trained: true, exerciseCount: 7),
+          day('Thu', '2026-09-10'),
+          day('Fri', '2026-09-11'),
+          day('Sat', '2026-09-12'),
+          day('Sun', '2026-09-13'),
+        ],
+      );
+      expect(
+        CoachCheckinsLogic.adherenceFactLabel(
+            workoutsInCoverage: 3, adherence: adh),
+        '3 done · week 2/4 planned',
+      );
+      expect(CoachCheckinsLogic.weekStripCells(adh)[2], 'Wed ✓7');
+    });
+  });
+
   group('E1RM parity pin (Dart PMU ↔ functions/coach/e1rm.js)', () {
     // These constants are asserted identically by the backend test suite
     // (functions/test/coach_pb_engine.test.js). If either side's formula
