@@ -251,8 +251,15 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   late FocusNode _rirFocus;
   late FocusNode _velocityFocus;
 
-  static String _fmtWeight(double v) =>
-      v % 1 == 0 ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+  /// Weight: preserve up to 3 decimal places of legitimately configured
+  /// increment precision, strip trailing zeros and any trailing point.
+  /// 16.0 → "16", 16.5 → "16.5", 16.25 → "16.25", 16.125 → "16.125".
+  /// Bounded fixed precision first also collapses float artefacts such as
+  /// 16.249999999999996 → "16.25". Display-only; never mutates the stored double.
+  static String _fmtWeight(double v) {
+    final s = v.toStringAsFixed(3);
+    return s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
   static String _fmtInt(int v) => v.toString();
   static String _fmtDouble(double v) => v.toStringAsFixed(1);
   /// Velocity: preserve up to 3 decimal places, strip trailing zeros.
