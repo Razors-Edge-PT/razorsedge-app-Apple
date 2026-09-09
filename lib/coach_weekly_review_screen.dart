@@ -7,6 +7,8 @@
 // callables. Enabling athletes and per-athlete goal/message settings live in
 // coachCheckIns/{coachUid}/athletes/{athleteUid}.
 
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +17,8 @@ import 'package:provider/provider.dart';
 
 import 'profile/ui/live_identity.dart';
 
+import 'bb3_week_planner.dart';
+import 'coach_checkin_copy_action.dart';
 import 'coach_checkins_logic.dart';
 import 'coach_roster.dart';
 import 'user_context.dart';
@@ -31,6 +35,61 @@ const List<String> kCoachTimezones = [
   'America/Los_Angeles',
 ];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Athlete week-planner navigation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Pushes the existing BB3 Week Planner for whoever [userContext] is currently
+/// acting as. This is verbatim the mechanism the Coach Dashboard and the app
+/// drawer already use — same screen, same provider wiring — so there is only
+/// ever one planner implementation.
+Future<void> pushBB3WeekPlanner(
+    BuildContext context, UserContext userContext) async {
+  await Navigator.of(context).push(MaterialPageRoute(
+    builder: (_) => ChangeNotifierProvider<UserContext>.value(
+      value: userContext,
+      child: const BB3WeekPlanner(),
+    ),
+  ));
+}
+
+/// Seam so tests can assert the navigation without mounting the Firebase-backed
+/// planner screen.
+typedef PlannerPusher = Future<void> Function(
+    BuildContext context, UserContext userContext);
+
+/// Opens [athleteUid]'s BB3 Week Planner on their current week.
+///
+/// Coach Mode already models "which athlete am I looking at" as
+/// [UserContext.actingAsUid], and BB3WeekPlanner reads exactly that. So this
+/// switches the acting athlete to the card's uid — never the signed-in
+/// coach's — and pushes the existing planner, which resolves the current week
+/// itself (it opens on the calendar week of the athlete's active block; no
+/// Monday / current-week arithmetic is duplicated here).
+///
+/// Navigation only: nothing about the workout, planner or report data is
+/// mutated. Missing athlete context is reported instead of crashing.
+Future<void> openAthleteWeekPlanner(
+  BuildContext context, {
+  required String athleteUid,
+  String? athleteName,
+  PlannerPusher pushPlanner = pushBB3WeekPlanner,
+}) async {
+  // listen: false — this runs from a tap handler, not a build.
+  final userContext = UserContext.maybeOf(context, listen: false);
+  if (userContext == null || athleteUid.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(
+          'Can\'t open the week planner for ${athleteName ?? 'this athlete'} '
+          'yet — their training context isn\'t available.'),
+    ));
+    return;
+  }
+  // The same call the Coach Dashboard makes when a coach taps an athlete row.
+  userContext.switchAthlete(athleteUid);
+  await pushPlanner(context, userContext);
+}
+
 class CoachWeeklyReviewScreen extends StatefulWidget {
   const CoachWeeklyReviewScreen({super.key});
 
@@ -41,9 +100,12 @@ class CoachWeeklyReviewScreen extends StatefulWidget {
 
 enum _ReviewFilter { all, ready, needsWeighIn, pbs, noTraining }
 
-class _AthleteReview {
+/// One athlete's row of the Weekly Review, plus the derived read-only views
+/// the card and the filters need. Public so the card widget — and its tests —
+/// can build one without the screen.
+class AthleteReview {
   final String uid;
-  final Map<String, dynamic> settings;
+  Map<String, dynamic> settings;
   final String? rosterName;
   Map<String, dynamic>? report; // current checkpoint report (may be null)
   Map<String, dynamic>? prevReport;
@@ -53,7 +115,7 @@ class _AthleteReview {
   /// still renders (saying so) instead of the whole screen failing.
   String? reportLoadError;
 
-  _AthleteReview({required this.uid, required this.settings, this.rosterName});
+  AthleteReview({required this.uid, required this.settings, this.rosterName});
 
   String get displayName {
     for (final v in [
@@ -64,6 +126,90 @@ class _AthleteReview {
       if (v != null && v.trim().isNotEmpty) return v.trim();
     }
     return uid;
+  }
+
+  String get status => report?['status'] as String? ?? 'pending';
+
+  bool get prevWasCopied =>
+      (prevReport?['status'] as String?) == CheckInStatus.copied;
+
+  /// The window this card describes.
+  ///
+  /// Once a report is copied the server has FROZEN its coverage, so the frozen
+  /// pair is the answer — recomputing would re-apply the clamp that same copy
+  /// just wrote (`lastFinalizedCoverageEnd == checkpointKey`) and collapse the
+  /// window to zero days. Drafts still resolve live, exactly as before.
+  ({String start, String end}) coverage(String currentKey) {
+    final r = report;
+    if (r != null &&
+        r['status'] == CheckInStatus.copied &&
+        r['coverageStart'] is String &&
+        r['coverageEnd'] is String) {
+      return (
+        start: r['coverageStart'] as String,
+        end: r['coverageEnd'] as String
+      );
+    }
+    return CoachCheckinsLogic.effectiveCoverage(
+      currentKey,
+      previousWasCopied: prevWasCopied,
+      lastFinalizedCoverageEnd: settings['lastFinalizedCoverageEnd'] as String?,
+    );
+  }
+
+  List<Map<String, dynamic>> eventsInWindow(String currentKey, String type) {
+    final r = report;
+    if (r == null) return const [];
+    final c = coverage(currentKey);
+    return (r['events'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .where((e) =>
+            e['type'] == type &&
+            (e['dateKey'] as String? ?? '').compareTo(c.start) >= 0 &&
+            (e['dateKey'] as String? ?? '').compareTo(c.end) < 0)
+        .toList();
+  }
+
+  int workoutsInWindow(String currentKey) {
+    final r = report;
+    if (r == null) return 0;
+    final c = coverage(currentKey);
+    return (r['workoutDates'] as List<dynamic>? ?? const [])
+        .whereType<String>()
+        .where((d) => d.compareTo(c.start) >= 0 && d.compareTo(c.end) < 0)
+        .length;
+  }
+
+  /// Server-derived (coach-timezone) staleness; falls back to the report's
+  /// generation-time status when the context omitted this athlete.
+  String get weighInStatus =>
+      liveWeighInStatus ??
+      (report?['bodyweight']?['weighInStatus'] as String?) ??
+      'ok';
+
+  String get draftPreview {
+    final r = report;
+    if (r == null) return '';
+    return CoachCheckinsLogic.visibleMessageText(
+      status: r['status'] as String?,
+      finalText: r['finalText'] as String?,
+      previousWasCopied: prevWasCopied,
+      draftIfPrevCopied: r['draftIfPrevCopied'] as String?,
+      draftIfPrevNotCopied: r['draftIfPrevNotCopied'] as String?,
+    );
+  }
+
+  /// Merges the authoritative fields the copy callable returned into the local
+  /// report, so no screen-wide reload is needed to render the copied state.
+  void applyCopyOutcome(CheckInCopyOutcome outcome) {
+    report = {...?report, ...outcome.reportPatch};
+    if (outcome.coverageEnd != null) {
+      // The same transaction that froze the report advanced this watermark.
+      settings = {
+        ...settings,
+        'lastFinalizedCoverageEnd': outcome.coverageEnd,
+      };
+    }
   }
 }
 
@@ -77,11 +223,38 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
   late String _currentKey;
   late String _prevKey;
   String _todayKey = CoachCheckinsLogic.dateKey(DateTime.now());
-  List<_AthleteReview> _athletes = [];
+  List<AthleteReview> _athletes = [];
   _ReviewFilter _filter = _ReviewFilter.all;
   final Set<String> _busy = {};
   int _rosterSize = 0;
   bool _contextDegraded = false;
+
+  /// Per-card pending state for Copy. Deliberately separate from [_loading]:
+  /// a copy must never put the screen into a loading state.
+  final Set<String> _copyPending = {};
+
+  /// Owns the in-flight guard, so a double tap cannot start a second
+  /// finalisation even inside a single frame.
+  late final CheckInCopyAction _copyAction = CheckInCopyAction(
+    invoke: ({required athleteUid, required checkpointKey}) async {
+      final res =
+          await _functions.httpsCallable('coachPrepareCheckInCopy').call({
+        'athleteUid': athleteUid,
+        'checkpointKey': checkpointKey,
+      });
+      return Map<String, dynamic>.from(res.data as Map);
+    },
+    writeClipboard: (text) => Clipboard.setData(ClipboardData(text: text)),
+  );
+
+  /// Athletes acted on since the last full load. They stay visible under the
+  /// current filter so a copy never makes the card the coach is looking at
+  /// vanish and reflow the list under their finger.
+  final Set<String> _stickyVisible = {};
+
+  /// Owned by this screen (not rebuilt per load) so the list keeps its offset
+  /// across every per-card action.
+  final ScrollController _listController = ScrollController();
 
   String get _coachUid => UserContext.of(context, listen: false).actorUid;
 
@@ -97,10 +270,17 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
+  @override
+  void dispose() {
+    _listController.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
+      _stickyVisible.clear();
     });
     try {
       final coachUid = _coachUid;
@@ -113,7 +293,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
 
       // 2) Per-athlete settings; only reporting-enabled athletes appear here.
       //    Reporting stays off until a coach toggles it on.
-      final enabled = <_AthleteReview>[];
+      final enabled = <AthleteReview>[];
       await Future.wait(roster.map((athlete) async {
         try {
           final s = await _db
@@ -124,7 +304,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
               .get();
           final data = s.data();
           if (data != null && data['reportingEnabled'] == true) {
-            enabled.add(_AthleteReview(
+            enabled.add(AthleteReview(
               uid: athlete.uid,
               settings: data,
               rosterName: athlete.label,
@@ -187,18 +367,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       await Future.wait(enabled.map((a) async {
         try {
           final results = await Future.wait([
-            _db
-                .collection('coachCheckIns')
-                .doc(coachUid)
-                .collection('reports')
-                .doc('${a.uid}_$_currentKey')
-                .get(),
-            _db
-                .collection('coachCheckIns')
-                .doc(coachUid)
-                .collection('reports')
-                .doc('${a.uid}_$_prevKey')
-                .get(),
+            _reportRef(coachUid, a.uid, _currentKey).get(),
+            _reportRef(coachUid, a.uid, _prevKey).get(),
           ]);
           a.report = results[0].data();
           a.prevReport = results[1].data();
@@ -231,53 +401,15 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     }
   }
 
+  DocumentReference<Map<String, dynamic>> _reportRef(
+          String coachUid, String athleteUid, String key) =>
+      _db
+          .collection('coachCheckIns')
+          .doc(coachUid)
+          .collection('reports')
+          .doc('${athleteUid}_$key');
+
   // ── Report helpers ─────────────────────────────────────────────────────────
-
-  bool _prevWasCopied(_AthleteReview a) =>
-      (a.prevReport?['status'] as String?) == CheckInStatus.copied;
-
-  ({String start, String end}) _coverage(_AthleteReview a) {
-    return CoachCheckinsLogic.effectiveCoverage(
-      _currentKey,
-      previousWasCopied: _prevWasCopied(a),
-      lastFinalizedCoverageEnd:
-          a.settings['lastFinalizedCoverageEnd'] as String?,
-    );
-  }
-
-  List<Map<String, dynamic>> _eventsInWindow(_AthleteReview a, String type) {
-    final report = a.report;
-    if (report == null) return const [];
-    final status = report['status'] as String?;
-    final String start;
-    final String end;
-    if (status == CheckInStatus.copied && report['coverageStart'] != null) {
-      start = report['coverageStart'] as String;
-      end = report['coverageEnd'] as String;
-    } else {
-      final c = _coverage(a);
-      start = c.start;
-      end = c.end;
-    }
-    final events = (report['events'] as List<dynamic>? ?? const [])
-        .whereType<Map<String, dynamic>>()
-        .where((e) =>
-            e['type'] == type &&
-            (e['dateKey'] as String? ?? '').compareTo(start) >= 0 &&
-            (e['dateKey'] as String? ?? '').compareTo(end) < 0)
-        .toList();
-    return events;
-  }
-
-  int _workoutsInWindow(_AthleteReview a) {
-    final report = a.report;
-    if (report == null) return 0;
-    final c = _coverage(a);
-    return (report['workoutDates'] as List<dynamic>? ?? const [])
-        .whereType<String>()
-        .where((d) => d.compareTo(c.start) >= 0 && d.compareTo(c.end) < 0)
-        .length;
-  }
 
   /// Defensive map cast: a report field written by an older server build (or
   /// a malformed document) must degrade to "absent", never throw inside build.
@@ -287,124 +419,178 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     return null;
   }
 
-  /// Server-derived (coach-timezone) staleness; falls back to the report's
-  /// generation-time status when the context omitted this athlete.
-  String _liveWeighInStatus(_AthleteReview a) =>
-      a.liveWeighInStatus ??
-      (a.report?['bodyweight']?['weighInStatus'] as String?) ??
-      'ok';
-
-  String _draftPreview(_AthleteReview a) {
-    final report = a.report;
-    if (report == null) return '';
-    return CoachCheckinsLogic.visibleMessageText(
-      status: report['status'] as String?,
-      finalText: report['finalText'] as String?,
-      previousWasCopied: _prevWasCopied(a),
-      draftIfPrevCopied: report['draftIfPrevCopied'] as String?,
-      draftIfPrevNotCopied: report['draftIfPrevNotCopied'] as String?,
-    );
-  }
-
-  bool _matchesFilter(_AthleteReview a) {
+  bool _matchesFilter(AthleteReview a) {
+    // An athlete acted on since the last load stays put, whatever the filter
+    // now says about them — the list must not reflow under the coach.
+    if (_stickyVisible.contains(a.uid)) return true;
     switch (_filter) {
       case _ReviewFilter.all:
         return true;
       case _ReviewFilter.ready:
         return a.report != null &&
             a.report!['status'] == CheckInStatus.draft &&
-            _draftPreview(a).isNotEmpty;
+            a.draftPreview.isNotEmpty;
       case _ReviewFilter.needsWeighIn:
-        return _liveWeighInStatus(a) != 'ok';
+        return a.weighInStatus != 'ok';
       case _ReviewFilter.pbs:
-        return _eventsInWindow(a, 'maxWeightPB').isNotEmpty ||
-            _eventsInWindow(a, 'repPB').isNotEmpty ||
-            _eventsInWindow(a, 'e1rmPB').isNotEmpty ||
-            _eventsInWindow(a, 'rirMatchPB').isNotEmpty;
+        return a.eventsInWindow(_currentKey, 'maxWeightPB').isNotEmpty ||
+            a.eventsInWindow(_currentKey, 'repPB').isNotEmpty ||
+            a.eventsInWindow(_currentKey, 'e1rmPB').isNotEmpty ||
+            a.eventsInWindow(_currentKey, 'rirMatchPB').isNotEmpty;
       case _ReviewFilter.noTraining:
-        return a.report != null && _workoutsInWindow(a) == 0;
+        return a.report != null && a.workoutsInWindow(_currentKey) == 0;
     }
   }
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
-  Future<void> _copyMessage(_AthleteReview a) async {
-    if (_busy.contains(a.uid)) return;
-    setState(() => _busy.add(a.uid));
+  /// Copy / finalise, scoped entirely to one card.
+  ///
+  /// Deliberately NEVER calls [_load] and never touches [_loading]: the whole
+  /// point is that the coach stays exactly where they were. The callable's
+  /// response is authoritative for everything the card renders, so the card is
+  /// reconciled from it directly.
+  ///
+  /// The clipboard write follows the callable rather than preceding it,
+  /// because coachPrepareCheckInCopy composes finalText at copy time from live
+  /// bodyweight and in-transaction milestone/coverage state — see
+  /// coach_checkin_copy_action.dart. Waiting is the only way to keep the
+  /// clipboard text and the report's finalText identical.
+  Future<void> _copyMessage(AthleteReview a) async {
+    if (_busy.contains(a.uid) || _copyPending.contains(a.uid)) return;
+    setState(() => _copyPending.add(a.uid));
+
+    final CheckInCopyOutcome outcome;
     try {
-      final res =
-          await _functions.httpsCallable('coachPrepareCheckInCopy').call({
-        'athleteUid': a.uid,
-        'checkpointKey': _currentKey,
-      });
-      final data = Map<String, dynamic>.from(res.data as Map);
-      final text = (data['text'] as String?) ?? '';
-      // The server's finalText is the single source: it is what gets frozen
-      // on the report, what goes on the clipboard, and what the card shows —
-      // update the visible card to this exact string before anything else.
-      setState(() {
-        a.report = {
-          ...?a.report,
-          'status': CheckInStatus.copied,
-          'finalText': text,
-          if (data['coverageStart'] != null)
-            'coverageStart': data['coverageStart'],
-          if (data['coverageEnd'] != null) 'coverageEnd': data['coverageEnd'],
-        };
-      });
-      await _copyToClipboard(text, a.displayName);
-      await _load();
-    } on FirebaseFunctionsException catch (e) {
-      _showError(_friendlyFunctionsError('Copy', e));
-    } catch (e) {
-      debugPrint('❌ [WeeklyReview] copy failed: $e');
-      _showError('Copy didn\'t go through. Please try again.');
+      outcome = await _copyAction.run(
+        athleteUid: a.uid,
+        checkpointKey: _currentKey,
+        onFinalised: (o) {
+          // The server's finalText is the single source: it is what is frozen
+          // on the report, what goes on the clipboard, and what the card now
+          // shows. Applied the instant the authoritative answer arrives.
+          if (!mounted) return;
+          setState(() {
+            a.applyCopyOutcome(o);
+            _stickyVisible.add(a.uid);
+          });
+        },
+      );
     } finally {
-      if (mounted) setState(() => _busy.remove(a.uid));
+      if (mounted) setState(() => _copyPending.remove(a.uid));
+    }
+    if (!mounted) return;
+
+    switch (outcome.status) {
+      case CheckInCopyStatus.duplicateIgnored:
+        return; // a copy for this athlete was already in flight
+      case CheckInCopyStatus.copied:
+        _showBrief(outcome.text.isEmpty
+            ? 'Nothing to send for ${a.displayName} — marked as sent.'
+            : 'Copied');
+        // Server-only fields the callable does not return (milestoneAwarded,
+        // copiedAtMs). One document read, after the coach already has their
+        // text — never a screen reload.
+        unawaited(_reconcileCopiedReport(a));
+        return;
+      case CheckInCopyStatus.clipboardFailed:
+        // The check-in IS recorded — say so, and hand over the exact text.
+        debugPrint('❌ [WeeklyReview] clipboard write failed: ${outcome.error}');
+        unawaited(_reconcileCopiedReport(a));
+        await _showManualCopyDialog(outcome.text, a.displayName,
+            recorded: true);
+        return;
+      case CheckInCopyStatus.failed:
+        final e = outcome.error;
+        if (e is FirebaseFunctionsException) {
+          _showError(_friendlyFunctionsError('Copy', e));
+        } else {
+          debugPrint('❌ [WeeklyReview] copy failed: $e');
+          _showError('Copy didn\'t go through. Please try again.');
+        }
+        return;
     }
   }
 
-  /// Puts [text] on the clipboard. On failure the coach is told clearly and
-  /// offered the full text to copy manually — we never claim success when
-  /// the clipboard write failed.
+  /// Refreshes ONE athlete's current report document after a successful copy,
+  /// picking up the fields the callable does not return. Silent and optional:
+  /// the authoritative status / finalText / coverage are already applied, so a
+  /// failure here changes nothing the coach can see.
+  Future<void> _reconcileCopiedReport(AthleteReview a) async {
+    try {
+      final snap = await _reportRef(_coachUid, a.uid, _currentKey).get();
+      final data = snap.data();
+      if (data == null || !mounted) return;
+      setState(() => a.report = data);
+    } catch (e) {
+      debugPrint('⚠️ [WeeklyReview] post-copy reconcile skipped: $e');
+    }
+  }
+
+  /// Puts [text] on the clipboard for the re-copy control on an already-copied
+  /// card. On failure the coach is told clearly and offered the full text to
+  /// copy manually — we never claim success when the clipboard write failed.
   Future<void> _copyToClipboard(String text, String athleteName) async {
     try {
       await Clipboard.setData(ClipboardData(text: text));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(text.isEmpty
-            ? 'Nothing to send for $athleteName — marked as sent.'
-            : 'Message copied for $athleteName.'),
-      ));
+      _showBrief(text.isEmpty
+          ? 'Nothing to send for $athleteName — marked as sent.'
+          : 'Copied');
     } catch (e) {
       debugPrint('❌ [WeeklyReview] clipboard write failed: $e');
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Copy to clipboard failed'),
-          content: SingleChildScrollView(
-            child: SelectableText(
-              text.isEmpty ? '(empty message)' : text,
-              style: const TextStyle(fontSize: 13),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'),
-            ),
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(ctx);
-                await _copyToClipboard(text, athleteName);
-              },
-              child: const Text('Try again'),
-            ),
-          ],
-        ),
-      );
+      await _showManualCopyDialog(text, athleteName, recorded: false);
     }
+  }
+
+  /// Truthful fallback when the clipboard itself refuses. [recorded] says
+  /// whether the server-side finalisation nevertheless succeeded.
+  Future<void> _showManualCopyDialog(String text, String athleteName,
+      {required bool recorded}) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(recorded
+            ? 'Copied, but couldn\'t reach the clipboard'
+            : 'Copy to clipboard failed'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (recorded)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'The check-in is recorded as sent. Only the clipboard '
+                    'write failed — here is the exact message.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+              SelectableText(
+                text.isEmpty ? '(empty message)' : text,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await _copyToClipboard(text, athleteName);
+            },
+            child: const Text('Try again'),
+          ),
+        ],
+      ),
+    );
   }
 
   String _friendlyFunctionsError(String action, FirebaseFunctionsException e) {
@@ -424,7 +610,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     }
   }
 
-  Future<void> _undo(_AthleteReview a) async {
+  Future<void> _undo(AthleteReview a) async {
     if (_busy.contains(a.uid)) return;
     setState(() => _busy.add(a.uid));
     try {
@@ -446,7 +632,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     }
   }
 
-  Future<void> _skip(_AthleteReview a) async {
+  Future<void> _skip(AthleteReview a) async {
     if (_busy.contains(a.uid)) return;
     setState(() => _busy.add(a.uid));
     try {
@@ -471,6 +657,18 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
   void _showError(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Compact, short-lived confirmation. Never blocks and never moves the list.
+  void _showBrief(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(msg),
+        duration: const Duration(milliseconds: 1200),
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
   Future<void> _editTimezone() async {
@@ -664,6 +862,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                               ),
                             )
                           : ListView.separated(
+                              controller: _listController,
                               padding: const EdgeInsets.fromLTRB(8, 6, 8, 24),
                               itemCount: filtered.length,
                               separatorBuilder: (_, __) =>
@@ -684,7 +883,10 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
       child: ChoiceChip(
         label: Text(label),
         selected: selected,
-        onSelected: (_) => setState(() => _filter = value),
+        onSelected: (_) => setState(() {
+          _filter = value;
+          _stickyVisible.clear();
+        }),
       ),
     );
   }
@@ -694,15 +896,84 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
     return wd == DateTime.monday ? 'Monday' : 'Thursday';
   }
 
-  Widget _athleteCard(_AthleteReview a) {
+  Widget _athleteCard(AthleteReview a) {
+    final statusByKey = <String, String>{
+      if (a.report != null) _currentKey: a.status,
+      if (a.prevReport != null)
+        _prevKey: a.prevReport!['status'] as String? ?? 'draft',
+    };
+    return CoachAthleteReviewCard(
+      // Stable identity: a per-card action must never remount its neighbours.
+      key: ValueKey('weeklyReviewCard_${a.uid}'),
+      review: a,
+      currentKey: _currentKey,
+      adherence: _mapOf(a.report?['currentWeekAdherence']),
+      busy: _busy.contains(a.uid) || _copyPending.contains(a.uid),
+      mutable: CoachCheckinsLogic.canMutate(_currentKey, statusByKey),
+      onCopy: () => _copyMessage(a),
+      onRecopy: () => _copyToClipboard(
+          (a.report?['finalText'] as String?) ?? '', a.displayName),
+      onUndo: () => _undo(a),
+      onSkip: () => _skip(a),
+      onOpenPlanner: () => openAthleteWeekPlanner(
+        context,
+        athleteUid: a.uid,
+        athleteName: a.displayName,
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Athlete card
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// One athlete's Weekly Review card. Public and Firebase-free so the exact
+/// production widget can be mounted in tests.
+class CoachAthleteReviewCard extends StatelessWidget {
+  const CoachAthleteReviewCard({
+    super.key,
+    required this.review,
+    required this.currentKey,
+    required this.busy,
+    required this.mutable,
+    required this.onCopy,
+    required this.onRecopy,
+    required this.onUndo,
+    required this.onSkip,
+    required this.onOpenPlanner,
+    this.adherence,
+  });
+
+  final AthleteReview review;
+  final String currentKey;
+
+  /// Fixed Monday→Sunday adherence (server-computed). Absent on reports
+  /// generated before this field existed — the card then falls back to the
+  /// legacy completion map and omits the week strip.
+  final Map<String, dynamic>? adherence;
+
+  /// Per-card pending state only. No screen-wide loading flag is involved in
+  /// any card action.
+  final bool busy;
+  final bool mutable;
+  final VoidCallback onCopy;
+  final VoidCallback onRecopy;
+  final VoidCallback onUndo;
+  final VoidCallback onSkip;
+  final VoidCallback onOpenPlanner;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final a = review;
     final report = a.report;
-    final status = report?['status'] as String? ?? 'pending';
-    final coverage = _coverage(a);
-    final maxWeightPBs = _eventsInWindow(a, 'maxWeightPB');
-    final repPBs = _eventsInWindow(a, 'repPB');
-    final e1rmPBs = _eventsInWindow(a, 'e1rmPB');
-    final rirMatchPBs = _eventsInWindow(a, 'rirMatchPB');
+    final status = a.status;
+    final coverage = a.coverage(currentKey);
+    final maxWeightPBs = a.eventsInWindow(currentKey, 'maxWeightPB');
+    final repPBs = a.eventsInWindow(currentKey, 'repPB');
+    final e1rmPBs = a.eventsInWindow(currentKey, 'e1rmPB');
+    final rirMatchPBs = a.eventsInWindow(currentKey, 'rirMatchPB');
     // A set that is both an all-time heaviest lift and a rep-target PB is ONE
     // achievement (the backend praises it once, as the heaviest lift), so the
     // rep-PB evidence list hides the duplicate rather than showing it twice.
@@ -712,25 +983,13 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
         .where((e) =>
             !maxWeightKeys.contains('${e['exerciseId']}_${e['dateKey']}'))
         .toList();
-    final workouts = _workoutsInWindow(a);
+    final workouts = a.workoutsInWindow(currentKey);
     final completion = report?['completion'] as Map<String, dynamic>?;
-    // Fixed Monday→Sunday adherence (server-computed). Absent on reports
-    // generated before this field existed — the card then falls back to the
-    // legacy completion map and omits the week strip.
-    final adherence = _mapOf(report?['currentWeekAdherence']);
     final weekStrip = CoachCheckinsLogic.weekStripRows(adherence);
     final bodyweight = report?['bodyweight'] as Map<String, dynamic>?;
     final fallbackWeek = report?['fallbackWeek'] as Map<String, dynamic>?;
-    final weighStatus = _liveWeighInStatus(a);
-    final draft = _draftPreview(a);
-    final busy = _busy.contains(a.uid);
-
-    final statusByKey = <String, String>{
-      if (report != null) _currentKey: status,
-      if (a.prevReport != null)
-        _prevKey: a.prevReport!['status'] as String? ?? 'draft',
-    };
-    final mutable = CoachCheckinsLogic.canMutate(_currentKey, statusByKey);
+    final weighStatus = a.weighInStatus;
+    final draft = a.draftPreview;
 
     return Card(
       elevation: 0,
@@ -753,6 +1012,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                _plannerButton(),
+                const SizedBox(width: 6),
                 _statusChip(status),
               ],
             ),
@@ -882,7 +1143,7 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
               children: [
                 if (report != null && status == CheckInStatus.draft)
                   ElevatedButton.icon(
-                    onPressed: busy || !mutable ? null : () => _copyMessage(a),
+                    onPressed: busy || !mutable ? null : onCopy,
                     icon: busy
                         ? const SizedBox(
                             width: 14,
@@ -902,27 +1163,55 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                     visualDensity: VisualDensity.compact,
                     icon:
                         const Icon(Icons.copy, size: 16, color: Colors.white70),
-                    onPressed: busy
-                        ? null
-                        : () => _copyToClipboard(
-                            (report['finalText'] as String?) ?? '',
-                            a.displayName),
+                    onPressed: busy ? null : onRecopy,
                   ),
                   const SizedBox(width: 4),
                   TextButton(
-                    onPressed: busy || !mutable ? null : () => _undo(a),
+                    onPressed: busy || !mutable ? null : onUndo,
                     child: const Text('Undo / Mark Not Sent'),
                   ),
                 ],
                 const Spacer(),
                 if (report != null && status == CheckInStatus.draft)
                   TextButton(
-                    onPressed: busy ? null : () => _skip(a),
+                    onPressed: busy ? null : onSkip,
                     child: const Text('Skip'),
                   ),
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Compact planner control, in the header row beside the status chip.
+  ///
+  /// Sized to the surrounding 15px name text (16px icon, 11px label, 2px
+  /// vertical padding) so the header row — and therefore the card — does not
+  /// grow.
+  Widget _plannerButton() {
+    return Tooltip(
+      message: 'Open week planner',
+      child: Semantics(
+        button: true,
+        label: 'Open week planner',
+        child: InkWell(
+          key: const ValueKey('openWeekPlannerButton'),
+          onTap: onOpenPlanner,
+          borderRadius: BorderRadius.circular(8),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.calendar_view_week, size: 16, color: Colors.white70),
+                SizedBox(width: 4),
+                Text('Planner',
+                    style: TextStyle(color: Colors.white70, fontSize: 11)),
+              ],
+            ),
+          ),
         ),
       ),
     );
