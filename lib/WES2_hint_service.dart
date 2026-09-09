@@ -4,6 +4,7 @@ import 'WES2_models.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'periodization_model_utils.dart';
+import 'increment_grid.dart';
 import 'progression_engine.dart';
 import 'wes2_hint_trace.dart';
 
@@ -384,8 +385,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
             reps: repsForWeight,
             rir: rirForWeight,
             exerciseName: row.name,
-            localValidWeights: PeriodizationModelUtils.expandIncrementOptions(
-              PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
+            localGrid: PeriodizationModelUtils.gridFromRaw(
+              exSettings?['increments'],
             ),
           );
           if (best != null) weightHint = best;
@@ -430,9 +431,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
         repsForWeight,
         rirForWeight,
         exerciseId: row.exerciseId,
-        increments: PeriodizationModelUtils.expandIncrementOptions(
-          PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
-        ),
+        grid: PeriodizationModelUtils.gridFromRaw(exSettings?['increments']),
         asOfDate: date,
       );
       if (defW > 0) {
@@ -744,13 +743,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
     // Local increment grid from this exercise's own settings (exerciseId-keyed),
     // matching the Engine and BB3HintService snapping convention.
-    final _sNValidWeights = PeriodizationModelUtils.expandIncrementOptions(
-      PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
-    );
-    double _sNSnap(double t) => _sNValidWeights.isEmpty
-        ? t
-        : _sNValidWeights
-            .reduce((a, b) => (a - t).abs() < (b - t).abs() ? a : b);
+    final _sNGrid =
+        PeriodizationModelUtils.gridFromRaw(exSettings?['increments']);
+    double _sNSnap(double t) => _sNGrid.snap(t);
 
     // Bodyweight exercises store display-added load; E1RM math needs absolute load.
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
@@ -975,7 +970,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     weightHint = _capWeightToPrevSet(
       proposed: weightHint,
       prevSet: prevSet,
-      validWeights: _sNValidWeights,
+      validWeights: const <double>[],
+      grid: _sNGrid,
     );
     if (Wes2HintTrace.enabled) {
       Wes2HintTrace.log(
@@ -1125,40 +1121,28 @@ class Wes2HintServiceImpl implements Wes2HintService {
   /// Evaluates the nearest rounded increment plus one step below and one above,
   /// returning the candidate with the smallest absolute E1RM difference.
   ///
-  /// [localValidWeights] is the exerciseId-keyed sorted increment list from the
-  /// caller's exSettings.  When non-empty it is used for all snapping; when empty
-  /// the call falls back to the global name-based PMU helper.
+  /// [localGrid] is the exerciseId-keyed increment lattice from the caller's
+  /// exSettings.  When supplied it is used for all snapping; when null the call
+  /// falls back to the global name-based PMU helper.  The lattice is unbounded,
+  /// so this stays correct above the old 100-position list ceiling.
   static double? _closestE1rmWeight({
     required double targetE1rm,
     required double rawWeight,
     required int reps,
     required double rir,
     required String exerciseName,
-    List<double> localValidWeights = const [],
+    IncrementGrid? localGrid,
   }) {
     if (targetE1rm <= 0 || rawWeight <= 0) return null;
 
-    double _snap(double t) {
-      if (localValidWeights.isNotEmpty) {
-        return localValidWeights
-            .reduce((a, b) => (a - t).abs() < (b - t).abs() ? a : b);
-      }
-      return PeriodizationModelUtils.roundToNearestValidIncrement(
-          targetWeight: t, exerciseName: exerciseName);
-    }
+    final IncrementGrid grid = localGrid ??
+        PeriodizationModelUtils.gridForExercise(exerciseName);
 
-    final nearest = _snap(rawWeight);
-
-    // Find the step size by snapping the value just above nearest.
-    final nextUp = _snap(nearest + 0.01);
-    final step = nextUp - nearest;
-    if (step <= 0) return nearest;
-
-    final candidates = <double>[
-      if (nearest - step > 0) nearest - step,
-      nearest,
-      nearest + step,
-    ];
+    // The real neighbours of the snapped weight — one valid step below, the
+    // snapped weight itself, one valid step above — never a synthesised
+    // `nearest ± step`, which can miss the grid when spacing is non-uniform.
+    final nearest = grid.snap(rawWeight);
+    final candidates = grid.neighborhood(rawWeight);
 
     double bestW = nearest;
     double bestDiff = double.infinity;
@@ -1195,6 +1179,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required double? proposed,
     required Wes2SetState prevSet,
     required List<double> validWeights,
+    IncrementGrid? grid,
   }) {
     if (proposed == null) return null;
     final prevResolved = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
@@ -1204,14 +1189,13 @@ class Wes2HintServiceImpl implements Wes2HintService {
     if (mayIncrease) return proposed;
     if (proposed <= prevResolved + 1e-9) return proposed;
     // Cap active: floor-snap to the highest valid increment ≤ prevResolved.
-    if (validWeights.isEmpty) return prevResolved;
-    double? best;
-    for (final w in validWeights) {
-      if (w <= prevResolved + 1e-9 && (best == null || w > best)) best = w;
-    }
+    // Computed on the lattice, so a cap above the old 247.5 kg list ceiling no
+    // longer collapses to that ceiling.
+    if (grid == null && validWeights.isEmpty) return prevResolved;
+    final lattice = grid ?? IncrementGrid.fromWeights(validWeights);
     // If no grid value is ≤ the cap, fall back to the cap itself rather than
     // ever returning an above-cap value.
-    return best ?? prevResolved;
+    return lattice.previousOrSame(prevResolved) ?? prevResolved;
   }
 
   /// Test-only entry point for the Change 3 weight cap rule. Forwards to

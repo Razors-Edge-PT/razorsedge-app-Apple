@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:core';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'periodization_model_utils.dart'; // your existing utils
+import 'increment_grid.dart';
 import 'dart:convert'; // for jsonEncode in debug logs
 
 
@@ -444,6 +445,13 @@ class ProgressionEngine {
     final incMap = PeriodizationModelUtils.incMapFromRaw(incRaw);
     final increments = PeriodizationModelUtils.expandIncrementOptions(incMap);
 
+    // 🔒 The canonical, unbounded weight lattice for this exercise. Every snap
+    // below — baseline, model overlay, BB2 overrides, bodyweight ADDED load —
+    // goes through this one grid, so nothing can be clamped to the end of a
+    // pre-generated list (247.5 kg with a 2.5 kg primary). `increments` is kept
+    // only as the compatibility payload for callers that still want a list.
+    final IncrementGrid incGrid = PeriodizationModelUtils.gridFromMap(incMap);
+
 // 🔒 PATCH: normalize increments for snapping everywhere
 
     final List<double> _incOpts =
@@ -474,6 +482,7 @@ class ProgressionEngine {
         exerciseId: exerciseId,
         topSetHistory: routedTopSetHistory,
         increments: _incOpts,
+        grid: incGrid,
         asOfDate: _selectedDate,
       );
 
@@ -495,6 +504,7 @@ class ProgressionEngine {
         defaultWeight: defaultWeight,
         rirValue: rir,
         increments: increments ?? [2.5],
+        grid: incGrid,
         debugOrigin: 'ENGINE',
 
         // ✅ fallback
@@ -571,9 +581,7 @@ class ProgressionEngine {
       );
 
       // snap on ADDED
-      double _snappedAdded = _incOpts.reduce(
-            (a, b) => (a - _targetAdded).abs() < (b - _targetAdded).abs() ? a : b,
-      );
+      double _snappedAdded = incGrid.snap(_targetAdded);
       if (_snappedAdded < 0) _snappedAdded = 0.0;
 
       // ADDED → ABS
@@ -587,9 +595,7 @@ class ProgressionEngine {
       progressed['weightDisplayAdded'] = _snappedAdded;
     } else {
       // non-BW: snap absolute
-      snapped = _incOpts.reduce(
-            (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
-      );
+      snapped = incGrid.snap(target);
       // (leaving your displayAdded mirror as-is)
       progressed['weightDisplayAdded'] = snapped;
     }
@@ -641,9 +647,7 @@ class ProgressionEngine {
         if (_added < 0) _added = 0.0;
 
         // snap on ADDED using increments
-        double _snappedAdded = _incOpts.reduce(
-              (a, b) => (a - _added).abs() < (b - _added).abs() ? a : b,
-        );
+        double _snappedAdded = incGrid.snap(_added);
         if (_snappedAdded < 0) _snappedAdded = 0.0;
 
         // ADDED → ABS
@@ -669,9 +673,7 @@ class ProgressionEngine {
       if (_isBwEx && ow is num && ow > 0 && !(overrides['addedWeight'] is num)) {
         double _added = ow.toDouble();
         // snap on ADDED
-        double _snappedAdded = _incOpts.reduce(
-              (a, b) => (a - _added).abs() < (b - _added).abs() ? a : b,
-        );
+        double _snappedAdded = incGrid.snap(_added);
         if (_snappedAdded < 0) _snappedAdded = 0.0;
         // ADDED → ABS with bodyweight as-of date
         final double _abs = PeriodizationModelUtils.toAbsoluteWeight(
@@ -752,9 +754,7 @@ class ProgressionEngine {
             exerciseName: exerciseName,
             asOfDate: _asOfDate,
           );
-          double _snappedAdded = _incOpts.reduce(
-                (a, b) => (a - _targetAdded).abs() < (b - _targetAdded).abs() ? a : b,
-          );
+          double _snappedAdded = incGrid.snap(_targetAdded);
           if (_snappedAdded < 0) _snappedAdded = 0.0;
           final double _snappedAbs = PeriodizationModelUtils.toAbsoluteWeight(
             uid: uidForBw,
@@ -765,9 +765,7 @@ class ProgressionEngine {
           progressed['weightDisplayAdded'] = _snappedAdded;
           progressed['weight'] = _snappedAbs;
         } else {
-          final double _snapped = _incOpts.reduce(
-                (a, b) => (a - _solvedAbs).abs() < (b - _solvedAbs).abs() ? a : b,
-          );
+          final double _snapped = incGrid.snap(_solvedAbs);
           progressed['weightDisplayAdded'] = _snapped;
           progressed['weight'] = _snapped;
         }
@@ -821,9 +819,7 @@ class ProgressionEngine {
             exerciseName: exerciseName,
             asOfDate: _asOfDate,
           );
-          double _snappedAdded = _incOpts.reduce(
-                (a, b) => (a - _disp).abs() < (b - _disp).abs() ? a : b,
-          );
+          double _snappedAdded = incGrid.snap(_disp);
           if (_snappedAdded < 0) _snappedAdded = 0.0;
           final _snappedAbs = PeriodizationModelUtils.toAbsoluteWeight(
             uid: uidForBw,

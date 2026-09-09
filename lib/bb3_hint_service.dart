@@ -145,19 +145,15 @@ class BB3HintService {
     // The Engine already used this same grid; we must snap the same way here so
     // the reverse-calculated weight is not re-rounded through a name-based lookup
     // that can miss the settings and fall back to the wrong step size.
-    final _localValidWeights = PeriodizationModelUtils.expandIncrementOptions(
-      PeriodizationModelUtils.incMapFromRaw(exSettings?['increments']),
-    );
+    final _localGrid =
+        PeriodizationModelUtils.gridFromRaw(exSettings?['increments']);
 
-    // Snaps [target] to the nearest value in the local grid.
+    // Snaps [target] to the nearest weight on the local lattice.
     // Falls back to the global 2.5-step grid when no settings are present,
-    // matching the Engine's own expandIncrementOptions(incMapFromRaw(null)) default.
-    double _snapToGrid(double target) {
-      if (_localValidWeights.isEmpty) return target;
-      return _localValidWeights.reduce(
-        (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
-      );
-    }
+    // matching the Engine's own gridFromRaw(null) default. The lattice is
+    // unbounded, so a heavy lift is not clamped to a generated list's last
+    // entry (247.5 kg with a 2.5 kg primary).
+    double _snapToGrid(double target) => _localGrid.snap(target);
 
     // ── Shared helper: build the weight display string for a given reps/RIR ──
     String _wHint(int reps, double rir) {

@@ -9,6 +9,7 @@ import 'templates.dart';
 import 'exercise_details_screen.dart'; // Import your exercise details screen
 import 'top_sets_screen.dart';
 import 'Block_Planner.dart';
+import 'increment_grid.dart';
 import 'dart:convert';
 import 'WorkoutSummaryScreen.dart';
 import 'dart:async';
@@ -1529,6 +1530,7 @@ class PeriodizationModelUtils {
     String? exerciseId,
     List<Map<String, dynamic>>? topSetHistory,
     List<double>? increments,
+    IncrementGrid? grid,
     DateTime? asOfDate,
   }) {
     final List<Map<String, dynamic>> routed = topSetHistory ??
@@ -1566,9 +1568,14 @@ class PeriodizationModelUtils {
     // 3) Snap to valid increment for this exercise. Prefer the grid the caller
     //    already built from exerciseId-keyed settings; the name-keyed lookup
     //    inside roundToNearestValidIncrement is the legacy fallback only.
-    final double rounded = (increments != null && increments.isNotEmpty)
-        ? increments.reduce((a, b) =>
-            (a - suggestedWeight).abs() < (b - suggestedWeight).abs() ? a : b)
+    //    Snapping is arithmetic on the lattice, so a 270 kg or 500 kg target
+    //    lands on a real increment instead of the top of a 100-entry list.
+    final IncrementGrid? snapGrid = grid ??
+        ((increments != null && increments.isNotEmpty)
+            ? IncrementGrid.fromWeights(increments)
+            : null);
+    final double rounded = (snapGrid != null)
+        ? snapGrid.snap(suggestedWeight)
         : roundToNearestValidIncrement(
             targetWeight: suggestedWeight,
             exerciseName: exerciseName,
@@ -1642,10 +1649,6 @@ class PeriodizationModelUtils {
     final double primary = inc['primary']!;
     final double secondary = inc['secondary'] ?? 0.0;
 
-    final Set<double> options = {};
-    for (int i = 0; i < 100; i++) {
-      options.add(i * primary); // ✅ Start from 0
-    }
     bool useSecondary = secondary > 0 && secondary != primary;
 
     if (incRaw is Map) {
@@ -1658,20 +1661,14 @@ class PeriodizationModelUtils {
       }
     }
 
-    if (useSecondary) {
-      for (final base in options.toList()) {
-        options.add(base + secondary);
-      }
-    }
-
-
-
-    final rounded = options.reduce((a, b) =>
-    (a - targetWeight).abs() < (b - targetWeight).abs() ? a : b);
-
-
-
-    return rounded;
+    // Snap on the arithmetic lattice, not on a pre-generated list. The old
+    // `for (i = 0; i < 100; i++) options.add(i * primary)` capped this helper
+    // at 99 primary steps (247.5 kg at 2.5 kg), which silently clamped every
+    // heavier lift down to that ceiling.
+    return IncrementGrid(
+      primary: primary,
+      secondary: useSecondary ? secondary : null,
+    ).snap(targetWeight);
 
   }
 
@@ -1707,11 +1704,6 @@ class PeriodizationModelUtils {
     final double primary = inc['primary']!;
     final double secondary = inc['secondary'] ?? 0.0;
 
-
-    final Set<double> weightOptions = {};
-    for (int i = 0; i < 100; i++) {
-      weightOptions.add(i * primary);
-    }
     bool useSecondary = secondary > 0 && secondary != primary;
 
 // Same guard against legacy/default-injected 1.0 with week/block keys
@@ -1728,20 +1720,26 @@ class PeriodizationModelUtils {
       }
     }
 
-    if (useSecondary) {
-      for (final base in weightOptions.toList()) {
-        weightOptions.add(base + secondary);
-      }
-    }
-
-
-
-    final list = weightOptions.toList()..sort();
-
-    return list;
+    // COMPATIBILITY ONLY — a materialised, finite view of the lattice. Use
+    // [gridForExercise]/[IncrementGrid] for anything that makes a decision.
+    return IncrementGrid(
+      primary: primary,
+      secondary: useSecondary ? secondary : null,
+    ).expand();
 
   }
 
+  /// The canonical lattice for an exercise, resolved from the name-keyed (and
+  /// then id-keyed) settings — the legacy lookup [roundToNearestValidIncrement]
+  /// uses. Progression paths should prefer the exerciseId-keyed grid built by
+  /// the engine; this is the fallback for callers that only have a name.
+  static IncrementGrid gridForExercise(String exerciseNameOrId) =>
+      IncrementGrid.fromWeights(getIncrementsForExercise(exerciseNameOrId));
+
+  /// LEGACY / UNUSED by progression. Multiplies a list of ABSOLUTE valid
+  /// weights by 0..99 as though those weights were increment sizes, which is
+  /// meaningless; nothing in the progression path calls it. Left in place only
+  /// so external/manual callers keep compiling — do not build on it.
   static List<double> roundToAllValidIncrements({
     required double baseWeight,
     required String exerciseName,
@@ -1806,19 +1804,28 @@ class PeriodizationModelUtils {
     return {'primary': 2.5}; // absolute fallback
   }
 
-  /// Expand a canonical increments map into a sorted list of valid weights.
-  static List<double> expandIncrementOptions(Map<String, double> inc) {
-    final primary = inc['primary'] ?? 2.5;
-    final secondary = inc['secondary'] ?? 0.0;
+  /// The canonical, ceiling-free weight lattice for an increments map.
+  ///
+  /// Every progression decision (snapping, "next weight", "previous weight",
+  /// Smart Progression trial centres) must go through this grid rather than
+  /// through a materialised list — see [IncrementGrid].
+  static IncrementGrid gridFromMap(Map<String, double>? inc) =>
+      IncrementGrid.fromMap(inc);
 
-    final opts = <double>{};
-    for (int i = 0; i < 100; i++) opts.add(i * primary);
-    if (secondary > 0 && secondary != primary) {
-      for (final base in opts.toList()) opts.add(base + secondary);
-    }
-    final list = opts.toList()..sort();
-    return list;
-  }
+  /// The canonical grid for a raw Firestore `increments` value.
+  static IncrementGrid gridFromRaw(dynamic incRaw) =>
+      IncrementGrid.fromMap(incMapFromRaw(incRaw));
+
+  /// Expand a canonical increments map into a sorted list of valid weights.
+  ///
+  /// COMPATIBILITY ONLY. This materialises the first 100 primary positions, so
+  /// with a 2.5 kg primary it stops at 247.5 kg. That ceiling is why Smart
+  /// Progression used to clamp a 270 kg Lat Pull Down down to 247.5 and pay for
+  /// the difference in reps. No progression decision may be made from this
+  /// list any more: pass the [IncrementGrid] (see [gridFromMap]) instead, or
+  /// recover it with `IncrementGrid.fromWeights(list)` at the boundary.
+  static List<double> expandIncrementOptions(Map<String, double> inc) =>
+      IncrementGrid.fromMap(inc).expand();
 
   // ==== BEGIN: Shared plan inputs hash (Warmup + WES use the same) ====
   static String computePlanInputsHash({
@@ -1882,6 +1889,7 @@ class PeriodizationModelUtils {
     required double defaultWeight,
     double rirValue = 0, // optional with default
     required List<double> increments,
+    IncrementGrid? grid,
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory, // optional
     int weekIndex = 0,
@@ -1965,15 +1973,16 @@ class PeriodizationModelUtils {
       return defaultWeight;
     }
 
-    // Use the increments passed in by the caller (already built by the Engine
-    // via expandIncrementOptions, keyed by exerciseId with a safe 2.5 kg default).
+    // Use the increment configuration passed in by the caller (already built by
+    // the Engine from exerciseId-keyed settings with a safe 2.5 kg default).
     // Do not re-derive from roundToAllValidIncrements: its name-keyed settings
     // lookup falls back to [20.0, 22.5, ...], producing a broken grid with a
     // 20 kg gap that forces the center far above the true implied weight.
-    final validWeights = (increments.isNotEmpty
-        ? List<double>.from(increments)
-        : [0.0, 2.5, 5.0, 7.5, 10.0])
-      ..sort();
+    // The lattice is unbounded, so "the next valid weight" exists at any load.
+    final IncrementGrid validGrid = grid ??
+        (increments.isNotEmpty
+            ? IncrementGrid.fromWeights(increments)
+            : IncrementGrid(primary: IncrementGrid.defaultPrimary));
 
     // Optional: used-combo guard (weight×repTarget×rir).
     // Served from the prebuilt index using the identity the router resolved --
@@ -2029,13 +2038,10 @@ class PeriodizationModelUtils {
 
 
     if (matchedReps >= repTarget) {
-      double nextHigher = weightUsed;
-      for (final option in validWeights) {
-        if (option > weightUsed) {
-          nextHigher = option;
-          break;
-        }
-      }
+      // The smallest valid weight strictly above the one just used. Computed
+      // arithmetically, so promotion still works at 270 kg or 500 kg — the old
+      // scan over a 100-entry list simply ran out and left the athlete stuck.
+      final double nextHigher = validGrid.next(weightUsed);
 
       if (nextHigher == weightUsed) {
         final finalE1RM = calculateE1RM(weightUsed, repTarget.toDouble(), rirValue);
@@ -2106,6 +2112,7 @@ class PeriodizationModelUtils {
     required double defaultWeight,
     double rirValue = 0,
     required List<double> increments,
+    IncrementGrid? grid,
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
@@ -2176,25 +2183,20 @@ class PeriodizationModelUtils {
             'plannedRIR=${rirValue.toStringAsFixed(1)})'
     );
 
-    // Use the increments passed in by the caller (already built by the Engine
-    // via expandIncrementOptions, keyed by exerciseId with a safe 2.5 kg default).
+    // Use the increment configuration passed in by the caller (already built by
+    // the Engine from exerciseId-keyed settings with a safe 2.5 kg default).
     // Do not re-derive from roundToAllValidIncrements: its name-keyed settings
     // lookup falls back to [20.0, 22.5, ...], producing a broken grid with a
     // 20 kg gap that forces the center far above the true implied weight.
-    final validWeights = (increments.isNotEmpty
-        ? List<double>.from(increments)
-        : [0.0, 2.5, 5.0, 7.5, 10.0])
-      ..sort();
-
-    // [ADD PRINT] —— are SP’s internal candidates consistent with router-provided increments near default?
-    final bool _gridsDifferNearDefault = (() {
-      if (validWeights.isEmpty || increments.isEmpty) return true;
-      double nearest(List<double> xs, double t) =>
-          xs.reduce((a,b)=> (a - t).abs() < (b - t).abs() ? a : b);
-      final vNear = nearest(validWeights, defaultWeight);
-      final rNear = nearest(increments,   defaultWeight);
-      return (vNear - rNear).abs() > 0.01;
-    })();
+    //
+    // The grid is an unbounded lattice, NOT a pre-generated list. A 100-entry
+    // list stopped at 247.5 kg with a 2.5 kg primary, so a Lat Pull Down whose
+    // implied weight is 269.9 kg had its centre clamped to the ceiling and the
+    // scorer then bought the missing E1RM with reps (245 × 6 for a 3-rep plan).
+    final IncrementGrid validGrid = grid ??
+        (increments.isNotEmpty
+            ? IncrementGrid.fromWeights(increments)
+            : IncrementGrid(primary: IncrementGrid.defaultPrimary));
 
 
 // 🎯 Center trials on the weight implied by baseE1RM at (repTarget, RIR),
@@ -2206,13 +2208,9 @@ class PeriodizationModelUtils {
     );
 
 // snap to nearest allowed weight
-    final double centerWeight = validWeights.reduce((a, b) =>
-    ((a - implied).abs() < (b - implied).abs()) ? a : b
-    );
-    final belowCW = validWeights.where((w) => w <= centerWeight).toList();
-    final aboveCW = validWeights.where((w) => w >  centerWeight).toList();
-    final nbCW = belowCW.isNotEmpty ? belowCW.last : null;
-    final naCW = aboveCW.isNotEmpty ? aboveCW.first : null;
+    final double centerWeight = validGrid.snap(implied);
+    final nbCW = validGrid.previous(centerWeight);
+    final naCW = validGrid.next(centerWeight);
     print('🎯 [SP] center=${centerWeight.toStringAsFixed(1)} '
         '(implied=${implied.toStringAsFixed(1)}) '
         'neigh: below=$nbCW above=$naCW');
@@ -2239,43 +2237,16 @@ class PeriodizationModelUtils {
     double bestE1RM = baseE1RM;
     double bestScore = double.infinity;
 
-    final sortedWeights = validWeights
-        .where((w) => (w - defaultWeight).abs() <= increments[0])
-        .toList()
-      ..sort((a, b) => (a - defaultWeight).abs().compareTo((b - defaultWeight).abs()));
-
-
-
-    // Find the local spacing in validWeights around centerWeight (tolerant to float mismatch)
-    int idx = validWeights.indexOf(centerWeight);
-    if (idx < 0) {
-      double minDiff = double.infinity;
-      int nearestIdx = 0;
-      for (int i = 0; i < validWeights.length; i++) {
-        final d = (validWeights[i] - centerWeight).abs();
-        if (d < minDiff) { minDiff = d; nearestIdx = i; }
-      }
-      idx = nearestIdx;
-    }
-
-    final int upIdx = (idx + 1 < validWeights.length) ? idx + 1 : idx;
-    final int dnIdx = (idx - 1 >= 0) ? idx - 1 : idx;
-
-    final double gapUp = validWeights[upIdx] - validWeights[idx];
-    final double gapDn = validWeights[idx] - validWeights[dnIdx];
-
-// Use the real local step (prefer upward gap if available)
-    final double delta = (gapUp > 0) ? gapUp : (gapDn > 0 ? gapDn : 0);
+    // Trial weights are the REAL neighbours of the centre on the lattice, not
+    // `centre ± delta`. On a non-uniform grid (primary 2.5 + secondary 1.0 →
+    // 0, 1, 2.5, 3.5, 5 …) `centre - delta` can land on a weight that is not
+    // actually loadable; neighborhood() only ever returns valid members, and
+    // it never goes below zero.
     final double base = centerWeight;
+    final List<double> trialWeights = validGrid.neighborhood(base);
 
-    print('🧩 [SP] idx=$idx gapUp=${gapUp.toStringAsFixed(1)} gapDn=${gapDn.toStringAsFixed(1)} → delta=${delta.toStringAsFixed(1)}');
-
-
-    final List<double> trialWeights = [
-      base - delta,
-      base,
-      base + delta,
-    ];
+    print('🧩 [SP] centre=${base.toStringAsFixed(1)} '
+        'trials=${trialWeights.map((w) => w.toStringAsFixed(2)).toList()}');
 
 
 
@@ -2372,6 +2343,7 @@ class PeriodizationModelUtils {
     required double defaultWeight,
     double rirValue = 0,
     required List<double> increments,
+    IncrementGrid? grid,
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
@@ -2418,15 +2390,16 @@ class PeriodizationModelUtils {
 
     final double baseE1RM = baseE1RMNullable;
 
-    // Use the increments passed in by the caller (already built by the Engine
-    // via expandIncrementOptions, keyed by exerciseId with a safe 2.5 kg default).
+    // Use the increment configuration passed in by the caller (already built by
+    // the Engine from exerciseId-keyed settings with a safe 2.5 kg default).
     // Do not re-derive from roundToAllValidIncrements: its name-keyed settings
     // lookup falls back to [20.0, 22.5, ...], producing a broken grid with a
     // 20 kg gap that forces the center far above the true implied weight.
-    final validWeights = (increments.isNotEmpty
-        ? List<double>.from(increments)
-        : [0.0, 2.5, 5.0, 7.5, 10.0])
-      ..sort();
+    // Unbounded lattice — "the next weight up" exists at any load.
+    final IncrementGrid validGrid = grid ??
+        (increments.isNotEmpty
+            ? IncrementGrid.fromWeights(increments)
+            : IncrementGrid(primary: IncrementGrid.defaultPrimary));
 
     // 🔍 Avoid repeating identical combos -- indexed lookup on the routed
     // identity (no rescan, no second name-based history universe).
@@ -2487,19 +2460,17 @@ class PeriodizationModelUtils {
         rir: rirValue,
       );
 
-      final valid = (increments.isNotEmpty
-          ? List<double>.from(increments)
-          : [0.0, 2.5, 5.0, 7.5, 10.0])
-        ..sort();
-
-      final below = valid.where((w) => w <= estWeight).toList();
-      final above = valid.where((w) => w > estWeight).toList();
+      // Same neighbourhood question as before — "the valid weight just below"
+      // and "the valid weight just above" — but answered arithmetically, so it
+      // still works above the old 247.5 kg list ceiling.
+      final double? below = validGrid.previousOrSame(estWeight);
+      final double above = validGrid.next(estWeight);
 
       double chosen = estWeight;
-      if (above.isNotEmpty && (above.first - estWeight) < 0.3) {
-        chosen = above.first;
-      } else if (below.isNotEmpty) {
-        chosen = below.last;
+      if ((above - estWeight) < 0.3) {
+        chosen = above;
+      } else if (below != null) {
+        chosen = below;
       }
 
       int adjustedReps = repTarget;
@@ -2525,10 +2496,12 @@ class PeriodizationModelUtils {
       return {'weight': chosen, 'reps': adjustedReps};
     }
 
-    // Weight-increment progression path
-    final int idx = validWeights.indexOf(lastWeight);
+    // Weight-increment progression path.
+    // Preserve the old gate — a last weight that is not itself a member of the
+    // grid never promoted (indexOf returned -1) — but drop the ceiling half of
+    // it: on the lattice there is always a next weight above a valid member.
     final double? nextWeight =
-    (idx >= 0 && idx + 1 < validWeights.length) ? validWeights[idx + 1] : null;
+        validGrid.contains(lastWeight) ? validGrid.next(lastWeight) : null;
 
     if (nextWeight == null) {
       print('🚧 No higher weight → stay and +1 rep');
@@ -2608,6 +2581,7 @@ class PeriodizationModelUtils {
     required int repTarget,
     required double defaultWeight,
     required List<double> increments,
+    IncrementGrid? grid,
     Map<String, dynamic>? maxWeightByReps,
     List<Map<String, dynamic>>? topSetHistory,
     int weekIndex = 0,
@@ -2649,7 +2623,13 @@ class PeriodizationModelUtils {
         ? <Map<String, dynamic>>[]
         : List<Map<String, dynamic>>.from(topSetHistory);
 
-
+    // ✅ Single increment-grid boundary. The model below and the overlay snap
+    // that follows it MUST use the same lattice, or a model can pick a weight
+    // the overlay then moves. Resolved once here and passed straight through.
+    final IncrementGrid routedGrid = grid ??
+        (increments.isNotEmpty
+            ? IncrementGrid.fromWeights(increments)
+            : IncrementGrid(primary: IncrementGrid.defaultPrimary));
 
     switch (model) {
       case ProgressionModelType.linearWeightIncrease: {
@@ -2659,6 +2639,7 @@ class PeriodizationModelUtils {
             repTarget: repTarget,
             defaultWeight: defaultWeight,
             increments: increments,
+            grid: routedGrid,
             maxWeightByReps: maxWeightByReps,
             topSetHistory: routedTopSetHistory,
             weekIndex: weekIndex,
@@ -2671,9 +2652,9 @@ class PeriodizationModelUtils {
         print('📦 [PMU Router] pre-overlay (linear) ${result['weight']} × ${result['reps']}');
 
         final target = (result['weight'] as num).toDouble();
-        final snapped = (increments.isNotEmpty ? increments : [2.5]).reduce(
-              (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
-        );
+        // Overlay snap on the SAME lattice the model just used — arithmetic,
+        // so it cannot clamp a heavy lift back down to a list ceiling.
+        final snapped = routedGrid.snap(target);
 
 
         print('🧲 [Overlay] (linear) ${result['weight']} → $snapped');
@@ -2689,6 +2670,7 @@ class PeriodizationModelUtils {
           repTarget: repTarget,
           defaultWeight: defaultWeight,
           increments: increments,
+          grid: routedGrid,
           maxWeightByReps: maxWeightByReps,
           topSetHistory: routedTopSetHistory,
           weekIndex: weekIndex,
@@ -2700,9 +2682,9 @@ class PeriodizationModelUtils {
         print('📦 [PMU Router] pre-overlay (smart) ${result['weight']} × ${result['reps']}');
 
         final target = (result['weight'] as num).toDouble();
-        final snapped = (increments.isNotEmpty ? increments : [2.5]).reduce(
-              (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
-        );
+        // Overlay snap on the SAME lattice the model just used — arithmetic,
+        // so it cannot clamp a heavy lift back down to a list ceiling.
+        final snapped = routedGrid.snap(target);
 
 
         print('🧲 [Overlay] (smart) ${result['weight']} → $snapped');
@@ -2717,6 +2699,7 @@ class PeriodizationModelUtils {
           repTarget: repTarget,
           defaultWeight: defaultWeight,
           increments: increments,
+          grid: routedGrid,
           maxWeightByReps: maxWeightByReps,
           topSetHistory: routedTopSetHistory,
           weekIndex: weekIndex,
@@ -2728,9 +2711,9 @@ class PeriodizationModelUtils {
         print('📦 [PMU Router] pre-overlay (addReps) ${result['weight']} × ${result['reps']}');
 
         final target = (result['weight'] as num).toDouble();
-        final snapped = (increments.isNotEmpty ? increments : [2.5]).reduce(
-              (a, b) => (a - target).abs() < (b - target).abs() ? a : b,
-        );
+        // Overlay snap on the SAME lattice the model just used — arithmetic,
+        // so it cannot clamp a heavy lift back down to a list ceiling.
+        final snapped = routedGrid.snap(target);
 
 
         print('🧲 [Overlay] (addReps) ${result['weight']} → $snapped');
