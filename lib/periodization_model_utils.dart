@@ -127,6 +127,71 @@ class PeriodizationModelUtils {
     return t;
   }
 
+  /// Canonical ordering of two candidate top sets for the SAME exercise on the
+  /// SAME date. Returns a negative number when `a` outranks `b`.
+  ///
+  /// Historical progression data is top-set data: the representative sample for
+  /// a date is the valid performed set with the highest calculated E1RM. Set
+  /// position carries no meaning — "Set 1", the last set, a planned set and an
+  /// athlete-added set are all ranked on their numbers alone.
+  ///
+  /// Ties are broken on ranked VALUES, never on list position, so re-ordering
+  /// the raw sets can never change the winner:
+  ///
+  ///   1. higher E1RM
+  ///   2. then heavier weight   (the heavier lift is the top set)
+  ///   3. then more reps
+  ///   4. then lower RIR        (closer to failure is the harder set)
+  ///
+  /// Two candidates equal on all four are indistinguishable in every value
+  /// progression reads, so either may win — the stored sample is identical.
+  static int compareTopSetCandidates({
+    required double aWeight,
+    required double aReps,
+    required double aRir,
+    required double bWeight,
+    required double bReps,
+    required double bRir,
+  }) {
+    const double eps = 1e-9;
+    final double aE1rm = calculateE1RM(aWeight, aReps, aRir);
+    final double bE1rm = calculateE1RM(bWeight, bReps, bRir);
+    if ((aE1rm - bE1rm).abs() > eps) return aE1rm > bE1rm ? -1 : 1;
+    if ((aWeight - bWeight).abs() > eps) return aWeight > bWeight ? -1 : 1;
+    if ((aReps - bReps).abs() > eps) return aReps > bReps ? -1 : 1;
+    if ((aRir - bRir).abs() > eps) return aRir < bRir ? -1 : 1;
+    return 0;
+  }
+
+  /// True when the candidate should replace the incumbent daily top set.
+  /// Thin wrapper over [compareTopSetCandidates] so every caller — the history
+  /// index and the Top Sets screen — applies one rule.
+  static bool beatsTopSet({
+    required double candidateWeight,
+    required double candidateReps,
+    required double candidateRir,
+    required double incumbentWeight,
+    required double incumbentReps,
+    required double incumbentRir,
+  }) =>
+      compareTopSetCandidates(
+        aWeight: candidateWeight,
+        aReps: candidateReps,
+        aRir: candidateRir,
+        bWeight: incumbentWeight,
+        bReps: incumbentReps,
+        bRir: incumbentRir,
+      ) <
+      0;
+
+  /// The weight×reps×RIR combo key for a canonical daily top-set sample.
+  /// One spelling, so the used-combo index and the models that query it can
+  /// never disagree about formatting.
+  static String topSetComboKey(Map<String, dynamic> sample) =>
+      '${_histNum(sample['weight']).toStringAsFixed(1)}_'
+      '${_histNum(sample['reps']).toInt()}_'
+      '${_histNum(sample['rir']).toStringAsFixed(1)}';
+
   /// Publishes an athlete history snapshot and rebuilds every derived index.
   ///
   /// [workouts] must be the athlete's workout documents (each with a `date`).
@@ -236,7 +301,6 @@ class PeriodizationModelUtils {
         if (sets is! List || sets.isEmpty) continue;
 
         // ── Top set for this exercise/day (highest e1RM) ──
-        double bestE1rm = 0.0;
         Map<String, dynamic>? best;
         // Exposure validity mirrors the historical DUP matcher exactly:
         // a set counts when the raw `weight` and `reps` fields are both
@@ -253,9 +317,17 @@ class PeriodizationModelUtils {
           final r = _histNum(s['reps'] ?? s['actualReps']);
           final rir = _histNum(s['rir'] ?? s['actualRir']);
           if (wKg <= 0 || r <= 0) continue;
-          final e1 = calculateE1RM(wKg, r, rir);
-          if (best == null || e1 > bestE1rm) {
-            bestE1rm = e1;
+          // Highest E1RM wins, with a value-based tie-break. Position in the
+          // `sets` array is never consulted.
+          if (best == null ||
+              beatsTopSet(
+                candidateWeight: wKg,
+                candidateReps: r,
+                candidateRir: rir,
+                incumbentWeight: _histNum(best['weight']),
+                incumbentReps: _histNum(best['reps']),
+                incumbentRir: _histNum(best['rir']),
+              )) {
             best = <String, dynamic>{
               'weight': wKg,
               'reps': r,
@@ -266,32 +338,29 @@ class PeriodizationModelUtils {
         }
 
         if (best != null) {
+          // One canonical sample per exercise identity per DATE, even when the
+          // same exercise appears as several rows in one workout document: the
+          // winner is the best set across every matching row for that date.
           final dayMap =
               bestByKeyDay.putIfAbsent(key, () => <String, Map<String, dynamic>>{});
           final existing = dayMap[ymd];
           if (existing == null ||
-              calculateE1RM(_histNum(existing['weight']),
-                      _histNum(existing['reps']), _histNum(existing['rir'])) <
-                  bestE1rm) {
+              beatsTopSet(
+                candidateWeight: _histNum(best['weight']),
+                candidateReps: _histNum(best['reps']),
+                candidateRir: _histNum(best['rir']),
+                incumbentWeight: _histNum(existing['weight']),
+                incumbentReps: _histNum(existing['reps']),
+                incumbentRir: _histNum(existing['rir']),
+              )) {
             dayMap[ymd] = best;
           }
         }
 
-        // ── Used combos: FIRST set only (unchanged "top set" scope) ──
-        final first = sets.first;
-        if (first is Map) {
-          final fw = first['weight'] ?? first['actualWeight'];
-          final fr = first['reps'] ?? first['actualReps'];
-          final frir = first['rir'] ?? first['actualRir'];
-          if (fw != null && fr != null && frir != null) {
-            final combo = '${_histNum(fw).toStringAsFixed(1)}_'
-                '${_histNum(fr).toInt()}_'
-                '${_histNum(frir).toStringAsFixed(1)}';
-            _usedCombosByKey
-                .putIfAbsent(key, () => <MapEntry<DateTime, String>>[])
-                .add(MapEntry(wDate, combo));
-          }
-        }
+        // Used combos are NOT built here. They are derived below from the
+        // resolved daily winners, so the combo index and the top-set history
+        // can never name different sets for the same date. Deriving them from
+        // the raw opening set of the row was exactly that inconsistency.
 
         // ── DUP exposure dates ──
         // Historic matching was: exerciseId match OR normalised-name match OR
@@ -316,6 +385,20 @@ class PeriodizationModelUtils {
       final samples = dayMap.values.toList()
         ..sort((a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
       _topSetsById[key] = samples;
+
+      // ── Used combos, derived from the canonical daily top sets ──
+      // "Do not repeat an already-used combination" means "do not repeat a
+      // combination that has already BEEN the athlete's top set", not "do not
+      // repeat anything that has ever appeared in any set". A back-off set
+      // therefore never blocks a future suggestion, and the day's real top set
+      // always does. RIR follows the same reader as the sample itself: a
+      // missing persisted RIR is 0, never an inferred hint.
+      if (samples.isNotEmpty) {
+        _usedCombosByKey[key] = <MapEntry<DateTime, String>>[
+          for (final sample in samples)
+            MapEntry(sample['date'] as DateTime, topSetComboKey(sample)),
+        ];
+      }
       if (legacyNameKeys.contains(key)) {
         final display = displayNameForKey[key] ?? key;
         _topSetsByLegacyName[display] = samples;

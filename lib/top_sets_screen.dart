@@ -368,7 +368,18 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                     final rir  = set.rir ?? 0.0;
                     final e1rm = calculateE1RM(weight, reps, rir);
 
-                    if (topSet == null || e1rm > highestE1RM) {
+                    // Same canonical rule the progression history index uses,
+                    // so the visible Top Set and the sample progression treats
+                    // as that date's history can never be different sets.
+                    if (topSet == null ||
+                        PeriodizationModelUtils.beatsTopSet(
+                          candidateWeight: weight,
+                          candidateReps: reps,
+                          candidateRir: rir,
+                          incumbentWeight: topSet.weight ?? 0.0,
+                          incumbentReps: (topSet.reps ?? 0).toDouble(),
+                          incumbentRir: topSet.rir ?? 0.0,
+                        )) {
                       highestE1RM = e1rm;
                       topSet = set;
                       topExerciseName = exercise.name;

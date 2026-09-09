@@ -657,7 +657,11 @@ void main() {
   });
 
   // ── Used-combo scope ─────────────────────────────────────────────────────
-  test('used combos keep their top-set scope (first set only)', () {
+  // The scope is the day's canonical TOP SET — the highest-E1RM set, wherever
+  // it sits in the array. Here 185 kg happens to be logged first, but it wins
+  // on E1RM, not on position; test/progression_top_set_identity_test.dart
+  // pins the position-independence directly.
+  test('used combos keep their top-set scope (daily top set only)', () {
     PeriodizationModelUtils.applyHistorySnapshot(
       uid: 'athlete-1',
       workouts: [
