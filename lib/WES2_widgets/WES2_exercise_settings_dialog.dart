@@ -653,6 +653,21 @@ class _Wes2ExerciseSettingsDialogState
                     const TextInputType.numberWithOptions(decimal: true),
               ),
               right: _buildTextField(
+                controller: _incrementsSecondaryCtrl,
+                label: 'Secondary Increment',
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+              ),
+            ),
+            const SizedBox(height: 3),
+            const Text(
+              'Secondary Increment is optional — leave blank for a single-step '
+              'weight grid.',
+              style: TextStyle(fontSize: 11, color: Colors.white54),
+            ),
+            const SizedBox(height: 8),
+            _settingsRow(
+              left: _buildTextField(
                 controller: _weeklyFrequencyCtrl,
                 label: 'Weekly Frequency',
                 keyboardType: TextInputType.number,
@@ -661,6 +676,7 @@ class _Wes2ExerciseSettingsDialogState
                   setState(() {});
                 },
               ),
+              right: const SizedBox.shrink(),
             ),
             const SizedBox(height: 8),
             _buildDropdown(

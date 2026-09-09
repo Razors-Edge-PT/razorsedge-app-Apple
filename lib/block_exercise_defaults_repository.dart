@@ -644,6 +644,12 @@ class BlockExerciseDefaultsRepository {
       final current = projected[key];
       if (current == null) {
         projected[key] = value;
+      } else if (key == 'increments' && current is Map) {
+        // An existing `increments` map is a deliberate, COMPLETE configuration.
+        // Absence of `secondary` (or `tertiary` / `quaternary`) is a valid
+        // canonical state chosen by the athlete/coach in the WES settings cog —
+        // never let library defaults re-introduce a sub-key the user removed on
+        // purpose. Only a fully absent `increments` map is seeded (branch above).
       } else if (value is Map && current is Map) {
         final sub = Map<String, dynamic>.from(current);
         value.forEach((subKey, subValue) {
