@@ -395,11 +395,22 @@ class Wes2SessionController extends ChangeNotifier {
           !_sameAsHint(cs.weight.actualValue, bs.weight.hintValue);
       final repsHasDifferentActual = cs.reps.actualValue != null &&
           !_sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue);
+      // RIR is E1RM-relevant exactly like weight and reps: changing it alone
+      // changes the set's resolved E1RM, so it must be treated symmetrically
+      // here. Omitting it let an RIR-only edit look like "nothing changed",
+      // which suppressed the same-as-hint weight/reps actuals and allowed
+      // _computeSet1Hints to re-solve a hidden Set 1 weight under the new RIR.
+      // The later-set cap then measured against that re-solved hint instead of
+      // the athlete's resolved load, so Set 2 could suggest MORE than Set 1.
+      final rirHasDifferentActual = cs.rir.actualValue != null &&
+          !_sameAsHint(cs.rir.actualValue, bs.rir.hintValue);
       // When any E1RM-relevant actual differs from baseline, preserve all user-entered
       // actuals so the cascade uses the correct resolved E1RM, not a BB3HintService
       // re-solve against the old target. Suppression applies only when nothing has
       // changed (all actuals equal hints), keeping the unconstrained initial-pass path.
-      final anyActualDiffersFromHint = weightHasDifferentActual || repsHasDifferentActual;
+      final anyActualDiffersFromHint = weightHasDifferentActual ||
+          repsHasDifferentActual ||
+          rirHasDifferentActual;
 
       final weightActual = (_sameAsHint(cs.weight.actualValue, bs.weight.hintValue) && !anyActualDiffersFromHint)
           ? null
