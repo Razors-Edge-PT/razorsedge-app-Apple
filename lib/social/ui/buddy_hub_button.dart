@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 
 import '../buddy_hub_screen.dart';
 import '../buddy_repository.dart';
+import '../user_search_repository.dart';
 
 /// The largest number the badge spells out. Beyond it the exact count stops
 /// being information and starts being a wide pill in a tight app bar.
@@ -31,12 +32,24 @@ class BuddyHubButton extends StatefulWidget {
   const BuddyHubButton({
     super.key,
     this.buddies,
+    this.search,
     this.iconColor,
     this.iconSize = 24,
+    this.actingAsOtherAccount = false,
   });
 
-  /// Injectable for tests. Production uses the default repository.
+  /// Injectable for tests. Production uses the default repositories, both of
+  /// which resolve the AUTHENTICATED account.
   final BuddyRepository? buddies;
+  final UserSearchRepository? search;
+
+  /// True when the surrounding screen is showing somebody else — a coach with
+  /// an athlete selected. Passed straight through to [BuddyHubScreen] so the
+  /// Hub can say whose buddies it is listing.
+  ///
+  /// Presentation only. The account acted on comes from FirebaseAuth either
+  /// way, so this flag cannot redirect a request, an acceptance or a removal.
+  final bool actingAsOtherAccount;
 
   final Color? iconColor;
   final double iconSize;
@@ -62,7 +75,11 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
 
   void _openHub() {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => BuddyHubScreen(buddies: _buddies),
+      builder: (_) => BuddyHubScreen(
+        buddies: _buddies,
+        search: widget.search,
+        showOwnAccountNotice: widget.actingAsOtherAccount,
+      ),
     ));
   }
 

@@ -16,6 +16,9 @@ const {
   pairKey,
   scan,
   repair,
+  labelOf,
+  describeEntry,
+  scanMalformedPendingInvites,
 } = require('../scripts/symmetrise_buddy_assignments');
 
 /**
@@ -258,4 +261,217 @@ test('backfill_search_index exposes its report surface', () => {
   const script = require('../scripts/backfill_search_index');
   assert.equal(typeof script.inspect, 'function');
   assert.equal(typeof script.publicProfiles, 'function');
+});
+
+// ── Read-only preflight reporting ──────────────────────────────────────────
+//
+// The report exists so a human can tell a real friendship from obsolete test
+// data before applying anything. Its job is to be UNAMBIGUOUS about accounts
+// that are gone and entries that are malformed, because those are exactly the
+// pairs worth leaving alone.
+
+test('report: an account with a name and handle is labelled with both', () => {
+  assert.equal(
+    labelOf({
+      hasPublicProfile: true,
+      hasAccountDoc: true,
+      displayName: 'Ruby Cain',
+      username: 'rubycakes',
+      fullName: '',
+    }),
+    'Ruby Cain  @rubycakes',
+  );
+});
+
+test('report: a deleted account is called out, not shown as anonymous', () => {
+  // A blank label reads as "no name set". "MISSING / DELETED" is a different
+  // fact, and it is the one that decides whether to repair the pair at all.
+  assert.equal(
+    labelOf({ hasPublicProfile: false, hasAccountDoc: false }),
+    'MISSING / DELETED',
+  );
+});
+
+test('report: a half-present account says which half is missing', () => {
+  const label = labelOf({
+    hasPublicProfile: false,
+    hasAccountDoc: true,
+    displayName: 'Someone',
+    username: '',
+  });
+  assert.match(label, /no users_public/);
+  assert.match(label, /\(no username\)/);
+});
+
+test('report: falls back to fullName when there is no display name', () => {
+  assert.equal(
+    labelOf({
+      hasPublicProfile: true,
+      hasAccountDoc: true,
+      displayName: '',
+      fullName: 'Shawn Cain',
+      username: 'MrWalker',
+    }),
+    'Shawn Cain  @MrWalker',
+  );
+});
+
+test('report: an absent entry and a status-less entry are described differently', () => {
+  // Production has both. A legacy entry carrying addedAt and displayName but
+  // NO status is not the same as no entry at all, and the operator needs to
+  // see which one they are looking at.
+  assert.equal(describeEntry(null, 'other'), 'no entry');
+  assert.equal(describeEntry({ athletes: {} }, 'other'), 'no entry');
+  assert.match(
+    describeEntry(
+      { athletes: { other: { displayName: 'Stevie_Wanda' } } },
+      'other',
+    ),
+    /status=\(none\)/,
+  );
+  assert.match(
+    describeEntry({ athletes: { other: { status: 'accepted' } } }, 'other'),
+    /status=accepted/,
+  );
+});
+
+/** A db whose collection-group read fails, forcing the per-account walk. */
+function fakeInviteDb(invitesByUser, { collectionGroupWorks = false } = {}) {
+  const docOf = (receiver, sender, data) => ({
+    ref: {
+      id: sender,
+      path: `users/${receiver}/buddyInvites/${sender}`,
+    },
+    data: () => data,
+  });
+
+  return {
+    collectionGroup() {
+      return {
+        where() {
+          return {
+            async get() {
+              if (!collectionGroupWorks) {
+                throw new Error('9 FAILED_PRECONDITION: index required');
+              }
+              const docs = [];
+              for (const [receiver, invites] of Object.entries(invitesByUser)) {
+                for (const [sender, data] of Object.entries(invites)) {
+                  if (data.status === 'pending') {
+                    docs.push(docOf(receiver, sender, data));
+                  }
+                }
+              }
+              return { docs };
+            },
+          };
+        },
+      };
+    },
+    collection() {
+      return {
+        select: () => ({
+          async get() {
+            return {
+              docs: Object.keys(invitesByUser).map((receiver) => ({
+                id: receiver,
+                ref: {
+                  collection: () => ({
+                    where: () => ({
+                      async get() {
+                        const docs = [];
+                        for (const [sender, data] of Object.entries(
+                          invitesByUser[receiver],
+                        )) {
+                          if (data.status === 'pending') {
+                            docs.push(docOf(receiver, sender, data));
+                          }
+                        }
+                        return { docs };
+                      },
+                    }),
+                  }),
+                },
+              })),
+            };
+          },
+        }),
+      };
+    },
+  };
+}
+
+const wellFormed = {
+  receiver1: {
+    sender1: { status: 'pending', fromUid: 'sender1', buddyUid: 'receiver1' },
+  },
+};
+
+test('report: a well-formed pending invite is not flagged', async () => {
+  const result = await scanMalformedPendingInvites(
+    fakeInviteDb(wellFormed, { collectionGroupWorks: true }),
+  );
+  assert.equal(result.scanned, 1);
+  assert.equal(result.bad.length, 0);
+  assert.equal(result.viaFallback, false);
+});
+
+test('report: the audit still completes without a collection-group index', async () => {
+  // Production has no COLLECTION_GROUP index on buddyInvites.status, so the
+  // fallback IS the path this takes. An audit that simply failed there would
+  // leave the operator with no answer about the very risk it exists to check.
+  const result = await scanMalformedPendingInvites(fakeInviteDb(wellFormed));
+  assert.equal(result.viaFallback, true);
+  assert.equal(result.scanned, 1);
+  assert.equal(result.bad.length, 0);
+});
+
+test('report: an invite missing fromUid or buddyUid is flagged', async () => {
+  const result = await scanMalformedPendingInvites(
+    fakeInviteDb(
+      {
+        r1: {
+          s1: { status: 'pending', buddyUid: 'r1' },
+          s2: { status: 'pending', fromUid: 's2' },
+          s3: { status: 'pending', fromUid: 's3', buddyUid: 'r1' },
+        },
+      },
+      { collectionGroupWorks: true },
+    ),
+  );
+  assert.equal(result.scanned, 3);
+  assert.equal(result.bad.length, 2);
+  assert.match(result.bad[0].problems.join(' '), /fromUid absent/);
+  assert.match(result.bad[1].problems.join(' '), /buddyUid absent/);
+});
+
+test('report: a pointer that disagrees with its path is flagged too', async () => {
+  // The rule compares the STORED fromUid against the document id, so an invite
+  // whose fields point somewhere else is just as un-answerable as one missing
+  // them. Both would otherwise look fine to a field-presence check.
+  const result = await scanMalformedPendingInvites(
+    fakeInviteDb(
+      {
+        r1: {
+          s1: { status: 'pending', fromUid: 'somebody-else', buddyUid: 'r1' },
+          s2: { status: 'pending', fromUid: 's2', buddyUid: 'wrong-receiver' },
+        },
+      },
+      { collectionGroupWorks: true },
+    ),
+  );
+  assert.equal(result.bad.length, 2);
+  assert.match(result.bad[0].problems.join(' '), /!= docId/);
+  assert.match(result.bad[1].problems.join(' '), /!= receiver/);
+});
+
+test('report: resolved invites are not audited', async () => {
+  const result = await scanMalformedPendingInvites(
+    fakeInviteDb(
+      { r1: { s1: { status: 'denied' }, s2: { status: 'accepted' } } },
+      { collectionGroupWorks: true },
+    ),
+  );
+  assert.equal(result.scanned, 0);
+  assert.equal(result.bad.length, 0);
 });

@@ -6,9 +6,9 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
-import 'approve_requests_screen.dart';
 import 'directMessages.dart';
 import 'profile_page.dart';
+import 'social/ui/buddy_hub_button.dart';
 import 'user_context.dart';
 
 /// AppBar for HomeScreen2. Extracted from home_screen_2.dart as a
@@ -210,137 +210,18 @@ class _HomeV2AppBarState extends State<HomeV2AppBar> {
 
                 const SizedBox(width: 1),
 
-                // Buddy invite notifications
-                Builder(
-                  builder: (context) {
-                    final userCtx = context.watch<UserContext>();
-                    final String invitesUid = userCtx.actingAsUid;
-
-                    return StreamBuilder<QuerySnapshot>(
-                      stream: FirebaseFirestore.instance
-                          .collection('users')
-                          .doc(invitesUid)
-                          .collection('buddyInvites')
-                          .where('status', isEqualTo: 'pending')
-                          .snapshots(),
-                      builder: (context, snapshot) {
-                        final int buddyCount =
-                            snapshot.hasData ? snapshot.data!.docs.length : 0;
-
-                        return Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            IconButton(
-                              icon: Icon(Icons.person_add_alt_1,
-                                  size: 24,
-                                  color: Theme.of(context).colorScheme.secondary),
-                              onPressed: () {
-                                if (!snapshot.hasData ||
-                                    snapshot.data!.docs.isEmpty) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                        content: Text('No buddy requests.')),
-                                  );
-                                  return;
-                                }
-
-                                showDialog(
-                                  context: context,
-                                  builder: (ctx) {
-                                    return AlertDialog(
-                                      title: const Text('Buddy Requests'),
-                                      content: SizedBox(
-                                        width: 310,
-                                        child: ListView.builder(
-                                          shrinkWrap: true,
-                                          itemCount: snapshot.data!.docs.length,
-                                          itemBuilder: (_, i) {
-                                            final doc = snapshot.data!.docs[i];
-                                            final data = doc.data()
-                                                as Map<String, dynamic>;
-                                            final fromUid =
-                                                data['fromUid'] ?? '';
-                                            final fromName =
-                                                data['fromDisplayName'] ??
-                                                    'Someone';
-
-                                            return Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  '$fromName added you!',
-                                                  style: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.bold),
-                                                ),
-                                                const SizedBox(height: 6),
-                                                Row(
-                                                  children: [
-                                                    TextButton(
-                                                      onPressed: () async {
-                                                        await acceptBuddyInvite(
-                                                          ownerUid: fromUid,
-                                                          buddyUid: invitesUid,
-                                                        );
-                                                        if (ctx.mounted) {
-                                                          Navigator.pop(ctx);
-                                                        }
-                                                      },
-                                                      child: const Text('Accept'),
-                                                    ),
-                                                    const SizedBox(width: 12),
-                                                    TextButton(
-                                                      onPressed: () async {
-                                                        await denyBuddyInvite(
-                                                          ownerUid: fromUid,
-                                                          buddyUid: invitesUid,
-                                                        );
-                                                        if (ctx.mounted) {
-                                                          Navigator.pop(ctx);
-                                                        }
-                                                      },
-                                                      child: const Text('Deny'),
-                                                    ),
-                                                  ],
-                                                ),
-                                                const Divider(),
-                                              ],
-                                            );
-                                          },
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                );
-                              },
-                            ),
-                            if (buddyCount > 0)
-                              Positioned(
-                                right: 6,
-                                top: 6,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.redAccent,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Text(
-                                    '$buddyCount',
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                          ],
-                        );
-                      },
-                    );
-                  },
+                // Buddy Hub entry point, immediately right of the avatar.
+                //
+                // The SAME control HomeScreen uses. It was a separate legacy
+                // dialog here, streaming `UserContext.actingAsUid` and calling
+                // acceptBuddyInvite(buddyUid: actingAsUid) — so a coach with an
+                // athlete selected was one tap from accepting or declining that
+                // athlete's buddy requests. Friendships belong to the person,
+                // not to the coaching session, so this control derives its
+                // account from FirebaseAuth and never reads UserContext.
+                BuddyHubButton(
+                  actingAsOtherAccount:
+                      !context.watch<UserContext>().isActingAsSelf,
                 ),
 
                 // DM badge

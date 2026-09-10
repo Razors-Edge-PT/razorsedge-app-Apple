@@ -998,70 +998,17 @@ class ApproveRequestsScreen extends StatelessWidget {
     );
   }
 }
-Future<void> acceptBuddyInvite({
-  required String ownerUid,
-  required String buddyUid,
-}) async {
-  final db = FirebaseFirestore.instance;
-  final batch = db.batch();
 
-  // ownerUid = A (the sender), buddyUid = B (the acceptor).
-
-  // 1) A's existing entry for B → mark accepted (A's doc already exists from send).
-  final assignmentRef = db.collection('buddyAssignments').doc(ownerUid);
-  batch.update(assignmentRef, {
-    'athletes.$buddyUid.status': 'accepted',
-    'athletes.$buddyUid.acceptedAt': FieldValue.serverTimestamp(),
-  });
-
-  // 2) Reciprocal: create/merge B's entry for A so both sides are accepted.
-  //    set+merge because B's buddyAssignments doc may not exist yet.
-  final reciprocalRef = db.collection('buddyAssignments').doc(buddyUid);
-  batch.set(reciprocalRef, {
-    'athletes': {
-      ownerUid: {
-        'status': 'accepted',
-        'acceptedAt': FieldValue.serverTimestamp(),
-      },
-    },
-  }, SetOptions(merge: true));
-
-  // 3) Mark the invite doc as accepted.
-  final inviteRef = db
-      .collection('users')
-      .doc(buddyUid)
-      .collection('buddyInvites')
-      .doc(ownerUid);
-  batch.update(inviteRef, {
-    'status': 'accepted',
-    'respondedAt': FieldValue.serverTimestamp(),
-  });
-
-  await batch.commit();
-}
-
-Future<void> denyBuddyInvite({
-  required String ownerUid,
-  required String buddyUid,
-}) async {
-  final db = FirebaseFirestore.instance;
-  final batch = db.batch();
-
-  final assignmentRef = db.collection('buddyAssignments').doc(ownerUid);
-  final inviteRef = db
-      .collection('users')
-      .doc(buddyUid)
-      .collection('buddyInvites')
-      .doc(ownerUid);
-
-  batch.update(assignmentRef, {
-    'athletes.$buddyUid': FieldValue.delete(),
-  });
-
-  batch.update(inviteRef, {
-    'status': 'denied',
-    'respondedAt': FieldValue.serverTimestamp(),
-  });
-
-  await batch.commit();
-}
+// The legacy acceptBuddyInvite / denyBuddyInvite helpers were removed here.
+//
+// They wrote `buddyAssignments` and the invite document directly from the
+// client, and their only callers were the buddy dialogs in the two app bars,
+// both of which passed `UserContext.actingAsUid` as the answering account — so
+// a coach with an athlete selected could accept or decline that athlete's buddy
+// requests. Both dialogs are now the shared BuddyHubButton, which derives its
+// account from FirebaseAuth, and answering a request goes through the
+// buddyRespondToRequest callable: it writes BOTH sides of the friendship in one
+// transaction, and takes no "acting as" argument to misuse.
+//
+// Nothing calls these any more. They are not kept as a fallback because a
+// direct client write is exactly the path the callable exists to replace.

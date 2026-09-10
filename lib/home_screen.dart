@@ -1616,7 +1616,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                   // action behind it belong to the AUTHENTICATED account, not
                   // to `actingAsUid` — a coach reviewing an athlete used to see
                   // and be able to answer that athlete's buddy requests here.
-                  const BuddyHubButton(),
+                  // `actingAsOtherAccount` is a CAPTION, not an authority:
+                  // BuddyHubButton resolves the account from FirebaseAuth.
+                  BuddyHubButton(
+                    actingAsOtherAccount:
+                        !context.watch<UserContext>().isActingAsSelf,
+                  ),
 
                   const SizedBox(width: 1),
 

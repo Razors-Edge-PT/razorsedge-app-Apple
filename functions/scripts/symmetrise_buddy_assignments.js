@@ -42,8 +42,17 @@
 //
 // Modes:
 //   (default)  dry-run — report every pair that would be repaired, write nothing
+//   --report           — dry run PLUS identity resolution and an invite audit,
+//                        for deciding which pairs are real friendships and
+//                        which are obsolete test data. Read-only.
 //   --apply            — write the missing side
 //   --verify           — report any pair still one-sided (expects zero)
+//
+// --report resolves nothing it could act on: it adds names, account existence,
+// the direction each side actually holds, and a scan for pending invites
+// missing fromUid/buddyUid (which the tightened rules make un-answerable by an
+// old client). It changes NO repair semantics — the classification and the
+// add-only contract above are untouched.
 //
 // Credentials come from GOOGLE_APPLICATION_CREDENTIALS or the ambient service
 // account.
@@ -69,6 +78,9 @@ function usage() {
     'Verify no one-sided accepted pair remains:',
     '  node scripts/symmetrise_buddy_assignments.js --project goodlift-us-storage --verify',
     '',
+    'Full read-only preflight (names, account existence, invite audit):',
+    '  node scripts/symmetrise_buddy_assignments.js --project goodlift-us-storage --report',
+    '',
     'Only ever ADDS the missing accepted entry. Never deletes or downgrades.',
   ].join('\n');
 }
@@ -78,6 +90,7 @@ function parseArgs(argv) {
     projectId: DEFAULT_PROJECT_ID,
     apply: false,
     verify: false,
+    report: false,
     limit: 0,
     help: false,
   };
@@ -85,6 +98,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--apply') out.apply = true;
     else if (arg === '--verify') out.verify = true;
+    else if (arg === '--report') out.report = true;
     else if (arg === '--limit') out.limit = Number(argv[++i]) || 0;
     else if (arg === '--project') out.projectId = argv[++i];
     else if (arg === '--help' || arg === '-h') out.help = true;
@@ -92,6 +106,9 @@ function parseArgs(argv) {
   }
   if (out.apply && out.verify) {
     throw new Error('Choose --apply or --verify, not both.');
+  }
+  if (out.report && (out.apply || out.verify)) {
+    throw new Error('--report is read-only; use it on its own.');
   }
   return out;
 }
@@ -241,6 +258,215 @@ async function repair(db, oneSided) {
   return { repaired, skipped, errors };
 }
 
+// ── Read-only preflight reporting ──────────────────────────────────────────
+
+/**
+ * Everything knowable about one account, for a human deciding about a pair.
+ *
+ * Reads `users_public` (the discoverable profile) and `users` (the account
+ * record) so a deleted account can be told apart from one that merely never
+ * published a name. Neither read can modify anything.
+ */
+async function resolveIdentity(db, uid) {
+  const [pub, priv] = await Promise.all([
+    db.collection('users_public').doc(uid).get(),
+    db.collection('users').doc(uid).get(),
+  ]);
+  const d = pub.exists ? pub.data() || {} : {};
+  const str = (v) => (typeof v === 'string' ? v.trim() : '');
+  return {
+    uid,
+    hasPublicProfile: pub.exists,
+    hasAccountDoc: priv.exists,
+    username: str(d.username),
+    displayName: str(d.displayName),
+    fullName: str(d.fullName),
+  };
+}
+
+/** A one-line human label for an account. */
+function labelOf(id) {
+  if (!id.hasPublicProfile && !id.hasAccountDoc) return 'MISSING / DELETED';
+  const name = id.displayName || id.fullName || '(no name)';
+  const handle = id.username ? `@${id.username}` : '(no username)';
+  const flags = [];
+  if (!id.hasPublicProfile) flags.push('no users_public');
+  if (!id.hasAccountDoc) flags.push('no users doc');
+  return `${name}  ${handle}${flags.length ? `  [${flags.join(', ')}]` : ''}`;
+}
+
+/** The raw entry [ownerUid] holds for [otherUid], described. */
+function describeEntry(ownerData, otherUid) {
+  const entry = athletesOf(ownerData)[otherUid];
+  if (!entry || typeof entry !== 'object') return 'no entry';
+  const at = entry.acceptedAt || entry.addedAt;
+  const when =
+    at && typeof at.toDate === 'function' ? at.toDate().toISOString() : '';
+  const extra = entry.displayName ? ` displayName="${entry.displayName}"` : '';
+  return `status=${entry.status || '(none)'}${when ? ` at ${when}` : ''}${extra}`;
+}
+
+/**
+ * Pending invites that the tightened rules would make un-answerable.
+ *
+ * The dedicated buddyInvites update rule requires the stored document to carry
+ * `fromUid` and `buddyUid` matching the document path; a pending invite that
+ * does not can currently be answered only because the users/{subcoll} catch-all
+ * still grants the receiver an unconstrained write, and that catch-all no
+ * longer covers buddyInvites. Such an invite stays answerable by the NEW client
+ * (the callable runs on the Admin SDK) but not by an installed one.
+ *
+ * Uses a collection-group read, falling back to a per-account walk when the
+ * collection-group index is absent, so the audit completes either way.
+ */
+async function scanMalformedPendingInvites(db) {
+  const bad = [];
+  const seen = { scanned: 0, viaFallback: false };
+
+  const inspect = (docRef, data, receiverUid) => {
+    seen.scanned += 1;
+    const from = data && data.fromUid;
+    const buddy = data && data.buddyUid;
+    const problems = [];
+    if (typeof from !== 'string' || from.trim() === '') {
+      problems.push('fromUid absent');
+    } else if (from !== docRef.id) {
+      problems.push(`fromUid "${from}" != docId "${docRef.id}"`);
+    }
+    if (typeof buddy !== 'string' || buddy.trim() === '') {
+      problems.push('buddyUid absent');
+    } else if (receiverUid && buddy !== receiverUid) {
+      problems.push(`buddyUid "${buddy}" != receiver "${receiverUid}"`);
+    }
+    if (problems.length > 0) {
+      bad.push({ path: docRef.path, problems, status: data && data.status });
+    }
+  };
+
+  try {
+    const snap = await db
+      .collectionGroup('buddyInvites')
+      .where('status', '==', 'pending')
+      .get();
+    for (const doc of snap.docs) {
+      // users/{receiver}/buddyInvites/{sender}
+      const parts = doc.ref.path.split('/');
+      inspect(doc.ref, doc.data(), parts.length >= 2 ? parts[1] : '');
+    }
+  } catch (err) {
+    seen.viaFallback = true;
+    process.stdout.write(
+      `  (collection-group read unavailable: ${err.message};\n` +
+        '   walking accounts instead)\n',
+    );
+    const users = await db.collection('users').select().get();
+    for (const u of users.docs) {
+      // eslint-disable-next-line no-await-in-loop
+      const invites = await u.ref
+        .collection('buddyInvites')
+        .where('status', '==', 'pending')
+        .get();
+      for (const doc of invites.docs) inspect(doc.ref, doc.data(), u.id);
+    }
+  }
+
+  return { bad, scanned: seen.scanned, viaFallback: seen.viaFallback };
+}
+
+/**
+ * The full read-only preflight: who these people are, what each side holds,
+ * and which pending invites are malformed.
+ *
+ * Prints enough to decide, per pair, whether it is a real friendship worth
+ * preserving or obsolete test data. It never writes.
+ */
+async function printReport(db, oneSided, mutual) {
+  process.stdout.write(`\n== ONE-SIDED ACCEPTED PAIRS ${'='.repeat(44)}\n`);
+  if (oneSided.length === 0) process.stdout.write('  none\n');
+
+  let n = 0;
+  for (const pair of oneSided) {
+    n += 1;
+    // eslint-disable-next-line no-await-in-loop
+    const [claimantId, missingId, claimantDoc, missingDoc] = await Promise.all([
+      resolveIdentity(db, pair.claimant),
+      resolveIdentity(db, pair.missing),
+      db.collection(COL).doc(pair.claimant).get(),
+      db.collection(COL).doc(pair.missing).get(),
+    ]);
+    const claimantData = claimantDoc.exists ? claimantDoc.data() : null;
+    const missingData = missingDoc.exists ? missingDoc.data() : null;
+
+    process.stdout.write(`\nPAIR ${n} of ${oneSided.length}\n`);
+    process.stdout.write(`  HOLDS the acceptance  : ${pair.claimant}\n`);
+    process.stdout.write(`                          ${labelOf(claimantId)}\n`);
+    process.stdout.write(
+      `                          ${COL}/${pair.claimant}` +
+        `${claimantDoc.exists ? '' : '   [DOCUMENT MISSING]'}\n`,
+    );
+    process.stdout.write(
+      `      entry for the other : ${describeEntry(claimantData, pair.missing)}\n`,
+    );
+    process.stdout.write(`  MISSING the acceptance: ${pair.missing}\n`);
+    process.stdout.write(`                          ${labelOf(missingId)}\n`);
+    process.stdout.write(
+      `                          ${COL}/${pair.missing}` +
+        `${missingDoc.exists ? '' : '   [DOCUMENT MISSING]'}\n`,
+    );
+    process.stdout.write(
+      `      entry for the other : ${describeEntry(missingData, pair.claimant)}\n`,
+    );
+    process.stdout.write(
+      `  --apply would write   : ${COL}/${pair.missing}` +
+        `.athletes.${pair.claimant}.status = 'accepted'\n`,
+    );
+    if (!missingId.hasPublicProfile && !missingId.hasAccountDoc) {
+      process.stdout.write(
+        '  NOTE: the missing side has no account. Repairing it restores a\n' +
+          '        friendship with an account nobody can sign in to.\n',
+      );
+    }
+    if (!claimantId.hasPublicProfile && !claimantId.hasAccountDoc) {
+      process.stdout.write(
+        '  NOTE: the side holding the acceptance has no account.\n',
+      );
+    }
+  }
+
+  process.stdout.write(`\n== MUTUAL PAIRS (no action) ${'='.repeat(44)}\n`);
+  for (const pair of mutual) {
+    // eslint-disable-next-line no-await-in-loop
+    const [x, y] = await Promise.all([
+      resolveIdentity(db, pair.a),
+      resolveIdentity(db, pair.b),
+    ]);
+    process.stdout.write(`  ${labelOf(x)}\n     <-> ${labelOf(y)}\n`);
+  }
+
+  process.stdout.write(
+    `\n== PENDING INVITES MISSING fromUid / buddyUid ${'='.repeat(26)}\n`,
+  );
+  const invites = await scanMalformedPendingInvites(db);
+  process.stdout.write(`  pending invites scanned : ${invites.scanned}\n`);
+  process.stdout.write(`  malformed               : ${invites.bad.length}\n`);
+  for (const b of invites.bad) {
+    process.stdout.write(`    ${b.path}\n      ${b.problems.join('; ')}\n`);
+  }
+  if (invites.bad.length === 0) {
+    process.stdout.write(
+      '  Every pending invite carries both pointers, so the tightened\n' +
+        '  buddyInvites rule leaves all of them answerable by installed\n' +
+        '  clients. No action needed.\n',
+    );
+  } else {
+    process.stdout.write(
+      '\n  These stay answerable by the NEW client (buddyRespondToRequest runs\n' +
+        '  on the Admin SDK and bypasses rules) but NOT by an installed one\n' +
+        '  once the tightened rules deploy.\n',
+    );
+  }
+}
+
 async function main() {
   let args;
   try {
@@ -279,6 +505,15 @@ async function main() {
       process.stdout.write(`  ... and ${oneSided.length - preview.length} more\n`);
     }
     process.stdout.write('\n');
+  }
+
+  if (args.report) {
+    await printReport(db, oneSided, mutual);
+    process.stdout.write(
+      '\nREPORT ONLY — nothing was written. ' +
+        'Decide per pair, then re-run with --apply.\n',
+    );
+    return;
   }
 
   if (args.verify) {
@@ -326,4 +561,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { athletesOf, isAccepted, pairKey, scan, repair };
+module.exports = {
+  athletesOf,
+  isAccepted,
+  pairKey,
+  scan,
+  repair,
+  labelOf,
+  describeEntry,
+  resolveIdentity,
+  scanMalformedPendingInvites,
+};

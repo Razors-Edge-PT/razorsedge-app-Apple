@@ -41,9 +41,24 @@ class BuddyHubScreen extends StatefulWidget {
     this.initialTab = BuddyHubTab.people,
     this.buddies,
     this.search,
+    this.showOwnAccountNotice = false,
   });
 
   final BuddyHubTab initialTab;
+
+  /// Says, in the UI, that these are the SIGNED-IN account's buddies.
+  ///
+  /// Set when a coach has an athlete selected. Everything else on HomeScreen2
+  /// is then showing that athlete — the header name, the calendar, the
+  /// training data — so a "Buddies" button in the same header reads as the
+  /// athlete's buddies unless it says otherwise. It is not: friendships belong
+  /// to the person, and [BuddyRepository] resolves the account from
+  /// FirebaseAuth, never from `UserContext.actingAsUid`.
+  ///
+  /// This is presentation only. It cannot change WHICH account is acted on —
+  /// nothing downstream reads it — so a wrong value here is a wrong caption,
+  /// never a request sent from the wrong account.
+  final bool showOwnAccountNotice;
 
   /// Injectable for tests. Production uses the default repositories, which
   /// resolve the AUTHENTICATED account — never a coach's selected athlete.
@@ -216,13 +231,24 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
         controller: _tabs,
         children: <Widget>[
           _buildPeople(),
-          BuddyFeedView(
+          _withNotice(BuddyFeedView(
             search: _search,
             onOpenProfile: _openProfile,
             onOpenPost: _openPost,
-          ),
+          )),
         ],
       ),
+    );
+  }
+
+  /// Prefixes [child] with the own-account banner when one is called for.
+  Widget _withNotice(Widget child) {
+    if (!widget.showOwnAccountNotice) return child;
+    return Column(
+      children: <Widget>[
+        const _OwnAccountNotice(),
+        Expanded(child: child),
+      ],
     );
   }
 
@@ -231,6 +257,7 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
   Widget _buildPeople() {
     return Column(
       children: <Widget>[
+        if (widget.showOwnAccountNotice) const _OwnAccountNotice(),
         _SearchField(
           controller: _queryController,
           onChanged: _onQueryChanged,
@@ -505,6 +532,43 @@ class _SearchField extends StatelessWidget {
             borderSide: const BorderSide(color: ProfilePalette.action),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Says whose buddies these are, when that could otherwise be misread.
+///
+/// Deliberately states the fact rather than warning about it: a coach has done
+/// nothing wrong by opening this, and the only thing they need to know is that
+/// the list is theirs.
+class _OwnAccountNotice extends StatelessWidget {
+  const _OwnAccountNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: ProfileSpacing.lg,
+        vertical: ProfileSpacing.sm + 2,
+      ),
+      color: ProfilePalette.surface,
+      child: Row(
+        children: <Widget>[
+          const Icon(
+            Icons.person_outline_rounded,
+            size: 16,
+            color: ProfilePalette.textMuted,
+          ),
+          const SizedBox(width: ProfileSpacing.sm),
+          Expanded(
+            child: Text(
+              'Your own buddies. Coaching an athlete does not change them.',
+              style: ProfileText.caption(context),
+            ),
+          ),
+        ],
       ),
     );
   }
