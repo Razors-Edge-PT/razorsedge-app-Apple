@@ -35,8 +35,10 @@ service firebase.storage {
       return isSignedIn() && request.auth.uid == "yoVAqScwLMQLAgNHh8v9IK49fBw2";
     }
 
-    // Bidirectional + accepted-status friendship check (mirrors the Firestore
-    // helper of the same name).
+    // MUTUAL accepted-status friendship check (mirrors the Firestore helper of
+    // the same name, and MUST stay identical to it — a media object whose
+    // Firestore pointer is readable but whose bytes are not, or the reverse,
+    // is a broken feature either way).
     //
     // NOTE the firestore.exists / firestore.get prefix. Storage rules have NO
     // bare exists()/get() — those are Firestore-rules builtins. The previous
@@ -45,24 +47,29 @@ service firebase.storage {
     // every friend read of post, story and lift-video media. Verified by
     // functions/test-rules/profile_storage_rules.spec.js against the real
     // rules engine.
+    //
+    // ── Why both sides, where this used to accept either ─────────────────
+    // buddyAssignments/{ownerUid} is writable by its owner, so a single-sided
+    // test meant any signed-in account could write
+    // `athletes.{victim} = {status:'accepted'}` into its OWN document and read
+    // the victim's post, story and lift-video OBJECTS out of Storage. The same
+    // OR also kept media access alive after a one-sided "remove buddy",
+    // because the entry the remover did not delete still satisfied it.
+    // Requiring both sides closes both, since an account can only write its
+    // own side. See functions/social/buddy_model.js for the full account, and
+    // run scripts/symmetrise_buddy_assignments.js BEFORE deploying this.
     function isBuddyOf(ownerUid) {
-      return isSignedIn() && (
-        (
-          firestore.exists(/databases/(default)/documents/buddyAssignments/$(request.auth.uid)) &&
-          firestore.get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
-            .data.athletes[ownerUid] != null &&
-          firestore.get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
-            .data.athletes[ownerUid].status == 'accepted'
-        )
-        ||
-        (
-          firestore.exists(/databases/(default)/documents/buddyAssignments/$(ownerUid)) &&
-          firestore.get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
-            .data.athletes[request.auth.uid] != null &&
-          firestore.get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
-            .data.athletes[request.auth.uid].status == 'accepted'
-        )
-      );
+      return isSignedIn() &&
+        firestore.exists(/databases/(default)/documents/buddyAssignments/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
+          .data.athletes[ownerUid] != null &&
+        firestore.get(/databases/(default)/documents/buddyAssignments/$(request.auth.uid))
+          .data.athletes[ownerUid].status == 'accepted' &&
+        firestore.exists(/databases/(default)/documents/buddyAssignments/$(ownerUid)) &&
+        firestore.get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
+          .data.athletes[request.auth.uid] != null &&
+        firestore.get(/databases/(default)/documents/buddyAssignments/$(ownerUid))
+          .data.athletes[request.auth.uid].status == 'accepted';
     }
 
     // Social visibility: self, confirmed friend, or super admin.

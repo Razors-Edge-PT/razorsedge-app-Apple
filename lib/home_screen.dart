@@ -19,7 +19,6 @@ import 'dart:async';
 import 'directMessages.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
-import 'post_service.dart';
 import 'feed_post_card.dart';
 import 'main.dart';
 import 'leaderboard_page.dart';
@@ -31,6 +30,11 @@ import 'planned_blocks_screen.dart';
 import 'home_screen_2.dart';
 import 'onboarding/onboarding_cue.dart';
 import 'onboarding/onboarding_cue_service.dart';
+import 'profile/profile_screen.dart';
+import 'social/feed_repository.dart';
+import 'social/feed_view.dart';
+import 'social/open_feed_post.dart';
+import 'social/ui/buddy_hub_button.dart';
 
 enum SelectedFeed { home, points, leaderboard }
 
@@ -83,10 +87,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
   String? _lastWarmUid;
 
   // ── Home FEED ─────────────────────────────────────────────────────────
+  // Retained: the outer scroll view's controller. BuddyFeedView pages from it
+  // rather than nesting a second scrollable inside this one.
   final ScrollController _homeScrollCtrl = ScrollController();
-  List<Post> _feedPosts = [];
-  bool _feedLoading = false;
-  bool _feedHasMore = true;
   SelectedFeed _selectedFeed = SelectedFeed.home;
   final ScrollController _pointsScrollCtrl = ScrollController();
 
@@ -104,10 +107,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   List<String> _feedOwnerUids = []; // self + buddies
   bool _feedOwnersResolved = false;
+  // Page size for the points feed. The buddy feed sets its own in
+  // FeedRepository, which pages the users/{uid}/feed projection.
   static const int _kFeedPageSize = 6;
-  bool _feedError = false;
-  Timestamp? _lastCreatedAt; // simple, stable pagination
-  bool _loadMoreScheduled = false;
 
   @override
   void initState() {
@@ -116,7 +118,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     final uc = Provider.of<UserContext>(context, listen: false);
     final actingUid = uc.actingAsUid;
-    _homeScrollCtrl.addListener(_onHomeScroll);
     _pointsScrollCtrl.addListener(_onPointsScroll);
 
     // Feed chain — always starts immediately, independent of block data.
@@ -124,9 +125,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       await _resolveFeedOwners();
       await _restoreSelectedFeed();
       if (!mounted) return;
-      if (_selectedFeed == SelectedFeed.home) {
-        await _loadInitialHomeFeed();
-      } else {
+      // The buddy feed loads itself when BuddyFeedView mounts; only the
+      // points feed still needs priming from here.
+      if (_selectedFeed == SelectedFeed.points) {
         await _loadInitialPointsFeed();
       }
     }());
@@ -871,7 +872,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     _activeBlockSub?.cancel();
 
     // Scroll controllers
-    _homeScrollCtrl.removeListener(_onHomeScroll);
     _homeScrollCtrl.dispose();
 
     _pointsScrollCtrl.removeListener(_onPointsScroll);
@@ -1028,128 +1028,12 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       unawaited(_loadOnboardingState());
 
       // 🟢 Existing logic — re-fetch whichever feed is active
-      if (_feedOwnersResolved) {
-        if (_selectedFeed == SelectedFeed.home) {
-          await _loadInitialHomeFeed();
-        } else {
-          await _loadInitialPointsFeed();
-        }
+      if (_feedOwnersResolved && _selectedFeed == SelectedFeed.points) {
+        await _loadInitialPointsFeed();
       }
     });
   }
 
-//Home FEED functions
-  Future<void> _loadInitialHomeFeed() async {
-    if (!_feedOwnersResolved) return;
-    setState(() {
-      _feedLoading = false;
-      _feedHasMore = true;
-      _feedError = false;
-      _feedPosts = [];
-      _lastCreatedAt = null;
-    });
-    await _loadMoreHomeFeed();
-  }
-
-  Future<void> _loadMoreHomeFeed() async {
-    if (_feedLoading || !_feedHasMore || _feedOwnerUids.isEmpty) return;
-
-    // capture scroll metrics BEFORE we change state
-    final hadClients = _homeScrollCtrl.hasClients;
-    final prevOffset = hadClients ? _homeScrollCtrl.offset : 0.0;
-
-    setState(() {
-      _feedLoading = true;
-      _feedError = false;
-    });
-
-    try {
-      Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-          .collection('posts')
-          .where('ownerUid', whereIn: _feedOwnerUids)
-          .orderBy('createdAt', descending: true)
-          .limit(_kFeedPageSize);
-
-      if (_lastCreatedAt != null) {
-        q = q.startAfter([_lastCreatedAt]);
-      }
-      final qs = await q.get();
-      final docs = qs.docs;
-
-// 👀 Count items that will actually render on Home
-      final int _renderableThisPage = docs.where((d) {
-        final m = d.data();
-        final t = m['type'];
-        if (t != 're_daily') return true; // media always renders on Home
-        // re_daily renders on Home only when current gates pass:
-        final promoted = (m['promoteToHome'] as bool?) == true;
-        final badges = (m['badges'] as List?) ?? const [];
-        final total = (m['dailyTotal'] as num?)?.toDouble() ?? 0.0;
-        return promoted && badges.isNotEmpty && total > 0.0;
-      }).length;
-
-// Update cursor BEFORE deciding to prefetch
-      if (docs.isNotEmpty) {
-        final last = docs.last.data();
-        final ts = (last['createdAt'] as Timestamp?);
-        _lastCreatedAt = ts ?? _lastCreatedAt;
-      }
-// 🚀 If nothing on this page would render, prefetch the next page immediately
-      if (_renderableThisPage == 0 &&
-          docs.isNotEmpty &&
-          docs.length >= _kFeedPageSize) {
-        _feedLoading = false; // allow re-entry past the guard
-        await _loadMoreHomeFeed();
-        return;
-      }
-
-      final newPosts = <Post>[];
-      for (final d in docs) {
-        try {
-          newPosts.add(Post.fromSnap(d));
-        } catch (e) {}
-      }
-      if (docs.isNotEmpty) {
-        final last = docs.last.data();
-        final ts = (last['createdAt'] as Timestamp?);
-        _lastCreatedAt = ts ?? _lastCreatedAt;
-      }
-      setState(() {
-        _feedPosts.addAll(newPosts);
-        _feedHasMore = docs.length >= _kFeedPageSize;
-        _feedLoading = false;
-      });
-      // if nothing new, restore scroll offset so the view doesn't “jump”
-      if (hadClients && docs.isEmpty) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_homeScrollCtrl.hasClients) {
-            _homeScrollCtrl.jumpTo(prevOffset);
-          }
-        });
-      }
-    } on FirebaseException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Feed error: ${e.code}')),
-        );
-      }
-      setState(() {
-        _feedError = true;
-        _feedLoading = false;
-        _feedHasMore = false;
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Feed failed to load: $e')));
-      }
-      setState(() {
-        _feedError = true;
-        _feedLoading = false;
-        _feedHasMore = false;
-      });
-    }
-  }
 
   Future<void> _loadInitialPointsFeed() async {
     if (!_feedOwnersResolved) return;
@@ -1247,27 +1131,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     final pos = _pointsScrollCtrl.position;
     if (pos.pixels >= pos.maxScrollExtent - 400) {
       _loadMorePointsFeed();
-    }
-  }
-
-// Trigger more when near bottom of outer scroll view
-  void _onHomeScroll() {
-    if (!_homeScrollCtrl.hasClients) return;
-    final pos = _homeScrollCtrl.position;
-    final shouldPrefetch = pos.maxScrollExtent - pos.pixels < 600;
-
-    if (shouldPrefetch &&
-        !_feedLoading &&
-        _feedHasMore &&
-        !_loadMoreScheduled) {
-      _loadMoreScheduled = true;
-      Future.microtask(() async {
-        try {
-          await _loadMoreHomeFeed();
-        } finally {
-          _loadMoreScheduled = false;
-        }
-      });
     }
   }
 
@@ -1747,143 +1610,13 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                   const SizedBox(width: 1),
 
-                  // Buddy invite notifications
-                  Builder(
-                    builder: (context) {
-                      final userCtx = context.watch<UserContext>();
-                      final String invitesUid = userCtx.actingAsUid;
-
-                      return StreamBuilder<QuerySnapshot>(
-                        stream: FirebaseFirestore.instance
-                            .collection('users')
-                            .doc(invitesUid)
-                            .collection('buddyInvites')
-                            .where('status', isEqualTo: 'pending')
-                            .snapshots(),
-                        builder: (context, snapshot) {
-                          final int buddyCount =
-                              snapshot.hasData ? snapshot.data!.docs.length : 0;
-
-                          return Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              IconButton(
-                                icon: Icon(Icons.person_add_alt_1,
-                                    size: 24,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .secondary),
-                                onPressed: () {
-                                  if (!snapshot.hasData ||
-                                      snapshot.data!.docs.isEmpty) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text("No buddy requests.")),
-                                    );
-                                    return;
-                                  }
-
-                                  showDialog(
-                                    context: context,
-                                    builder: (ctx) {
-                                      return AlertDialog(
-                                        title: const Text("Buddy Requests"),
-                                        content: SizedBox(
-                                          width: 310,
-                                          child: ListView.builder(
-                                            shrinkWrap: true,
-                                            itemCount:
-                                                snapshot.data!.docs.length,
-                                            itemBuilder: (_, i) {
-                                              final doc =
-                                                  snapshot.data!.docs[i];
-                                              final data = doc.data()
-                                                  as Map<String, dynamic>;
-
-                                              final fromUid =
-                                                  data['fromUid'] ?? '';
-                                              final fromName =
-                                                  data['fromDisplayName'] ??
-                                                      'Someone';
-
-                                              return Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    "$fromName added you!",
-                                                    style: const TextStyle(
-                                                        fontWeight:
-                                                            FontWeight.bold),
-                                                  ),
-                                                  const SizedBox(height: 6),
-                                                  Row(
-                                                    children: [
-                                                      TextButton(
-                                                        onPressed: () async {
-                                                          await acceptBuddyInvite(
-                                                            ownerUid: fromUid,
-                                                            buddyUid:
-                                                                invitesUid,
-                                                          );
-                                                          Navigator.pop(ctx);
-                                                        },
-                                                        child: const Text(
-                                                            "Accept"),
-                                                      ),
-                                                      const SizedBox(width: 12),
-                                                      TextButton(
-                                                        onPressed: () async {
-                                                          await denyBuddyInvite(
-                                                            ownerUid: fromUid,
-                                                            buddyUid:
-                                                                invitesUid,
-                                                          );
-                                                          Navigator.pop(ctx);
-                                                        },
-                                                        child:
-                                                            const Text("Deny"),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  const Divider(),
-                                                ],
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                              if (buddyCount > 0)
-                                Positioned(
-                                  right: 6,
-                                  top: 6,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 3, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: Colors.redAccent,
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Text(
-                                      buddyCount.toString(),
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                  ),
+                  // Buddy Hub entry point, immediately right of the avatar.
+                  //
+                  // Replaces the legacy invite dialog. The badge and every
+                  // action behind it belong to the AUTHENTICATED account, not
+                  // to `actingAsUid` — a coach reviewing an athlete used to see
+                  // and be able to answer that athlete's buddy requests here.
+                  const BuddyHubButton(),
 
                   const SizedBox(width: 1),
 
@@ -2393,10 +2126,7 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                                 setState(() => _selectedFeed = next);
                                 await _persistSelectedFeed();
 
-                                if (next == SelectedFeed.home) {
-                                  if (_feedPosts.isEmpty && !_feedLoading)
-                                    _loadInitialHomeFeed();
-                                } else if (next == SelectedFeed.points) {
+                                if (next == SelectedFeed.points) {
                                   if (_pointsPosts.isEmpty && !_pointsLoading)
                                     _loadInitialPointsFeed();
                                 } else {
@@ -2502,118 +2232,41 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                         ),
 */
 
-                  // ── Home Feed ──────────────────────────────────────────────────────────
+                  // -- Home Feed ------------------------------------------
+                  //
+                  // The buddy feed, below the calendar. Reads the per-viewer
+                  // projection at users/{uid}/feed rather than querying `posts`
+                  // with `ownerUid whereIn [...]`, which is what the previous
+                  // implementation did. Three things came with that change:
+                  //
+                  //   * `whereIn` takes at most 30 values, so the old query
+                  //     silently stopped covering a viewer past 30 buddies.
+                  //   * paging by `startAfter([createdAt])` is an offset into a
+                  //     timestamp, so two posts sharing one were repeated or
+                  //     skipped at the page boundary between them. The cursor
+                  //     here is a DOCUMENT, which is a position in the index.
+                  //   * eligibility is decided server-side, so RE Daily cards,
+                  //     stories and malformed records never arrive as blank
+                  //     tiles that the old builder had to filter out after the
+                  //     fact — and paid a wasted page fetch for.
+                  //
+                  // Paging is driven by _homeScrollCtrl, the outer scroll view,
+                  // so the section shrink-wraps into this Column rather than
+                  // nesting a second scrollable inside the first.
                   if (_selectedFeed == SelectedFeed.home) ...[
-                    const SizedBox(height: 2),
                     const SizedBox(height: 8),
-                    if (!_feedOwnersResolved)
-                      const Center(
-                        child: SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
-                    else if (_feedOwnerUids.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8),
-                        child: Text(
-                          'No recent posts from you or your gym buddies yet.',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                      )
-                    else
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Cards (Home: media + RE posts that were explicitly shared to Home)
-                          ..._feedPosts.map((p) {
-                            // Media: render immediately
-                            if (p.type != 're_daily') {
-                              return FeedPostCard(
-                                post: p,
-                                isHomeContext: true,
-                                onOpenDetail: () async {
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => PostDetailPage(
-                                        post: p,
-                                        onToggleLike: (pp) => PostService
-                                            .instance
-                                            .toggleLike(pp.id),
-                                        onToggleGoodLift: (pp) => PostService
-                                            .instance
-                                            .toggleGoodLift(pp.id,
-                                                isVideo:
-                                                    pp.mediaType == 'video'),
-                                        onAddComment: (pp, text) => PostService
-                                            .instance
-                                            .addComment(pp.id, text,
-                                                usernameFallback: 'user'),
-                                        canDelete: (UserContext.of(context,
-                                                    listen: false)
-                                                .actorUid ==
-                                            p.ownerUid),
-                                      ),
-                                    ),
-                                  );
-                                  if (!context.mounted) return;
-                                  _loadInitialHomeFeed();
-                                },
-                              );
-                            }
-
-                            // re_daily: eligibility captured in Post model at load time — no stream needed
-                            if (!p.promoteToHome ||
-                                p.badges.isEmpty ||
-                                p.dailyTotal <= 0.0) {
-                              return const SizedBox.shrink();
-                            }
-                            return FeedPostCard(
-                              post: p,
-                              isHomeContext: true,
-                              onOpenDetail: () async {
-                                await Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                      builder: (_) =>
-                                          ReDailyDetailPage(postId: p.id)),
-                                );
-                                if (!context.mounted) return;
-                                _loadInitialHomeFeed();
-                              },
-                            );
-                          }),
-
-                          // Footer (Home)
-                          SizedBox(
-                            height: 52,
-                            child: Center(
-                              child: () {
-                                if (_feedLoading) {
-                                  return const SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2),
-                                  );
-                                }
-                                if (_feedError) {
-                                  return TextButton(
-                                      onPressed: _loadInitialHomeFeed,
-                                      child: const Text('Retry'));
-                                }
-                                if (_feedHasMore) {
-                                  return TextButton(
-                                      onPressed: _loadMoreHomeFeed,
-                                      child: const Text('Load more'));
-                                }
-                                return const SizedBox.shrink();
-                              }(),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                      ),
+                    BuddyFeedView(
+                      scrollController: _homeScrollCtrl,
+                      onOpenProfile: (String uid) =>
+                          Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => ProfileScreen(viewedUid: uid, readOnly: true),
+                      )),
+                      onOpenPost: (FeedItem item) => unawaited(openFeedPost(
+                        context,
+                        item,
+                        viewerUid: UserContext.of(context, listen: false).actorUid,
+                      )),
+                    ),
                   ] else if (_selectedFeed == SelectedFeed.points) ...[
                     // ── Points Feed ──────────────────────────────────────────────────────
                     const SizedBox(height: 2),

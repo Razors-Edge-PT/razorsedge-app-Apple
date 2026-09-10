@@ -58,12 +58,21 @@ test.before(async () => {
     await db.doc(`athleteAssignments/${OWNER}`).set({
       coaches: { [COACH]: { approved: true }, [COACH_FRIEND]: { approved: true } },
     });
-    // Confirmed friendships (accepted, one direction — the rule is bidirectional).
+    // Confirmed friendships. BOTH sides are seeded because isBuddyOf() is now
+    // a mutual test: a single-sided entry is exactly what an attacker can
+    // write into their own document, so it no longer counts as a friendship.
+    // See the one-sided cases further down, which assert that it does not.
     await db.doc(`buddyAssignments/${OWNER}`).set({
       athletes: {
         [FRIEND]: { status: 'accepted' },
         [COACH_FRIEND]: { status: 'accepted' },
       },
+    });
+    await db.doc(`buddyAssignments/${FRIEND}`).set({
+      athletes: { [OWNER]: { status: 'accepted' } },
+    });
+    await db.doc(`buddyAssignments/${COACH_FRIEND}`).set({
+      athletes: { [OWNER]: { status: 'accepted' } },
     });
 
     // Profile identity + the achievement snapshot mirror.

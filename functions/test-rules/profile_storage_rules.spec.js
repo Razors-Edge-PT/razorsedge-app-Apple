@@ -48,9 +48,14 @@ test.before(async () => {
 
   await env.withSecurityRulesDisabled(async (ctx) => {
     const db = ctx.firestore();
-    // The Storage rules read this document to decide friendship.
+    // The Storage rules read these documents to decide friendship. BOTH sides
+    // are seeded: isBuddyOf() is a mutual test, because a single-sided entry
+    // is one an attacker can write into their own document unaided.
     await db.doc(`buddyAssignments/${OWNER}`).set({
       athletes: { [FRIEND]: { status: 'accepted' } },
+    });
+    await db.doc(`buddyAssignments/${FRIEND}`).set({
+      athletes: { [OWNER]: { status: 'accepted' } },
     });
     // COACH is assigned but is NOT a friend — the whole point of these cases.
     await db.doc(`athleteAssignments/${OWNER}`).set({

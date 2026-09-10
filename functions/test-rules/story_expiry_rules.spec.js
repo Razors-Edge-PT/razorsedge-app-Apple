@@ -94,9 +94,13 @@ test.before(async () => {
   });
 
   await env.withSecurityRulesDisabled(async (ctx) => {
-    // A confirmed friendship, in one direction — the rule is bidirectional.
+    // A confirmed friendship. Both sides, because isBuddyOf() is a mutual
+    // test — a single-sided entry is self-assertable and no longer counts.
     await ctx.firestore().doc(`buddyAssignments/${OWNER}`).set({
       athletes: { [FRIEND]: { status: 'accepted' } },
+    });
+    await ctx.firestore().doc(`buddyAssignments/${FRIEND}`).set({
+      athletes: { [OWNER]: { status: 'accepted' } },
     });
     await seedStory(ctx, LIVE, 60 * 1000);
     await seedStory(ctx, EXACT, TTL_MS);

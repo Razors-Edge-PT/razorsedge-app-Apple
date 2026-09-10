@@ -861,3 +861,26 @@ exports.identityOnPublicProfileWritten =
 const stories = require('./social/stories');
 exports.storyOnPublished = stories.storyOnPublished;
 exports.storyCleanupScheduler = stories.storyCleanupScheduler;
+
+// ── Buddy discovery, relationships and feed ─────────────────────────────────
+// The search projection is maintained from users_public by trusted code only;
+// firestore.rules denies every client write to it. See social/search_index.js.
+const searchIndex = require('./social/search_index');
+exports.searchIndexOnPublicProfileWritten =
+  searchIndex.searchIndexOnPublicProfileWritten;
+
+// Relationship mutations touch two accounts at once and must be all-or-nothing,
+// which a client batch cannot be. Every one of these derives the acting account
+// from request.auth.uid alone — the app's coach "acting as" uid never reaches
+// them. See social/buddies.js.
+const buddies = require('./social/buddies');
+exports.buddySendRequest = buddies.buddySendRequest;
+exports.buddyRespondToRequest = buddies.buddyRespondToRequest;
+exports.buddyCancelRequest = buddies.buddyCancelRequest;
+exports.buddyRemoveFriend = buddies.buddyRemoveFriend;
+
+// Feed fan-out plus the confirmed-friend projection it fans out over.
+// See social/feed.js for why fan-out beats a chunked posts query here.
+const feed = require('./social/feed');
+exports.feedOnPostWritten = feed.feedOnPostWritten;
+exports.feedOnBuddyAssignmentWritten = feed.feedOnBuddyAssignmentWritten;

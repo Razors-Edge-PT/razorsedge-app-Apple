@@ -100,28 +100,47 @@ service cloud.firestore {
         );
     }
 
-    // Bidirectional + accepted-status check.
-    // Covers the asymmetric acceptance problem: when B accepts A's invite,
-    // only buddyAssignments/A.athletes.B is written. The second branch lets
-    // B see A's social content despite B having no reciprocal entry.
+    // MUTUAL accepted-status check: BOTH assignment documents must name the
+    // other account as accepted.
+    //
+    // ── Why this is an AND, and why it used to be an OR ──────────────────
+    // The original OR existed for the asymmetric acceptance problem: an older
+    // accept wrote only buddyAssignments/A.athletes.B, so B needed the second
+    // branch to see A's content. It had two consequences that are worse than
+    // the problem it solved.
+    //
+    //   FORGERY. buddyAssignments/{ownerUid} lets the owner write their own
+    //   document. Under the OR, any signed-in account could write
+    //   `athletes.{victim} = {status:'accepted'}` into its OWN document and
+    //   immediately read the victim's posts, stories, lift videos and every
+    //   Storage object behind them. Friendship was self-assertable, and the
+    //   whole friend-only media model rested on it.
+    //
+    //   UNFRIENDING DID NOT UNFRIEND. The old client-side remove deleted only
+    //   the remover's entry; the other side's entry kept the OR true, so media
+    //   access survived the removal.
+    //
+    // An AND fixes both, because an account can only ever write its own side.
+    // Acceptance is what writes the second side, and buddyRespondToRequest
+    // writes both in ONE transaction, so a friendship is never half-formed.
+    //
+    // ── The legacy pairs this changes ────────────────────────────────────
+    // A genuinely-accepted pair whose reciprocal write was lost now reads as
+    // not-friends. functions/scripts/symmetrise_buddy_assignments.js repairs
+    // exactly those pairs and MUST be run (with --apply) BEFORE these rules
+    // are deployed. No data is deleted by it; it only adds the missing side.
     function isBuddyOf(ownerUid) {
-      return isSignedIn() && (
-        (
-          exists(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
-            .data.athletes[ownerUid] != null &&
-          get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
-            .data.athletes[ownerUid].status == 'accepted'
-        )
-        ||
-        (
-          exists(/databases/$(database)/documents/buddyAssignments/$(ownerUid)) &&
-          get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
-            .data.athletes[request.auth.uid] != null &&
-          get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
-            .data.athletes[request.auth.uid].status == 'accepted'
-        )
-      );
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
+          .data.athletes[ownerUid] != null &&
+        get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
+          .data.athletes[ownerUid].status == 'accepted' &&
+        exists(/databases/$(database)/documents/buddyAssignments/$(ownerUid)) &&
+        get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
+          .data.athletes[request.auth.uid] != null &&
+        get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
+          .data.athletes[request.auth.uid].status == 'accepted';
     }
 
     // Social visibility gate: self, confirmed friend, or super admin.
@@ -171,7 +190,9 @@ service cloud.firestore {
     // Reads are unaffected: the catch-all still gives the owner and the super
     // admin read, and each block widens reads where that is intended.
     function hasOwnWriteRule(subcoll) {
-      return subcoll in ['showcase', 'showcaseDays', 'stories'];
+      return subcoll in [
+        'showcase', 'showcaseDays', 'stories', 'feed', 'buddyInvites',
+      ];
     }
 
 
@@ -322,24 +343,74 @@ service cloud.firestore {
       // users/{userId}/buddyInvites/{fromUid}
       // userId  = the receiver
       // fromUid = the sender (doc key)
+      // 'buddyInvites' is listed in hasOwnWriteRule() so the users/{subcoll}
+      // catch-all below does not re-grant the receiver unconstrained writes
+      // under their own uid. It did: rule matches are ORed, so the catch-all's
+      // `isSelf(userId)` write silently overrode every constraint in this
+      // block — a user could create a self-request, and a receiver could
+      // rewrite fromUid/buddyUid to re-address somebody else's request. Both
+      // were caught by test-rules/social_buddy_rules.spec.js.
       match /buddyInvites/{fromUid} {
         // Receiver (owner of userId) or super admin can read their invites.
         allow read: if isSelf(userId) || isSuperAdmin();
 
         // Sender creates the invite doc.
+        //
+        // The doc id IS the sender's uid, so a sender cannot hold two open
+        // requests to the same person however many times they tap Add.
+        // fromUid != userId blocks a self-request, which would otherwise sit
+        // in the receiver's own pending list and inflate their badge.
+        //
+        // Still a client write, deliberately: installed builds create invites
+        // directly and would stop being able to send if this were denied. The
+        // new client calls buddySendRequest instead, which additionally
+        // rate-limits and resolves crossed requests.
         allow create: if isSignedIn()
                       && request.auth.uid == fromUid
+                      && fromUid != userId
                       && request.resource.data.fromUid == fromUid
                       && request.resource.data.buddyUid == userId;
 
         // Receiver updates status (accepted / denied).
+        //
+        // Restricted to the response fields: the participants are what the
+        // document path and the invite's own identity are built on, so letting
+        // an update rewrite fromUid/buddyUid would let a receiver re-address
+        // somebody else's request.
         allow update: if isSignedIn()
                       && request.auth.uid == userId
                       && resource.data.fromUid == fromUid
-                      && resource.data.buddyUid == userId;
+                      && resource.data.buddyUid == userId
+                      && request.resource.data.diff(resource.data)
+                           .affectedKeys()
+                           .hasOnly(['status', 'respondedAt']);
 
         // Receiver may delete the invite doc.
         allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      // ---- Buddy feed projection ----
+      // users/{userId}/feed/{ownerUid__postId}
+      //
+      // A per-viewer index of gallery posts by the viewer and their confirmed
+      // buddies, written ONLY by feedOnPostWritten / feedOnBuddyAssignmentWritten
+      // through the Admin SDK. It holds references and display metadata — post
+      // id, media URLs, Storage paths, caption, timestamps — never media bytes.
+      //
+      // Read is the owner's alone. Write is denied to every client, including
+      // the owner: a forgeable feed row is a way to put an arbitrary URL, or a
+      // reference to a stranger's post, into your own feed and have the app
+      // render it as a buddy's. 'feed' is also listed in hasOwnWriteRule() so
+      // the users/{subcoll} catch-all below does not quietly re-grant the
+      // owner the write this block withholds.
+      //
+      // Reading a row does NOT grant access to the media it points at. The
+      // posts and Storage rules are still evaluated on their own terms, so a
+      // stale row for an ex-buddy resolves to a permission denial, not to
+      // content.
+      match /feed/{itemId} {
+        allow read: if isSelf(userId) || isSuperAdmin();
+        allow write: if false;
       }
 
       // ---- Proof-of-record media pointers ----
@@ -508,16 +579,101 @@ service cloud.firestore {
       // Only the owner or super admin can read their buddy list.
       allow read: if request.auth.uid == ownerUid || isSuperAdmin();
 
-      // Owner or super admin may create / update / delete freely.
-      // An athlete who already appears in the existing athletes map may
-      // create or update (covers: accept invite, deny invite — B updating A's doc).
-      // They may NOT delete the whole document.
-      allow create, update: if isSignedIn() && (
+      // Only the owner or super admin may bring this document into existence.
+      // The non-owner branch below is an UPDATE rule: it is reached only when
+      // the caller already appears in an existing athletes map, which cannot
+      // be true on a create.
+      allow create: if isSignedIn() && (
+        request.auth.uid == ownerUid || isSuperAdmin()
+      );
+
+      // Owner or super admin may update freely.
+      //
+      // An athlete who already appears in the athletes map may update too —
+      // that is the legacy accept/deny path, where B writes `athletes.B` in
+      // A's document — but ONLY their own entry.
+      //
+      // Without the diff clause that branch let anyone already inside A's map
+      // rewrite the WHOLE map: B could add C as accepted in A's document, and
+      // C could accept A in C's own, manufacturing a friendship between A and
+      // C that neither of them agreed to. Restricting the write to the single
+      // key named by the caller keeps the legacy flows working — both of them
+      // touch exactly `athletes.{self}` — while removing the forgery.
+      allow update: if isSignedIn() && (
         request.auth.uid == ownerUid
         || isSuperAdmin()
-        || resource.data.athletes[request.auth.uid] != null
+        || (
+          resource.data.athletes[request.auth.uid] != null
+          && request.resource.data.diff(resource.data)
+               .affectedKeys().hasOnly(['athletes'])
+          && request.resource.data.athletes.diff(resource.data.athletes)
+               .affectedKeys().hasOnly([request.auth.uid])
+        )
       );
+
       allow delete: if request.auth.uid == ownerUid || isSuperAdmin();
+    }
+
+
+    // ======================================================
+    // BUDDY DISCOVERY: SEARCH PROJECTION
+    // ======================================================
+    // userSearchIndex/{uid}
+    //
+    // The only collection buddy search reads. Maintained from users_public by
+    // searchIndexOnPublicProfileWritten (functions/social/search_index.js) and
+    // by nothing else.
+    //
+    // It carries only what is safe for one signed-in stranger to see about
+    // another: uid, username, display name, published full name, derived first
+    // and last name, a small avatar URL, and the match tokens. No email, no
+    // phone, no date of birth, no entitlement or billing state, no coach
+    // relationship, no training data. The legacy search queried users_public
+    // by emailLower and handed the matched email back to the client; this
+    // projection exists so that stops being possible.
+    //
+    // Writes are denied outright. The Admin SDK bypasses rules, so the
+    // maintenance function is unaffected, while a client cannot make itself
+    // findable under someone else's name or inject terms it does not own.
+    match /userSearchIndex/{uid} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+
+    // ======================================================
+    // CONFIRMED-FRIEND PROJECTION
+    // ======================================================
+    // socialGraph/{uid}.friends
+    //
+    // The precomputed intersection of both buddyAssignments documents — the
+    // accounts that have accepted each other. A PROJECTION, never an
+    // authority: no rule in this file reads it, and deleting it would change
+    // nothing about what is permitted. isBuddyOf() still reads the assignment
+    // documents themselves.
+    //
+    // It exists because a confirmed friendship is mutual and buddyAssignments
+    // is owner-read-only, so a client cannot see the other side and therefore
+    // cannot tell a real friendship from one it merely claims. Owner-read,
+    // server-write, for exactly that reason: a client-writable friend list
+    // would put the answer back in the client's hands.
+    match /socialGraph/{uid} {
+      allow read: if isSelf(uid) || isSuperAdmin();
+      allow write: if false;
+    }
+
+
+    // ======================================================
+    // SOCIAL RATE LIMITS
+    // ======================================================
+    // socialRateLimits/{uid}
+    //
+    // The buddy-request budget consumed by buddySendRequest. Denied to clients
+    // in both directions and stated explicitly rather than left to the default
+    // deny: a counter a device could read would tell an abuser exactly how
+    // much room is left, and one it could write would not be a limit at all.
+    match /socialRateLimits/{uid} {
+      allow read, write: if false;
     }
 
 
