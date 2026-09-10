@@ -40,8 +40,24 @@
 //   storage.rules. Between the deploy and the repair, affected pairs lose
 //   access to each other's media.
 //
+// STRATEGIES
+//   --strategy=symmetrise       (default) ADD the missing accepted entry, so a
+//                               half-recorded friendship becomes whole.
+//   --strategy=remove-one-sided REMOVE both sides' entries plus the pair's own
+//                               invite documents, so the pair holds no
+//                               relationship and either person can send a fresh
+//                               request. For pairs whose surviving half is
+//                               ambiguous — a deleted account, a status-less
+//                               legacy entry — where completing the friendship
+//                               would invent one nobody asked for.
+//
+//   The strategies are mutually exclusive and neither is implied. A run with no
+//   --strategy uses symmetrise, which is add-only; nothing deletes anything
+//   without both --strategy=remove-one-sided AND --apply on the same command.
+//
 // Modes:
-//   (default)  dry-run — report every pair that would be repaired, write nothing
+//   (default)  dry-run — report every pair the chosen strategy would act on,
+//                        write nothing
 //   --report           — dry run PLUS identity resolution and an invite audit,
 //                        for deciding which pairs are real friendships and
 //                        which are obsolete test data. Read-only.
@@ -81,7 +97,19 @@ function usage() {
     'Full read-only preflight (names, account existence, invite audit):',
     '  node scripts/symmetrise_buddy_assignments.js --project goodlift-us-storage --report',
     '',
-    'Only ever ADDS the missing accepted entry. Never deletes or downgrades.',
+    'Reset the four ambiguous pairs instead of completing them (dry run):',
+    '  node scripts/symmetrise_buddy_assignments.js --project goodlift-us-storage \\',
+    '    --strategy=remove-one-sided',
+    '',
+    'Reset them for real, then verify:',
+    '  node scripts/symmetrise_buddy_assignments.js --project goodlift-us-storage \\',
+    '    --strategy=remove-one-sided --apply',
+    '  node scripts/symmetrise_buddy_assignments.js --project goodlift-us-storage \\',
+    '    --strategy=remove-one-sided --verify',
+    '',
+    'symmetrise (the default) only ever ADDS. remove-one-sided deletes only the',
+    'named athletes.{uid} keys of the one-sided pairs and their own invites, and',
+    'requires --apply. Neither ever deletes a whole document.',
   ].join('\n');
 }
 
@@ -91,6 +119,8 @@ function parseArgs(argv) {
     apply: false,
     verify: false,
     report: false,
+    strategy: STRATEGY_SYMMETRISE,
+    expectMutual: null,
     limit: 0,
     help: false,
   };
@@ -99,7 +129,11 @@ function parseArgs(argv) {
     if (arg === '--apply') out.apply = true;
     else if (arg === '--verify') out.verify = true;
     else if (arg === '--report') out.report = true;
-    else if (arg === '--limit') out.limit = Number(argv[++i]) || 0;
+    else if (arg.startsWith('--strategy=')) out.strategy = arg.split('=')[1];
+    else if (arg === '--strategy') out.strategy = argv[++i];
+    else if (arg === '--expect-mutual') {
+      out.expectMutual = Number(argv[++i]);
+    } else if (arg === '--limit') out.limit = Number(argv[++i]) || 0;
     else if (arg === '--project') out.projectId = argv[++i];
     else if (arg === '--help' || arg === '-h') out.help = true;
     else throw new Error(`Unknown argument: ${arg}`);
@@ -109,6 +143,18 @@ function parseArgs(argv) {
   }
   if (out.report && (out.apply || out.verify)) {
     throw new Error('--report is read-only; use it on its own.');
+  }
+  if (!STRATEGIES.includes(out.strategy)) {
+    throw new Error(
+      `Unknown --strategy "${out.strategy}". ` +
+        `Expected one of: ${STRATEGIES.join(', ')}.`,
+    );
+  }
+  if (
+    out.expectMutual !== null &&
+    (!Number.isInteger(out.expectMutual) || out.expectMutual < 0)
+  ) {
+    throw new Error('--expect-mutual takes a non-negative integer.');
   }
   return out;
 }
@@ -120,6 +166,31 @@ function athletesOf(data) {
 
 function isAccepted(entry) {
   return !!entry && typeof entry === 'object' && entry.status === 'accepted';
+}
+
+/**
+ * The entry [ownerData] holds for [otherUid], whatever its status, or null.
+ *
+ * Deliberately not "the ACCEPTED entry": a reset has to clear a relationship
+ * record that carries no status at all, which is the shape production actually
+ * has for one of these pairs. Mirrors `entryFor` in ../social/buddy_model.js;
+ * duplicated rather than imported so this script stays runnable on its own,
+ * against a project whose Functions have not been deployed yet.
+ */
+function entryFor(ownerData, otherUid) {
+  const entry = athletesOf(ownerData)[otherUid];
+  return entry && typeof entry === 'object' ? entry : null;
+}
+
+/**
+ * True when both documents record each other as accepted.
+ *
+ * The guard that keeps the nine mutual friendships out of the removal path:
+ * re-checked at write time, so a pair somebody accepts mid-run is left alone.
+ * Mirrors `areMutualFriends` in ../social/buddy_model.js.
+ */
+function areMutualFriends(aData, bData, aUid, bUid) {
+  return isAccepted(entryFor(aData, bUid)) && isAccepted(entryFor(bData, aUid));
 }
 
 /**
@@ -467,6 +538,306 @@ async function printReport(db, oneSided, mutual) {
   }
 }
 
+// ── Strategy: remove-one-sided ─────────────────────────────────────────────
+//
+// The alternative to symmetrising. Instead of completing a half-recorded
+// friendship, it CLEARS both sides so the pair genuinely holds no
+// relationship, and either person can send a fresh request afterwards.
+//
+// Chosen when the surviving half is ambiguous — an account that no longer
+// exists, an entry with no status at all, a friendship nobody can date. A
+// repaired ambiguous pair is a friendship neither party asked for; a cleared
+// one is a clean slate that either of them can act on.
+//
+// WHAT IT TOUCHES, EXACTLY
+//   For each pair (A holds the acceptance, B is missing it):
+//     buddyAssignments/A  →  delete the single key `athletes.B`
+//     buddyAssignments/B  →  delete the single key `athletes.A`, if present
+//   plus the pair's own invite documents in both directions, because a stale
+//   invite is what stops the relationship being genuinely reset:
+//     users/A/buddyInvites/B  and  users/B/buddyInvites/A
+//
+//   An installed client re-sending to somebody who still has an invite
+//   document cannot create one — the tightened create rule does not apply to
+//   an existing document, and the update rule belongs to the receiver. And
+//   buddyRespondToRequest refuses to accept an invite already marked denied.
+//   Leaving those behind would reset the friendship on paper and leave the
+//   pair unable to use it.
+//
+// WHAT IT NEVER TOUCHES
+//   * a whole buddyAssignments document — only named keys inside it;
+//   * any other entry in the same document, including every mutual friendship;
+//   * a pair that is mutually accepted, checked again at write time;
+//   * accounts, public profiles, posts, media, stories, or the invite history
+//     of any pair other than these.
+//
+// PROJECTIONS
+//   Every delete is a write to buddyAssignments/{uid}, which is the trigger
+//   path of feedOnBuddyAssignmentWritten. That handler recomputes
+//   socialGraph/{uid} for both sides from the authority and purges the feed
+//   rows of anyone who stopped being a friend, so no stale projection is left
+//   behind. It must therefore be DEPLOYED BEFORE this runs — see the rollout
+//   order. Run this before the trigger exists and the assignment entries go
+//   while socialGraph and users/{uid}/feed keep the removed relationship.
+
+/** The strategies this tool knows. The default never deletes anything. */
+const STRATEGY_SYMMETRISE = 'symmetrise';
+const STRATEGY_REMOVE = 'remove-one-sided';
+const STRATEGIES = [STRATEGY_SYMMETRISE, STRATEGY_REMOVE];
+
+const SUB_INVITES = 'buddyInvites';
+const COL_USERS = 'users';
+
+const inviteRefOf = (db, receiverUid, senderUid) =>
+  db.collection(COL_USERS).doc(receiverUid).collection(SUB_INVITES).doc(senderUid);
+
+/**
+ * Everything the removal would touch, resolved and read-only.
+ *
+ * Built entirely from reads so the dry run and the apply agree about what the
+ * work is, and so a human can see every uid, name, path and field before any
+ * of it happens.
+ */
+async function planRemoval(db, oneSided) {
+  const plan = [];
+
+  for (const pair of oneSided) {
+    // eslint-disable-next-line no-await-in-loop
+    const [claimantId, missingId, claimantDoc, missingDoc, inviteA, inviteB] =
+      await Promise.all([
+        resolveIdentity(db, pair.claimant),
+        resolveIdentity(db, pair.missing),
+        db.collection(COL).doc(pair.claimant).get(),
+        db.collection(COL).doc(pair.missing).get(),
+        inviteRefOf(db, pair.claimant, pair.missing).get(),
+        inviteRefOf(db, pair.missing, pair.claimant).get(),
+      ]);
+
+    const claimantData = claimantDoc.exists ? claimantDoc.data() : null;
+    const missingData = missingDoc.exists ? missingDoc.data() : null;
+
+    const entryDeletes = [];
+    if (entryFor(claimantData, pair.missing)) {
+      entryDeletes.push({
+        ownerUid: pair.claimant,
+        otherUid: pair.missing,
+        path: `${COL}/${pair.claimant}`,
+        field: `athletes.${pair.missing}`,
+        describes: describeEntry(claimantData, pair.missing),
+      });
+    }
+    if (entryFor(missingData, pair.claimant)) {
+      // Pair 4's case: a legacy entry carrying addedAt and displayName but no
+      // status. It is not an acceptance, so symmetrising ignored it — but it
+      // is a relationship record, so a reset has to clear it too.
+      entryDeletes.push({
+        ownerUid: pair.missing,
+        otherUid: pair.claimant,
+        path: `${COL}/${pair.missing}`,
+        field: `athletes.${pair.claimant}`,
+        describes: describeEntry(missingData, pair.claimant),
+      });
+    }
+
+    const inviteDeletes = [];
+    for (const snap of [inviteA, inviteB]) {
+      if (!snap.exists) continue;
+      const d = snap.data() || {};
+      inviteDeletes.push({
+        path: snap.ref.path,
+        status: typeof d.status === 'string' ? d.status : '(none)',
+      });
+    }
+
+    plan.push({
+      pair,
+      claimantId,
+      missingId,
+      entryDeletes,
+      inviteDeletes,
+      noop: entryDeletes.length === 0 && inviteDeletes.length === 0,
+    });
+  }
+
+  return plan;
+}
+
+/** Prints the whole plan: every uid, name, path and field, before anything runs. */
+function printRemovalPlan(plan, { willApply }) {
+  process.stdout.write(
+    `\n== PLAN: ${STRATEGY_REMOVE} ${'='.repeat(46)}\n` +
+      (willApply
+        ? 'APPLYING. Each entry below will be deleted.\n'
+        : 'DRY RUN. Nothing below will be written.\n'),
+  );
+
+  let entries = 0;
+  let invites = 0;
+  let n = 0;
+
+  for (const item of plan) {
+    n += 1;
+    process.stdout.write(`\nPAIR ${n} of ${plan.length}\n`);
+    process.stdout.write(
+      `  ${item.pair.claimant}\n    ${labelOf(item.claimantId)}\n`,
+    );
+    process.stdout.write(
+      `  ${item.pair.missing}\n    ${labelOf(item.missingId)}\n`,
+    );
+
+    if (item.noop) {
+      process.stdout.write('  nothing to remove — already clear\n');
+      continue;
+    }
+
+    for (const del of item.entryDeletes) {
+      entries += 1;
+      process.stdout.write(
+        `  DELETE FIELD  ${del.path}\n` +
+          `                  ${del.field}\n` +
+          `                  currently: ${del.describes}\n`,
+      );
+    }
+    for (const del of item.inviteDeletes) {
+      invites += 1;
+      process.stdout.write(
+        `  DELETE DOC    ${del.path}\n` +
+          `                  status=${del.status}` +
+          `${del.status === 'pending' ? '   <-- LIVE REQUEST' : ''}\n`,
+      );
+    }
+  }
+
+  process.stdout.write(
+    `\n  assignment fields to delete : ${entries}\n` +
+      `  invite documents to delete  : ${invites}\n`,
+  );
+  const live = plan.some((i) =>
+    i.inviteDeletes.some((d) => d.status === 'pending'),
+  );
+  if (live) {
+    process.stdout.write(
+      '\n  WARNING: one of these invites is still PENDING. Removing it\n' +
+        '  cancels a request somebody is waiting on. Review before --apply.\n',
+    );
+  }
+  return { entries, invites };
+}
+
+/**
+ * Executes the plan, one pair at a time, re-reading before every delete.
+ *
+ * Idempotent and race-safe in the same way the repair is: the state is read
+ * again inside the write, so a pair somebody has meanwhile made MUTUAL is
+ * skipped rather than torn down, and a pair already cleared costs nothing.
+ *
+ * Deletes are `set(merge:true)` of a single `FieldValue.delete()` on one named
+ * key. That cannot remove the document and cannot touch a sibling entry, which
+ * is what keeps the nine mutual friendships out of reach.
+ */
+async function applyRemoval(db, plan) {
+  let fieldsRemoved = 0;
+  let invitesRemoved = 0;
+  let skippedMutual = 0;
+  let skippedAbsent = 0;
+  const errors = [];
+
+  for (const item of plan) {
+    const { claimant, missing } = item.pair;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const [claimantDoc, missingDoc] = await Promise.all([
+        db.collection(COL).doc(claimant).get(),
+        db.collection(COL).doc(missing).get(),
+      ]);
+      const claimantData = claimantDoc.exists ? claimantDoc.data() : null;
+      const missingData = missingDoc.exists ? missingDoc.data() : null;
+
+      // Somebody accepted while we were reading. A mutual friendship is not
+      // this tool's to remove.
+      if (areMutualFriends(claimantData, missingData, claimant, missing)) {
+        skippedMutual += 1;
+        process.stdout.write(
+          `  SKIP ${claimant} x ${missing} — became mutual since the scan\n`,
+        );
+        continue;
+      }
+
+      const batch = db.batch();
+      let queued = 0;
+
+      if (entryFor(claimantData, missing)) {
+        batch.set(
+          db.collection(COL).doc(claimant),
+          { athletes: { [missing]: admin.firestore.FieldValue.delete() } },
+          { merge: true },
+        );
+        queued += 1;
+      } else {
+        skippedAbsent += 1;
+      }
+
+      if (entryFor(missingData, claimant)) {
+        batch.set(
+          db.collection(COL).doc(missing),
+          { athletes: { [claimant]: admin.firestore.FieldValue.delete() } },
+          { merge: true },
+        );
+        queued += 1;
+      }
+
+      const inviteFields = queued;
+
+      // eslint-disable-next-line no-await-in-loop
+      const [inviteA, inviteB] = await Promise.all([
+        inviteRefOf(db, claimant, missing).get(),
+        inviteRefOf(db, missing, claimant).get(),
+      ]);
+      for (const snap of [inviteA, inviteB]) {
+        if (!snap.exists) continue;
+        batch.delete(snap.ref);
+        queued += 1;
+      }
+
+      if (queued > 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await batch.commit();
+        fieldsRemoved += inviteFields;
+        invitesRemoved += queued - inviteFields;
+      }
+    } catch (err) {
+      errors.push({ pair: `${claimant} x ${missing}`, message: err.message });
+    }
+  }
+
+  return { fieldsRemoved, invitesRemoved, skippedMutual, skippedAbsent, errors };
+}
+
+/**
+ * Confirms the outcome: the one-sided pairs are gone AND the mutual ones are
+ * all still there.
+ *
+ * The second half is the point. "Zero one-sided pairs" is also what you would
+ * see if the tool had deleted everything, so a verification that only counts
+ * what it removed cannot tell success from catastrophe.
+ */
+async function verifyRemoval(db, expectedMutual) {
+  const { mutual, oneSided } = await scan(db, 0);
+  const okOneSided = oneSided.length === 0;
+  const okMutual =
+    expectedMutual === null || mutual.length === expectedMutual;
+
+  process.stdout.write(`  one-sided pairs remaining : ${oneSided.length}\n`);
+  process.stdout.write(
+    `  mutual pairs intact       : ${mutual.length}` +
+      (expectedMutual === null ? '\n' : ` (expected ${expectedMutual})\n`),
+  );
+  for (const p of oneSided) {
+    process.stdout.write(`    still one-sided: ${p.claimant} -> ${p.missing}\n`);
+  }
+  return { ok: okOneSided && okMutual, mutual, oneSided };
+}
+
 async function main() {
   let args;
   try {
@@ -484,9 +855,16 @@ async function main() {
   admin.initializeApp({ projectId: args.projectId });
   const db = admin.firestore();
 
-  const mode = args.apply ? 'APPLY' : args.verify ? 'VERIFY' : 'DRY RUN';
+  const mode = args.apply
+    ? 'APPLY'
+    : args.verify
+      ? 'VERIFY'
+      : args.report
+        ? 'REPORT'
+        : 'DRY RUN';
   process.stdout.write(
-    `symmetrise_buddy_assignments — ${mode} on ${args.projectId}\n\n`,
+    `symmetrise_buddy_assignments — ${mode} on ${args.projectId}\n` +
+      `strategy: ${args.strategy}\n\n`,
   );
 
   const { scanned, mutual, oneSided } = await scan(db, args.limit);
@@ -512,6 +890,74 @@ async function main() {
     process.stdout.write(
       '\nREPORT ONLY — nothing was written. ' +
         'Decide per pair, then re-run with --apply.\n',
+    );
+    return;
+  }
+
+  // ── remove-one-sided ────────────────────────────────────────────────────
+  if (args.strategy === STRATEGY_REMOVE) {
+    if (args.verify) {
+      const expected =
+        args.expectMutual === null ? mutual.length : args.expectMutual;
+      const result = await verifyRemoval(db, args.expectMutual);
+      if (result.ok) {
+        process.stdout.write(
+          '\nVERIFY OK — no one-sided pair remains and every mutual\n' +
+            `friendship is intact (${result.mutual.length}).\n`,
+        );
+      } else {
+        process.stdout.write(
+          '\nVERIFY FAILED — see the counts above. ' +
+            `Expected ${expected} mutual pair(s) and 0 one-sided.\n`,
+        );
+        process.exitCode = 1;
+      }
+      return;
+    }
+
+    const plan = await planRemoval(db, oneSided);
+    printRemovalPlan(plan, { willApply: args.apply });
+
+    if (!args.apply) {
+      process.stdout.write(
+        '\nDRY RUN — nothing was written. Re-run with ' +
+          '--strategy=remove-one-sided --apply to reset these pairs.\n',
+      );
+      return;
+    }
+
+    const before = mutual.length;
+    process.stdout.write('\napplying...\n');
+    const out = await applyRemoval(db, plan);
+    process.stdout.write(`\nassignment fields removed : ${out.fieldsRemoved}\n`);
+    process.stdout.write(`invite documents removed  : ${out.invitesRemoved}\n`);
+    process.stdout.write(`skipped (became mutual)   : ${out.skippedMutual}\n`);
+    process.stdout.write(`skipped (already clear)   : ${out.skippedAbsent}\n`);
+    process.stdout.write(`errors                    : ${out.errors.length}\n`);
+    for (const e of out.errors) {
+      process.stderr.write(`  ${e.pair}: ${e.message}\n`);
+    }
+    if (out.errors.length > 0) {
+      process.exitCode = 1;
+      return;
+    }
+
+    process.stdout.write('\nre-checking...\n');
+    const check = await verifyRemoval(db, before);
+    if (!check.ok) {
+      process.stdout.write(
+        '\nPOST-CHECK FAILED — the mutual friendships or the one-sided\n' +
+          'pairs are not what they should be. Investigate before deploying\n' +
+          'the tightened rules.\n',
+      );
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(
+      '\nDone. The four pairs hold no relationship; every mutual\n' +
+        'friendship is unchanged. feedOnBuddyAssignmentWritten has been\n' +
+        'triggered by each delete and will have recomputed socialGraph and\n' +
+        'purged the matching feed rows — provided it was deployed first.\n',
     );
     return;
   }
@@ -564,6 +1010,8 @@ if (require.main === module) {
 module.exports = {
   athletesOf,
   isAccepted,
+  entryFor,
+  areMutualFriends,
   pairKey,
   scan,
   repair,
@@ -571,4 +1019,11 @@ module.exports = {
   describeEntry,
   resolveIdentity,
   scanMalformedPendingInvites,
+  STRATEGY_SYMMETRISE,
+  STRATEGY_REMOVE,
+  STRATEGIES,
+  planRemoval,
+  printRemovalPlan,
+  applyRemoval,
+  verifyRemoval,
 };
