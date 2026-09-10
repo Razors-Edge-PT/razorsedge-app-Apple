@@ -5,6 +5,7 @@ import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'periodization_model_utils.dart';
 import 'increment_grid.dart';
+import 'wes2_setn_solver.dart';
 import 'progression_engine.dart';
 import 'wes2_hint_trace.dart';
 
@@ -859,106 +860,108 @@ class Wes2HintServiceImpl implements Wes2HintService {
     double? weightHint;
     int? repsHint;
 
+    // ── Set 2+ bounded weight × reps candidate search ────────────────────────
+    // Both weight and reps are legitimate tools for hitting this set's target
+    // E1RM, and neither is preferred a priori. Build a small legal candidate
+    // space for each free field and pick the pairing with the smallest absolute
+    // E1RM error. See Wes2SetNSolver for the candidate bounds and tie ladder.
+    //
+    // Display-added vs absolute: candidates, bounds and tie-breakers all live in
+    // display units; only E1RM scoring converts, through toAbs below.
+    double toAbs(double displayWeight) => isBw
+        ? PeriodizationModelUtils.toAbsoluteWeight(
+            uid: uid,
+            displayAddedKg: displayWeight,
+            exerciseId: row.exerciseId,
+            exerciseName: row.name,
+            asOfDate: date,
+          )
+        : displayWeight;
+
+    // Preferred rep centre: this set's own model/baseline rep hint first, then
+    // the planned target for this set, then the previous set's resolved reps,
+    // then the WES fallback. Anchoring on the baseline hint keeps repeated
+    // recalculations of the same set stable.
+    final planRepsForSet = BB3PlannedExerciseService.getRepTargetForSet(
+      exSettings: exSettings,
+      weekIndex: weekIndex,
+      sessionIndex: sessionIndex,
+      setIndex: setIdx,
+    );
+    final int preferredRep = (set.reps.hintValue != null &&
+            set.reps.hintValue! > 0)
+        ? set.reps.hintValue!
+        : (planRepsForSet > 0 ? planRepsForSet : (prevReps > 0 ? prevReps : 8));
+
     if (cwt != null && creps != null) {
       // Both locked — nothing to compute.
     } else if (creps != null) {
-      // Reps locked → solve weight at locked reps.
-      final raw = PeriodizationModelUtils.reverseCalculateWeight(
-        targetE1RM: targetE1rm,
-        reps: creps,
-        rir: thisRir,
+      // Reps locked → search only the legal generated weights at those reps.
+      final weights = Wes2SetNSolver.weightCandidates(
+        previousResolvedDisplayWeight: prevWeight,
+        previousActualRir: prevSet.rir.actualValue,
+        grid: _sNGrid,
+        keepCandidate: (w) => toAbs(w) > 0,
       );
-      if (raw > 0) {
-        // BW: convert absolute → display weight first, then snap the display value.
-        // Non-BW: snap the absolute weight directly.
-        // Both use the local exerciseId-keyed grid (_sNSnap), not the name-based PMU helper.
-        weightHint = isBw
-            ? _sNSnap(PeriodizationModelUtils.toDisplayAddedWeight(
-                uid: uid,
-                absoluteKg: raw,
-                exerciseId: row.exerciseId,
-                exerciseName: row.name,
-                asOfDate: date,
-              ))
-            : _sNSnap(raw);
-      }
+      final choice = Wes2SetNSolver.choose(
+        targetE1rm: targetE1rm,
+        weightCandidates: weights,
+        repCandidates: <int>[creps],
+        thisRir: thisRir,
+        preferredRep: creps,
+        previousResolvedDisplayWeight: prevWeight,
+        toAbsolute: toAbs,
+      );
+      if (choice != null) weightHint = choice.weight;
     } else if (cwt != null) {
-      // Weight constraint: solve reps unless locked by BB3 or user actual.
-      // Center is derived from cwt (actual weight), not prevWeight — fixes Issue 4.
-      // For BW exercises, use absolute load for all E1RM math.
+      // Weight locked (user actual or BB3) → search only reps at that weight.
+      // The previous-set cap deliberately does NOT apply here: the athlete is
+      // allowed to enter a heavier load than the set before by hand.
       if (!_isBb3Locked(set.reps) && set.reps.actualValue == null) {
-        final cwtForMath = isBw
-            ? PeriodizationModelUtils.toAbsoluteWeight(
-                uid: uid,
-                displayAddedKg: cwt,
-                exerciseId: row.exerciseId,
-                exerciseName: row.name,
-                asOfDate: date,
-              )
-            : cwt;
-        final midD = PeriodizationModelUtils.reverseCalculateReps(
-          targetE1RM: targetE1rm,
-          weight: cwtForMath,
-          baseWeight: cwtForMath,
-          rir: thisRir,
-        ).clamp(1.0, 100.0);
-        repsHint = _closestRepsForWeight(
+        final choice = Wes2SetNSolver.choose(
           targetE1rm: targetE1rm,
-          weight: cwtForMath,
-          center: midD.round().clamp(1, 100),
-          rir: thisRir,
-          group: group,
+          weightCandidates: <double>[cwt],
+          repCandidates:
+              Wes2SetNSolver.repCandidates(preferredRep: preferredRep),
+          thisRir: thisRir,
+          preferredRep: preferredRep,
+          previousResolvedDisplayWeight: prevWeight,
+          toAbsolute: toAbs,
         );
+        if (choice != null) repsHint = choice.reps;
       }
     } else {
-      // Neither locked. If only RIR is typed, preserve reps hint; only weight updates.
-      if (set.rir.actualValue != null && set.reps.hintValue != null) {
-        final rawW = PeriodizationModelUtils.reverseCalculateWeight(
-          targetE1RM: targetE1rm,
-          reps: set.reps.hintValue!,
-          rir: thisRir,
-        );
-        if (rawW > 0) {
-          weightHint = isBw
-              ? _sNSnap(PeriodizationModelUtils.toDisplayAddedWeight(
-                  uid: uid,
-                  absoluteKg: rawW,
-                  exerciseId: row.exerciseId,
-                  exerciseName: row.name,
-                  asOfDate: date,
-                ))
-              : _sNSnap(rawW);
-        }
-        // Pass existing hint so _mergeInt keeps it instead of clearing (Issue 2 fix).
-        repsHint = set.reps.hintValue;
-      } else {
-        // Compute both; anchor center at prevWeightAbs (absolute for BW).
-        final midD = PeriodizationModelUtils.reverseCalculateReps(
-          targetE1RM: targetE1rm,
-          weight: prevWeightAbs,
-          baseWeight: prevWeightAbs,
-          rir: thisRir,
-        ).clamp(1.0, 100.0);
-        final midRep = midD.round().clamp(1, 100);
-
-        final rawW = PeriodizationModelUtils.reverseCalculateWeight(
-          targetE1RM: targetE1rm,
-          reps: midRep,
-          rir: thisRir,
-        );
-        if (rawW > 0) {
-          weightHint = isBw
-              ? _sNSnap(PeriodizationModelUtils.toDisplayAddedWeight(
-                  uid: uid,
-                  absoluteKg: rawW,
-                  exerciseId: row.exerciseId,
-                  exerciseName: row.name,
-                  asOfDate: date,
-                ))
-              : _sNSnap(rawW);
-        }
-        repsHint = midRep;
+      // Both free → full joint search. A typed RIR on THIS set fixes thisRir but
+      // leaves weight and reps free to adapt together; it no longer pins the old
+      // rep hint in place.
+      final weights = Wes2SetNSolver.weightCandidates(
+        previousResolvedDisplayWeight: prevWeight,
+        previousActualRir: prevSet.rir.actualValue,
+        grid: _sNGrid,
+        keepCandidate: (w) => toAbs(w) > 0,
+      );
+      final choice = Wes2SetNSolver.choose(
+        targetE1rm: targetE1rm,
+        weightCandidates: weights,
+        repCandidates: Wes2SetNSolver.repCandidates(preferredRep: preferredRep),
+        thisRir: thisRir,
+        preferredRep: preferredRep,
+        previousResolvedDisplayWeight: prevWeight,
+        toAbsolute: toAbs,
+      );
+      if (choice != null) {
+        weightHint = choice.weight;
+        repsHint = choice.reps;
       }
+    }
+
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'setN',
+          'S$setIdx solver preferredRep=$preferredRep '
+          'mayIncrease=${Wes2SetNSolver.mayIncrease(prevSet.rir.actualValue)} '
+          '→ w=$weightHint r=$repsHint',
+          exerciseId: row.exerciseId);
     }
 
     // Cap an upward weight suggestion against the previous set's resolved weight
@@ -1415,48 +1418,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
     if (prevRir > 2.0) return 0.0;
     if (prevRir >= 1.8 && prevRir <= 2.0) return drop * 0.8;
     return drop;
-  }
-
-  /// Picks the reps from {center−1, center, center+1} whose E1RM at [weight]
-  /// is closest to [targetE1rm], with WES tolerance rules (D: 0.3 kg, else 0.7 kg).
-  static int _closestRepsForWeight({
-    required double targetE1rm,
-    required double weight,
-    required int center,
-    required double rir,
-    required String group,
-  }) {
-    final tol = group == 'D' ? 0.3 : 0.7;
-    final candidates = <int>{
-      (center - 1).clamp(1, 100),
-      center,
-      (center + 1).clamp(1, 100),
-    }.toList()
-      ..sort();
-
-    int best = center;
-    double bestErr = double.infinity;
-    for (final r in candidates) {
-      final e =
-          PeriodizationModelUtils.calculateE1RM(weight, r.toDouble(), rir);
-      final err = (e - targetE1rm).abs();
-      final withinTolBest = bestErr <= tol + 1e-6;
-      final withinTolCur = err <= tol + 1e-6;
-      final take = (withinTolCur && !withinTolBest) ||
-          (withinTolCur &&
-              withinTolBest &&
-              (err < bestErr - 1e-9 ||
-                  ((err - bestErr).abs() <= 1e-9 && r < best))) ||
-          (!withinTolCur &&
-              !withinTolBest &&
-              (err < bestErr - 1e-9 ||
-                  ((err - bestErr).abs() <= 1e-9 && r < best)));
-      if (take) {
-        bestErr = err;
-        best = r;
-      }
-    }
-    return best;
   }
 
   /// Returns the DUP Signature rep target for Set 1 using exerciseSettings
