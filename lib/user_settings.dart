@@ -9,6 +9,7 @@ import 'demographics_cache.dart';
 import 'package:localtest222/user_context.dart'; // <-- your UserContext
 import 'themes_screen.dart';
 import 'account_deletion_screen.dart';
+import 'push/notification_settings_screen.dart';
 import 'app_theme.dart';
 
 class UserSettingsScreen extends StatefulWidget {
@@ -1057,6 +1058,38 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                             const SizedBox(width: 12),
                             const Text(
                               'Themes',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const Spacer(),
+                            Icon(Icons.chevron_right,
+                                color: Theme.of(context).colorScheme.tertiary,
+                                size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    InkWell(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const NotificationSettingsScreen()),
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          children: [
+                            Icon(Icons.notifications_outlined,
+                                color: Theme.of(context).colorScheme.tertiary,
+                                size: 20),
+                            const SizedBox(width: 12),
+                            const Text(
+                              'Notifications',
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 15,

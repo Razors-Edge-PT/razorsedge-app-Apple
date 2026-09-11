@@ -62,8 +62,13 @@ const accepted = (from, to) => ({
   respondedAt: admin.firestore.Timestamp.fromMillis(Date.UTC(2026, 8, 1)),
 });
 
-/** alice asked bob; bob accepted. */
-function acceptance({ alice, bob }, eventId) {
+/**
+ * alice asked bob; bob accepted. The invite is written first, as it is in
+ * production before the trigger runs: the trigger re-reads it to reject
+ * stale and replayed events.
+ */
+async function acceptance({ alice, bob }, eventId) {
+  await db().doc(`users/${bob}/buddyInvites/${alice}`).set(accepted(alice, bob));
   return N.applyInviteWrite(db(), {
     receiverUid: bob,
     senderUid: alice,

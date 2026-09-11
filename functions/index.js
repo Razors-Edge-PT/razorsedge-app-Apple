@@ -897,3 +897,13 @@ exports.socialOnBuddyInviteWritten =
 const feed = require('./social/feed');
 exports.feedOnPostWritten = feed.feedOnPostWritten;
 exports.feedOnBuddyAssignmentWritten = feed.feedOnBuddyAssignmentWritten;
+
+// ── Push notifications ──────────────────────────────────────────────────────
+// Exactly three: friend request, request accepted, direct message. Triggers
+// enqueue one idempotent job per occurrence into pushOutbox; the worker below
+// is the only thing that talks to FCM. Friend-request and acceptance jobs are
+// enqueued by socialOnBuddyInviteWritten above. See push/outbox.js and
+// docs/push_notifications.md (including rollback).
+const pushTriggers = require('./push/triggers');
+exports.pushOnDirectMessageWritten = pushTriggers.pushOnDirectMessageWritten;
+exports.pushOutboxOnCreated = pushTriggers.pushOutboxOnCreated;

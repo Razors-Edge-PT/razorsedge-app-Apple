@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'startup_route_service.dart';
 import 'membership_gate.dart';
 import 'auth_signout.dart';
+import 'push/push_notification_service.dart';
 
 class AccountDeletionScreen extends StatefulWidget {
   const AccountDeletionScreen({super.key});
@@ -111,6 +114,10 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
       await StartupRouteService.clearForLogout(uid);
       MembershipGate.clearSessionAllowed();
 
+      // This device's push registration must go while the account can still
+      // delete it. Bounded; never blocks deletion.
+      await PushNotificationService.instance.onExplicitSignOut();
+
       await FirebaseAuth.instance.currentUser?.delete();
       await performSignOut(
         reason: SignOutReason.accountDeletion,
@@ -122,6 +129,12 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
         Navigator.pushReplacementNamed(context, '/login');
       }
     } on FirebaseAuthException catch (e) {
+      // Still signed in (e.g. requires-recent-login): restore this device's
+      // push registration, which was removed just before the attempt.
+      final String? stillSignedIn = FirebaseAuth.instance.currentUser?.uid;
+      if (stillSignedIn != null) {
+        unawaited(PushNotificationService.instance.onSignedIn(stillSignedIn));
+      }
       setState(() {
         _deleting = false;
         _error = e.code == 'requires-recent-login'
@@ -129,6 +142,10 @@ class _AccountDeletionScreenState extends State<AccountDeletionScreen> {
             : 'Deletion failed. Please try again or contact support.';
       });
     } catch (_) {
+      final String? stillSignedIn = FirebaseAuth.instance.currentUser?.uid;
+      if (stillSignedIn != null) {
+        unawaited(PushNotificationService.instance.onSignedIn(stillSignedIn));
+      }
       setState(() {
         _deleting = false;
         _error = 'Deletion failed. Please try again or contact support.';

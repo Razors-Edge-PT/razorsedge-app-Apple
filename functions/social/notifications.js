@@ -46,6 +46,25 @@
 // When the friendship ends, the remove path deletes the invites; that delete
 // lands here too and removes the now-meaningless notice, unless the pair is
 // still friends (a receiver tidying an old invite changes nothing).
+//
+// ── Occurrences, replays and push notifications ─────────────────────────────
+// The notice id is reused for the same pair, so the event id alone cannot tell
+// a new acceptance from an old one arriving late. Each notice therefore also
+// records `occurrenceKey` — the accepted request's own `createdAt` (see
+// push/push_model.js inviteOccurrence). An acceptance is applied only when the
+// invite, read NOW inside the transaction, is still accepted and is still that
+// same request; so a replayed or out-of-order event from before an
+// unfriend/re-request neither revives the old notice nor notifies again, and a
+// receiver toggling one invite accepted → pending → accepted cannot reset the
+// notice or repeat the alert.
+//
+// The "accepted your friend request" PUSH is enqueued in the same transaction
+// that creates the notice, and nowhere else — one decision, one path. A notice
+// being read or marked seen writes only `seen`/`seenAt`, which never reaches
+// this trigger, so it can never produce a push or reset the badge.
+//
+// This trigger also enqueues "sent you a friend request" for a genuine
+// → pending transition. Delivery (and every re-check) is push/outbox.js.
 
 'use strict';
 
@@ -54,6 +73,8 @@ const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
 const M = require('./buddy_model');
+const P = require('../push/push_model');
+const Outbox = require('../push/outbox');
 
 const SUB_NOTIFICATIONS = 'socialNotifications';
 
@@ -108,11 +129,17 @@ function inviteChange(beforeData, afterData) {
  * What to do with the sender's notice. Pure: every input is read inside the
  * caller's transaction.
  */
-function decideNotice({ change, mutual, existing, eventId }) {
+function decideNotice({ change, mutual, existing, eventId, stale, occurrenceKey }) {
   if (change === InviteChange.ACCEPTED) {
     if (!mutual) return { action: NoticeAction.NONE, reason: 'not-mutual' };
     if (existing && eventId && existing.sourceEventId === eventId) {
       return { action: NoticeAction.NONE, reason: 'duplicate-delivery' };
+    }
+    // The invite has moved on since this event (removed, re-requested,
+    // declined): a late or replayed event must not revive anything.
+    if (stale) return { action: NoticeAction.NONE, reason: 'stale-event' };
+    if (existing && occurrenceKey && existing.occurrenceKey === occurrenceKey) {
+      return { action: NoticeAction.NONE, reason: 'same-occurrence' };
     }
     return { action: NoticeAction.CREATE, reason: 'accepted' };
   }
@@ -125,7 +152,7 @@ function decideNotice({ change, mutual, existing, eventId }) {
 }
 
 /** The notice document for [acceptorUid]'s acceptance. */
-function acceptedNotice({ acceptorUid, eventId, acceptedAt, now }) {
+function acceptedNotice({ acceptorUid, eventId, acceptedAt, now, occurrenceKey }) {
   return {
     type: NotificationType.BUDDY_ACCEPTED,
     otherUid: acceptorUid,
@@ -133,6 +160,7 @@ function acceptedNotice({ acceptorUid, eventId, acceptedAt, now }) {
     createdAt: now,
     acceptedAt: acceptedAt || now,
     sourceEventId: eventId || null,
+    ...(occurrenceKey ? { occurrenceKey } : {}),
   };
 }
 
@@ -148,7 +176,7 @@ function dataOf(snap) {
  */
 async function applyInviteWrite(
   db,
-  { receiverUid, senderUid, beforeData, afterData, eventId },
+  { receiverUid, senderUid, beforeData, afterData, eventId, eventTimeMs },
 ) {
   const change = inviteChange(beforeData, afterData);
   if (change === InviteChange.NONE) {
@@ -159,12 +187,33 @@ async function applyInviteWrite(
   }
 
   const ref = acceptedNoticeRef(db, senderUid, receiverUid);
+  const inviteRef = db
+    .collection(M.COL_USERS)
+    .doc(receiverUid)
+    .collection(M.SUB_INVITES)
+    .doc(senderUid);
+  const accepted = change === InviteChange.ACCEPTED;
+  const occurrenceKey = accepted ? P.inviteOccurrence(afterData, eventId) : null;
+  const job = accepted
+    ? Outbox.friendAcceptedJob({
+      senderUid,
+      acceptorUid: receiverUid,
+      inviteOccurrence: occurrenceKey,
+      eventId,
+      eventTimeMs,
+    })
+    : null;
+  const jobRef = job ? Outbox.outboxRef(db, job.id) : null;
+
   return db.runTransaction(async (tx) => {
-    const [senderAssign, receiverAssign, notice] = await Promise.all([
+    const [senderAssign, receiverAssign, notice, invite, existingJob] = await Promise.all([
       tx.get(db.collection(M.COL_ASSIGNMENTS).doc(senderUid)),
       tx.get(db.collection(M.COL_ASSIGNMENTS).doc(receiverUid)),
       tx.get(ref),
+      accepted ? tx.get(inviteRef) : Promise.resolve(null),
+      jobRef ? tx.get(jobRef) : Promise.resolve(null),
     ]);
+    const current = dataOf(invite);
     const decision = decideNotice({
       change,
       mutual: M.areMutualFriends(
@@ -175,6 +224,12 @@ async function applyInviteWrite(
       ),
       existing: dataOf(notice),
       eventId,
+      stale:
+        accepted &&
+        (!current ||
+          current.status !== M.InviteStatus.ACCEPTED ||
+          P.inviteOccurrence(current, eventId) !== occurrenceKey),
+      occurrenceKey,
     });
 
     if (decision.action === NoticeAction.CREATE) {
@@ -189,8 +244,14 @@ async function applyInviteWrite(
               ? respondedAt
               : null,
           now: admin.firestore.FieldValue.serverTimestamp(),
+          occurrenceKey,
         }),
       );
+      // The push for this acceptance, in the same commit as its notice.
+      if (existingJob && !existingJob.exists) {
+        tx.create(jobRef, job.data);
+        decision.jobId = job.id;
+      }
     } else if (decision.action === NoticeAction.DELETE) {
       tx.delete(ref);
     }
@@ -204,21 +265,42 @@ const socialOnBuddyInviteWritten = onDocumentWritten(
     const { receiverUid, senderUid } = event.params;
     const before = event.data && event.data.before;
     const after = event.data && event.data.after;
+    const beforeData = before && before.exists ? before.data() : null;
+    const afterData = after && after.exists ? after.data() : null;
+    const parsedTime = Date.parse(event.time);
+    const eventTimeMs = Number.isFinite(parsedTime) ? parsedTime : undefined;
     try {
       const result = await applyInviteWrite(admin.firestore(), {
         receiverUid,
         senderUid,
-        beforeData: before && before.exists ? before.data() : null,
-        afterData: after && after.exists ? after.data() : null,
+        beforeData,
+        afterData,
         eventId: event.id,
+        eventTimeMs,
       });
-      if (result.action !== NoticeAction.NONE) {
+      if (result.action !== NoticeAction.NONE || result.reason === 'stale-event') {
         logger.info(
           '[social] invite %s <- %s: notice %s (%s)',
           receiverUid,
           senderUid,
           result.action,
           result.reason,
+        );
+      }
+      const request = await Outbox.enqueueFriendRequest(admin.firestore(), {
+        receiverUid,
+        senderUid,
+        beforeData,
+        afterData,
+        eventId: event.id,
+        eventTimeMs,
+      });
+      if (request.reason !== 'not-a-new-request') {
+        logger.info(
+          '[social] invite %s <- %s: request push %s',
+          receiverUid,
+          senderUid,
+          request.reason,
         );
       }
     } catch (err) {

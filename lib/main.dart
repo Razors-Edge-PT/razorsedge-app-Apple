@@ -47,6 +47,8 @@ import 'silent_restore_coordinator.dart';
 import 'valid_user_gate.dart';
 import 'auth_diag.dart';
 import 'auth_signout.dart';
+import 'push/push_notification_service.dart';
+import 'push/push_ready_scope.dart';
 
 
 
@@ -391,6 +393,11 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // Route immediately — never stall on tokenPending for remembered users.
     StartupTrace.authenticatedSelected();
     setState(() => _phase = _AuthPhase.authenticated);
+
+    // Push notifications for THIS authenticated account (never a coach's
+    // selected athlete). Fire-and-forget: registration, token and network
+    // work never block this route. Idempotent for the same uid.
+    unawaited(PushNotificationService.instance.onSignedIn(user.uid));
   }
 
   /// The live accountEntitlements/{uid} subscription. Owned here so it is
@@ -938,6 +945,10 @@ void main() async {
   // but the first frame never waits on SQLite or the network.
   unawaited(Wes2SyncServices.initialiseAndDrain());
 
+  // Finishes an FCM token deletion an offline explicit logout could not.
+  // Not awaited: never delays the first frame.
+  unawaited(PushNotificationService.instance.onAppStart());
+
   StartupTrace.runAppCalled();
   runApp(
     ChangeNotifierProvider<ThemeController>.value(
@@ -1018,10 +1029,15 @@ class MyApp extends StatelessWidget {
 
   /// Gated default Home — used by `/home`, the initial route, and as the
   /// restore target when a root WES2 route is deliberately exited.
+  // PushReadyScope sits INSIDE the gate: notification taps open only once the
+  // gate has let the person through (see push/push_ready_scope.dart).
   static Widget _gatedHome() => MembershipGate(
-        child: kUseHomeScreen2AsDefault
-            ? const HomeScreen2()
-            : const HomeScreen(),
+        child: PushReadyScope(
+          offerPermissionPrimer: true,
+          child: kUseHomeScreen2AsDefault
+              ? const HomeScreen2()
+              : const HomeScreen(),
+        ),
       );
 
   @override
@@ -1071,8 +1087,10 @@ class MyApp extends StatelessWidget {
                 return [
                   MaterialPageRoute<void>(
                     settings: const RouteSettings(name: '/workouts'),
-                    builder: (_) =>
-                        const MembershipGate(child: Wes2Screen()),
+                    // A tap opens ON TOP of the restored workout; WES2 stays
+                    // underneath untouched.
+                    builder: (_) => const MembershipGate(
+                        child: PushReadyScope(child: Wes2Screen())),
                   ),
                 ];
               }

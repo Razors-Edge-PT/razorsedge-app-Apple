@@ -815,13 +815,31 @@ service cloud.firestore {
 
       // Create: caller must be a participant; exactly 2 participants;
       // and caller must be a confirmed friend of the other person.
+      //
+      // The participants must be EXACTLY the two accounts the id names, both
+      // `true`. Push delivery and the Storage dm/ rules both read this map to
+      // decide who a message is for; a map naming a third account (or omitting
+      // the other one) would address a conversation to the wrong person.
       allow create: if isSignedIn()
                     && request.resource.data.participants[request.auth.uid] == true
                     && request.resource.data.participants.size() == 2
+                    && convId.size() == 57
+                    && convId[28:29] == '_'
+                    && request.resource.data.participants.keys()
+                         .hasAll([convId[0:28], convId[29:57]])
+                    && request.resource.data.participants[convId[0:28]] == true
+                    && request.resource.data.participants[convId[29:57]] == true
                     && isConvFriend();
 
-      // Update: participant + still a confirmed friend.
-      allow update: if isParticipant() && isConvFriend();
+      // Update: participant + still a confirmed friend — and never the
+      // participants themselves. Before this, either participant could rewrite
+      // the map, e.g. add one of their own friends, who would then satisfy
+      // isParticipant() and isConvFriend() and read the whole thread. Every
+      // app write (lastMessage, updatedAt, participantState, and the merge-set
+      // bootstrap that repeats the SAME map) leaves `participants` unchanged.
+      allow update: if isParticipant() && isConvFriend()
+                    && !request.resource.data.diff(resource.data)
+                          .affectedKeys().hasAny(['participants']);
 
       // Conversations are never deleted via client.
       allow delete: if false;
@@ -842,9 +860,28 @@ service cloud.firestore {
         }
 
         allow read: if (convParticipant() && msgConvFriend()) || isSuperAdmin();
-        allow create: if convParticipant() && msgConvFriend();
-        // Allows reaction updates and unread-count patches by participants.
-        allow update: if convParticipant() && msgConvFriend();
+
+        // Create: the sender is the caller. Every installed build writes
+        // `senderId: <own uid>`; binding it here means a participant cannot
+        // post a message as the other person — which push delivery would
+        // otherwise announce to that person's friend under the wrong name.
+        allow create: if convParticipant() && msgConvFriend()
+                      && request.resource.data.senderId == request.auth.uid;
+
+        // Update: `senderId` is immutable. The SENDER may complete their own
+        // message (the photo/video URL attached after upload); anyone else in
+        // the conversation may only react. Those are the only message updates
+        // any build has ever made. Without this, the other participant could
+        // attach media to an empty upload shell and have it delivered as the
+        // sender's.
+        allow update: if convParticipant() && msgConvFriend()
+                      && !request.resource.data.diff(resource.data)
+                            .affectedKeys().hasAny(['senderId'])
+                      && (
+                           resource.data.get('senderId', '') == request.auth.uid
+                           || request.resource.data.diff(resource.data)
+                                .affectedKeys().hasOnly(['reactions'])
+                         );
         allow delete: if false;
       }
     }
@@ -1068,6 +1105,82 @@ service cloud.firestore {
     match /usernames/{indexKey} {
       allow read: if isSignedIn();
       allow write: if false;
+    }
+
+
+    // ======================================================
+    // PUSH NOTIFICATIONS
+    // ======================================================
+    // Three notifications only: friend request, request accepted, direct
+    // message. Delivery is entirely server-side (functions/push/outbox.js);
+    // no device ever sends a push or reads another account's registrations.
+    // Top-level collections on purpose: nothing under users/{userId} — and so
+    // none of that block's catch-all grants — can reach them.
+
+    // ---- Registrations: pushDevices/{sha256(token)} ----
+    // One document per FCM token, its id bound to the token by hash, so a
+    // token has exactly ONE owning account. Signing into another account on
+    // the same phone re-registers the same token and takes the document over;
+    // it cannot end up delivering both accounts' notifications.
+    //
+    // The owner reads and deletes their own. A write must name the caller as
+    // owner and stamp the server clock (the freshness the server prunes on).
+    // Taking over an existing document requires presenting the SAME token —
+    // i.e. being the device that holds it.
+    match /pushDevices/{deviceId} {
+      function validRegistration() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['uid', 'token', 'platform', 'appVersion', 'updatedAt'])
+          && d.keys().hasAll(['uid', 'token', 'platform', 'updatedAt'])
+          && d.uid == request.auth.uid
+          && d.token is string
+          && d.token.size() > 0
+          && d.token.size() <= 4096
+          && deviceId == hashing.sha256(d.token).toHexString().lower()
+          && d.platform in ['android', 'ios']
+          && (!('appVersion' in d) || (d.appVersion is string && d.appVersion.size() <= 40))
+          && d.updatedAt == request.time;
+      }
+
+      allow get, list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn() && validRegistration();
+      allow update: if isSignedIn() && validRegistration()
+                    && request.resource.data.token == resource.data.token;
+      allow delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // ---- Preferences: pushPreferences/{uid} ----
+    // The account's own switches, and nobody else's: not an assigned coach
+    // (Coach Mode never acts on an athlete's social account), not the super
+    // admin. Every field is optional; the server defaults missing categories
+    // to ON and message previews to OFF.
+    match /pushPreferences/{uid} {
+      function validPreferences() {
+        let d = request.resource.data;
+        return d.keys().hasOnly([
+            'friendRequests', 'friendAccepted', 'directMessages',
+            'messagePreviews', 'updatedAt'
+          ])
+          && (!('friendRequests' in d) || d.friendRequests is bool)
+          && (!('friendAccepted' in d) || d.friendAccepted is bool)
+          && (!('directMessages' in d) || d.directMessages is bool)
+          && (!('messagePreviews' in d) || d.messagePreviews is bool)
+          && d.updatedAt == request.time;
+      }
+
+      allow read: if isSelf(uid);
+      allow create, update: if isSelf(uid) && validPreferences();
+      allow delete: if isSelf(uid);
+    }
+
+    // ---- Delivery jobs and the kill switch: server only ----
+    // A readable outbox would reveal who is messaging whom; a writable one
+    // would let a device push arbitrary alerts to anybody.
+    match /pushOutbox/{jobId} {
+      allow read, write: if false;
+    }
+    match /pushConfig/{docId} {
+      allow read, write: if false;
     }
 
 

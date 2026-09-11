@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Android 13+ runtime permission for notifications (friend requests,
+         accepted requests, direct messages). Asked only after the in-app
+         explanation, never at launch. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Deliberately NOT required. Recording a set is one optional feature;
          everything else in GoodLift works without a camera or microphone, and
          marking these required would hide the app on Play from devices that
@@ -51,6 +56,20 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Firebase Cloud Messaging defaults for notifications the OS displays
+             while the app is in the background or not running. Each message
+             also names its own channel (created in MainActivity.kt); these
+             apply to anything that does not. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_goodlift" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_accent" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="goodlift_direct_messages" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

@@ -11,6 +11,8 @@ import 'package:chewie/chewie.dart';
 import 'dart:io';
 
 import 'profile/ui/live_identity.dart';
+import 'main.dart' show routeObserver;
+import 'push/foreground_conversation.dart';
 
 /// Deterministic conversation id for a pair of users.
 /// Ensures both users always open the same thread, no query needed.
@@ -283,7 +285,45 @@ class ConversationPage extends StatefulWidget {
   State<ConversationPage> createState() => _ConversationPageState();
 }
 
-class _ConversationPageState extends State<ConversationPage> {
+class _ConversationPageState extends State<ConversationPage> with RouteAware {
+  // ── Push: is this thread the one actually on screen? ───────────────────
+  // Reported to ForegroundConversation as this route becomes visible, is
+  // covered, or is popped, so a DM notification for THIS thread shows no
+  // extra banner while it is really in front of the person (and still does
+  // when the page is merely mounted under another screen). Read state and
+  // unread counts are untouched by this.
+  ModalRoute<void>? _observedRoute;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ModalRoute<void>? route = ModalRoute.of(context);
+    if (route != null && !identical(route, _observedRoute)) {
+      if (_observedRoute != null) routeObserver.unsubscribe(this);
+      _observedRoute = route;
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void didPush() => ForegroundConversation.shown(widget.convId);
+
+  @override
+  void didPopNext() => ForegroundConversation.shown(widget.convId);
+
+  @override
+  void didPushNext() => ForegroundConversation.hidden(widget.convId);
+
+  @override
+  void didPop() => ForegroundConversation.hidden(widget.convId);
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    ForegroundConversation.hidden(widget.convId);
+    super.dispose();
+  }
+
   // 👇 avoid duplicate .snapshots() listeners per message doc
   final Set<String> _watchedMsgIds = {};
 

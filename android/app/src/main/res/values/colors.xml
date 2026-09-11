@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#000000</color>
+    <!-- Tint for the notification icon/accent (the app's default secondary). -->
+    <color name="notification_accent">#03A9F4</color>
 </resources>

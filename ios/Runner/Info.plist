@@ -72,6 +72,13 @@
 	</array>
 
 
+	<!-- Push notifications (friend requests, accepted requests, direct
+	     messages): lets FCM deliver while the app is in the background. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

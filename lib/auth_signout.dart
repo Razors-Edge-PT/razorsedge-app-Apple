@@ -6,6 +6,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_debug.dart';
+import 'push/push_notification_service.dart';
 
 /// Fixed reason codes for every INTENTIONAL sign-out. Centralizing all sign-out
 /// calls behind [performSignOut] guarantees no sign-out path is silent — each
@@ -67,6 +68,17 @@ Future<void> performSignOut({
       'explicitLogout=$explicitLogout';
   debugPrint('[AUTHSIGNOUT] $line');
   unawaited(writeAuthBreadcrumb(line));
+
+  // A deliberate logout removes THIS device's push registration while the
+  // account's credentials still exist (other devices are untouched). Bounded
+  // and non-throwing, so an offline logout is never trapped. Only the two
+  // explicit logout reasons: the stale-user / late-restore sign-outs are not a
+  // person logging out, and account deletion cleans up before the account is
+  // deleted (account_deletion_screen.dart).
+  if (reason == SignOutReason.explicitLogoutDrawer ||
+      reason == SignOutReason.explicitLogoutPaywall) {
+    await PushNotificationService.instance.onExplicitSignOut();
+  }
 
   if (google) {
     try {
