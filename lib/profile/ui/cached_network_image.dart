@@ -33,6 +33,7 @@
 library;
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -88,8 +89,15 @@ class ProfileMediaCache {
           kCacheKey,
           stalePeriod: kStalePeriod,
           maxNrOfCacheObjects: kMaxCachedObjects,
+          fileService: createFileService(),
         ),
       );
+
+  /// The HTTP layer this store fetches through.
+  ///
+  /// Named rather than inlined so a test can state which one production uses
+  /// without constructing the manager, which would need path_provider.
+  static FileService createFileService() => StallGuardedFileService();
 
   /// The store's directory, or null when it cannot be resolved.
   ///
@@ -261,8 +269,11 @@ Future<File> fetchWithStaleRecovery({
 /// a process restart is.
 ProfileImageStore profileImageStore = CacheManagerImageStore();
 
-/// Resets [profileImageStore] to the app-wide default. For tests.
-void resetProfileImageCache() => profileImageStore = CacheManagerImageStore();
+/// Resets [profileImageStore] and the shared loader state. For tests.
+void resetProfileImageCache() {
+  profileImageStore = CacheManagerImageStore();
+  mediaLoader.reset();
+}
 
 /// Why a media load ended, when it did not end in bytes.
 enum MediaLoadFailure {
@@ -292,6 +303,435 @@ bool isConnectivityFailure(Object error) =>
     (error is HttpException &&
         error.message.toLowerCase().contains('connection')) ||
     error.toString().contains('Failed host lookup');
+
+/// An HTTP layer that cannot hang.
+///
+/// `flutter_cache_manager` runs at most ten fetches at once and queues the
+/// rest, and it keeps one entry per key while a fetch is in flight so that a
+/// second request for the same media JOINS the first. Both of those are good,
+/// and both assume every fetch eventually finishes.
+///
+/// Nothing underneath guarantees that. `dart:io` has no read timeout: a
+/// transfer that starts and then stops arriving — a Wi-Fi handover, a radio
+/// dropping to sleep, a NAT that forgot the flow — leaves a future that never
+/// completes. The widget above gives up on schedule, but the transfer does
+/// not: it keeps its fetch slot and its in-flight entry for the life of the
+/// process. Ten of those and every later image, on every screen, queues behind
+/// something that will never finish; one of those and every Retry for that
+/// media joins the same dead transfer and fails again. "Retry stopped working
+/// until I restarted the app" is exactly that shape.
+///
+/// So a response that never starts, and a transfer whose bytes stop arriving,
+/// are both made to FAIL. Failing releases the slot and the entry, which is
+/// what lets the recovery above — and the person's own Retry — actually run.
+class StallGuardedFileService extends FileService {
+  StallGuardedFileService({
+    FileService? inner,
+    this.responseTimeout = kMediaResponseTimeout,
+    this.stallTimeout = kMediaStallTimeout,
+  }) : _inner = inner ?? HttpFileService();
+
+  final FileService _inner;
+
+  /// Bounds connect, TLS and the response headers.
+  final Duration responseTimeout;
+
+  /// Bounds the gap BETWEEN chunks, not the transfer. A slow download that
+  /// keeps arriving is never cut off.
+  final Duration stallTimeout;
+
+  @override
+  Future<FileServiceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
+    final FileServiceResponse response =
+        await _inner.get(url, headers: headers).timeout(responseTimeout);
+    return _StallGuardedResponse(response, stallTimeout);
+  }
+}
+
+/// [FileServiceResponse] whose body must keep arriving.
+class _StallGuardedResponse implements FileServiceResponse {
+  _StallGuardedResponse(this._inner, this._stallTimeout);
+
+  final FileServiceResponse _inner;
+  final Duration _stallTimeout;
+
+  @override
+  Stream<List<int>> get content => _inner.content.timeout(
+        _stallTimeout,
+        onTimeout: (EventSink<List<int>> sink) {
+          sink.addError(
+            TimeoutException('media transfer stalled', _stallTimeout),
+          );
+          sink.close();
+        },
+      );
+
+  @override
+  int? get contentLength => _inner.contentLength;
+
+  @override
+  String? get eTag => _inner.eTag;
+
+  @override
+  String get fileExtension => _inner.fileExtension;
+
+  @override
+  int get statusCode => _inner.statusCode;
+
+  @override
+  DateTime get validTill => _inner.validTill;
+}
+
+/// Why one attempt at a piece of media failed — the question that decides
+/// whether trying again could possibly help.
+///
+/// The distinction is not cosmetic. Storage answers **403 for a deleted object
+/// just as it does for a revoked token**, so "this is gone" and "this string
+/// has expired" are indistinguishable at the HTTP layer and only a canonical
+/// lookup can separate them. Meanwhile a dropped connection arrives as a
+/// `ClientException` — no status code, not a `SocketException` — and treating
+/// that as "this image is broken" is what left a card permanently blank after
+/// one hiccup.
+enum MediaFailureKind {
+  /// No route to the network. Trying again immediately would only fail again.
+  offline,
+
+  /// The object is gone. Stable, and never retried.
+  missing,
+
+  /// Storage refused the URL: a rotated or revoked token — or an object that
+  /// has been deleted behind a URL that still looks valid.
+  refused,
+
+  /// The attempt ran out of time. The transfer may well still be running.
+  timedOut,
+
+  /// A dropped connection, a server error: worth exactly one more try.
+  transient,
+}
+
+/// [error], classified for recovery.
+MediaFailureKind classifyMediaFailure(Object error) {
+  if (error is TimeoutException) return MediaFailureKind.timedOut;
+  // package:http's own socket failure implements SocketException, so this
+  // catches "no network" however it is wrapped.
+  if (error is SocketException) return MediaFailureKind.offline;
+
+  final int? status = _statusCodeOf(error);
+  if (status != null) {
+    if (status == 404 || status == 410) return MediaFailureKind.missing;
+    if (status == 401 || status == 403) return MediaFailureKind.refused;
+    return MediaFailureKind.transient;
+  }
+
+  final String text = _withoutLocation(error.toString()).toLowerCase();
+  if (text.contains('object-not-found') ||
+      text.contains('404') ||
+      text.contains('not found')) {
+    return MediaFailureKind.missing;
+  }
+  if (text.contains('401') ||
+      text.contains('403') ||
+      text.contains('unauthorized') ||
+      text.contains('unauthenticated') ||
+      text.contains('permission denied') ||
+      text.contains('forbidden')) {
+    return MediaFailureKind.refused;
+  }
+  if (text.contains('failed host lookup') ||
+      text.contains('network is unreachable')) {
+    return MediaFailureKind.offline;
+  }
+  return MediaFailureKind.transient;
+}
+
+/// The HTTP status an error carries, by duck typing rather than by importing
+/// another package's internals.
+int? _statusCodeOf(Object error) {
+  try {
+    final Object? status = (error as dynamic).statusCode as Object?;
+    return status is int ? status : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// [text] with the URL or file path it ends in removed.
+///
+/// A download token is thirty-two random hex characters and a cache file is
+/// named after a UUID, so roughly one error message in a hundred contains
+/// "404" or "403" purely by accident. Classifying a live object as deleted
+/// because of the digits in its own URL is not a failure mode worth keeping.
+String _withoutLocation(String text) {
+  int cut = text.length;
+  for (final String marker in const <String>[', uri', ', path']) {
+    final int at = text.indexOf(marker);
+    if (at >= 0 && at < cut) cut = at;
+  }
+  return text.substring(0, cut);
+}
+
+/// The outcome of one media load: bytes, or the reason there are none.
+class MediaLoadResult {
+  const MediaLoadResult.loaded(File this.file) : failure = null;
+  const MediaLoadResult.failed(MediaLoadFailure this.failure) : file = null;
+
+  final File? file;
+  final MediaLoadFailure? failure;
+}
+
+/// One media load per piece of media, wherever it is drawn.
+///
+/// ── Why this is not simply "await the store" ────────────────────────────────
+/// The store answers "is it on disk?" and "fetch it"; everything that decides
+/// whether a card ends up showing a picture or a Retry button lives BETWEEN
+/// those two calls, and it used to live in the widget — one copy per card, with
+/// no memory of any other card and none of its own past. That produced the
+/// reported bug in three ways:
+///
+///   * every failure was final. One dropped connection, one attempt that ran
+///     out of time while the app was still starting, and that card was blank
+///     until the reader tapped Retry — which simply ran the identical code
+///     again, and worked, which is why Retry "fixed" it.
+///   * an attempt that timed out was ABANDONED, though the transfer it started
+///     was still running and usually finished moments later. The bytes landed;
+///     nothing was watching. Retry then joined that same transfer, which is why
+///     Retry was slow.
+///   * two cards showing one photo, or the same card mounted twice, meant two
+///     downloads of the same bytes.
+///
+/// So a load is an operation keyed by cache identity, not a method on a widget:
+/// concurrent askers join it, a widget that goes away does not cancel it, and
+/// its result — including bytes that arrive after the widget gave up — is on
+/// disk for whoever asks next.
+///
+/// ── The one recovery, and its bounds ────────────────────────────────────────
+/// Disk, then the network, then AT MOST one more attempt chosen by why the
+/// first failed: a refused URL is refreshed through the canonical Storage path
+/// and fetched once more; a timeout keeps waiting on the transfer already
+/// running rather than starting a second copy of it; a dropped connection is
+/// re-tried once. Offline and "gone" recover from nothing and say so
+/// immediately. There is no third attempt and no loop — anything past this is
+/// the reader's Retry, which starts a genuinely fresh operation.
+class MediaLoader {
+  MediaLoader();
+
+  /// How many resolved file paths are remembered, so that a tile scrolled back
+  /// to draws in its first frame instead of blinking through a placeholder.
+  /// Paths only — the bytes live on disk under the cache's own byte ceiling.
+  static const int kRememberedPaths = 256;
+
+  final Map<String, Future<MediaLoadResult>> _running =
+      <String, Future<MediaLoadResult>>{};
+  final LinkedHashMap<String, String> _onDisk = LinkedHashMap<String, String>();
+
+  /// Identity is the cache key, per store — so a test's store can never join
+  /// or serve another's operation.
+  static String _slot(ProfileImageStore store, String key) =>
+      '${identityHashCode(store)} $key';
+
+  /// The file for [key] if this process has already resolved it and the bytes
+  /// are still there. Synchronous on purpose: it is read during `initState`.
+  File? knownFile(ProfileImageStore store, String key) {
+    final String slot = _slot(store, key);
+    final String? path = _onDisk.remove(slot);
+    if (path == null) return null;
+    final File file = File(path);
+    if (!isUsableCacheFile(file)) return null;
+    _onDisk[slot] = path; // re-inserted: most recently used
+    return file;
+  }
+
+  /// True while an operation for this media is in flight. For tests.
+  bool isRunning(ProfileImageStore store, String key) =>
+      _running.containsKey(_slot(store, key));
+
+  /// Forgets every in-flight operation and remembered path. For tests.
+  void reset() {
+    _running.clear();
+    _onDisk.clear();
+  }
+
+  /// Bytes for [url] under [key], joining an operation already running for it.
+  Future<MediaLoadResult> load({
+    required ProfileImageStore store,
+    required String url,
+    required String key,
+    String storagePath = '',
+    StorageUrlRefresher? refresher,
+    Duration readTimeout = kMediaCacheReadTimeout,
+    Duration downloadTimeout = kMediaDownloadTimeout,
+  }) {
+    final String slot = _slot(store, key);
+    final Future<MediaLoadResult>? joined = _running[slot];
+    if (joined != null) return joined;
+
+    final Future<MediaLoadResult> run = _run(
+      store: store,
+      url: url,
+      key: key,
+      storagePath: storagePath,
+      refresher: refresher,
+      readTimeout: readTimeout,
+      downloadTimeout: downloadTimeout,
+    ).then((MediaLoadResult result) {
+      final File? file = result.file;
+      if (file != null) _remember(slot, file);
+      return result;
+    });
+
+    _running[slot] = run;
+    // Registered BEFORE any caller awaits, so a failed operation is out of the
+    // map by the time the card that was waiting on it offers Retry.
+    unawaited(run.whenComplete(() {
+      if (identical(_running[slot], run)) _running.remove(slot);
+    }));
+    return run;
+  }
+
+  Future<MediaLoadResult> _run({
+    required ProfileImageStore store,
+    required String url,
+    required String key,
+    required String storagePath,
+    required StorageUrlRefresher? refresher,
+    required Duration readTimeout,
+    required Duration downloadTimeout,
+  }) async {
+    try {
+      // 1. Disk. A previously seen image appears with no network at all, which
+      //    is the whole point of the store.
+      final File? cached = await _fromDisk(store, url, key, readTimeout);
+      if (cached != null) return MediaLoadResult.loaded(cached);
+
+      // 2. The ordinary network path.
+      final Future<File> attempt = _fetch(store, url, key);
+      Object error;
+      try {
+        return MediaLoadResult.loaded(await attempt.timeout(downloadTimeout));
+      } catch (e) {
+        error = e;
+      }
+
+      // 3. One bounded recovery, chosen by why step 2 failed.
+      switch (classifyMediaFailure(error)) {
+        case MediaFailureKind.offline:
+          return const MediaLoadResult.failed(MediaLoadFailure.offline);
+
+        case MediaFailureKind.missing:
+          return const MediaLoadResult.failed(MediaLoadFailure.unavailable);
+
+        case MediaFailureKind.timedOut:
+          // Slow is not broken. The transfer is still running; a second copy
+          // of it would only compete with it for the same connection.
+          return await _settle(() => attempt.timeout(downloadTimeout));
+
+        case MediaFailureKind.refused:
+          final String? fresh = await _canonicalUrl(
+            url: url,
+            storagePath: storagePath,
+            refresher: refresher,
+          );
+          // No canonical URL means the object is gone, unreadable, or there is
+          // nothing to look it up by. Repeating the refused URL cannot help.
+          if (fresh == null) {
+            return const MediaLoadResult.failed(MediaLoadFailure.unavailable);
+          }
+          return await _settle(
+              () => _fetch(store, fresh, key).timeout(downloadTimeout));
+
+        case MediaFailureKind.transient:
+          // Another card's operation may have filled the entry meanwhile.
+          final File? landed = await _fromDisk(store, url, key, readTimeout);
+          if (landed != null) return MediaLoadResult.loaded(landed);
+          return await _settle(
+              () => _fetch(store, url, key).timeout(downloadTimeout));
+      }
+    } catch (e) {
+      return MediaLoadResult.failed(_stateFor(e));
+    }
+  }
+
+  Future<MediaLoadResult> _settle(Future<File> Function() attempt) async {
+    try {
+      return MediaLoadResult.loaded(await attempt());
+    } catch (e) {
+      return MediaLoadResult.failed(_stateFor(e));
+    }
+  }
+
+  static MediaLoadFailure _stateFor(Object error) {
+    switch (classifyMediaFailure(error)) {
+      case MediaFailureKind.offline:
+        return MediaLoadFailure.offline;
+      case MediaFailureKind.timedOut:
+        return MediaLoadFailure.timedOut;
+      case MediaFailureKind.missing:
+      case MediaFailureKind.refused:
+      case MediaFailureKind.transient:
+        return MediaLoadFailure.unavailable;
+    }
+  }
+
+  /// The already-persisted file, or null. A wedged or corrupt index is a miss,
+  /// never a failure — and nothing is deleted on the way past.
+  Future<File?> _fromDisk(
+    ProfileImageStore store,
+    String url,
+    String key,
+    Duration timeout,
+  ) async {
+    try {
+      final File? hit = await store.cached(url, key: key).timeout(timeout);
+      return isUsableCacheFile(hit) ? hit : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<File> _fetch(ProfileImageStore store, String url, String key) async {
+    final File file = await store.download(url, key: key);
+    // New bytes just landed, so this is the moment to check the disk ceiling.
+    // Started, never awaited: the image is already about to be shown.
+    ProfileMediaCache.tidyInBackground();
+    return file;
+  }
+
+  /// A fresh URL for the object [url] actually names, or null.
+  ///
+  /// The URL wins over the caller's [storagePath] when it carries one, so a
+  /// refresh can never swap one rendition for another — and a legacy row with
+  /// no recorded path still has a canonical object to ask about.
+  Future<String?> _canonicalUrl({
+    required String url,
+    required String storagePath,
+    required StorageUrlRefresher? refresher,
+  }) async {
+    final String path = storagePathFromDownloadUrl(url) ?? storagePath.trim();
+    if (path.isEmpty) return null;
+    try {
+      return await (refresher ?? profileUrlRefresher)
+          .replacementFor(path, url)
+          .timeout(kMediaUrlRefreshTimeout);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _remember(String slot, File file) {
+    _onDisk.remove(slot);
+    _onDisk[slot] = file.path;
+    while (_onDisk.length > kRememberedPaths) {
+      _onDisk.remove(_onDisk.keys.first);
+    }
+  }
+}
+
+/// The loader every media surface shares. Replaceable for tests.
+MediaLoader mediaLoader = MediaLoader();
 
 /// An image loaded from [url], persisted to disk so it renders after a restart
 /// with no connection.
@@ -387,7 +827,7 @@ class _CachedProfileImageState extends State<CachedProfileImage> {
   @override
   void initState() {
     super.initState();
-    _resolve();
+    _resolve(duringInit: true);
   }
 
   @override
@@ -404,97 +844,62 @@ class _CachedProfileImageState extends State<CachedProfileImage> {
   /// attempt is abandoned rather than reused.
   void _retry() => _resolve();
 
-  Future<void> _resolve() async {
+  /// Resolves the bytes this widget draws, through [mediaLoader] — so a card
+  /// that is drawn twice, or torn down and rebuilt, shares ONE operation with
+  /// its own recovery rather than starting a private one that fails alone.
+  Future<void> _resolve({bool duringInit = false}) async {
     final int attempt = ++_attempt;
     final String? url = safeThumbnailUrl(widget.url);
     _resolvedFor = url;
 
     if (url == null) {
-      if (mounted) {
-        setState(() {
-          _file = null;
-          _failure = MediaLoadFailure.unusableSource;
-        });
-      }
+      _set(duringInit, failure: MediaLoadFailure.unusableSource);
       return;
-    }
-
-    if (mounted) {
-      setState(() {
-        _file = null;
-        _failure = null;
-      });
     }
 
     final String key = _keyFor(url);
 
-    // 1. Disk first. A previously viewed image is available with no network,
-    //    which is the whole point. Bounded: a wedged cache index must not hold
-    //    the tile hostage when the network would have answered.
-    try {
-      final File? hit =
-          await _store.cached(url, key: key).timeout(widget.readTimeout);
-      if (hit != null && hit.existsSync()) {
-        if (!_stillCurrent(attempt, url)) return;
-        setState(() => _file = hit);
-        return;
-      }
-    } catch (_) {
-      // A corrupt or slow index entry is not worth failing over, and it is
-      // certainly not worth deleting anything over; fall through to the
-      // download, which rewrites it.
+    // Bytes this process has already drawn are shown in the FIRST frame: a
+    // tile scrolled past and come back to must not blink through a placeholder
+    // to arrive at a picture that was on disk all along.
+    final File? known = mediaLoader.knownFile(_store, key);
+    if (known != null) {
+      _set(duringInit, file: known);
+      return;
     }
 
-    // 2. Miss: download, and persist for next time — including next launch.
-    try {
-      final File downloaded = await _download(url, key);
-      if (!_stillCurrent(attempt, url)) return;
-      setState(() => _file = downloaded);
-    } on TimeoutException {
-      if (!_stillCurrent(attempt, url)) return;
-      setState(() => _failure = MediaLoadFailure.timedOut);
-    } catch (e) {
-      if (!_stillCurrent(attempt, url)) return;
-      setState(() => _failure = isConnectivityFailure(e)
-          ? MediaLoadFailure.offline
-          : MediaLoadFailure.unavailable);
-    }
+    _set(duringInit);
+
+    final MediaLoadResult result = await mediaLoader.load(
+      store: _store,
+      url: url,
+      key: key,
+      storagePath: widget.storagePath,
+      refresher: widget.urlRefresher,
+      readTimeout: widget.readTimeout,
+      downloadTimeout: widget.downloadTimeout,
+    );
+
+    if (!_stillCurrent(attempt, url)) return;
+    setState(() {
+      _file = result.file;
+      _failure = result.failure;
+    });
   }
 
-  /// Downloads [url] under [key], recovering ONCE from a revoked access token.
-  ///
-  /// The retry is deliberately narrow. It happens only when the failure looks
-  /// like an authorization refusal rather than a missing object, only when a
-  /// `storagePath` is available to look the object up by, and only when Storage
-  /// returns a URL that actually differs from the one that just failed. There
-  /// is no second retry and no loop: a fresh URL that also fails is reported.
-  Future<File> _download(String url, String key) async {
-    try {
-      final File f =
-          await _store.download(url, key: key).timeout(widget.downloadTimeout);
-      // New bytes just landed, so this is the moment to check the ceiling.
-      // Started, never awaited: the image is already about to be shown.
-      ProfileMediaCache.tidyInBackground();
-      return f;
-    } catch (e) {
-      if (e is TimeoutException ||
-          widget.storagePath.isEmpty ||
-          !isAuthorizationFailure(e)) {
-        rethrow;
-      }
-      final StorageUrlRefresher refresher =
-          widget.urlRefresher ?? profileUrlRefresher;
-      final String? fresh =
-          await refresher.replacementFor(widget.storagePath, url);
-      if (fresh == null) rethrow;
-      // Same key on purpose: the bytes are the same object, so the refreshed
-      // fetch fills the entry the first attempt was going to fill.
-      final File f = await _store
-          .download(fresh, key: key)
-          .timeout(widget.downloadTimeout);
-      ProfileMediaCache.tidyInBackground();
-      return f;
+  /// Applies state that is known synchronously. During `initState` there is no
+  /// frame to rebuild yet, so the fields are simply set.
+  void _set(bool duringInit, {File? file, MediaLoadFailure? failure}) {
+    if (duringInit) {
+      _file = file;
+      _failure = failure;
+      return;
     }
+    if (!mounted) return;
+    setState(() {
+      _file = file;
+      _failure = failure;
+    });
   }
 
   /// True when this attempt is still the live one and the widget is still

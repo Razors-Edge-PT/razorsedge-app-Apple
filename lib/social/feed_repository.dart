@@ -70,8 +70,15 @@ class FeedItem {
       (smallUrl.isNotEmpty || thumbUrl.isNotEmpty || storagePath.isNotEmpty);
 
   /// The image a card shows: the poster for a video, the photo for an image.
+  ///
+  /// A video has NO fallback. `smallUrl` on a video row is the clip itself, and
+  /// falling back to it asks a feed card to fetch tens of megabytes of video to
+  /// draw a still. Today that is usually caught downstream by the container
+  /// extension — but an extensionless Storage URL passes that check, and the
+  /// card would download the clip. A video with no poster has nothing to draw,
+  /// and saying so costs nothing.
   String get displayUrl {
-    if (isVideo) return thumbUrl.isNotEmpty ? thumbUrl : smallUrl;
+    if (isVideo) return thumbUrl;
     return smallUrl.isNotEmpty ? smallUrl : thumbUrl;
   }
 
@@ -171,6 +178,33 @@ class FeedRepository {
     return (_auth ?? FirebaseAuth.instance).currentUser?.uid;
   }
 
+  /// How long the first page waits for a session that is still being restored.
+  static const Duration kAccountWait = Duration(seconds: 10);
+
+  /// The signed-in account, waiting briefly for one that has not arrived yet.
+  ///
+  /// The home feed mounts during startup, and `currentUser` can still be null
+  /// for the moment it takes Firebase to restore the session. Reading that as
+  /// "this person has no posts" is how a feed became a permanent *Nothing here
+  /// yet* — nothing re-queries, because as far as the view is concerned the
+  /// answer arrived. Waiting for the account instead costs one spinner and
+  /// makes the empty state mean what it says.
+  Future<String?> resolveUid() async {
+    final String? now = currentUid;
+    if (now != null) return now;
+    try {
+      final User? user = await (_auth ?? FirebaseAuth.instance)
+          .authStateChanges()
+          .firstWhere((User? u) => u != null)
+          .timeout(kAccountWait);
+      return user?.uid;
+    } catch (_) {
+      // No session within the window: genuinely signed out, as far as the feed
+      // is concerned.
+      return null;
+    }
+  }
+
   Query<Map<String, dynamic>> _baseQuery(String uid) => _db
       .collection('users')
       .doc(uid)
@@ -187,7 +221,7 @@ class FeedRepository {
     DocumentSnapshot<Map<String, dynamic>>? cursor,
     bool fromServer = false,
   }) async {
-    final String? uid = currentUid;
+    final String? uid = await resolveUid();
     if (uid == null) return FeedPage.empty;
 
     Query<Map<String, dynamic>> q = _baseQuery(uid);

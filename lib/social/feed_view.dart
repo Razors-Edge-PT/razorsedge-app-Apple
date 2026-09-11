@@ -267,8 +267,11 @@ class _BuddyFeedViewState extends State<BuddyFeedView> {
     ];
 
     if (widget.shrinkWrap || widget.scrollController != null) {
-      // Embedded: the host owns the scrolling, so this is a plain column. The
-      // cards are already built lazily by the host's own viewport.
+      // Embedded: the host owns the scrolling, so this is a plain column —
+      // which means every card of every loaded page is BUILT, on screen or
+      // not. Cheap for a header and a caption; not cheap for media, so each
+      // card loads its picture only as it approaches the viewport. See
+      // kFeedMediaLookAhead in ui/feed_card.dart.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: children,

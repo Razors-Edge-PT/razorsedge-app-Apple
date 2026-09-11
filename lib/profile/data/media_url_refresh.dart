@@ -69,6 +69,30 @@ bool isAuthorizationFailure(Object error) {
       text.contains('forbidden');
 }
 
+/// The Storage object a Firebase download URL points at, or null.
+///
+/// A download URL carries its object path percent-encoded into one segment
+/// (`/v0/b/<bucket>/o/users%2Fu1%2Fposts%2Fm1%2Foriginal.jpg?alt=media&…`), so
+/// the URL itself says which object it opens.
+///
+/// That matters for a refresh. The caller passes a `storagePath` from the
+/// document it is drawing, and the two can disagree — a row that records the
+/// ORIGINAL's path while displaying a small variant would otherwise be
+/// "refreshed" into a URL for a different rendition, and those bytes would be
+/// written under the variant's cache key. Trusting the URL keeps a refresh
+/// pointing at the object that actually failed, and gives a legacy row with no
+/// recorded path a canonical path anyway.
+String? storagePathFromDownloadUrl(String url) {
+  final Uri? parsed = Uri.tryParse(url.trim());
+  if (parsed == null || !parsed.host.contains('firebasestorage')) return null;
+  final List<String> segments = parsed.pathSegments;
+  final int o = segments.indexOf('o');
+  if (o < 0 || o + 1 >= segments.length) return null;
+  // pathSegments are already percent-decoded, so this is the real object name.
+  final String path = segments.sublist(o + 1).join('/').trim();
+  return path.isEmpty ? null : path;
+}
+
 /// Asks Storage for a fresh download URL.
 ///
 /// Injectable so the recovery path is testable without a live Firebase app —
