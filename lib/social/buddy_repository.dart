@@ -82,12 +82,77 @@ class OutgoingRequest {
   final DateTime? sentAt;
 }
 
+/// One of the viewer's OWN requests that the other person accepted, not yet
+/// seen by the viewer.
+///
+/// Written only by the server (functions/social/notifications.js) when an
+/// invite moves from pending to accepted while both sides accept, one document
+/// per pair. firestore.rules denies every client create and delete, so a device
+/// cannot fabricate one; the viewer's only write is marking it seen.
+class AcceptedNotice {
+  const AcceptedNotice({
+    required this.id,
+    required this.uid,
+    this.acceptedAt,
+  });
+
+  /// The notification document id.
+  final String id;
+
+  /// The account that accepted.
+  final String uid;
+
+  final DateTime? acceptedAt;
+
+  static AcceptedNotice? fromSnapshot(
+    DocumentSnapshot<Map<String, dynamic>> snap, {
+    required String viewerUid,
+  }) {
+    final Map<String, dynamic>? d = snap.data();
+    if (d == null) return null;
+    if (d['type'] != 'buddyAccepted' || d['seen'] != false) return null;
+    final Object? other = d['otherUid'];
+    if (other is! String || other.trim().isEmpty || other == viewerUid) {
+      return null;
+    }
+    final Object? at = d['acceptedAt'] ?? d['createdAt'];
+    return AcceptedNotice(
+      id: snap.id,
+      uid: other,
+      acceptedAt: at is Timestamp ? at.toDate() : null,
+    );
+  }
+}
+
+/// What the header badge counts.
+class BuddyBadge {
+  const BuddyBadge({this.incoming = 0, this.accepted = 0});
+
+  /// Requests addressed to the viewer that still need an answer.
+  final int incoming;
+
+  /// Acceptances of the viewer's own requests not yet seen.
+  final int accepted;
+
+  int get total => incoming + accepted;
+
+  @override
+  bool operator ==(Object other) =>
+      other is BuddyBadge &&
+      other.incoming == incoming &&
+      other.accepted == accepted;
+
+  @override
+  int get hashCode => Object.hash(incoming, accepted);
+}
+
 /// The viewer's whole social state, as one value.
 class BuddyState {
   const BuddyState({
     this.incoming = const <IncomingRequest>[],
     this.outgoing = const <OutgoingRequest>[],
     this.friends = const <String>[],
+    this.unseenAccepted = const <AcceptedNotice>[],
     this.loaded = false,
   });
 
@@ -97,9 +162,30 @@ class BuddyState {
   /// Confirmed, MUTUAL friends, from the server-maintained projection.
   final List<String> friends;
 
+  /// Acceptances of the viewer's own requests not yet seen. See [newBuddies].
+  final List<AcceptedNotice> unseenAccepted;
+
   final bool loaded;
 
   int get pendingCount => incoming.length;
+
+  /// Unseen acceptances the friend projection confirms, one per account.
+  ///
+  /// An acceptance for somebody who is not — or no longer — a confirmed
+  /// friend is not news the viewer can act on, so it is neither counted nor
+  /// shown.
+  List<AcceptedNotice> get newBuddies {
+    final Set<String> counted = <String>{};
+    return unseenAccepted
+        .where((AcceptedNotice n) =>
+            friends.contains(n.uid) && counted.add(n.uid))
+        .toList(growable: false);
+  }
+
+  /// What the header badge shows: requests waiting for an answer, plus
+  /// acceptances not yet seen.
+  BuddyBadge get badge =>
+      BuddyBadge(incoming: incoming.length, accepted: newBuddies.length);
 
   BuddyRelationship relationshipWith(String uid) {
     if (friends.contains(uid)) return BuddyRelationship.friends;
@@ -119,23 +205,33 @@ class BuddyRepository {
     FirebaseFunctions? functions,
     FirebaseAuth? auth,
     String? overrideUid,
+    String? Function()? uidResolver,
   })  : _db = firestore ?? FirebaseFirestore.instance,
         _functions = functions,
         _auth = auth,
-        _overrideUid = overrideUid;
+        _overrideUid = overrideUid,
+        _uidResolver = uidResolver;
 
   final FirebaseFirestore _db;
   final FirebaseFunctions? _functions;
   final FirebaseAuth? _auth;
   final String? _overrideUid;
 
+  /// Test seam standing in for FirebaseAuth itself — including returning null
+  /// for a signed-out device. Never an "acting as" value.
+  final String? Function()? _uidResolver;
+
   /// The signed-in account. Never the coach's selected athlete — see the
   /// library comment.
   String? get currentUid {
     if (_overrideUid != null) return _overrideUid;
+    if (_uidResolver != null) return _uidResolver();
     final FirebaseAuth auth = _auth ?? FirebaseAuth.instance;
     return auth.currentUser?.uid;
   }
+
+  CollectionReference<Map<String, dynamic>> _notifications(String uid) =>
+      _db.collection('users').doc(uid).collection('socialNotifications');
 
   FirebaseFunctions get _fns => _functions ?? FirebaseFunctions.instance;
 
@@ -223,6 +319,37 @@ class BuddyRepository {
     });
   }
 
+  /// Acceptances of the viewer's own requests that the viewer has not seen.
+  ///
+  /// A live query over the viewer's OWN notices, so an acceptance lands in the
+  /// badge without a restart, and one seen on another device leaves it there
+  /// too. Newest first.
+  Stream<List<AcceptedNotice>> watchUnseenAcceptances() {
+    final String? uid = currentUid;
+    if (uid == null) {
+      return Stream<List<AcceptedNotice>>.value(const <AcceptedNotice>[]);
+    }
+    return _notifications(uid)
+        .where('seen', isEqualTo: false)
+        .snapshots()
+        .map((QuerySnapshot<Map<String, dynamic>> q) {
+      final List<AcceptedNotice> out = <AcceptedNotice>[];
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
+        final AcceptedNotice? n = AcceptedNotice.fromSnapshot(d, viewerUid: uid);
+        if (n != null) out.add(n);
+      }
+      out.sort((AcceptedNotice a, AcceptedNotice b) {
+        final DateTime? x = a.acceptedAt;
+        final DateTime? y = b.acceptedAt;
+        if (x == null && y == null) return a.uid.compareTo(b.uid);
+        if (x == null) return 1;
+        if (y == null) return -1;
+        return y.compareTo(x);
+      });
+      return out;
+    });
+  }
+
   /// Everything the People view needs, as one stream.
   Stream<BuddyState> watchState() {
     final String? uid = currentUid;
@@ -236,9 +363,11 @@ class BuddyRepository {
     List<IncomingRequest> incoming = const <IncomingRequest>[];
     List<OutgoingRequest> outgoing = const <OutgoingRequest>[];
     List<String> friends = const <String>[];
+    List<AcceptedNotice> accepted = const <AcceptedNotice>[];
     bool sawIncoming = false;
     bool sawOutgoing = false;
     bool sawFriends = false;
+    bool sawAccepted = false;
 
     void emit() {
       if (controller.isClosed) return;
@@ -246,7 +375,8 @@ class BuddyRepository {
         incoming: incoming,
         outgoing: outgoing,
         friends: friends,
-        loaded: sawIncoming && sawOutgoing && sawFriends,
+        unseenAccepted: accepted,
+        loaded: sawIncoming && sawOutgoing && sawFriends && sawAccepted,
       ));
     }
 
@@ -275,6 +405,14 @@ class BuddyRepository {
         sawFriends = true;
         emit();
       }),
+      watchUnseenAcceptances().listen((List<AcceptedNotice> v) {
+        accepted = v;
+        sawAccepted = true;
+        emit();
+      }, onError: (Object _) {
+        sawAccepted = true;
+        emit();
+      }),
     ];
 
     controller.onCancel = () async {
@@ -285,9 +423,37 @@ class BuddyRepository {
     return controller.stream;
   }
 
-  /// Just the badge number.
+  /// Just the pending-request number.
   Stream<int> watchPendingCount() =>
       watchIncoming().map((List<IncomingRequest> r) => r.length);
+
+  /// The header badge: pending requests plus unseen acceptances of the
+  /// viewer's own requests. Live, and the viewer's own account only.
+  Stream<BuddyBadge> watchBadge() =>
+      watchState().map((BuddyState s) => s.badge).distinct();
+
+  /// Marks [notices] seen, on the signed-in account only.
+  ///
+  /// Called by the People view once it has SHOWN them, never on opening the
+  /// Hub, so the badge is never cleared without an explanation. The write is
+  /// `seen: true` with `seenAt` at the server's clock — the only notice write
+  /// the rules allow — and it is queued offline like any Firestore write, so a
+  /// notice seen without a connection stays seen across restarts and devices.
+  /// Pending requests are a different collection and are never touched here.
+  Future<void> acknowledgeAcceptances(Iterable<AcceptedNotice> notices) async {
+    final String? uid = currentUid;
+    if (uid == null) return;
+    final List<AcceptedNotice> list = notices.toList(growable: false);
+    if (list.isEmpty) return;
+    final WriteBatch batch = _db.batch();
+    for (final AcceptedNotice n in list) {
+      batch.update(_notifications(uid).doc(n.id), <String, Object?>{
+        'seen': true,
+        'seenAt': FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+  }
 
   // ── Mutations ─────────────────────────────────────────────────────────────
   //

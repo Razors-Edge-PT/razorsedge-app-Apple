@@ -882,6 +882,14 @@ exports.buddyRespondToRequest = buddies.buddyRespondToRequest;
 exports.buddyCancelRequest = buddies.buddyCancelRequest;
 exports.buddyRemoveFriend = buddies.buddyRemoveFriend;
 
+// "Your request was accepted" notices. Driven by the invite's own
+// pending → accepted transition, so every acceptance path — the callables and
+// older installed builds alike — produces exactly one. See
+// social/notifications.js.
+const socialNotifications = require('./social/notifications');
+exports.socialOnBuddyInviteWritten =
+  socialNotifications.socialOnBuddyInviteWritten;
+
 // Feed fan-out plus the confirmed-friend projection it fans out over.
 // See social/feed.js for why fan-out beats a chunked posts query here.
 const feed = require('./social/feed');

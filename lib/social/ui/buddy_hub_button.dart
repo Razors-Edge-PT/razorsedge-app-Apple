@@ -16,6 +16,12 @@
 /// permission granted for training. [BuddyRepository] derives the account from
 /// FirebaseAuth and never reads UserContext, which is why nothing here does
 /// either.
+///
+/// ── What the badge counts ──────────────────────────────────────────────────
+/// Requests waiting for an answer, plus acceptances of the account's OWN
+/// requests that it has not yet seen. Both are durable server state, so the
+/// number survives a restart and follows the account between devices; the
+/// acceptances clear only once the People view has shown them.
 library;
 
 import 'package:flutter/material.dart';
@@ -64,13 +70,26 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
   /// Created once and reused for the life of the widget. Building the stream
   /// inside `build` would open a new Firestore listener on every rebuild of
   /// the app bar, and the app bar rebuilds constantly.
-  late final Stream<int> _pending;
+  late final Stream<BuddyBadge> _badge;
 
   @override
   void initState() {
     super.initState();
     _buddies = widget.buddies ?? BuddyRepository();
-    _pending = _buddies.watchPendingCount();
+    _badge = _buddies.watchBadge();
+  }
+
+  static String _tooltipFor(BuddyBadge badge) {
+    if (badge.total == 0) return 'Buddies';
+    if (badge.accepted == 0) {
+      return '${badge.incoming} buddy '
+          '${badge.incoming == 1 ? 'request' : 'requests'}';
+    }
+    if (badge.incoming == 0) {
+      return '${badge.accepted} new '
+          '${badge.accepted == 1 ? 'buddy' : 'buddies'}';
+    }
+    return '${badge.total} buddy updates';
   }
 
   void _openHub() {
@@ -88,21 +107,20 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
     final Color color =
         widget.iconColor ?? Theme.of(context).colorScheme.secondary;
 
-    return StreamBuilder<int>(
-      stream: _pending,
-      builder: (BuildContext context, AsyncSnapshot<int> snap) {
+    return StreamBuilder<BuddyBadge>(
+      stream: _badge,
+      builder: (BuildContext context, AsyncSnapshot<BuddyBadge> snap) {
         // A stream error is not a reason to hide the way into the Hub — the
         // icon still works, it just cannot say whether anything is waiting.
-        final int count = snap.data ?? 0;
+        final BuddyBadge badge = snap.data ?? const BuddyBadge();
+        final int count = badge.total;
         return Stack(
           alignment: Alignment.center,
           clipBehavior: Clip.none,
           children: <Widget>[
             IconButton(
               onPressed: _openHub,
-              tooltip: count > 0
-                  ? '$count buddy ${count == 1 ? 'request' : 'requests'}'
-                  : 'Buddies',
+              tooltip: _tooltipFor(badge),
               icon: Icon(
                 Icons.person_add_alt_1,
                 size: widget.iconSize,

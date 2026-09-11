@@ -8,6 +8,11 @@
 /// Opened on [BuddyHubTab.people] from the header icon, because that icon means
 /// "someone wants to be your buddy" and the requests are what the person came
 /// to see.
+///
+/// The icon also counts acceptances of the viewer's own requests. Those are
+/// explained here — a NEW BUDDIES section — and marked seen only after the
+/// People view has actually shown them, so the badge never clears for a reason
+/// the person did not see.
 library;
 
 import 'dart:async';
@@ -84,6 +89,15 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
   /// Accounts with a mutation in flight, so a row cannot be double-submitted
   /// and the rest of the list stays usable while one row works.
   final Set<String> _busy = <String>{};
+
+  /// Acceptances shown as new during this visit, by account. Kept after they
+  /// are acknowledged, so the explanation stays on screen for the visit rather
+  /// than vanishing the moment the badge clears.
+  final Map<String, AcceptedNotice> _newThisVisit = <String, AcceptedNotice>{};
+
+  /// Notice ids already sent for acknowledgement, so no rebuild sends one
+  /// twice.
+  final Set<String> _acknowledging = <String>{};
 
   @override
   void initState() {
@@ -175,6 +189,34 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
 
   void _openPost(FeedItem item) {
     unawaited(openFeedPost(context, item, viewerUid: _buddies.currentUid));
+  }
+
+  /// Marks the acceptances the People view has just shown as seen.
+  ///
+  /// Runs AFTER the frame that painted them, and only while the People tab is
+  /// the one on screen, no search is replacing the list, and this route is the
+  /// top one — so a badge is never cleared by something the person did not
+  /// see. A write that fails is retried on a later build.
+  void _acknowledgeShown(List<AcceptedNotice> shown) {
+    final List<AcceptedNotice> fresh = shown
+        .where((AcceptedNotice n) => !_acknowledging.contains(n.id))
+        .toList(growable: false);
+    if (fresh.isEmpty) return;
+    final Iterable<String> ids = fresh.map((AcceptedNotice n) => n.id);
+    _acknowledging.addAll(ids);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final bool presented = mounted &&
+          _tabs.index == 0 &&
+          _query.isEmpty &&
+          (ModalRoute.of(context)?.isCurrent ?? true);
+      if (!presented) {
+        _acknowledging.removeAll(ids);
+        return;
+      }
+      unawaited(_buddies.acknowledgeAcceptances(fresh).catchError((Object _) {
+        _acknowledging.removeAll(ids);
+      }));
+    });
   }
 
   Future<void> _confirmRemove(String uid, String name) async {
@@ -359,6 +401,15 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
   }
 
   Widget _buildRelationships(BuddyState state, AsyncSnapshot<BuddyState> snap) {
+    // An acceptance is news for the whole visit: remembered the first time it
+    // is shown, so acknowledging it does not make the explanation disappear.
+    for (final AcceptedNotice n in state.newBuddies) {
+      _newThisVisit.putIfAbsent(n.uid, () => n);
+    }
+    final List<AcceptedNotice> newRows = _newThisVisit.values
+        .where((AcceptedNotice n) => state.friends.contains(n.uid))
+        .toList(growable: false);
+
     if (!state.loaded && snap.connectionState == ConnectionState.waiting) {
       return const Center(
         child: CircularProgressIndicator(color: ProfilePalette.action),
@@ -390,6 +441,11 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
       ) {
         final Map<String, UserSearchResult> byUid =
             people.data ?? const <String, UserSearchResult>{};
+        // Names resolved (or failed to): the rows below are what the person
+        // sees, so the acceptances among them can now count as seen.
+        if (people.connectionState == ConnectionState.done) {
+          _acknowledgeShown(state.newBuddies);
+        }
         return ListView(
           children: <Widget>[
             if (state.incoming.isNotEmpty) ...<Widget>[
@@ -404,6 +460,22 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
                       _mutate(r.fromUid, () => _buddies.acceptRequest(r.fromUid)),
                   onSecondary: () =>
                       _mutate(r.fromUid, () => _buddies.declineRequest(r.fromUid)),
+                ),
+            ],
+            if (newRows.isNotEmpty) ...<Widget>[
+              const _SectionHeader('NEW BUDDIES'),
+              for (final AcceptedNotice n in newRows)
+                _row(
+                  uid: n.uid,
+                  fallbackName: '',
+                  people: byUid,
+                  action: BuddyRowAction.friends,
+                  subtitle: 'Accepted your request',
+                  onTap: () => _openProfile(n.uid),
+                  onPrimary: () => _confirmRemove(
+                    n.uid,
+                    byUid[n.uid]?.bestName ?? 'this buddy',
+                  ),
                 ),
             ],
             if (state.outgoing.isNotEmpty) ...<Widget>[

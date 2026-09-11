@@ -189,9 +189,13 @@ service cloud.firestore {
     //     create is constrained to publishedAt == request.time.
     // Reads are unaffected: the catch-all still gives the owner and the super
     // admin read, and each block widens reads where that is intended.
+    //   socialNotifications — server-written; the owner may only mark one
+    //     seen. A client that could create one could announce a friendship
+    //     nobody accepted.
     function hasOwnWriteRule(subcoll) {
       return subcoll in [
         'showcase', 'showcaseDays', 'stories', 'feed', 'buddyInvites',
+        'socialNotifications',
       ];
     }
 
@@ -387,6 +391,36 @@ service cloud.firestore {
 
         // Receiver may delete the invite doc.
         allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      // ---- Social notifications ----
+      // users/{userId}/socialNotifications/{notificationId}
+      //
+      // "Your buddy request was accepted", written ONLY by
+      // socialOnBuddyInviteWritten (functions/social/notifications.js) through
+      // the Admin SDK, and only when the pair is mutually accepted.
+      //
+      // Read is the owner's alone — an assigned coach does not see an
+      // athlete's social notices, and nobody else sees anyone's.
+      //
+      // The ONE client write is the owner acknowledging a notice: `seen` set to
+      // true with `seenAt` at the server's clock, and nothing else changed.
+      // Create and delete are denied to every client, so no device can
+      // fabricate an acceptance, retarget one at another account, or plant one
+      // in somebody else's collection. 'socialNotifications' is also listed in
+      // hasOwnWriteRule() so the users/{subcoll} catch-all below does not
+      // quietly re-grant the owner the writes this block withholds.
+      match /socialNotifications/{notificationId} {
+        allow read: if isSelf(userId) || isSuperAdmin();
+
+        allow update: if isSelf(userId)
+                      && request.resource.data.diff(resource.data)
+                           .affectedKeys()
+                           .hasOnly(['seen', 'seenAt'])
+                      && request.resource.data.seen == true
+                      && request.resource.data.seenAt == request.time;
+
+        allow create, delete: if false;
       }
 
       // ---- Buddy feed projection ----
