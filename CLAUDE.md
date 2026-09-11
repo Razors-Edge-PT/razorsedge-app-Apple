@@ -81,3 +81,9 @@ npm run logs             # View function logs
 **Sensitive files** (extra caution required):
 - `Camp_BB2.dart` - Block builder / week planner
 - `workout_entry_screen.dart` - Workout entry screen (WES)
+
+## Android release workflow
+
+Use the project skill `/goodlift-release` when the user requests the release sequence: tests, version bump, commit/push to `main`, necessary Firebase deployment, and a verified signed AAB.
+
+The maintained workflow is in [.claude/skills/goodlift-release/SKILL.md](.claude/skills/goodlift-release/SKILL.md). Richard uploads to Play internal testing and runs phone tests.
