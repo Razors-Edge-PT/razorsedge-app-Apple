@@ -25,6 +25,7 @@ import 'package:provider/provider.dart';
 
 import '../post_media.dart';
 import '../post_service.dart';
+import '../social/buddy_repository.dart';
 import '../user_context.dart';
 import 'core/media_models.dart';
 import 'core/showcase_models.dart';
@@ -39,7 +40,7 @@ import 'ui/media_detail_page.dart';
 import 'ui/media_grid.dart';
 import 'ui/profile_header.dart';
 import 'ui/profile_theme.dart';
-import 'ui/story_viewer.dart';
+import 'ui/story_launch.dart';
 import 'ui/units.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -115,6 +116,10 @@ class _ProfileScreenState extends State<ProfileScreen>
       stories: services.stories,
       staging: services.staging,
       uploader: services.uploader,
+      // The SIGNED-IN account's confirmed friends. BuddyRepository resolves
+      // the account from FirebaseAuth, never from the coach's "acting as"
+      // athlete, so coaching an athlete never counts as being their friend.
+      viewerFriends: BuddyRepository().watchFriends,
     )..start();
 
     setState(() => _controller = controller);
@@ -456,17 +461,11 @@ class _ProfileScreenState extends State<ProfileScreen>
     }
   }
 
-  Future<void> _openStories(ProfileController c) async {
-    if (c.stories.isEmpty) return;
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => StoryViewer(
-        stories: c.stories,
-        username: c.displayName,
-        isOwner: c.isOwner,
-        onDelete: c.isOwner ? (StoryItem s) => _deleteStory(c, s) : null,
-      ),
-    ));
-  }
+  Future<void> _openStories(ProfileController c) => openProfileStories(
+        context,
+        c,
+        onDelete: (StoryItem s) => _deleteStory(c, s),
+      );
 
   Future<void> _deleteStory(ProfileController c, StoryItem story) async {
     await ProfileServices.instance.stories.delete(c.targetUid, story.id);

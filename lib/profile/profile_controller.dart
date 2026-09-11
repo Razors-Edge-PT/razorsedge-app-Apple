@@ -17,6 +17,18 @@
 /// the user. [_syncEditors] writes into a TextEditingController only when that
 /// field is not being edited, so a remote change is adopted the moment the user
 /// stops and never while they are typing.
+///
+/// ── Whose stories a visitor sees ─────────────────────────────────────────────
+/// Stories are friend-only. A visitor's controller asks for them only while the
+/// SIGNED-IN account and this profile are confirmed friends, according to the
+/// server-maintained mutual projection for `actorUid` ([viewerFriends]). The
+/// security rules remain the authority — they check both assignment documents
+/// on every read — but the client no longer asks at all for somebody who is not
+/// a friend. That matters for the accounts the rules DO let read: the super
+/// admin may read any story for moderation, and must still not be shown a
+/// stranger's story ring as if it were a friend's. An assigned coach is not a
+/// friend by virtue of coaching, and without a friendship source the gate stays
+/// closed.
 library;
 
 import 'dart:async';
@@ -48,6 +60,7 @@ class ProfileController extends ChangeNotifier {
     required MediaStaging staging,
     required MediaUploader uploader,
     DateTime Function()? clock,
+    Stream<List<String>> Function()? viewerFriends,
   })  : _now = clock ?? DateTime.now,
         _profiles = profiles,
         _identity = identity,
@@ -55,7 +68,8 @@ class ProfileController extends ChangeNotifier {
         _media = media,
         _stories = stories,
         _staging = staging,
-        _uploader = uploader;
+        _uploader = uploader,
+        _viewerFriends = viewerFriends;
 
   /// Whose profile is on screen.
   final String targetUid;
@@ -71,8 +85,19 @@ class ProfileController extends ChangeNotifier {
   final MediaStaging _staging;
   final MediaUploader _uploader;
 
+  /// The SIGNED-IN account's confirmed friends (the mutual `socialGraph`
+  /// projection for [actorUid]). Only consulted for a visitor. Null means no
+  /// friendship is known, and a visitor is then shown no stories.
+  final Stream<List<String>> Function()? _viewerFriends;
+
   /// True only when the signed-in user owns this profile.
   bool get isOwner => actorUid == targetUid;
+
+  bool _viewerIsFriend = false;
+
+  /// True when the signed-in account may be shown this profile's stories: its
+  /// owner, or a confirmed friend.
+  bool get viewerSeesStories => isOwner || _viewerIsFriend;
 
   // ── Editors ───────────────────────────────────────────────────────────────
 
@@ -203,6 +228,7 @@ class ProfileController extends ChangeNotifier {
   static const String _kPending = 'pending';
   static const String _kPendingStories = 'pendingStories';
   static const String _kPendingAvatar = 'pendingAvatar';
+  static const String _kFriendship = 'friendship';
 
   String? _gridError;
 
@@ -244,6 +270,15 @@ class ProfileController extends ChangeNotifier {
   void _bind(String name, StreamSubscription<Object?> Function() subscribe) {
     _binders[name] = subscribe;
     _rebind(name);
+  }
+
+  /// Drops [name] for good: cancelled, forgotten, and not re-bound by a later
+  /// resume.
+  void _unbind(String name) {
+    _binders.remove(name);
+    _failed.remove(name);
+    final StreamSubscription<Object?>? existing = _subs.remove(name);
+    if (existing != null) unawaited(existing.cancel());
   }
 
   void _rebind(String name) {
@@ -329,17 +364,11 @@ class ProfileController extends ChangeNotifier {
           ),
     );
 
-    _bind(
-      _kStories,
-      () => _stories.watchLive(targetUid, clock: _now).listen(
-            (List<StoryItem> items) {
-              _liveStories = items;
-              _scheduleStoryExpiry();
-              notifyListeners();
-            },
-            onError: (Object e) => _onStreamError(_kStories, e),
-          ),
-    );
+    if (isOwner) {
+      _bindStories();
+    } else {
+      _watchFriendship();
+    }
 
     if (isOwner) {
       _bind(
@@ -375,6 +404,52 @@ class ProfileController extends ChangeNotifier {
       // App start / page open is one of the four moments the outbox drains.
       unawaited(processOutbox());
     }
+  }
+
+  /// The live-story listener — the same repository query, ordering and expiry
+  /// handling for the owner and for a friend.
+  void _bindStories() {
+    _bind(
+      _kStories,
+      () => _stories.watchLive(targetUid, clock: _now).listen(
+            (List<StoryItem> items) {
+              _liveStories = items;
+              _scheduleStoryExpiry();
+              notifyListeners();
+            },
+            onError: (Object e) => _onStreamError(_kStories, e),
+          ),
+    );
+  }
+
+  /// A visitor's stories follow the friendship, live: listening starts when
+  /// the signed-in account and this profile are confirmed friends and stops —
+  /// ring and all — the moment they are not.
+  void _watchFriendship() {
+    final Stream<List<String>> Function()? source = _viewerFriends;
+    if (source == null) return; // no friendship known: fail closed
+    _bind(
+      _kFriendship,
+      () => source().listen(
+            (List<String> friends) =>
+                _onFriendship(friends.contains(targetUid)),
+            onError: (Object e) => _onStreamError(_kFriendship, e),
+          ),
+    );
+  }
+
+  void _onFriendship(bool friend) {
+    if (friend == _viewerIsFriend) return;
+    _viewerIsFriend = friend;
+    if (friend) {
+      _bindStories();
+      return;
+    }
+    _unbind(_kStories);
+    _storyExpiryTimer?.cancel();
+    _storyExpiryTimer = null;
+    _liveStories = const <StoryItem>[];
+    notifyListeners();
   }
 
   /// The showcase view has to be rebuilt whenever EITHER half changes.

@@ -49,6 +49,7 @@ const SUPER = 'yoVAqScwLMQLAgNHh8v9IK49fBw2';
 const OWNER = 'storyExpiryOwner';
 const FRIEND = 'storyExpiryFriend';
 const STRANGER = 'storyExpiryStranger';
+const COACH = 'storyExpiryCoach'; // OWNER's assigned coach — NOT a friend
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -101,6 +102,14 @@ test.before(async () => {
     });
     await ctx.firestore().doc(`buddyAssignments/${FRIEND}`).set({
       athletes: { [OWNER]: { status: 'accepted' } },
+    });
+    // COACH coaches OWNER — an active entitlement and an approved assignment —
+    // and is not OWNER's friend. Coaching grants training data, never stories.
+    await ctx.firestore().doc(`accountEntitlements/${COACH}`).set({
+      coach: { state: 'active', source: 'manual_review' },
+    });
+    await ctx.firestore().doc(`athleteAssignments/${OWNER}`).set({
+      coaches: { [COACH]: { approved: true } },
     });
     await seedStory(ctx, LIVE, 60 * 1000);
     await seedStory(ctx, EXACT, TTL_MS);
@@ -308,6 +317,26 @@ test('storage: an object with NO story document is unreachable', async () => {
 test('storage: a stranger is denied story media at any age', async () => {
   await assertFails(readObject(stAs(STRANGER), LIVE));
   await assertFails(readObject(stAs(STRANGER), PAST));
+});
+
+// ── Coaching is not friendship ──────────────────────────────────────────────
+
+test('firestore: an assigned coach who is not a friend reads no story', async () => {
+  // Training access is real — the coach can reach the athlete's workouts — but
+  // it is not a friendship, and stories are friend-only.
+  await assertFails(doc(fsAs(COACH), LIVE).get());
+  const cutoff = new Date(Date.now() - TTL_MS + 90 * 1000);
+  await assertFails(
+    fsAs(COACH)
+      .collection(`users/${OWNER}/stories`)
+      .where('publishedAt', '>', cutoff)
+      .orderBy('publishedAt')
+      .get(),
+  );
+});
+
+test('storage: an assigned coach who is not a friend is denied story media', async () => {
+  await assertFails(readObject(stAs(COACH), LIVE));
 });
 
 test('storage: the owner keeps access to their own expired media', async () => {
