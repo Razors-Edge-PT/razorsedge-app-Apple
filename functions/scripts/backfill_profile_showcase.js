@@ -43,6 +43,14 @@ function usage() {
     'Verify what is published matches a fresh recomputation:',
     '  node scripts/backfill_profile_showcase.js --project goodlift-us-storage --verify',
     '',
+    'Verify that record SELECTION is unchanged, ignoring bodyweight context',
+    '(loadBasis / bodyweightKg / bodyweightDateKey) — run before an apply that',
+    'only adds that context:',
+    '  node scripts/backfill_profile_showcase.js --project goodlift-us-storage --verify --selection-only',
+    '',
+    'Restrict to accounts whose recomputed showcase holds one slot:',
+    '  ... --only-slot chinUp',
+    '',
     'Resume is automatic. --force reprocesses users already marked done.',
   ].join('\n');
 }
@@ -55,6 +63,8 @@ function parseArgs(argv) {
     verify: false,
     force: false,
     limit: 0,
+    selectionOnly: false,
+    onlySlot: null,
     help: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -62,6 +72,8 @@ function parseArgs(argv) {
     if (arg === '--apply') out.apply = true;
     else if (arg === '--verify') out.verify = true;
     else if (arg === '--force') out.force = true;
+    else if (arg === '--selection-only') out.selectionOnly = true;
+    else if (arg === '--only-slot') out.onlySlot = argv[++i];
     else if (arg === '--uid') out.uid = argv[++i];
     else if (arg === '--limit') out.limit = Number(argv[++i]) || 0;
     else if (arg === '--project') out.projectId = argv[++i];
@@ -70,6 +82,10 @@ function parseArgs(argv) {
   }
   if (!out.projectId) throw new Error('--project requires a value');
   if (out.apply && out.verify) throw new Error('Choose either --apply or --verify, not both');
+  if (out.selectionOnly && !out.verify) {
+    throw new Error('--selection-only is a verify mode; add --verify');
+  }
+  if (out.onlySlot !== null && !out.onlySlot) throw new Error('--only-slot requires a value');
   return out;
 }
 
@@ -91,10 +107,12 @@ function canonical(value) {
   return value;
 }
 
-function sameSnapshot(a, b) {
+function sameSnapshot(a, b, { selectionOnly = false } = {}) {
+  const { stripBodyweightAnnotations } = require('../showcase/bodyweight');
   const strip = (s) => {
     if (!s) return null;
-    const copy = canonical(JSON.parse(JSON.stringify(s)));
+    const base = selectionOnly ? stripBodyweightAnnotations(s) : s;
+    const copy = canonical(JSON.parse(JSON.stringify(base)));
     delete copy.updatedAtMs;
     if (copy.lifts && Object.keys(copy.lifts).length === 0) delete copy.lifts;
     return copy;
@@ -144,6 +162,7 @@ async function main() {
     verifiedOk: 0,
     verifiedMismatch: 0,
     verifiedMissing: 0,
+    skippedOtherSlots: 0,
     errors: 0,
   };
   const mismatches = [];
@@ -159,12 +178,27 @@ async function main() {
       }
 
       // Always compute into memory first: dry-run and verify must never write,
-      // and apply gets the same deterministic answer.
-      const memory = store.memoryStore();
+      // and apply gets the same deterministic answer. Bodyweight context is
+      // resolved read-only from the athlete's weigh-ins, exactly as the
+      // triggers resolve it; --selection-only compares without it, so it
+      // skips those reads.
+      const memory = store.memoryStore(
+        options.selectionOnly
+          ? undefined
+          : { bodyweightAsOf: fsStore.bodyweightResolver(uid) },
+      );
       const { snapshot, workoutDays } = await fsStore.rebuildAthlete(uid, {
         apply: false,
         store: memory,
       });
+
+      if (
+        options.onlySlot &&
+        !(snapshot && snapshot.lifts && snapshot.lifts[options.onlySlot])
+      ) {
+        counts.skippedOtherSlots += 1;
+        continue;
+      }
 
       counts.processed += 1;
       counts.workoutDaysRead += workoutDays;
@@ -183,7 +217,7 @@ async function main() {
           } else {
             counts.verifiedOk += 1;
           }
-        } else if (sameSnapshot(published, snapshot)) {
+        } else if (sameSnapshot(published, snapshot, { selectionOnly: options.selectionOnly })) {
           counts.verifiedOk += 1;
         } else {
           counts.verifiedMismatch += 1;

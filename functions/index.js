@@ -846,6 +846,9 @@ exports.mirrorUserPlannedBlocksToLegacy =
 //     --no-invoker-iam-check --region=us-central1 --project=goodlift-us-storage
 const showcase = require('./showcase/firestore_store');
 exports.showcaseOnWorkoutWrite = showcase.showcaseOnWorkoutWrite;
+// Keeps the bodyweight beside a Chin-Up record in step with later weigh-ins.
+// Presentation context only; record selection is untouched.
+exports.showcaseOnWeightWrite = showcase.showcaseOnWeightWrite;
 
 const identity = require('./identity');
 exports.profileChangeUsername = identity.profileChangeUsername;

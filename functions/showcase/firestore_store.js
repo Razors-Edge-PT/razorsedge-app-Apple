@@ -17,9 +17,14 @@ const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
-const { applyWorkoutDay, rebuildAll, dayDocId } = require('./store');
+const { applyWorkoutDay, rebuildAll, refreshBodyweight, dayDocId } = require('./store');
 const { PROFILE_SHOWCASE_SCHEMA } = require('./reducer');
 const { SLOT_ORDER } = require('./big_five');
+const {
+  BODYWEIGHT_QUERY_LIMIT,
+  bodyweightCutoffMillis,
+  pickBodyweightAsOf,
+} = require('./bodyweight');
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SNAPSHOT_FIELD = 'profileShowcaseV1';
@@ -42,6 +47,34 @@ function daysCol(uid) {
 
 function publicRef(uid) {
   return db().collection('users_public').doc(uid);
+}
+
+/**
+ * The few most recent weigh-ins that could be the bodyweight for a lift on
+ * [dateKey]. Read-only; the exact choice is pickBodyweightAsOf's.
+ */
+function bodyweightQuery(uid, dateKey) {
+  return userRef(uid)
+    .collection('weights')
+    .where(
+      'timestamp',
+      '<',
+      admin.firestore.Timestamp.fromMillis(bodyweightCutoffMillis(dateKey)),
+    )
+    .orderBy('timestamp', 'desc')
+    .limit(BODYWEIGHT_QUERY_LIMIT);
+}
+
+function weightEntryOf(doc) {
+  const d = doc.data() || {};
+  const ts = d.timestamp;
+  return {
+    id: doc.id,
+    weight: typeof d.weight === 'number' ? d.weight : Number(d.weight),
+    unit: d.unit,
+    tod: d.tod,
+    tsMillis: ts && typeof ts.toMillis === 'function' ? ts.toMillis() : Number.NaN,
+  };
 }
 
 /**
@@ -168,6 +201,10 @@ function bufferedStore(uid, reader) {
     async deleteDay(slot, dateKey) {
       dayOverlay.set(dayDocId(slot, dateKey), null);
       queueDelete(daysCol(uid).doc(dayDocId(slot, dateKey)));
+    },
+    async getBodyweightAsOf(dateKey) {
+      const q = await reader.query(bodyweightQuery(uid, dateKey));
+      return pickBodyweightAsOf(q.docs.map(weightEntryOf), dateKey);
     },
     async flush() {
       const ops = [...pending.values()];
@@ -301,6 +338,60 @@ const showcaseOnWorkoutWrite = onDocumentWritten(
 );
 
 /**
+ * Keeps the bodyweight shown beside a Chin-Up record in step with the athlete's
+ * weigh-ins.
+ *
+ * A record's bodyweight is the weigh-in for THAT lift's date, resolved when the
+ * record is published. A weigh-in logged afterwards for that date or earlier —
+ * the common "trained, then weighed in" morning — changes the answer without
+ * any workout being written, so without this the profile would keep showing
+ * the previous day's bodyweight indefinitely.
+ *
+ * Transactional for the same reason the workout trigger is: both write
+ * profileShowcaseV1, and a read-modify-write that raced the other could
+ * republish a record the workout trigger had just replaced.
+ *
+ * Idempotent and loop-free: it re-derives the bodyweight fields from the
+ * current weigh-ins, writes only when they changed, and writes only
+ * users_public — never a weights document — so it cannot re-trigger itself.
+ */
+async function refreshBodyweightTransactionally(uid) {
+  return db().runTransaction(async (tx) => {
+    const store = transactionalStore(uid, tx);
+    const result = await refreshBodyweight(store);
+    // Every read above happened before this hands the writes to the tx.
+    await store.flush();
+    return result;
+  });
+}
+
+const showcaseOnWeightWrite = onDocumentWritten(
+  { document: 'users/{uid}/weights/{weightId}', retry: true },
+  async (event) => {
+    const uid = event.params.uid;
+    try {
+      const result = await refreshBodyweightTransactionally(uid);
+      if (result.changed) {
+        logger.info('showcase bodyweight refreshed', { uid, slots: result.slots });
+      }
+    } catch (err) {
+      logger.error('showcaseOnWeightWrite failed', {
+        uid,
+        weightId: event.params.weightId,
+        error: err,
+      });
+      throw err;
+    }
+  },
+);
+
+/** A plain (non-transactional) bodyweight lookup for one athlete. */
+function bodyweightResolver(uid) {
+  const store = firestoreStore(uid);
+  return (dateKey) => store.getBodyweightAsOf(dateKey);
+}
+
+/**
  * Deterministic full rebuild for ONE athlete. Reads every date-keyed workout
  * document (paged) and never mutates or deletes one.
  *
@@ -326,7 +417,10 @@ async function rebuildAthlete(uid, { apply = true, store } = {}) {
     if (page.size < PAGE) break;
   }
 
-  const target = store || (apply ? firestoreStore(uid) : require('./store').memoryStore());
+  const target = store ||
+    (apply
+      ? firestoreStore(uid)
+      : require('./store').memoryStore({ bodyweightAsOf: bodyweightResolver(uid) }));
   const snapshot = await rebuildAll(target, entries);
   if (target.flush) await target.flush();
   return { snapshot, workoutDays: entries.length };
@@ -354,7 +448,10 @@ async function pruneStaleDays(uid, keepIds) {
 
 module.exports = {
   showcaseOnWorkoutWrite,
+  showcaseOnWeightWrite,
   applyWorkoutDayTransactionally,
+  refreshBodyweightTransactionally,
+  bodyweightResolver,
   firestoreStore,
   transactionalStore,
   rebuildAthlete,

@@ -28,6 +28,7 @@
 const crypto = require('crypto');
 const { matchBigFive, bigFiveBySlot, SLOT_ORDER } = require('./big_five');
 const { showcaseE1rm, SHOWCASE_FORMULA_VERSION } = require('./e1rm_spec');
+const { setLoadBasis } = require('./bodyweight');
 
 /** Schema version of the compact snapshot mirrored into users_public. */
 const PROFILE_SHOWCASE_SCHEMA = 'profileShowcaseV1';
@@ -106,7 +107,11 @@ function extractBigFiveSets(workoutData) {
           : `s${n}`;
 
       if (!out[lift.slot]) out[lift.slot] = [];
-      out[lift.slot].push({ setKey, weight, reps: Math.round(reps) });
+      const entry = { setKey, weight, reps: Math.round(reps) };
+      // Bodyweight-loaded lifts only, so every other slot keeps its exact
+      // shape. The basis never takes part in selection (see bodyweight.js).
+      if (lift.bodyweightLoaded) entry.basis = setLoadBasis(s);
+      out[lift.slot].push(entry);
     }
   }
   return out;
@@ -155,6 +160,13 @@ function betterHeaviestWithinDay(a, b) {
   return a.setKey < b.setKey;
 }
 
+/** The compact candidate stored in a day contribution. */
+function candidateSet(set) {
+  const out = { setKey: set.setKey, weight: set.weight, reps: set.reps };
+  if (set.basis) out.basis = set.basis;
+  return out;
+}
+
 /**
  * Reduces one workout document to at most five day contributions.
  * Within-day ordering is the lifetime ordering with the date term held
@@ -177,8 +189,8 @@ function summarizeWorkoutDay(dateKey, workoutData) {
       slot,
       dateKey,
       exerciseId: casing[slot] || bigFiveBySlot(slot).exerciseId,
-      bestE1rm: { setKey: bestE.setKey, weight: bestE.weight, reps: bestE.reps },
-      heaviest: { setKey: bestH.setKey, weight: bestH.weight, reps: bestH.reps },
+      bestE1rm: candidateSet(bestE),
+      heaviest: candidateSet(bestH),
     };
   }
   return out;
@@ -206,7 +218,7 @@ function betterHeaviestAcrossDays(a, b) {
 }
 
 function recordOf(slot, day, set) {
-  return {
+  const record = {
     slot,
     exerciseId: day.exerciseId,
     dateKey: day.dateKey,
@@ -224,6 +236,8 @@ function recordOf(slot, day, set) {
       reps: set.reps,
     }),
   };
+  if (set.basis) record.loadBasis = set.basis;
+  return record;
 }
 
 /** Folds day contributions for ONE slot into that slot's lifetime snapshot. */

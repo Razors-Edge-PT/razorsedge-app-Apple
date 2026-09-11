@@ -46,6 +46,7 @@ class BigFiveLift {
     required this.exerciseId,
     required this.displayName,
     required this.legacyNameAliases,
+    this.bodyweightLoaded = false,
   });
 
   /// Stable slot key (see [BigFiveSlot]).
@@ -59,6 +60,11 @@ class BigFiveLift {
 
   /// Exact canonical names accepted for id-less legacy rows only.
   final List<String> legacyNameAliases;
+
+  /// True when the stored load includes the athlete's bodyweight (the
+  /// Chin-Up). Presentation only: the showcase shows such a record as the
+  /// ADDED load. It never takes part in record selection or fingerprints.
+  final bool bodyweightLoaded;
 
   /// Case-folded catalogue id — the stream key used everywhere.
   String get foldedId => exerciseId.toLowerCase();
@@ -92,6 +98,7 @@ const List<BigFiveLift> kBigFive = <BigFiveLift>[
     // "Pull-Up" is a DIFFERENT catalogue exercise (RFyjAjezFs8Rf7CQoaXz) and
     // is deliberately absent.
     legacyNameAliases: <String>['Chin-Up', 'Chin Up'],
+    bodyweightLoaded: true,
   ),
   BigFiveLift(
     slot: BigFiveSlot.ohpUnilateral,
@@ -118,6 +125,10 @@ final Map<String, BigFiveLift> _byFoldedAlias = <String, BigFiveLift>{
 
 /// The lift for a stable slot key, or null.
 BigFiveLift? bigFiveBySlot(String slot) => _bySlot[slot];
+
+/// True for a slot whose stored loads include the athlete's bodyweight.
+bool isBodyweightLoadedSlot(String slot) =>
+    _bySlot[slot]?.bodyweightLoaded ?? false;
 
 /// Case-folds an exercise id the way every showcase stream key is folded.
 /// Returns null for a blank / non-string id.

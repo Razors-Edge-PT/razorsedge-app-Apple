@@ -13,6 +13,10 @@
 ///
 /// Nothing here is ever labelled "verified" — the wording is "Proof attached",
 /// which is what the video actually establishes.
+///
+/// A bodyweight-loaded lift (the Chin-Up) shows the ADDED load, with the
+/// bodyweight recorded for that lift on its own line — see
+/// record_presentation.dart for the arithmetic and the fallbacks.
 library;
 
 import 'package:flutter/material.dart';
@@ -21,6 +25,7 @@ import '../core/big_five.dart';
 import '../core/showcase_models.dart';
 import '../data/showcase_repository.dart';
 import 'profile_theme.dart';
+import 'record_presentation.dart';
 import 'units.dart';
 
 class BigFiveShowcase extends StatelessWidget {
@@ -152,7 +157,9 @@ class _LiftCard extends StatelessWidget {
                 ),
                 Container(
                   width: 1,
-                  height: 78,
+                  // A bodyweight-loaded lift carries one more line per column
+                  // ("at 85 kg BW"); the rule grows with it.
+                  height: lift.bodyweightLoaded ? 94 : 78,
                   margin:
                       const EdgeInsets.symmetric(horizontal: ProfileSpacing.md),
                   color: ProfilePalette.outline,
@@ -231,6 +238,8 @@ class _RecordColumn extends StatelessWidget {
     }
 
     final ProofRecord? proof = view.proofFor(r);
+    final RecordPresentation shown =
+        presentShowcaseRecord(record: r, isE1rm: isE1rm, units: units);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -238,16 +247,21 @@ class _RecordColumn extends StatelessWidget {
         Text(label, style: ProfileText.recordLabel(context)),
         const SizedBox(height: ProfileSpacing.xs),
         Text(
-          isE1rm ? units.format(r.e1rm) : units.format(r.weight),
+          shown.value,
           style: ProfileText.recordValue(context),
         ),
         const SizedBox(height: 2),
         Text(
           // The source performance, always. "180 kg × 2" for an E1RM, and the
           // rep count for the heaviest load, so the number can be checked.
-          '${units.format(r.weight)} × ${r.reps}',
+          shown.source,
           style: ProfileText.recordDetail(context),
         ),
+        if (shown.bodyweightNote != null)
+          Text(
+            shown.bodyweightNote!,
+            style: ProfileText.recordDetail(context),
+          ),
         Text(
           units.formatDate(r.dateKey),
           style: ProfileText.caption(context),

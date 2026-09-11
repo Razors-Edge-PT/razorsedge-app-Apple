@@ -52,6 +52,23 @@ class WeightUnits {
     return '$text $suffix';
   }
 
+  /// A load relative to bodyweight, for bodyweight-loaded lifts:
+  /// "+57 kg", "+53.5 kg", "BW" for no added load, "−5 kg" below it.
+  ///
+  /// Rounded with the same single decimal as [format] BEFORE the sign and the
+  /// whole-number form are chosen, so float noise from the subtraction can
+  /// never read as "+0.0", "57.0" or "−0". A negative is spelt with a real
+  /// minus sign, never as "+-".
+  String formatAdded(double kg) {
+    final double value = convert(kg);
+    final String fixed = value.abs().toStringAsFixed(1);
+    final double shown = double.parse(fixed);
+    if (shown == 0) return 'BW';
+    final String text =
+        shown == shown.roundToDouble() ? shown.toStringAsFixed(0) : fixed;
+    return '${value > 0 ? '+' : '−'}$text $suffix';
+  }
+
   /// A record's `YYYY-MM-DD` date key, rendered for humans. Falls back to the
   /// raw key rather than showing nothing if it is ever malformed.
   String formatDate(String dateKey) {

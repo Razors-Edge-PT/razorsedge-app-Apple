@@ -63,6 +63,9 @@ const BIG_FIVE = [
     displayName: 'Chin-Up',
     // "Pull-Up" is a DIFFERENT catalogue exercise and is deliberately absent.
     legacyNameAliases: ['Chin-Up', 'Chin Up'],
+    // The stored load includes the athlete's bodyweight. Presentation only —
+    // see showcase/bodyweight.js. Selection and fingerprints ignore it.
+    bodyweightLoaded: true,
   },
   {
     slot: SLOTS.OHP_UNILATERAL,

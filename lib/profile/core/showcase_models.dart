@@ -16,12 +16,35 @@ class ShowcaseRecordKind {
   static const String heaviest = 'heaviest';
 }
 
+/// How a stored set weight relates to the athlete's bodyweight. Carried only
+/// for bodyweight-loaded lifts (see [BigFiveLift.bodyweightLoaded]). Mirrors
+/// `LoadBasis` in functions/showcase/bodyweight.js.
+class ShowcaseLoadBasis {
+  /// Stored weight is bodyweight + added load (the legacy workout screen).
+  static const String absolute = 'absolute';
+
+  /// Stored weight is the added load alone (WES2, which saves what was typed).
+  static const String added = 'added';
+
+  /// The basis of one stored set map. WES2 is the only writer that stamps
+  /// `setIndex` on a set.
+  static String ofSetMap(Map<Object?, Object?> setMap) {
+    final Object? idx = setMap['setIndex'];
+    return (idx is num && idx.isFinite) ? added : absolute;
+  }
+
+  /// [raw] when it is a known basis, otherwise null.
+  static String? parse(Object? raw) =>
+      (raw == absolute || raw == added) ? raw as String : null;
+}
+
 /// A single completed set, normalised out of a workout document.
 class ShowcaseSet {
   const ShowcaseSet({
     required this.setKey,
     required this.weight,
     required this.reps,
+    this.basis,
   });
 
   /// Stable identity of this set inside its day: the row's own set id when the
@@ -29,6 +52,10 @@ class ShowcaseSet {
   final String setKey;
   final double weight;
   final int reps;
+
+  /// [ShowcaseLoadBasis] for bodyweight-loaded lifts; null for every other
+  /// lift. Never read by selection.
+  final String? basis;
 
   double get e1rm => showcaseE1rm(weight, reps);
 }
@@ -45,6 +72,9 @@ class ShowcaseRecord {
     required this.e1rm,
     required this.formulaVersion,
     required this.fingerprint,
+    this.loadBasis,
+    this.bodyweightKg,
+    this.bodyweightDateKey,
   });
 
   final String slot;
@@ -63,6 +93,21 @@ class ShowcaseRecord {
   /// Stable key identifying the SOURCE PERFORMANCE (see [recordFingerprint]).
   final String fingerprint;
 
+  // ── Bodyweight context (bodyweight-loaded lifts only) ─────────────────────
+  // Published by the server beside the record, AFTER selection. None of these
+  // takes part in which set holds the record or in its fingerprint.
+
+  /// [ShowcaseLoadBasis] of the source set, or null when the record was
+  /// published before records carried one.
+  final String? loadBasis;
+
+  /// The bodyweight recorded for this record's own lift date (the latest
+  /// weigh-in on or before it), in kg. Null when none was recorded.
+  final double? bodyweightKg;
+
+  /// The `YYYY-MM-DD` day of that weigh-in.
+  final String? bodyweightDateKey;
+
   Map<String, Object?> toMap() => <String, Object?>{
         'slot': slot,
         'exerciseId': exerciseId,
@@ -73,6 +118,9 @@ class ShowcaseRecord {
         'e1rm': e1rm,
         'formulaVersion': formulaVersion,
         'fingerprint': fingerprint,
+        if (loadBasis != null) 'loadBasis': loadBasis,
+        if (bodyweightKg != null) 'bodyweightKg': bodyweightKg,
+        if (bodyweightDateKey != null) 'bodyweightDateKey': bodyweightDateKey,
       };
 
   static ShowcaseRecord? fromMap(Object? raw) {
@@ -80,6 +128,8 @@ class ShowcaseRecord {
     final Object? slot = raw['slot'];
     final Object? fp = raw['fingerprint'];
     if (slot is! String || fp is! String) return null;
+    final Object? bw = raw['bodyweightKg'];
+    final Object? bwDate = raw['bodyweightDateKey'];
     return ShowcaseRecord(
       slot: slot,
       exerciseId: (raw['exerciseId'] as String?) ?? '',
@@ -90,6 +140,10 @@ class ShowcaseRecord {
       e1rm: (raw['e1rm'] as num?)?.toDouble() ?? 0,
       formulaVersion: (raw['formulaVersion'] as num?)?.toInt() ?? 0,
       fingerprint: fp,
+      loadBasis: ShowcaseLoadBasis.parse(raw['loadBasis']),
+      bodyweightKg:
+          (bw is num && bw.isFinite && bw > 0) ? bw.toDouble() : null,
+      bodyweightDateKey: (bwDate is String && bwDate.isNotEmpty) ? bwDate : null,
     );
   }
 }

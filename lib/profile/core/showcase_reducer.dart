@@ -70,11 +70,13 @@ class ShowcaseDayContribution {
           'setKey': bestE1rmSet.setKey,
           'weight': bestE1rmSet.weight,
           'reps': bestE1rmSet.reps,
+          if (bestE1rmSet.basis != null) 'basis': bestE1rmSet.basis,
         },
         'heaviest': <String, Object?>{
           'setKey': heaviestSet.setKey,
           'weight': heaviestSet.weight,
           'reps': heaviestSet.reps,
+          if (heaviestSet.basis != null) 'basis': heaviestSet.basis,
         },
       };
 
@@ -93,6 +95,7 @@ class ShowcaseDayContribution {
         setKey: (m['setKey'] as String?) ?? '',
         weight: w,
         reps: r,
+        basis: ShowcaseLoadBasis.parse(m['basis']),
       );
     }
 
@@ -152,8 +155,13 @@ Map<String, List<ShowcaseSet>> extractBigFiveSets(Object? workoutData) {
               ? explicitId.trim()
               : 's$n';
 
-      (out[lift.slot] ??= <ShowcaseSet>[])
-          .add(ShowcaseSet(setKey: setKey, weight: w, reps: r.round()));
+      (out[lift.slot] ??= <ShowcaseSet>[]).add(ShowcaseSet(
+        setKey: setKey,
+        weight: w,
+        reps: r.round(),
+        // Bodyweight-loaded lifts only; never read by selection.
+        basis: lift.bodyweightLoaded ? ShowcaseLoadBasis.ofSetMap(s) : null,
+      ));
     }
   }
   return out;
@@ -324,6 +332,7 @@ ShowcaseRecord _recordOf(
     reps: set.reps,
     e1rm: set.e1rm,
     formulaVersion: kE1rmFormulaVersion,
+    loadBasis: set.basis,
     fingerprint: recordFingerprint(
       slot: slot,
       exerciseId: day.exerciseId,
