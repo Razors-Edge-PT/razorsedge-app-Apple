@@ -46,11 +46,29 @@
 
 const { E1RM_FORMULA_VERSION } = require('./e1rm');
 const {
-  summarizeWorkoutDay, deriveExerciseEvents, applyDayToState, emptyState,
+  summarizeWorkoutDay, hasBodyweightExercise, deriveExerciseEvents, applyDayToState,
+  emptyState,
 } = require('./pb_engine');
 
 function dayDocId(exerciseId, dateKey) {
   return `${exerciseId}_${dateKey}`;
+}
+
+/**
+ * The bodyweight (kg) recorded on or before each of [dateKeys], as a Map, from
+ * the store's optional `getBodyweightAsOfMany(dateKeys) → Map<dateKey,
+ * { weightKg, dateKey } | null>`. A store without one resolves nothing, and a
+ * bodyweight exercise's WES2 sets are then left out (pb_engine).
+ */
+async function bodyweightsFor(store, dateKeys) {
+  const out = new Map();
+  if (dateKeys.length === 0 || typeof store.getBodyweightAsOfMany !== 'function') return out;
+  const got = await store.getBodyweightAsOfMany(dateKeys);
+  for (const d of dateKeys) {
+    const bw = got && got.get(d);
+    out.set(d, bw && typeof bw.weightKg === 'number' ? bw.weightKg : null);
+  }
+  return out;
 }
 
 /** Lifetime state → persisted summary document. */
@@ -191,7 +209,11 @@ async function reconcileExercise(store, exerciseId, dateKey, dayOrNull) {
  * @returns {Object} paths by exerciseId (for instrumentation in tests)
  */
 async function applyWorkoutDay(store, dateKey, workoutData) {
-  const after = summarizeWorkoutDay(workoutData || {});
+  // Only a day that holds a bodyweight exercise costs a weigh-in lookup.
+  const bodyweightKg = hasBodyweightExercise(workoutData)
+    ? (await bodyweightsFor(store, [dateKey])).get(dateKey)
+    : null;
+  const after = summarizeWorkoutDay(workoutData || {}, { bodyweightKg });
   const existing = await store.listExerciseIdsForDate(dateKey);
   const touched = new Set([...Object.keys(after), ...existing]);
 
@@ -214,9 +236,16 @@ async function applyWorkoutDay(store, dateKey, workoutData) {
  * @returns number of exercises built
  */
 async function bulkRebuild(store, entries) {
+  const list = [...entries];
+  const bodyweights = await bodyweightsFor(
+    store,
+    list.filter(([, data]) => hasBodyweightExercise(data)).map(([dateKey]) => dateKey),
+  );
   const histories = {}; // exerciseId -> { dateKey: day }
-  for (const [dateKey, data] of entries) {
-    const summary = summarizeWorkoutDay(data || {});
+  for (const [dateKey, data] of list) {
+    const summary = summarizeWorkoutDay(data || {}, {
+      bodyweightKg: bodyweights.has(dateKey) ? bodyweights.get(dateKey) : null,
+    });
     for (const [exerciseId, day] of Object.entries(summary)) {
       (histories[exerciseId] = histories[exerciseId] || {})[dateKey] = day;
     }

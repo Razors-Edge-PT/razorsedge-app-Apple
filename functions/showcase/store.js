@@ -23,15 +23,18 @@
 //     wrongly authorise the append fast path.
 //
 //   users/{uid}/showcaseDays/{slot}__{dateKey}
-//     one compact day contribution (two candidate sets), bounded per day.
+//     one compact day contribution (two candidate sets; for a bodyweight-loaded
+//     lift also the day's sets and the bodyweight they were ranked at),
+//     bounded per day.
 //
 //   users_public/{uid}.profileShowcaseV1
 //     the presentation-ready snapshot, merged field-by-field.
 //
 // ── Cost model ──────────────────────────────────────────────────────────────
 // FAST PATH (chronological append, the common case): 1 state read, 1 day read
-// per slot touched, ≤5 day writes, 1 state write, 1 snapshot merge. Independent
-// of history size.
+// per slot touched, ≤5 day writes, 1 state write, 1 snapshot merge — plus one
+// bounded weigh-in query when the day holds a bodyweight-loaded lift.
+// Independent of history size.
 // REBUILD (edit / delete / out-of-order): lists ONLY the affected slots' day
 // docs and re-folds them. Bounded by how many days that athlete trained that
 // one lift, never by total workout count.
@@ -44,23 +47,19 @@ const {
   PROFILE_SHOWCASE_SCHEMA,
   SHOWCASE_FORMULA_VERSION,
   summarizeWorkoutDay,
+  resummarizeDay,
   foldSlot,
+  recordOf,
+  e1rmKeyOfRecord,
+  heaviestKeyOfRecord,
+  compareKeys,
   snapshotFromLifts,
-  greater,
 } = require('./reducer');
 const { SLOT_ORDER, bigFiveBySlot } = require('./big_five');
-const { showcaseE1rm } = require('./e1rm_spec');
-const { recordFingerprint } = require('./reducer');
-const { annotateLifts, isBodyweightSlot } = require('./bodyweight');
+const { isBodyweightSlot, sameRecordedBodyweight } = require('./bodyweight');
 
 function dayDocId(slot, dateKey) {
   return `${slot}__${dateKey}`;
-}
-
-function cmpNum(a, b) {
-  if (greater(a, b)) return 1;
-  if (greater(b, a)) return -1;
-  return 0;
 }
 
 function laterSource(a, b) {
@@ -68,70 +67,113 @@ function laterSource(a, b) {
   return a.setKey < b.setKey;
 }
 
-/** e1rm desc, weight desc, dateKey desc, setKey asc. */
+/**
+ * e1rm desc, weight desc, dateKey desc, setKey asc — on the normalised values
+ * for a bodyweight-loaded lift (see bodyweight.e1rmRank).
+ */
 function betterE1rmRecord(a, b) {
   if (!b) return true;
   if (!a) return false;
-  const byE1rm = cmpNum(a.e1rm, b.e1rm);
-  if (byE1rm !== 0) return byE1rm > 0;
-  const byWeight = cmpNum(a.weight, b.weight);
-  if (byWeight !== 0) return byWeight > 0;
+  const byKey = compareKeys(e1rmKeyOfRecord(a), e1rmKeyOfRecord(b));
+  if (byKey !== 0) return byKey > 0;
   return laterSource(a, b);
 }
 
-/** weight desc, reps desc, dateKey desc, setKey asc. */
+/**
+ * weight desc, reps desc, dateKey desc, setKey asc — the added load for a
+ * bodyweight-loaded lift (see bodyweight.heaviestRank).
+ */
 function betterHeaviestRecord(a, b) {
   if (!b) return true;
   if (!a) return false;
-  const byWeight = cmpNum(a.weight, b.weight);
-  if (byWeight !== 0) return byWeight > 0;
+  const byKey = compareKeys(heaviestKeyOfRecord(a), heaviestKeyOfRecord(b));
+  if (byKey !== 0) return byKey > 0;
   if (a.reps !== b.reps) return a.reps > b.reps;
   return laterSource(a, b);
 }
 
 /** Day contribution → the two candidate records it offers. */
 function candidateRecords(day) {
-  const mk = (set) => {
-    const record = {
-      slot: day.slot,
-      exerciseId: day.exerciseId,
-      dateKey: day.dateKey,
-      setKey: set.setKey,
-      weight: set.weight,
-      reps: set.reps,
-      e1rm: showcaseE1rm(set.weight, set.reps),
-      formulaVersion: SHOWCASE_FORMULA_VERSION,
-      fingerprint: recordFingerprint({
-        slot: day.slot,
-        exerciseId: day.exerciseId,
-        dateKey: day.dateKey,
-        setKey: set.setKey,
-        weight: set.weight,
-        reps: set.reps,
-      }),
-    };
-    if (set.basis) record.loadBasis = set.basis;
-    return record;
+  return {
+    e1rm: recordOf(day.slot, day, day.bestE1rm),
+    heaviest: recordOf(day.slot, day, day.heaviest),
   };
-  return { e1rm: mk(day.bestE1rm), heaviest: mk(day.heaviest) };
+}
+
+function numOrNull(v) {
+  return typeof v === 'number' ? v : null;
+}
+
+function sameSet(x, y) {
+  return (
+    x.setKey === y.setKey &&
+    x.weight === y.weight &&
+    x.reps === y.reps &&
+    (x.basis || null) === (y.basis || null) &&
+    numOrNull(x.typedAddedKg) === numOrNull(y.typedAddedKg)
+  );
+}
+
+function sameSets(a, b) {
+  const x = Array.isArray(a) ? a : null;
+  const y = Array.isArray(b) ? b : null;
+  if (!x || !y) return !x && !y;
+  return x.length === y.length && x.every((s, i) => sameSet(s, y[i]));
 }
 
 /** Structural equality of two day contributions (null-safe). */
 function sameDay(a, b) {
   if (!a && !b) return true;
   if (!a || !b) return false;
-  // `basis` is compared so that a day stored before bodyweight-loaded lifts
-  // carried one is rewritten the next time that date is saved.
-  const eq = (x, y) =>
-    x.setKey === y.setKey &&
-    x.weight === y.weight &&
-    x.reps === y.reps &&
-    (x.basis || null) === (y.basis || null);
+  // `basis`, the typed added load, the day's sets and its bodyweight are
+  // compared so that a bodyweight-loaded day stored before it carried them
+  // is rewritten the next time that date is saved.
   return (
     a.exerciseId === b.exerciseId &&
-    eq(a.bestE1rm, b.bestE1rm) &&
-    eq(a.heaviest, b.heaviest)
+    sameSet(a.bestE1rm, b.bestE1rm) &&
+    sameSet(a.heaviest, b.heaviest) &&
+    sameSets(a.sets, b.sets) &&
+    sameRecordedBodyweight(a.bodyweight, b.bodyweight)
   );
+}
+
+/**
+ * The store's single-date bodyweight lookup, or null for a store that cannot
+ * resolve one (every bodyweight-loaded set is then ranked as "bodyweight not
+ * recorded").
+ */
+function bodyweightResolver(store) {
+  return store && typeof store.getBodyweightAsOf === 'function'
+    ? (dateKey) => store.getBodyweightAsOf(dateKey)
+    : null;
+}
+
+function canResolveBodyweight(store) {
+  return !!(store && (
+    typeof store.getBodyweightAsOf === 'function' ||
+    typeof store.getBodyweightAsOfMany === 'function'
+  ));
+}
+
+/**
+ * The bodyweight recorded on or before each of [dateKeys], as a Map. Uses the
+ * store's bulk lookup when it has one (one weigh-in read for many dates).
+ */
+async function resolveBodyweights(store, dateKeys) {
+  const out = new Map();
+  const keys = [...new Set(dateKeys)];
+  if (keys.length === 0 || !canResolveBodyweight(store)) return out;
+  if (typeof store.getBodyweightAsOfMany === 'function') {
+    const got = await store.getBodyweightAsOfMany(keys);
+    for (const d of keys) out.set(d, (got && got.get(d)) || null);
+    return out;
+  }
+  for (const d of keys) out.set(d, (await store.getBodyweightAsOf(d)) || null);
+  return out;
+}
+
+function hasBodyweightSlot(summary) {
+  return Object.keys(summary).some(isBodyweightSlot);
 }
 
 /**
@@ -141,7 +183,13 @@ function sameDay(a, b) {
  * which the tests and the backfill verifier assert on.
  */
 async function applyWorkoutDay(store, dateKey, workoutData) {
-  const next = summarizeWorkoutDay(dateKey, workoutData);
+  let next = summarizeWorkoutDay(dateKey, workoutData);
+  // A bodyweight-loaded lift is ranked at the bodyweight recorded for this
+  // date, so only a day that holds one costs a weigh-in lookup.
+  if (hasBodyweightSlot(next) && canResolveBodyweight(store)) {
+    const bw = (await resolveBodyweights(store, [dateKey])).get(dateKey) || null;
+    next = summarizeWorkoutDay(dateKey, workoutData, { bodyweight: bw });
+  }
   const prior = await store.getDaysForDate(dateKey);
 
   const touched = new Set([...Object.keys(next), ...Object.keys(prior)]);
@@ -196,16 +244,7 @@ async function applyWorkoutDay(store, dateKey, workoutData) {
     }
   }
 
-  // Bodyweight context for the bodyweight-loaded slots this write touched,
-  // AFTER the records were chosen — it can never influence which set wins.
-  // Untouched slots keep exactly what they were published with.
-  const annotated = await annotateLifts(
-    lifts,
-    bodyweightResolver(store),
-    canAppend ? changed : rebuildSlots,
-  );
-
-  await store.setSnapshot(snapshotFromLifts(annotated));
+  await store.setSnapshot(snapshotFromLifts(lifts));
   await store.setState({
     schema: PROFILE_SHOWCASE_SCHEMA,
     formulaVersion: SHOWCASE_FORMULA_VERSION,
@@ -229,10 +268,17 @@ async function applyWorkoutDay(store, dateKey, workoutData) {
  */
 async function rebuildAll(store, entries) {
   const sorted = [...entries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const plain = sorted.map(([dateKey, data]) => [dateKey, data, summarizeWorkoutDay(dateKey, data)]);
+  const bwByDate = await resolveBodyweights(
+    store,
+    plain.filter(([, , day]) => hasBodyweightSlot(day)).map(([dateKey]) => dateKey),
+  );
   const allDays = [];
   let latestDateKey = '';
-  for (const [dateKey, data] of sorted) {
-    const day = summarizeWorkoutDay(dateKey, data);
+  for (const [dateKey, data, plainDay] of plain) {
+    const day = bwByDate.has(dateKey)
+      ? summarizeWorkoutDay(dateKey, data, { bodyweight: bwByDate.get(dateKey) })
+      : plainDay;
     for (const slot of Object.keys(day)) {
       allDays.push(day[slot]);
       await store.setDay(slot, dateKey, day[slot]);
@@ -241,9 +287,7 @@ async function rebuildAll(store, entries) {
   }
   const lifts = {};
   for (const slot of SLOT_ORDER) lifts[slot] = foldSlot(slot, allDays);
-  const snapshot = snapshotFromLifts(
-    await annotateLifts(lifts, bodyweightResolver(store)),
-  );
+  const snapshot = snapshotFromLifts(lifts);
   await store.setSnapshot(snapshot);
   await store.setState({
     schema: PROFILE_SHOWCASE_SCHEMA,
@@ -253,38 +297,37 @@ async function rebuildAll(store, entries) {
   return snapshot;
 }
 
-/**
- * The store's bodyweight lookup, or null for a store that cannot resolve one
- * (in which case records are published without bodyweight context, exactly as
- * before bodyweight-loaded lifts carried it).
- */
-function bodyweightResolver(store) {
-  return store && typeof store.getBodyweightAsOf === 'function'
-    ? (dateKey) => store.getBodyweightAsOf(dateKey)
-    : null;
-}
-
-function sameBodyweight(a, b) {
-  const pick = (r) => (r ? [r.bodyweightKg, r.bodyweightDateKey] : [undefined, undefined]);
-  const [aw, ad] = pick(a);
-  const [bw, bd] = pick(b);
-  return aw === bw && ad === bd;
+/** Key-order-independent JSON form, for value comparisons. */
+function canonicalJson(value) {
+  const canon = (v) => {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v).sort()) out[k] = canon(v[k]);
+      return out;
+    }
+    return v;
+  };
+  return JSON.stringify(canon(value === undefined ? null : value));
 }
 
 /**
- * Re-resolves the bodyweight context of the PUBLISHED bodyweight-loaded
- * records — used when a weigh-in is added, edited or deleted, which changes
- * the bodyweight for a lift date without touching any workout.
+ * Re-ranks the bodyweight-loaded days a weigh-in change can affect, and
+ * republishes their lifts — used when a weigh-in is added, edited or deleted,
+ * which changes the bodyweight for a lift date without touching any workout.
  *
- * Record selection is not re-run and no record is replaced: only the
- * bodyweight fields of the records already standing can change. Writes
- * nothing when nothing changed, so a repeated delivery is a no-op, and it
- * leaves a snapshot from another schema or formula alone for the next workout
- * write to rebuild.
+ * `options.sinceDateKey`: the earliest day the changed weigh-in counted for
+ * (before or after the change). Only days on or after it can have a different
+ * bodyweight; without it every day of the lift is re-checked.
+ *
+ * Re-ranks from the sets each day contribution keeps, so no workout is read.
+ * Writes nothing when nothing changed, so a repeated delivery is a no-op, and
+ * it leaves a snapshot from another schema or formula alone for the next
+ * workout write to rebuild.
  */
-async function refreshBodyweight(store) {
-  const resolve = bodyweightResolver(store);
-  if (!resolve) return { changed: false, reason: 'no-resolver' };
+async function refreshBodyweight(store, options) {
+  const sinceDateKey = (options && options.sinceDateKey) || '';
+  if (!canResolveBodyweight(store)) return { changed: false, reason: 'no-resolver' };
   const snapshot = await store.getSnapshot();
   if (!snapshot || !snapshot.lifts) return { changed: false, reason: 'no-snapshot' };
   if (
@@ -296,24 +339,43 @@ async function refreshBodyweight(store) {
   const slots = Object.keys(snapshot.lifts).filter(isBodyweightSlot);
   if (slots.length === 0) return { changed: false, reason: 'no-bodyweight-lift' };
 
-  const next = await annotateLifts(snapshot.lifts, resolve, slots);
-  const moved = slots.filter((slot) => {
-    const before = snapshot.lifts[slot] || {};
-    const after = next[slot] || {};
-    return !sameBodyweight(before.e1rm, after.e1rm) ||
-      !sameBodyweight(before.heaviest, after.heaviest);
-  });
+  const lifts = Object.assign({}, snapshot.lifts);
+  const moved = [];
+  for (const slot of slots) {
+    const days = await store.listDaysForSlot(slot);
+    const affected = days.filter((d) => d.dateKey >= sinceDateKey);
+    const bwByDate = await resolveBodyweights(store, affected.map((d) => d.dateKey));
+    const nextDays = [];
+    const rewritten = [];
+    for (const d of days) {
+      if (d.dateKey < sinceDateKey) {
+        nextDays.push(d);
+        continue;
+      }
+      const re = resummarizeDay(d, bwByDate.get(d.dateKey) || null);
+      nextDays.push(re);
+      if (!sameDay(re, d)) rewritten.push(re);
+    }
+    const folded = foldSlot(slot, nextDays);
+    if (rewritten.length === 0 && canonicalJson(folded) === canonicalJson(snapshot.lifts[slot])) {
+      continue;
+    }
+    for (const d of rewritten) await store.setDay(slot, d.dateKey, d);
+    lifts[slot] = folded;
+    moved.push(slot);
+  }
   if (moved.length === 0) return { changed: false, reason: 'unchanged' };
 
-  await store.setSnapshot(snapshotFromLifts(next));
+  await store.setSnapshot(snapshotFromLifts(lifts));
   return { changed: true, slots: moved };
 }
 
 /**
  * In-memory store used by unit tests and by the migration's dry-run mode.
  *
- * `options.bodyweightAsOf(dateKey)` supplies bodyweight context; without it the
- * store cannot resolve one and records are published without it.
+ * `options.bodyweightAsOf(dateKey)` supplies the recorded bodyweight; without
+ * it the store cannot resolve one, and bodyweight-loaded sets are ranked as
+ * "bodyweight not recorded".
  */
 function memoryStore(options) {
   const bodyweightAsOf = options && options.bodyweightAsOf;

@@ -43,9 +43,9 @@ function usage() {
     'Verify what is published matches a fresh recomputation:',
     '  node scripts/backfill_profile_showcase.js --project goodlift-us-storage --verify',
     '',
-    'Verify that record SELECTION is unchanged, ignoring bodyweight context',
-    '(loadBasis / bodyweightKg / bodyweightDateKey) — run before an apply that',
-    'only adds that context:',
+    'Verify only WHICH stored set holds each record, ignoring the bodyweight',
+    'fields of bodyweight-loaded records (loadBasis, the normalised loads, the',
+    'bodyweight and their E1RM):',
     '  node scripts/backfill_profile_showcase.js --project goodlift-us-storage --verify --selection-only',
     '',
     'Restrict to accounts whose recomputed showcase holds one slot:',
@@ -178,15 +178,12 @@ async function main() {
       }
 
       // Always compute into memory first: dry-run and verify must never write,
-      // and apply gets the same deterministic answer. Bodyweight context is
-      // resolved read-only from the athlete's weigh-ins, exactly as the
-      // triggers resolve it; --selection-only compares without it, so it
-      // skips those reads.
-      const memory = store.memoryStore(
-        options.selectionOnly
-          ? undefined
-          : { bodyweightAsOf: fsStore.bodyweightResolver(uid) },
-      );
+      // and apply gets the same deterministic answer. Bodyweight is resolved
+      // read-only from the athlete's weigh-ins with the triggers' rule; it
+      // decides which Chin-Up set holds a record, so every mode needs it.
+      const memory = store.memoryStore({
+        bodyweightAsOf: fsStore.bodyweightResolver(uid),
+      });
       const { snapshot, workoutDays } = await fsStore.rebuildAthlete(uid, {
         apply: false,
         store: memory,

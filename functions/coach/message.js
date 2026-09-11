@@ -76,6 +76,20 @@ function fmtKg(v) {
   return Number.isInteger(r) ? `${r}kg` : `${r}kg`;
 }
 
+/**
+ * A load [v] from event [ev], as the athlete knows it. A bodyweight
+ * exercise's event carries the bodyweight its totals were computed at, and is
+ * shown as the load ADDED to it ("+60kg", or "bodyweight"); every other event
+ * exactly as before.
+ */
+function fmtLoad(ev, v) {
+  const bw = ev && ev.bodyweightKg;
+  if (v == null || typeof bw !== 'number' || !(bw > 0)) return fmtKg(v);
+  const r = Math.round((v - bw) * 10) / 10;
+  if (r === 0) return 'bodyweight';
+  return `${r > 0 ? '+' : '−'}${Math.abs(r)}kg`;
+}
+
 // ── Training sentences ──────────────────────────────────────────────────────
 
 function repPBSentence(praise, seed, { lead }) {
@@ -83,14 +97,14 @@ function repPBSentence(praise, seed, { lead }) {
   const alias = exerciseAlias(ev.exerciseName, seed);
   let s;
   if (lead) {
-    s = `nice work hitting ${fmtKg(ev.weightKg)} for ${ev.reps} on the ${alias}, new ${ev.reps} rep target PB 💪`;
+    s = `nice work hitting ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} on the ${alias}, new ${ev.reps} rep target PB 💪`;
   } else {
-    s = `${fmtKg(ev.weightKg)} for ${ev.reps} on the ${alias} also a new rep target PB`;
+    s = `${fmtLoad(ev, ev.weightKg)} for ${ev.reps} on the ${alias} also a new rep target PB`;
   }
   if (praise.alsoE1rm) {
     s += lead
-      ? ` (that's a new E1RM PB too, ${fmtKg(praise.alsoE1rm.e1rmKg)} excluding RIR)`
-      : ` — new E1RM PB as well, ${fmtKg(praise.alsoE1rm.e1rmKg)} excluding RIR`;
+      ? ` (that's a new E1RM PB too, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR)`
+      : ` — new E1RM PB as well, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR`;
   }
   return s;
 }
@@ -102,14 +116,14 @@ function maxWeightPBSentence(praise, seed, { lead }) {
   const alias = exerciseAlias(ev.exerciseName, seed);
   let s;
   if (lead) {
-    s = `new all-time heaviest lift on the ${alias}: ${fmtKg(ev.weightKg)} for ${ev.reps} — huge work 💪`;
+    s = `new all-time heaviest lift on the ${alias}: ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} — huge work 💪`;
   } else {
-    s = `${fmtKg(ev.weightKg)} for ${ev.reps} on the ${alias} is a new all-time heaviest lift too`;
+    s = `${fmtLoad(ev, ev.weightKg)} for ${ev.reps} on the ${alias} is a new all-time heaviest lift too`;
   }
   if (praise.alsoE1rm) {
     s += lead
-      ? ` (that's a new E1RM PB too, ${fmtKg(praise.alsoE1rm.e1rmKg)} excluding RIR)`
-      : ` — new E1RM PB as well, ${fmtKg(praise.alsoE1rm.e1rmKg)} excluding RIR`;
+      ? ` (that's a new E1RM PB too, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR)`
+      : ` — new E1RM PB as well, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR`;
   }
   return s;
 }
@@ -122,18 +136,18 @@ function rirMatchPBSentence(praise, seed, { lead }) {
   const ev = praise.event;
   const alias = exerciseAlias(ev.exerciseName, seed);
   if (lead) {
-    return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} with more reps in reserve — that is getting easier 💪`;
+    return `matched your ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} PB on the ${alias} with more reps in reserve — that is getting easier 💪`;
   }
-  return `matched your ${fmtKg(ev.weightKg)} for ${ev.reps} PB on the ${alias} with more in reserve too`;
+  return `matched your ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} PB on the ${alias} with more in reserve too`;
 }
 
 function e1rmPBSentence(praise, seed, { lead }) {
   const ev = praise.event;
   const alias = exerciseAlias(ev.exerciseName, seed);
   if (lead) {
-    return `saw you got a new E1RM PB on the ${alias}, nice work, ${fmtKg(ev.e1rmKg)} excluding RIR, that is huge 💪`;
+    return `saw you got a new E1RM PB on the ${alias}, nice work, ${fmtLoad(ev, ev.e1rmKg)} excluding RIR, that is huge 💪`;
   }
-  return `new E1RM PB ${fmtKg(ev.e1rmKg)} excluding RIR on the ${alias} too, nice!`;
+  return `new E1RM PB ${fmtLoad(ev, ev.e1rmKg)} excluding RIR on the ${alias} too, nice!`;
 }
 
 /**

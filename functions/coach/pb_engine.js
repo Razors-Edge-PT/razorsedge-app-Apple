@@ -72,6 +72,8 @@
 'use strict';
 
 const { coachE1rm, E1RM_FORMULA_VERSION } = require('./e1rm');
+const { normalizeLoad, setLoadBasis, typedAddedKg } = require('../showcase/bodyweight');
+const { isBodyweightExercise } = require('./bodyweight_exercises');
 
 // Relative epsilon. Absorbs representation noise without ever letting an
 // exact tie count as an improvement.
@@ -152,8 +154,25 @@ function hasUpperCase(id) {
  *     } }
  * Only the completed `exercises[]` array participates; wesPlannedExercises
  * are plans, not results.
+ *
+ * ── Bodyweight exercises (Chin-Up, Pull-Up, Dips …) ─────────────────────────
+ * Their stored loads are not one basis: the legacy screen stored the TOTAL,
+ * WES2 stores the ADDED load. For PB analytics pass `options.bodyweightKg` —
+ * the bodyweight recorded on or before this day, or null — and each of their
+ * sets is compared on its total load (showcase/bodyweight.js normalizeLoad).
+ * A set whose total is unknown (a WES2 set with no weigh-in on or before it) is
+ * left out rather than guessed. The day then carries `bodyweightKg`, so the
+ * events it produces can be presented as the added load.
+ *
+ * Without options every set is read as stored: that form only answers WHICH
+ * exercises were trained (the coverage count), never how much.
  */
-function summarizeWorkoutDay(workoutData) {
+function summarizeWorkoutDay(workoutData, options) {
+  const normalize = !!options;
+  const bodyweightKg = options && typeof options.bodyweightKg === 'number'
+    && Number.isFinite(options.bodyweightKg) && options.bodyweightKg > 0
+    ? options.bodyweightKg
+    : null;
   const out = {};
   const exercises = Array.isArray(workoutData && workoutData.exercises)
     ? workoutData.exercises
@@ -166,12 +185,24 @@ function summarizeWorkoutDay(workoutData) {
     if (!rawExerciseId) continue;
     const exerciseId = canonicalExerciseId(rawExerciseId);
     if (!exerciseId) continue;
+    const bwExercise = normalize && isBodyweightExercise(rawExerciseId, ex.name);
     const sets = Array.isArray(ex.sets) ? ex.sets : [];
     for (const s of sets) {
       if (!s || typeof s !== 'object') continue;
-      const weight = toNum(s.weight != null ? s.weight : s.actualWeight);
+      let weight = toNum(s.weight != null ? s.weight : s.actualWeight);
       const reps = toNum(s.reps != null ? s.reps : s.actualReps);
       if (!(weight > 0) || !(reps > 0)) continue;
+      if (bwExercise) {
+        const total = normalizeLoad({
+          basis: setLoadBasis(s),
+          storedKg: weight,
+          reps,
+          typedAddedKg: typedAddedKg(s),
+          bodyweightKg,
+        }).totalKg;
+        if (!(total > 0)) continue;
+        weight = total;
+      }
       const repsInt = Math.round(reps);
       const repKey = String(repsInt);
       // RIR is read here for the higher-RIR PB-match achievement ONLY. It is
@@ -191,6 +222,7 @@ function summarizeWorkoutDay(workoutData) {
           bestE1rm: 0,
           bestE1rmSet: null,
         };
+        if (bwExercise && bodyweightKg !== null) entry.bodyweightKg = bodyweightKg;
         out[exerciseId] = entry;
       }
       // Two casings can appear in the same document (production did on
@@ -229,6 +261,18 @@ function summarizeWorkoutDay(workoutData) {
     }
   }
   return out;
+}
+
+/** True when a workout document holds a row of a bodyweight exercise. */
+function hasBodyweightExercise(workoutData) {
+  const exercises = Array.isArray(workoutData && workoutData.exercises)
+    ? workoutData.exercises
+    : [];
+  return exercises.some((ex) => ex && typeof ex === 'object'
+    && isBodyweightExercise(
+      typeof ex.exerciseId === 'string' && ex.exerciseId ? ex.exerciseId : ex.id,
+      ex.name,
+    ));
 }
 
 /** Empty lifetime state for one exercise. */
@@ -436,6 +480,11 @@ function applyDayToState(state, exerciseId, dateKey, day) {
   // use); catalogExerciseId carries the real catalog id for display and for
   // the coach's custom-exercise selection.
   for (const ev of events) ev.catalogExerciseId = state.catalogExerciseId;
+  // A bodyweight exercise's loads are totals at this day's recorded
+  // bodyweight; carrying it lets the message show the added load.
+  if (typeof day.bodyweightKg === 'number') {
+    for (const ev of events) ev.bodyweightKg = day.bodyweightKg;
+  }
   return events;
 }
 
@@ -514,6 +563,7 @@ function strOr(v, fallback) {
 
 module.exports = {
   summarizeWorkoutDay,
+  hasBodyweightExercise,
   deriveExerciseEvents,
   applyDayToState,
   emptyState,

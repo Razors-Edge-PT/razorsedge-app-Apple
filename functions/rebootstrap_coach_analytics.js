@@ -46,9 +46,10 @@ const admin = require('firebase-admin');
 
 const { bulkRebuild } = require('./coach/analytics_store');
 const { E1RM_FORMULA_VERSION } = require('./coach/e1rm');
+const { pickBodyweightAsOf, weightEntryOfDoc } = require('./showcase/bodyweight');
 
 // Keep in step with ANALYTICS_VERSION in functions/coach/index.js.
-const ANALYTICS_VERSION = 4;
+const ANALYTICS_VERSION = 5;
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const args = process.argv.slice(2);
@@ -92,6 +93,14 @@ function bufferStore(athleteUid, writes) {
     async deleteEvent(id) { writes.push({ path: `${base}/events/${id}`, delete: true }); },
     async withExerciseLock(exerciseId, fn) { await fn(store); },
     async flush() {},
+    // Bodyweight exercises are compared on total load at the bodyweight
+    // recorded on or before each day — the same rule the backend uses.
+    // Weigh-ins are READ, never written.
+    async getBodyweightAsOfMany(dateKeys) {
+      const snap = await db.collection('users').doc(athleteUid).collection('weights').get();
+      const entries = snap.docs.map(weightEntryOfDoc);
+      return new Map(dateKeys.map((d) => [d, pickBodyweightAsOf(entries, d)]));
+    },
   };
   return store;
 }

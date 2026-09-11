@@ -27,7 +27,10 @@ const authz = require('./authz');
 const {
   dayDocId, applyWorkoutDay, bulkRebuild,
 } = require('./analytics_store');
-const { summarizeWorkoutDay } = require('./pb_engine');
+const { summarizeWorkoutDay, hasBodyweightExercise } = require('./pb_engine');
+const {
+  bodyweightCutoffMillis, pickBodyweightAsOf, weightEntryOfDoc, weighInSinceDateKey,
+} = require('../showcase/bodyweight');
 const {
   TxnError, copyTransaction, undoTransaction, skipTransaction,
 } = require('./checkin_txns');
@@ -51,7 +54,15 @@ const db = admin.firestore();
 //     while a lower one only means the athlete went closer to failure. The v4
 //     re-bootstrap deletes every v3 lower-RIR event and rebuilds the baseline
 //     as a monotonically increasing best-RIR.
-const ANALYTICS_VERSION = 4;
+// v5: bodyweight exercises (Chin-Up, Pull-Up, Dips …) compared on TOTAL load.
+//     The legacy workout screen stored bodyweight + added load, WES2 stores the
+//     added load alone, and v4 compared the raw numbers — so after an athlete
+//     moved to WES2 no bodyweight-exercise PB could fire against their legacy
+//     history, and a WES2-only history compared added loads that a weigh-in
+//     would later turn into totals. v5 reads every set through the showcase's
+//     normalisation boundary at the bodyweight recorded on or before its day,
+//     and the re-bootstrap rebuilds those streams from the raw workouts.
+const ANALYTICS_VERSION = 5;
 const VERSIONS = { formulaVersion: E1RM_FORMULA_VERSION, analyticsVersion: ANALYTICS_VERSION };
 const DEFAULT_TZ = 'Pacific/Auckland';
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -223,6 +234,23 @@ function txStore(tx, base) {
 }
 
 /**
+ * The bodyweight recorded on or before each of [dateKeys] — the showcase's
+ * rule (showcase/bodyweight.js pickBodyweightAsOf) — as a Map. One read of the
+ * athlete's weigh-ins before the latest cutoff. Read-only.
+ */
+async function recordedBodyweights(athleteUid, dateKeys) {
+  const out = new Map();
+  if (dateKeys.length === 0) return out;
+  const latest = dateKeys.reduce((a, b) => (a > b ? a : b));
+  const snap = await db.collection('users').doc(athleteUid).collection('weights')
+    .where('timestamp', '<', admin.firestore.Timestamp.fromMillis(bodyweightCutoffMillis(latest)))
+    .get();
+  const entries = snap.docs.map(weightEntryOfDoc);
+  for (const d of dateKeys) out.set(d, pickBodyweightAsOf(entries, d));
+  return out;
+}
+
+/**
  * Buffered-write store over coachAnalytics/{athleteUid}. Writes queue into a
  * batch (flushed at 400 ops and before every read). withExerciseLock runs
  * its body inside a Firestore transaction, serialising concurrent
@@ -304,6 +332,7 @@ function firestoreStore(athleteUid) {
       await flush(); // buffered writes must land before the txn reads
       await db.runTransaction(async (tx) => fn(txStore(tx, base)));
     },
+    getBodyweightAsOfMany: (dateKeys) => recordedBodyweights(athleteUid, dateKeys),
     flush,
   };
 }
@@ -347,6 +376,60 @@ const coachAnalyticsOnWorkoutWrite = onDocumentWritten(
       await store.flush();
     } catch (err) {
       logger.error('coachAnalyticsOnWorkoutWrite failed', { uid, workoutId, error: err });
+      throw err;
+    }
+  }
+);
+
+/**
+ * Trigger: a weigh-in added, edited or deleted changes the bodyweight that a
+ * bodyweight exercise's sets are compared at (their TOTAL load — see
+ * pb_engine.summarizeWorkoutDay) on every workout day on or after it.
+ *
+ * Re-applies exactly those days that hold a bodyweight exercise, under the
+ * same decision gate as the workout trigger: nothing for an athlete without
+ * maintained analytics, and a running bootstrap receives the days through
+ * dirtyDates. Idempotent (applyWorkoutDay is), and it never writes a weights
+ * document, so it cannot re-trigger itself.
+ */
+const coachAnalyticsOnWeightWrite = onDocumentWritten(
+  { document: 'users/{uid}/weights/{weightId}', retry: true },
+  async (event) => {
+    const uid = event.params.uid;
+    try {
+      const pre = await analyticsRef(uid).get();
+      if (enrollment.workoutTriggerDecision(pre.exists ? pre.data() : null) === 'skip') return;
+
+      const since = weighInSinceDateKey(event);
+      let q = db.collection('users').doc(uid).collection('workouts')
+        .orderBy(admin.firestore.FieldPath.documentId());
+      if (since) q = q.startAt(since);
+      const snap = await q.get();
+      const days = snap.docs.filter((d) => DATE_KEY_RE.test(d.id) && hasBodyweightExercise(d.data()));
+      if (days.length === 0) return;
+
+      const decision = await db.runTransaction(async (tx) => {
+        const s = await tx.get(analyticsRef(uid));
+        const dec = enrollment.workoutTriggerDecision(s.exists ? s.data() : null);
+        if (dec === 'defer') {
+          tx.update(analyticsRef(uid), {
+            dirtyDates: admin.firestore.FieldValue.arrayUnion(...days.map((d) => d.id)),
+          });
+        }
+        return dec;
+      });
+      if (decision !== 'apply') return;
+
+      for (const d of days) {
+        const store = firestoreStore(uid);
+        await applyWorkoutDay(store, d.id, d.data());
+        await store.flush();
+      }
+      logger.info('coach analytics re-applied after a weigh-in', { uid, days: days.length });
+    } catch (err) {
+      logger.error('coachAnalyticsOnWeightWrite failed', {
+        uid, weightId: event.params.weightId, error: err,
+      });
       throw err;
     }
   }
@@ -1149,6 +1232,7 @@ const coachSkipCheckIn = onCall(CALLABLE_OPTS, async (request) => {
 
 module.exports = {
   coachAnalyticsOnWorkoutWrite,
+  coachAnalyticsOnWeightWrite,
   coachOnAthleteSettingsWritten,
   coachOnAthleteAssignmentsWritten,
   coachOnCoachAssignmentsWritten,

@@ -62,8 +62,9 @@ class BigFiveLift {
   final List<String> legacyNameAliases;
 
   /// True when the stored load includes the athlete's bodyweight (the
-  /// Chin-Up). Presentation only: the showcase shows such a record as the
-  /// ADDED load. It never takes part in record selection or fingerprints.
+  /// Chin-Up). Such a lift's records are chosen and shown on the loads
+  /// normalised by bodyweight_load.dart (the ADDED load, at the bodyweight
+  /// recorded for each lift's date); fingerprints still name the stored set.
   final bool bodyweightLoaded;
 
   /// Case-folded catalogue id — the stream key used everywhere.

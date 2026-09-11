@@ -13,12 +13,21 @@
 //     whether reached by appending or rebuilding, which is what makes
 //     at-least-once and out-of-order trigger delivery safe.
 //
+// ── Bodyweight-loaded lifts (the Chin-Up) ───────────────────────────────────
+// Their stored loads are not comparable as raw numbers (see bodyweight.js), so
+// their candidates are ranked on the normalised loads, at the bodyweight
+// recorded for that day. A bodyweight-loaded day contribution therefore also
+// keeps every valid set of the day and the bodyweight it was ranked with:
+// when a weigh-in changes that bodyweight the day can be re-ranked without
+// reading the workout again. Every other lift keeps exactly the shape and the
+// ordering it always had.
+//
 // ── Provenance ──────────────────────────────────────────────────────────────
 // Every record carries workout date, exercise id, set identity, weight, reps,
 // formula version and a fingerprint. The fingerprint identifies the SOURCE
 // PERFORMANCE (slot + folded id + date + set key + weight + reps) and
-// deliberately excludes the E1RM value, the formula version and which
-// achievement it satisfies, so that:
+// deliberately excludes the E1RM value, the formula version, the bodyweight
+// and which achievement it satisfies, so that:
 //   * one video proves both achievements when they share a set, and
 //   * bumping the E1RM curve does not orphan every attached proof,
 //   * but editing the source set's weight or reps DOES retire the proof.
@@ -28,7 +37,18 @@
 const crypto = require('crypto');
 const { matchBigFive, bigFiveBySlot, SLOT_ORDER } = require('./big_five');
 const { showcaseE1rm, SHOWCASE_FORMULA_VERSION } = require('./e1rm_spec');
-const { setLoadBasis } = require('./bodyweight');
+const {
+  LoadBasis,
+  isBodyweightSlot,
+  setLoadBasis,
+  typedAddedKg,
+  normalizeCandidate,
+  normalizedOfRecord,
+  e1rmRank,
+  heaviestRank,
+  recordedBodyweight,
+  recordFields,
+} = require('./bodyweight');
 
 /** Schema version of the compact snapshot mirrored into users_public. */
 const PROFILE_SHOWCASE_SCHEMA = 'profileShowcaseV1';
@@ -109,8 +129,15 @@ function extractBigFiveSets(workoutData) {
       if (!out[lift.slot]) out[lift.slot] = [];
       const entry = { setKey, weight, reps: Math.round(reps) };
       // Bodyweight-loaded lifts only, so every other slot keeps its exact
-      // shape. The basis never takes part in selection (see bodyweight.js).
-      if (lift.bodyweightLoaded) entry.basis = setLoadBasis(s);
+      // shape: what the stored weight means, and the typed added load the
+      // legacy screen kept beside its total.
+      if (lift.bodyweightLoaded) {
+        entry.basis = setLoadBasis(s);
+        if (entry.basis === LoadBasis.ABSOLUTE) {
+          const typed = typedAddedKg(s);
+          if (typed !== null) entry.typedAddedKg = typed;
+        }
+      }
       out[lift.slot].push(entry);
     }
   }
@@ -141,59 +168,46 @@ function casingForDay(workoutData) {
   return casing;
 }
 
-function e1rmOf(set) {
-  return showcaseE1rm(set.weight, set.reps);
-}
+// ── Ranking ─────────────────────────────────────────────────────────────────
+//
+// Each candidate is reduced to a rank key, compared tier desc, value desc,
+// tie desc. For every lift but the bodyweight-loaded ones the tier is constant
+// and value/tie are the raw E1RM/weight, which is exactly the ordering the
+// showcase has always used.
 
-function betterE1rmWithinDay(a, b) {
-  const byE1rm = cmpNum(e1rmOf(a), e1rmOf(b));
-  if (byE1rm !== 0) return byE1rm > 0;
-  const byWeight = cmpNum(a.weight, b.weight);
-  if (byWeight !== 0) return byWeight > 0;
-  return a.setKey < b.setKey;
-}
-
-function betterHeaviestWithinDay(a, b) {
-  const byWeight = cmpNum(a.weight, b.weight);
-  if (byWeight !== 0) return byWeight > 0;
-  if (a.reps !== b.reps) return a.reps > b.reps;
-  return a.setKey < b.setKey;
-}
-
-/** The compact candidate stored in a day contribution. */
-function candidateSet(set) {
-  const out = { setKey: set.setKey, weight: set.weight, reps: set.reps };
-  if (set.basis) out.basis = set.basis;
-  return out;
-}
-
-/**
- * Reduces one workout document to at most five day contributions.
- * Within-day ordering is the lifetime ordering with the date term held
- * constant, so folding day winners equals scanning every set.
- */
-function summarizeWorkoutDay(dateKey, workoutData) {
-  const bySlot = extractBigFiveSets(workoutData);
-  const casing = casingForDay(workoutData);
-  const out = {};
-  for (const slot of Object.keys(bySlot)) {
-    const sets = bySlot[slot];
-    if (!sets.length) continue;
-    let bestE = sets[0];
-    let bestH = sets[0];
-    for (let i = 1; i < sets.length; i++) {
-      if (betterE1rmWithinDay(sets[i], bestE)) bestE = sets[i];
-      if (betterHeaviestWithinDay(sets[i], bestH)) bestH = sets[i];
-    }
-    out[slot] = {
-      slot,
-      dateKey,
-      exerciseId: casing[slot] || bigFiveBySlot(slot).exerciseId,
-      bestE1rm: candidateSet(bestE),
-      heaviest: candidateSet(bestH),
-    };
+/** Rank key of a candidate set for BEST E1RM, at the day's bodyweight [bw]. */
+function e1rmKeyOfSet(slot, set, bw) {
+  if (!isBodyweightSlot(slot)) {
+    return { tier: 0, value: showcaseE1rm(set.weight, set.reps), tie: set.weight };
   }
-  return out;
+  return e1rmRank(normalizeCandidate(set, bw), set.reps);
+}
+
+/** Rank key of a candidate set for HEAVIEST, at the day's bodyweight [bw]. */
+function heaviestKeyOfSet(slot, set, bw) {
+  if (!isBodyweightSlot(slot)) return { tier: 0, value: set.weight };
+  return heaviestRank(normalizeCandidate(set, bw));
+}
+
+/** Rank key of a published record for BEST E1RM. */
+function e1rmKeyOfRecord(r) {
+  if (!isBodyweightSlot(r.slot)) return { tier: 0, value: r.e1rm, tie: r.weight };
+  return e1rmRank(normalizedOfRecord(r), r.reps);
+}
+
+/** Rank key of a published record for HEAVIEST. */
+function heaviestKeyOfRecord(r) {
+  if (!isBodyweightSlot(r.slot)) return { tier: 0, value: r.weight };
+  return heaviestRank(normalizedOfRecord(r));
+}
+
+/** Three-way comparison of two rank keys. */
+function compareKeys(a, b) {
+  if (a.tier !== b.tier) return a.tier > b.tier ? 1 : -1;
+  const byValue = cmpNum(a.value, b.value);
+  if (byValue !== 0) return byValue;
+  if (a.tie === undefined && b.tie === undefined) return 0;
+  return cmpNum(a.tie, b.tie);
 }
 
 /** Later training date wins; same date → lexicographically smaller set key. */
@@ -202,21 +216,116 @@ function laterSource(aDate, bDate, aSetKey, bSetKey) {
   return aSetKey < bSetKey;
 }
 
+function betterE1rmWithinDay(slot, a, b, bw) {
+  const byKey = compareKeys(e1rmKeyOfSet(slot, a, bw), e1rmKeyOfSet(slot, b, bw));
+  if (byKey !== 0) return byKey > 0;
+  return a.setKey < b.setKey;
+}
+
+function betterHeaviestWithinDay(slot, a, b, bw) {
+  const byKey = compareKeys(heaviestKeyOfSet(slot, a, bw), heaviestKeyOfSet(slot, b, bw));
+  if (byKey !== 0) return byKey > 0;
+  if (a.reps !== b.reps) return a.reps > b.reps;
+  return a.setKey < b.setKey;
+}
+
+/** The compact candidate stored in a day contribution. */
+function candidateSet(set) {
+  const out = { setKey: set.setKey, weight: set.weight, reps: set.reps };
+  if (set.basis) out.basis = set.basis;
+  if (typeof set.typedAddedKg === 'number') out.typedAddedKg = set.typedAddedKg;
+  return out;
+}
+
+/**
+ * One slot's contribution for one day, from that day's valid sets of the lift.
+ * Within-day ordering is the lifetime ordering with the date term held
+ * constant, so folding day winners equals scanning every set.
+ */
+function summarizeSlotDay(slot, dateKey, exerciseId, sets, bodyweight) {
+  const bwLoaded = isBodyweightSlot(slot);
+  const bw = bwLoaded ? recordedBodyweight(bodyweight) : null;
+  let bestE = sets[0];
+  let bestH = sets[0];
+  for (let i = 1; i < sets.length; i++) {
+    if (betterE1rmWithinDay(slot, sets[i], bestE, bw)) bestE = sets[i];
+    if (betterHeaviestWithinDay(slot, sets[i], bestH, bw)) bestH = sets[i];
+  }
+  const out = {
+    slot,
+    dateKey,
+    exerciseId,
+    bestE1rm: candidateSet(bestE),
+    heaviest: candidateSet(bestH),
+  };
+  if (bwLoaded) {
+    out.sets = sets.map(candidateSet);
+    out.bodyweight = bw;
+  }
+  return out;
+}
+
+/**
+ * Reduces one workout document to at most five day contributions.
+ *
+ * `options.bodyweight` is the `{ weightKg, dateKey }` recorded on or before
+ * [dateKey] (or null). Only bodyweight-loaded lifts read it.
+ */
+function summarizeWorkoutDay(dateKey, workoutData, options) {
+  const bodyweight = (options && options.bodyweight) || null;
+  const bySlot = extractBigFiveSets(workoutData);
+  const casing = casingForDay(workoutData);
+  const out = {};
+  for (const slot of Object.keys(bySlot)) {
+    const sets = bySlot[slot];
+    if (!sets.length) continue;
+    out[slot] = summarizeSlotDay(
+      slot,
+      dateKey,
+      casing[slot] || bigFiveBySlot(slot).exerciseId,
+      sets,
+      bodyweight,
+    );
+  }
+  return out;
+}
+
+/**
+ * A stored bodyweight-loaded day contribution re-ranked at [bodyweight].
+ *
+ * Uses the day's stored sets; a contribution written before days kept them
+ * falls back to its two candidates, which is the best it can do until that
+ * workout is written again (or the backfill rebuilds it).
+ */
+function resummarizeDay(day, bodyweight) {
+  let sets = Array.isArray(day.sets) && day.sets.length ? day.sets : null;
+  if (!sets) {
+    sets = [day.bestE1rm];
+    if (day.heaviest && day.heaviest.setKey !== day.bestE1rm.setKey) sets.push(day.heaviest);
+  }
+  return summarizeSlotDay(day.slot, day.dateKey, day.exerciseId, sets.map(candidateSet), bodyweight);
+}
+
 function betterE1rmAcrossDays(a, b) {
-  const byE1rm = cmpNum(e1rmOf(a.bestE1rm), e1rmOf(b.bestE1rm));
-  if (byE1rm !== 0) return byE1rm > 0;
-  const byWeight = cmpNum(a.bestE1rm.weight, b.bestE1rm.weight);
-  if (byWeight !== 0) return byWeight > 0;
+  const byKey = compareKeys(
+    e1rmKeyOfSet(a.slot, a.bestE1rm, a.bodyweight),
+    e1rmKeyOfSet(b.slot, b.bestE1rm, b.bodyweight),
+  );
+  if (byKey !== 0) return byKey > 0;
   return laterSource(a.dateKey, b.dateKey, a.bestE1rm.setKey, b.bestE1rm.setKey);
 }
 
 function betterHeaviestAcrossDays(a, b) {
-  const byWeight = cmpNum(a.heaviest.weight, b.heaviest.weight);
-  if (byWeight !== 0) return byWeight > 0;
+  const byKey = compareKeys(
+    heaviestKeyOfSet(a.slot, a.heaviest, a.bodyweight),
+    heaviestKeyOfSet(b.slot, b.heaviest, b.bodyweight),
+  );
+  if (byKey !== 0) return byKey > 0;
   if (a.heaviest.reps !== b.heaviest.reps) return a.heaviest.reps > b.heaviest.reps;
   return laterSource(a.dateKey, b.dateKey, a.heaviest.setKey, b.heaviest.setKey);
 }
 
+/** The published record for candidate [set] of day contribution [day]. */
 function recordOf(slot, day, set) {
   const record = {
     slot,
@@ -236,7 +345,14 @@ function recordOf(slot, day, set) {
       reps: set.reps,
     }),
   };
-  if (set.basis) record.loadBasis = set.basis;
+  if (isBodyweightSlot(slot)) {
+    const n = normalizeCandidate(set, day.bodyweight);
+    // The E1RM of what was actually lifted, bodyweight included, whenever
+    // the bodyweight is known; the stored number's otherwise.
+    if (n.totalE1rm !== null) record.e1rm = n.totalE1rm;
+    record.loadBasis = set.basis === LoadBasis.ADDED ? LoadBasis.ADDED : LoadBasis.ABSOLUTE;
+    Object.assign(record, recordFields(n, day.bodyweight));
+  }
   return record;
 }
 
@@ -279,11 +395,18 @@ function snapshotFromLifts(liftSnapshots) {
   };
 }
 
-/** Whole-history rebuild. workoutsByDate: { 'YYYY-MM-DD': workoutData }. */
-function buildShowcase(workoutsByDate) {
+/**
+ * Whole-history rebuild. workoutsByDate: { 'YYYY-MM-DD': workoutData }.
+ * `options.bodyweightByDate`: { 'YYYY-MM-DD': { weightKg, dateKey } | null },
+ * the bodyweight recorded on or before each date.
+ */
+function buildShowcase(workoutsByDate, options) {
+  const bodyweightByDate = (options && options.bodyweightByDate) || {};
   const all = [];
   for (const dateKey of Object.keys(workoutsByDate).sort()) {
-    const day = summarizeWorkoutDay(dateKey, workoutsByDate[dateKey]);
+    const day = summarizeWorkoutDay(dateKey, workoutsByDate[dateKey], {
+      bodyweight: bodyweightByDate[dateKey] || null,
+    });
     for (const slot of Object.keys(day)) all.push(day[slot]);
   }
   const lifts = {};
@@ -309,7 +432,12 @@ module.exports = {
   recordFingerprint,
   extractBigFiveSets,
   summarizeWorkoutDay,
+  resummarizeDay,
   foldSlot,
+  recordOf,
+  e1rmKeyOfRecord,
+  heaviestKeyOfRecord,
+  compareKeys,
   snapshotFromLifts,
   buildShowcase,
   liveFingerprints,

@@ -65,16 +65,18 @@ test('a Chin-Up record is published with the bodyweight for its own date', async
     await weighIn(uid, '2026-05-31', 85);
     await weighIn(uid, '2026-06-14', 83.4);
     await weighIn(uid, '2026-06-20', 80); // after both lifts
+    // Best E1RM: 120 × 8 at 85 kg (+64.0); heaviest: 142 × 2 at 83.4 (+58.6).
     await store.applyWorkoutDayTransactionally(uid, '2026-06-01',
-      workout(CHIN, [{ weight: 138.5, reps: 3 }]));
+      workout(CHIN, [{ weight: 120, reps: 8 }]));
     await store.applyWorkoutDayTransactionally(uid, '2026-06-15',
       workout(CHIN, [{ weight: 142, reps: 2 }]));
 
     const chin = (await store.readPublishedSnapshot(uid)).lifts.chinUp;
-    assert.equal(chin.e1rm.weight, 138.5);
+    assert.equal(chin.e1rm.weight, 120);
     assert.equal(chin.e1rm.bodyweightKg, 85);
     assert.equal(chin.e1rm.bodyweightDateKey, '2026-05-31');
     assert.equal(chin.e1rm.loadBasis, 'absolute');
+    assert.equal(chin.e1rm.addedKg, 35);
     assert.equal(chin.heaviest.weight, 142);
     assert.equal(chin.heaviest.bodyweightKg, 83.4);
     assert.equal(chin.heaviest.bodyweightDateKey, '2026-06-14');
@@ -156,6 +158,41 @@ test('a refresh racing a workout write loses neither', async () => {
     const snap = await store.readPublishedSnapshot(uid);
     assert.ok(snap.lifts.bench, 'the bench day survives the refresh');
     assert.equal(snap.lifts.chinUp.e1rm.bodyweightKg, 84, 'the refresh survives the bench day');
+  } finally {
+    await wipe(uid);
+  }
+});
+
+test('a back-filled weigh-in re-ranks Chin-Up days inside the refresh transaction', async () => {
+  const uid = freshUid();
+  const db = admin.firestore();
+  try {
+    await weighIn(uid, '2026-04-01', 85);
+    // Legacy +53.5 × 3 at 85 kg: +61.6.
+    await store.applyWorkoutDayTransactionally(uid, '2026-05-01',
+      workout(CHIN, [{ weight: 138.5, weightAdded: 53.5, reps: 3 }]));
+    // WES2 +70 × 3 on a day before any weigh-in: its E1RM is not known yet.
+    await store.applyWorkoutDayTransactionally(uid, '2026-03-10',
+      workout(CHIN, [{ setIndex: 0, weight: 70, reps: 3 }]));
+    let chin = (await store.readPublishedSnapshot(uid)).lifts.chinUp;
+    assert.equal(chin.e1rm.dateKey, '2026-05-01');
+
+    await weighIn(uid, '2026-03-09', 84);
+    const r = await store.refreshBodyweightTransactionally(uid, { sinceDateKey: '2026-03-09' });
+    assert.equal(r.changed, true);
+    chin = (await store.readPublishedSnapshot(uid)).lifts.chinUp;
+    assert.equal(chin.e1rm.dateKey, '2026-03-10', 'E1RM(154 × 3) − 84 = +79.1');
+    assert.equal(chin.e1rm.bodyweightKg, 84);
+    assert.equal(chin.e1rm.totalKg, 154);
+    assert.equal(chin.e1rm.weight, 70, 'the stored set is untouched');
+    const day = await db.collection('users').doc(uid)
+      .collection('showcaseDays').doc('chinUp__2026-03-10').get();
+    assert.deepEqual(day.data().bodyweight, { weightKg: 84, dateKey: '2026-03-09' });
+
+    assert.deepEqual(
+      await store.refreshBodyweightTransactionally(uid, { sinceDateKey: '2026-03-09' }),
+      { changed: false, reason: 'unchanged' },
+    );
   } finally {
     await wipe(uid);
   }

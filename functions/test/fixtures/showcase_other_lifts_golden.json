@@ -1,0 +1,257 @@
+{
+  "history": {
+    "2026-03-02": {
+      "exercises": [
+        {
+          "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+          "name": "x",
+          "sets": [
+            {
+              "setIndex": 0,
+              "weight": 100,
+              "reps": 5
+            },
+            {
+              "setIndex": 1,
+              "weight": 105,
+              "reps": 3,
+              "weightAdded": 12
+            }
+          ]
+        },
+        {
+          "exerciseId": "heeBViVINHO6tUScSd6y",
+          "name": "x",
+          "sets": [
+            {
+              "weight": 140,
+              "reps": 5
+            },
+            {
+              "weight": 150,
+              "reps": 2
+            }
+          ]
+        }
+      ]
+    },
+    "2026-04-11": {
+      "exercises": [
+        {
+          "exerciseId": "amfuwbf1dh3i7qpadh5k",
+          "name": "x",
+          "sets": [
+            {
+              "weight": 110,
+              "reps": 1
+            },
+            {
+              "weight": 100,
+              "reps": 4
+            }
+          ]
+        },
+        {
+          "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+          "name": "x",
+          "sets": [
+            {
+              "weight": 180,
+              "reps": 3,
+              "addedWeight": 20
+            },
+            {
+              "weight": 190,
+              "reps": 1
+            }
+          ]
+        },
+        {
+          "exerciseId": "RdsGazgdH0xgpjek0n3u",
+          "name": "x",
+          "sets": [
+            {
+              "weight": 30,
+              "reps": 8
+            },
+            {
+              "weight": 32.5,
+              "reps": 6
+            }
+          ]
+        }
+      ]
+    },
+    "2026-06-20": {
+      "exercises": [
+        {
+          "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+          "name": "x",
+          "sets": [
+            {
+              "setIndex": 0,
+              "weight": 110,
+              "reps": 1
+            }
+          ]
+        },
+        {
+          "exerciseId": "heeBViVINHO6tUScSd6y",
+          "name": "x",
+          "sets": [
+            {
+              "setIndex": 0,
+              "weight": 150,
+              "reps": 2
+            },
+            {
+              "setIndex": 1,
+              "weight": 160,
+              "reps": 1
+            }
+          ]
+        },
+        {
+          "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+          "name": "x",
+          "sets": [
+            {
+              "setIndex": 0,
+              "weight": 170,
+              "reps": 6
+            }
+          ]
+        }
+      ]
+    },
+    "2026-07-05": {
+      "exercises": [
+        {
+          "name": "Overhead Dumbbell Press, Unilateral",
+          "sets": [
+            {
+              "weight": 35,
+              "reps": 5
+            },
+            {
+              "weight": 27.5,
+              "reps": 12
+            }
+          ]
+        },
+        {
+          "exerciseId": "heeBViVINHO6tUScSd6y",
+          "name": "x",
+          "sets": [
+            {
+              "weight": 120,
+              "reps": 12
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "lifts": {
+    "bench": {
+      "slot": "bench",
+      "e1rm": {
+        "slot": "bench",
+        "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+        "dateKey": "2026-03-02",
+        "setKey": "s0",
+        "weight": 100,
+        "reps": 5,
+        "e1rm": 112.5,
+        "formulaVersion": 1,
+        "fingerprint": "1b695d38686e3189c2e8116c03160f12"
+      },
+      "heaviest": {
+        "slot": "bench",
+        "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+        "dateKey": "2026-06-20",
+        "setKey": "s0",
+        "weight": 110,
+        "reps": 1,
+        "e1rm": 110,
+        "formulaVersion": 1,
+        "fingerprint": "1848b52cee5044a03122a1445db8c5e3"
+      }
+    },
+    "squat": {
+      "slot": "squat",
+      "e1rm": {
+        "slot": "squat",
+        "exerciseId": "heeBViVINHO6tUScSd6y",
+        "dateKey": "2026-07-05",
+        "setKey": "s0",
+        "weight": 120,
+        "reps": 12,
+        "e1rm": 172.79999999999998,
+        "formulaVersion": 1,
+        "fingerprint": "532596c1d3c6264f175fb239ba9a16ee"
+      },
+      "heaviest": {
+        "slot": "squat",
+        "exerciseId": "heeBViVINHO6tUScSd6y",
+        "dateKey": "2026-06-20",
+        "setKey": "s1",
+        "weight": 160,
+        "reps": 1,
+        "e1rm": 160,
+        "formulaVersion": 1,
+        "fingerprint": "fa24efd1127e878105768692922205d2"
+      }
+    },
+    "deadlift": {
+      "slot": "deadlift",
+      "e1rm": {
+        "slot": "deadlift",
+        "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+        "dateKey": "2026-06-20",
+        "setKey": "s0",
+        "weight": 170,
+        "reps": 6,
+        "e1rm": 197.4193548387097,
+        "formulaVersion": 1,
+        "fingerprint": "8798392a3e078792b00c849d68c3e4f6"
+      },
+      "heaviest": {
+        "slot": "deadlift",
+        "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+        "dateKey": "2026-04-11",
+        "setKey": "s1",
+        "weight": 190,
+        "reps": 1,
+        "e1rm": 190,
+        "formulaVersion": 1,
+        "fingerprint": "75ad5c2299d50a3c649488468ba9ce9f"
+      }
+    },
+    "ohpUnilateral": {
+      "slot": "ohpUnilateral",
+      "e1rm": {
+        "slot": "ohpUnilateral",
+        "exerciseId": "RdsGazgdH0xgpjek0n3u",
+        "dateKey": "2026-07-05",
+        "setKey": "s1",
+        "weight": 27.5,
+        "reps": 12,
+        "e1rm": 39.6,
+        "formulaVersion": 1,
+        "fingerprint": "44faeb01e1d4129f3971f533336d6461"
+      },
+      "heaviest": {
+        "slot": "ohpUnilateral",
+        "exerciseId": "RdsGazgdH0xgpjek0n3u",
+        "dateKey": "2026-07-05",
+        "setKey": "s0",
+        "weight": 35,
+        "reps": 5,
+        "e1rm": 39.375,
+        "formulaVersion": 1,
+        "fingerprint": "94c44f00221215d6ed70a920959bdb30"
+      }
+    }
+  }
+}

@@ -4,9 +4,10 @@
 //
 // The profile shows a Chin-Up as the ADDED load ("+53.5 kg × 3, at 85 kg
 // BW"). These tests pin what the server publishes to make that possible — the
-// basis of the stored load and the bodyweight for each record's OWN date — and,
-// just as important, that none of it changes which set holds a record, the
-// record itself, or its fingerprint.
+// basis of the stored load and the bodyweight for each record's OWN date — and
+// that the stored set and its fingerprint are never rewritten. Which set holds
+// a record is ranked on the normalised loads; showcase_mixed_basis.test.js
+// covers that rule across legacy and WES2 history.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -103,10 +104,18 @@ test('Chin-Up sets carry their basis; every other lift keeps its exact shape', (
 
   const summary = summarizeWorkoutDay('2026-06-01', day);
   assert.deepEqual(Object.keys(summary.bench.bestE1rm), ['setKey', 'weight', 'reps']);
-  assert.equal(summary.chinUp.heaviest.basis, 'absolute');
+  assert.deepEqual(Object.keys(summary.bench).sort(),
+    ['bestE1rm', 'dateKey', 'exerciseId', 'heaviest', 'slot']);
+  // With no bodyweight recorded, the WES2 +20 is a known added load and the
+  // legacy 138.5 is only a total: the known added load is the heaviest.
+  assert.equal(summary.chinUp.heaviest.basis, 'added');
+  assert.equal(summary.chinUp.heaviest.weight, 20);
+  // The Chin-Up day keeps every set and the bodyweight it was ranked at.
+  assert.equal(summary.chinUp.sets.length, 2);
+  assert.equal(summary.chinUp.bodyweight, null);
 });
 
-test('the basis never changes which set holds a record, or its fingerprint', () => {
+test('with no bodyweight recorded, identical stored sets win alike under either basis', () => {
   const legacy = {
     '2026-06-01': workout(CHIN, [{ weight: 138.5, reps: 3 }, { weight: 142, reps: 2 }]),
     '2026-06-08': workout(CHIN, [{ weight: 130, reps: 6 }]),
@@ -216,13 +225,17 @@ test('the query bound covers every weigh-in dated on or before the lift day', ()
 // ── Publishing ──────────────────────────────────────────────────────────────
 
 const HISTORY = {
-  // Best E1RM: 138.5 × 3 → 146.6 (legacy total, bodyweight 85 that day).
-  '2026-06-01': workout(CHIN, [{ weight: 138.5, reps: 3 }]),
-  // Heaviest: 142 × 2 (bodyweight 83.4 by then).
+  // Best E1RM: 120 × 8 (legacy total) at 85 kg → E1RM 149.0, +64.0.
+  '2026-06-01': workout(CHIN, [{ weight: 120, reps: 8 }]),
+  // Heaviest: 142 × 2 at 83.4 kg → +58.6 (E1RM 146.1, +62.7).
   '2026-06-15': workout(CHIN, [{ weight: 142, reps: 2 }]),
   '2026-06-16': workout(BENCH, [{ weight: 120, reps: 3 }]),
 };
 const WEIGH_INS = [weighIn('2026-05-31', 85), weighIn('2026-06-14', 83.4)];
+const BW_BY_DATE = {
+  '2026-06-01': { weightKg: 85, dateKey: '2026-05-31' },
+  '2026-06-15': { weightKg: 83.4, dateKey: '2026-06-14' },
+};
 
 test('each Chin-Up record carries the bodyweight for its own date', async () => {
   const store = memoryStore({ bodyweightAsOf: resolverOver(WEIGH_INS) });
@@ -239,19 +252,21 @@ test('each Chin-Up record carries the bodyweight for its own date', async () => 
   assert.equal(chin.heaviest.bodyweightDateKey, '2026-06-14');
 });
 
-test('annotation changes nothing about the records themselves', async () => {
+test('the published records are the pure reducer at the same bodyweights', async () => {
   const store = memoryStore({ bodyweightAsOf: resolverOver(WEIGH_INS) });
   for (const d of Object.keys(HISTORY)) await applyWorkoutDay(store, d, HISTORY[d]);
   const published = await store.getSnapshot();
-  const pure = buildShowcase(HISTORY);
+  const pure = buildShowcase(HISTORY, { bodyweightByDate: BW_BY_DATE });
 
-  assert.deepEqual(bw.stripBodyweightAnnotations(published), bw.stripBodyweightAnnotations(pure));
-  // Stored values are the canonical system loads, untouched.
-  assert.equal(published.lifts.chinUp.e1rm.weight, 138.5);
+  assert.deepEqual(published, pure);
+  // Stored values are untouched; the normalised ones sit beside them.
+  assert.equal(published.lifts.chinUp.e1rm.weight, 120);
+  assert.equal(published.lifts.chinUp.e1rm.totalKg, 120);
+  assert.equal(published.lifts.chinUp.e1rm.addedKg, 35);
   assert.equal(published.lifts.chinUp.heaviest.weight, 142);
-  assert.equal(published.lifts.chinUp.e1rm.fingerprint, pure.lifts.chinUp.e1rm.fingerprint);
-  // Bench is published exactly as before.
-  assert.deepEqual(published.lifts.bench, pure.lifts.bench);
+  assert.ok(Math.abs(published.lifts.chinUp.heaviest.addedKg - 58.6) < 1e-9);
+  // Bench is published exactly as it is without any bodyweight.
+  assert.deepEqual(published.lifts.bench, buildShowcase(HISTORY).lifts.bench);
 });
 
 test('a lift with no weigh-in on or before it publishes no bodyweight, and says nothing else', async () => {
@@ -351,25 +366,62 @@ test('refresh does nothing for an account without a Chin-Up record, or a stale s
   assert.deepEqual(await refreshBodyweight(memoryStore()), { changed: false, reason: 'no-resolver' });
 });
 
-test('annotation leaves other slots as the very same objects', async () => {
-  const lifts = buildShowcase(HISTORY).lifts;
-  const out = await bw.annotateLifts(lifts, resolverOver(WEIGH_INS));
-  assert.equal(out.bench, lifts.bench);
-  assert.notEqual(out.chinUp, lifts.chinUp);
-  // The input is not mutated.
-  assert.equal('bodyweightKg' in lifts.chinUp.e1rm, false);
-});
-
-test('stripping annotations restores the pre-annotation snapshot', async () => {
+test('stripping leaves only which stored set holds each record', async () => {
   const store = memoryStore({ bodyweightAsOf: resolverOver(WEIGH_INS) });
   const annotated = await rebuildAll(store, Object.entries(HISTORY));
   const stripped = bw.stripBodyweightAnnotations(annotated);
   for (const kind of ['e1rm', 'heaviest']) {
-    for (const f of bw.ANNOTATION_FIELDS) {
+    for (const f of [...bw.ANNOTATION_FIELDS, 'e1rm']) {
       assert.equal(f in stripped.lifts.chinUp[kind], false, `${kind}.${f}`);
     }
+    for (const f of ['dateKey', 'setKey', 'weight', 'reps', 'fingerprint']) {
+      assert.equal(stripped.lifts.chinUp[kind][f], annotated.lifts.chinUp[kind][f], `${kind}.${f}`);
+    }
   }
+  assert.deepEqual(stripped.lifts.bench, annotated.lifts.bench, 'other lifts untouched');
   assert.equal(annotated.lifts.chinUp.e1rm.bodyweightKg, 85, 'input untouched');
+});
+
+test('a weigh-in write names the earliest day it can change', () => {
+  const { weighInSinceDateKey } = require('../showcase/firestore_store');
+  const side = (exists, tsMillis) => ({
+    exists,
+    data: () => (tsMillis === undefined ? {} : { timestamp: { toMillis: () => tsMillis } }),
+  });
+  const ev = (before, after) => ({ data: { before, after } });
+  assert.equal(weighInSinceDateKey(ev(side(false), side(true, nzNoon('2026-06-10')))), '2026-06-10');
+  // An edit that moves the entry: the earlier of its two days.
+  assert.equal(
+    weighInSinceDateKey(ev(side(true, nzNoon('2026-06-10')), side(true, nzNoon('2026-06-03')))),
+    '2026-06-03',
+  );
+  // A delete: the day it used to count for.
+  assert.equal(weighInSinceDateKey(ev(side(true, nzNoon('2026-06-10')), side(false))), '2026-06-10');
+  // No usable stamp: re-check everything.
+  assert.equal(weighInSinceDateKey(ev(side(false), side(true))), null);
+});
+
+test('a refresh from a weigh-in day re-ranks only the days on or after it', async () => {
+  const entries = [weighIn('2026-04-01', 85)];
+  const resolve = resolverOver(entries);
+  const store = memoryStore({ bodyweightAsOf: resolve });
+  await applyWorkoutDay(store, '2026-05-01', workout(CHIN, [{ weight: 138.5, weightAdded: 53.5, reps: 3 }]));
+  await applyWorkoutDay(store, '2026-08-10', workout(CHIN, [{ setIndex: 0, weight: 55, reps: 3 }]));
+  entries.push(weighIn('2026-08-01', 80));
+  resolve.calls.length = 0;
+
+  const r = await refreshBodyweight(store, { sinceDateKey: '2026-08-01' });
+  assert.equal(r.changed, true);
+  assert.deepEqual(resolve.calls, ['2026-08-10'], 'the May day is not looked at');
+  const chin = (await store.getSnapshot()).lifts.chinUp;
+  assert.equal(chin.e1rm.dateKey, '2026-08-10');
+  assert.equal(chin.e1rm.bodyweightKg, 80);
+  assert.equal(chin.e1rm.totalKg, 135);
+  // And it is what a rebuild from scratch publishes.
+  const fresh = memoryStore({ bodyweightAsOf: resolverOver(entries) });
+  await applyWorkoutDay(fresh, '2026-05-01', workout(CHIN, [{ weight: 138.5, weightAdded: 53.5, reps: 3 }]));
+  await applyWorkoutDay(fresh, '2026-08-10', workout(CHIN, [{ setIndex: 0, weight: 55, reps: 3 }]));
+  assert.deepEqual(await store.getSnapshot(), await fresh.getSnapshot());
 });
 
 // ── Deployment surface ──────────────────────────────────────────────────────

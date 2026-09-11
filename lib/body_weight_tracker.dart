@@ -120,6 +120,8 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
           'date': w['date'] as DateTime,
           'weight': (w['weight'] as num).toDouble(),
           'unit': (w['unit'] ?? 'kg').toString(),
+          'tod': w['tod'],
+          'id': w['id'],
         }).toList(),
       );
 

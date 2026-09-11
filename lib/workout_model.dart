@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'bodyweight_load.dart';
+
 class Workout {
   final String name;
   final DateTime date;
@@ -94,12 +96,20 @@ class SetDetails {
   double? velocity;
   String? notes;
 
+  // Read-only context for bodyweight exercises (see bodyweight_load.dart):
+  // WES2 stamps `setIndex` and stores the added load; the legacy screen stored
+  // the total with the typed added load beside it. Parsed, never written.
+  int? setIndex;
+  double? weightAdded;
+
   SetDetails({
     this.reps,
     this.weight,
     this.rir,
     this.velocity,
     this.notes,
+    this.setIndex,
+    this.weightAdded,
   });
 
   factory SetDetails.fromFirestore(Map<String, dynamic> data, int setNumber) {
@@ -123,6 +133,11 @@ class SetDetails {
 
       // ✅ Handle notes
       notes: data['notes']?.toString(),
+
+      setIndex: (data['setIndex'] is num && (data['setIndex'] as num).isFinite)
+          ? (data['setIndex'] as num).toInt()
+          : null,
+      weightAdded: typedAddedKgOf(data),
     );
   }
 
@@ -133,6 +148,18 @@ class SetDetails {
     'velocity': velocity,
     'notes': notes,
   };
+
+  /// This set of a BODYWEIGHT exercise, normalised (bodyweight_load.dart) at
+  /// [bodyweightKg] — the weigh-in recorded on or before its workout date.
+  NormalizedLoad bodyweightLoad(double? bodyweightKg) => normalizeLoad(
+        basis: setIndex != null
+            ? BodyweightLoadBasis.added
+            : BodyweightLoadBasis.absolute,
+        storedKg: weight,
+        reps: reps ?? 0,
+        typedAddedKg: weightAdded,
+        bodyweightKg: bodyweightKg,
+      );
 
   /// ✅ Check if a SetDetails entry is empty (for hint text logic)
   bool isEmpty() {

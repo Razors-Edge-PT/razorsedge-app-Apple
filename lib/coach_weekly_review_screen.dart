@@ -23,6 +23,28 @@ import 'coach_checkins_logic.dart';
 import 'coach_roster.dart';
 import 'user_context.dart';
 
+/// A PB load as the coach reads it. A bodyweight exercise's event (Chin-Up,
+/// Pull-Up, Dips …) carries the bodyweight its totals were computed at and
+/// reads as the load ADDED to it ("+60kg", "BW"); every other event reads
+/// exactly as before ("145kg").
+String _pbLoad(Map<dynamic, dynamic> e, Object? kg) {
+  final Object? bw = e['bodyweightKg'];
+  if (kg is num && bw is num && bw > 0) {
+    final double r = ((kg - bw) * 10).roundToDouble() / 10;
+    if (r == 0) return 'BW';
+    final double a = r.abs();
+    final String v =
+        a == a.roundToDouble() ? a.toStringAsFixed(0) : a.toStringAsFixed(1);
+    return '${r > 0 ? '+' : '−'}${v}kg';
+  }
+  return '${kg}kg';
+}
+
+/// A PREVIOUS load on a PB line: for a bodyweight exercise it is a total at an
+/// earlier bodyweight, so it says so.
+String _pbPrev(Map<dynamic, dynamic> e, Object? kg) =>
+    e['bodyweightKg'] is num ? '${kg}kg total' : '${kg}kg';
+
 const List<String> kCoachTimezones = [
   'Pacific/Auckland',
   'Australia/Sydney',
@@ -1084,25 +1106,27 @@ class CoachAthleteReviewCard extends StatelessWidget {
               const SizedBox(height: 6),
               for (final e in maxWeightPBs)
                 Text(
-                  '• ${e['exerciseName']}: all-time heaviest ${e['weightKg']}kg × ${e['reps']} '
-                  '(prev ${e['prevWeightKg']}kg)',
+                  '• ${e['exerciseName']}: all-time heaviest ${_pbLoad(e, e['weightKg'])} × ${e['reps']} '
+                  '(prev ${_pbPrev(e, e['prevWeightKg'])})',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               for (final e in repOnlyPBs)
                 Text(
-                  '• ${e['exerciseName']}: ${e['weightKg']}kg × ${e['reps']} '
-                  '(prev ${e['prevWeightKg']}kg at ≥ ${e['reps']} reps)',
+                  '• ${e['exerciseName']}: ${_pbLoad(e, e['weightKg'])} × ${e['reps']} '
+                  '(prev ${_pbPrev(e, e['prevWeightKg'])} at ≥ ${e['reps']} reps)',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               for (final e in e1rmPBs)
                 Text(
-                  '• ${e['exerciseName']}: E1RM ${(e['e1rmKg'] as num).toStringAsFixed(1)}kg '
-                  '(prev ${(e['prevE1rmKg'] as num).toStringAsFixed(1)}kg, no RIR)',
+                  '• ${e['exerciseName']}: E1RM '
+                  '${e['bodyweightKg'] is num ? _pbLoad(e, e['e1rmKg']) : '${(e['e1rmKg'] as num).toStringAsFixed(1)}kg'} '
+                  '(prev ${(e['prevE1rmKg'] as num).toStringAsFixed(1)}kg'
+                  '${e['bodyweightKg'] is num ? ' total' : ''}, no RIR)',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               for (final e in rirMatchPBs)
                 Text(
-                  '• ${e['exerciseName']}: matched ${e['weightKg']}kg × ${e['reps']} '
+                  '• ${e['exerciseName']}: matched ${_pbLoad(e, e['weightKg'])} × ${e['reps']} '
                   'at RIR ${e['rir']} (prev RIR ${e['prevRir']}) — more in reserve, '
                   'not a new PB',
                   style: const TextStyle(color: Colors.white70, fontSize: 12),

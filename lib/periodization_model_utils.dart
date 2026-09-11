@@ -15,6 +15,7 @@ import 'WorkoutSummaryScreen.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
+import 'bodyweight_load.dart';
 
 
 
@@ -89,6 +90,9 @@ class PeriodizationModelUtils {
   // The exposure index folds nameToId at build time, so a catalog that loads
   // after the snapshot must trigger a rebuild.
   static int _indexedNameToIdLength = -1;
+  // Bodyweight exercises are indexed in TOTAL load at the bodyweight recorded
+  // for each day, so a newly published weigh-in history must trigger a rebuild.
+  static int _indexedBwVersion = -1;
 
   /// exerciseId → newest-first top sets (one sample per exercise/date).
   static final Map<String, List<Map<String, dynamic>>> _topSetsById = {};
@@ -243,7 +247,8 @@ class PeriodizationModelUtils {
     if (identical(_indexedList, savedWorkoutsList) &&
         _indexedLength == savedWorkoutsList.length &&
         _indexedUid == historyUid &&
-        _indexedNameToIdLength == nameToId.length) {
+        _indexedNameToIdLength == nameToId.length &&
+        _indexedBwVersion == _bwHistoryVersionFor(historyUid)) {
       return;
     }
     _rebuildHistoryIndex();
@@ -265,6 +270,8 @@ class PeriodizationModelUtils {
     // Bucket keys that came from rows genuinely lacking an exerciseId.
     final Set<String> legacyNameKeys = <String>{};
     final Map<String, String> displayNameForKey = <String, String>{};
+    // ymd → bodyweight recorded on or before it (null when none was).
+    final Map<String, double?> recordedBwByDay = <String, double?>{};
 
     for (final w in savedWorkoutsList) {
       // Skip entries explicitly stamped for another athlete. Unstamped entries
@@ -300,6 +307,20 @@ class PeriodizationModelUtils {
         final sets = ex['sets'];
         if (sets is! List || sets.isEmpty) continue;
 
+        // Bodyweight exercises: stored loads are not one basis — the legacy
+        // screen stored the total, WES2 stores the added load (see
+        // bodyweight_load.dart). Progression works in TOTAL load, so each set
+        // is indexed as its total at the bodyweight recorded on or before this
+        // day. A set whose total is unknown (a WES2 set with no weigh-in on or
+        // before it) is left out of top-set history rather than guessed.
+        final bool isBwEx = isBodyweightExercise(id: exId, name: exName);
+        double? recordedBw() => recordedBwByDay.putIfAbsent(
+              ymd,
+              () => activeUid == null
+                  ? null
+                  : recordedBodyweightKgOnOrBefore(uid: activeUid, asOf: wDate),
+            );
+
         // ── Top set for this exercise/day (highest e1RM) ──
         Map<String, dynamic>? best;
         // Exposure validity mirrors the historical DUP matcher exactly:
@@ -313,10 +334,20 @@ class PeriodizationModelUtils {
             final rRaw = (s['reps']?.toString() ?? '').trim();
             if (wRaw.isNotEmpty && rRaw.isNotEmpty) anyUsableSet = true;
           }
-          final wKg = _histNum(s['weight'] ?? s['actualWeight']);
+          double wKg = _histNum(s['weight'] ?? s['actualWeight']);
           final r = _histNum(s['reps'] ?? s['actualReps']);
           final rir = _histNum(s['rir'] ?? s['actualRir']);
           if (wKg <= 0 || r <= 0) continue;
+          if (isBwEx) {
+            final double? total = totalLoadKg(
+              basis: BodyweightLoadBasis.ofSetMap(s),
+              storedKg: wKg,
+              typedAddedKg: typedAddedKgOf(s),
+              bodyweightKg: recordedBw(),
+            );
+            if (total == null || total <= 0) continue;
+            wKg = total;
+          }
           // Highest E1RM wins, with a value-based tie-break. Position in the
           // `sets` array is never consulted.
           if (best == null ||
@@ -420,6 +451,7 @@ class PeriodizationModelUtils {
     _indexedLength = savedWorkoutsList.length;
     _indexedUid = historyUid;
     _indexedNameToIdLength = nameToId.length;
+    _indexedBwVersion = _bwHistoryVersionFor(historyUid);
     historyIndexBuilds++;
   }
 
@@ -922,6 +954,14 @@ class PeriodizationModelUtils {
 
   };
 
+  /// The bodyweight-exercise catalogue, for the parity test that pins
+  /// functions/coach/bodyweight_exercises.js to it.
+  @visibleForTesting
+  static Set<String> get debugBodyweightExerciseIds => _bwById.keys.toSet();
+  @visibleForTesting
+  static Set<String> get debugBodyweightExerciseNames =>
+      _bwByName.keys.toSet();
+
   static bool isBodyweightExercise({String? id, String? name}) {
     if (id != null && _bwById[id] == true) return true;
     if (name != null) {
@@ -961,9 +1001,17 @@ class PeriodizationModelUtils {
   static final Map<String, DateTime> _latestBwDateByUid = {};
 // 2b) Full BW history cache (sorted descending by date)
   static final Map<String, List<Map<String, dynamic>>> _bwHistoryByUid = {};
+  // Bumped on every publish, so the history index (which holds bodyweight
+  // exercises in total load) knows to rebuild.
+  static final Map<String, int> _bwHistoryVersionByUid = {};
+
+  static int _bwHistoryVersionFor(String? uid) =>
+      uid == null ? 0 : (_bwHistoryVersionByUid[uid] ?? 0);
 
   /// Call once whenever you (re)fetch the user's weights from Firestore.
-  /// Expect entries like: {'date': DateTime, 'weight': double, 'unit': 'kg'}
+  /// Expect entries like: {'date': DateTime, 'weight': double, 'unit': 'kg'},
+  /// optionally with the entry's 'tod' ('am' | 'pm') and document 'id', which
+  /// [recordedBodyweightKgOnOrBefore] uses to break same-day ties.
   static void setBodyweightHistory({
     required String uid,
     required List<Map<String, dynamic>> entries,
@@ -974,12 +1022,15 @@ class PeriodizationModelUtils {
         .map((e) => {
       'date': (e['date'] as DateTime),
       'weight': (e['weight'] as num).toDouble(),
+      if (e['tod'] is String) 'tod': (e['tod'] as String).trim().toLowerCase(),
+      if (e['id'] is String) 'id': e['id'] as String,
     })
         .toList();
 
     // sort DESC by date (newest first)
     filtered.sort((a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime));
     _bwHistoryByUid[uid] = filtered;
+    _bwHistoryVersionByUid[uid] = (_bwHistoryVersionByUid[uid] ?? 0) + 1;
 
     // keep the existing "latest" cache in sync (used when asOf is null)
     if (filtered.isNotEmpty) {
@@ -1087,6 +1138,33 @@ class PeriodizationModelUtils {
 
     // all entries are after the cutoff → we had no earlier weigh-in
     return 80.0;
+  }
+
+  /// The bodyweight RECORDED on or before [asOf]'s calendar day, or null when
+  /// none was — never the latest weigh-in, a later one, or the 80 kg default
+  /// [bodyweightKgForDate] falls back to. The rule the server's showcase uses
+  /// (bodyweight_load.dart): the latest such day, its AM entry first (a
+  /// missing time of day is AM), then the latest stamp.
+  static double? recordedBodyweightKgOnOrBefore({
+    required String uid,
+    required DateTime asOf,
+  }) {
+    final history = _bwHistoryByUid[uid];
+    if (history == null || history.isEmpty) return null;
+    return pickBodyweightAsOf(
+      <BodyweightEntry>[
+        for (final e in history)
+          BodyweightEntry(
+            weight: (e['weight'] as num).toDouble(),
+            unit: 'kg',
+            tod: e['tod'] as String?,
+            dateKey: bodyweightDateKeyOf(e['date'] as DateTime),
+            tsMillis: (e['date'] as DateTime).millisecondsSinceEpoch,
+            id: (e['id'] as String?) ?? '',
+          ),
+      ],
+      bodyweightDateKeyOf(asOf),
+    )?.weightKg;
   }
 
 

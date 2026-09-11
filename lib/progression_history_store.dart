@@ -111,6 +111,8 @@ class ProgressionHistoryStore {
   Future<List<Map<String, dynamic>>> Function(String uid)? debugCacheFetch;
   @visibleForTesting
   Future<Map<String, dynamic>?> Function(String uid, String ymd)? debugDayFetch;
+  @visibleForTesting
+  Future<List<Map<String, dynamic>>> Function(String uid)? debugWeightsFetch;
 
   @visibleForTesting
   void debugReset() {
@@ -223,6 +225,10 @@ class ProgressionHistoryStore {
     // only the days we knew about up front are considered resolved by it.
     final claimedDirty = Set<String>.from(_dirtyDays[uid] ?? const <String>{});
     final claimedStale = _forcedStale.contains(uid);
+    // Weigh-ins first: bodyweight exercises are indexed in total load at the
+    // bodyweight recorded for each day, so they must be published before the
+    // workout history is.
+    await _hydrateBodyweight(uid);
     try {
       final docs = await _fetchFromServer(uid);
       await _writeCompletenessMarker(uid, docs.length);
@@ -385,6 +391,53 @@ class ProgressionHistoryStore {
     final data = doc.data();
     if (!doc.exists || data == null) return null;
     return _normalise(uid, doc.id, data);
+  }
+
+  /// Publishes [uid]'s recorded weigh-ins to PeriodizationModelUtils, so a
+  /// bodyweight exercise's history is read at the bodyweight recorded for each
+  /// day (see bodyweight_load.dart). Best effort: a failed read leaves
+  /// whatever was already published, and history is still served.
+  Future<void> _hydrateBodyweight(String uid) async {
+    List<Map<String, dynamic>>? entries;
+    try {
+      entries = await _fetchWeights(uid, Source.server);
+    } catch (_) {
+      try {
+        entries = await _fetchWeights(uid, Source.cache);
+      } catch (e) {
+        debugPrint('[History] weigh-ins unavailable for $uid: $e');
+      }
+    }
+    if (entries == null) return;
+    PeriodizationModelUtils.setBodyweightHistory(uid: uid, entries: entries);
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchWeights(
+      String uid, Source source) async {
+    final override = debugWeightsFetch;
+    if (override != null) return override(uid);
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .collection('weights')
+        .get(GetOptions(source: source));
+    final out = <Map<String, dynamic>>[];
+    for (final d in snap.docs) {
+      final data = d.data();
+      final ts = data['timestamp'];
+      final w = data['weight'];
+      if (ts is! Timestamp || w is! num) continue;
+      final unit = ((data['unit'] as String?) ?? '').trim().toLowerCase();
+      out.add(<String, dynamic>{
+        'id': d.id,
+        'date': ts.toDate(),
+        'weight': w.toDouble(),
+        // A missing unit is kilograms, as BodyWeightTracker writes it.
+        'unit': unit.isEmpty ? 'kg' : unit,
+        'tod': data['tod'],
+      });
+    }
+    return out;
   }
 
   // ── Completeness marker ───────────────────────────────────────────────────

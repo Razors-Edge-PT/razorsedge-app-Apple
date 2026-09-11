@@ -590,6 +590,7 @@ class ProgressionEngine {
         displayAddedKg: _snappedAdded,
         exerciseId: exerciseId,
         exerciseName: exerciseName,
+        asOfDate: _asOfDate,
       );
 
       progressed['weightDisplayAdded'] = _snappedAdded;
@@ -761,6 +762,7 @@ class ProgressionEngine {
             displayAddedKg: _snappedAdded,
             exerciseId: exerciseId,
             exerciseName: exerciseName,
+            asOfDate: _asOfDate,
           );
           progressed['weightDisplayAdded'] = _snappedAdded;
           progressed['weight'] = _snappedAbs;

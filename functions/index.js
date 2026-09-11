@@ -785,6 +785,7 @@ async function handleInvoicePaymentFailed(event) {
 // Monday+Thursday athlete review system. Everything above is untouched.
 const coachCheckins = require('./coach');
 exports.coachAnalyticsOnWorkoutWrite = coachCheckins.coachAnalyticsOnWorkoutWrite;
+exports.coachAnalyticsOnWeightWrite = coachCheckins.coachAnalyticsOnWeightWrite;
 exports.coachOnAthleteSettingsWritten = coachCheckins.coachOnAthleteSettingsWritten;
 exports.coachOnAthleteAssignmentsWritten = coachCheckins.coachOnAthleteAssignmentsWritten;
 exports.coachOnCoachAssignmentsWritten = coachCheckins.coachOnCoachAssignmentsWritten;
@@ -846,8 +847,9 @@ exports.mirrorUserPlannedBlocksToLegacy =
 //     --no-invoker-iam-check --region=us-central1 --project=goodlift-us-storage
 const showcase = require('./showcase/firestore_store');
 exports.showcaseOnWorkoutWrite = showcase.showcaseOnWorkoutWrite;
-// Keeps the bodyweight beside a Chin-Up record in step with later weigh-ins.
-// Presentation context only; record selection is untouched.
+// Keeps Chin-Up records in step with later weigh-ins: a Chin-Up set is ranked
+// at the bodyweight recorded on or before its date (showcase/bodyweight.js),
+// so a weigh-in re-ranks the Chin-Up days it can affect.
 exports.showcaseOnWeightWrite = showcase.showcaseOnWeightWrite;
 
 const identity = require('./identity');

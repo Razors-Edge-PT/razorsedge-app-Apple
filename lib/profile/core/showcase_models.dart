@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import '../../bodyweight_load.dart';
 import 'big_five.dart';
 import 'e1rm_spec.dart';
 
@@ -27,11 +28,9 @@ class ShowcaseLoadBasis {
   static const String added = 'added';
 
   /// The basis of one stored set map. WES2 is the only writer that stamps
-  /// `setIndex` on a set.
-  static String ofSetMap(Map<Object?, Object?> setMap) {
-    final Object? idx = setMap['setIndex'];
-    return (idx is num && idx.isFinite) ? added : absolute;
-  }
+  /// `setIndex` on a set (see bodyweight_load.dart).
+  static String ofSetMap(Map<Object?, Object?> setMap) =>
+      BodyweightLoadBasis.ofSetMap(setMap);
 
   /// [raw] when it is a known basis, otherwise null.
   static String? parse(Object? raw) =>
@@ -45,6 +44,7 @@ class ShowcaseSet {
     required this.weight,
     required this.reps,
     this.basis,
+    this.typedAddedKg,
   });
 
   /// Stable identity of this set inside its day: the row's own set id when the
@@ -54,8 +54,12 @@ class ShowcaseSet {
   final int reps;
 
   /// [ShowcaseLoadBasis] for bodyweight-loaded lifts; null for every other
-  /// lift. Never read by selection.
+  /// lift.
   final String? basis;
+
+  /// Bodyweight-loaded lifts stored by the legacy screen only: the added load
+  /// it kept beside its total (see bodyweight_load.dart).
+  final double? typedAddedKg;
 
   double get e1rm => showcaseE1rm(weight, reps);
 }
@@ -75,6 +79,10 @@ class ShowcaseRecord {
     this.loadBasis,
     this.bodyweightKg,
     this.bodyweightDateKey,
+    this.addedKg,
+    this.totalKg,
+    this.totalE1rm,
+    this.addedE1rm,
   });
 
   final String slot;
@@ -94,8 +102,9 @@ class ShowcaseRecord {
   final String fingerprint;
 
   // ── Bodyweight context (bodyweight-loaded lifts only) ─────────────────────
-  // Published by the server beside the record, AFTER selection. None of these
-  // takes part in which set holds the record or in its fingerprint.
+  // Published by the server beside the record: the source set's loads
+  // normalised at the bodyweight recorded for its date (bodyweight_load.dart),
+  // which is what the record was chosen on. None of it enters the fingerprint.
 
   /// [ShowcaseLoadBasis] of the source set, or null when the record was
   /// published before records carried one.
@@ -108,6 +117,18 @@ class ShowcaseRecord {
   /// The `YYYY-MM-DD` day of that weigh-in.
   final String? bodyweightDateKey;
 
+  /// The load added to bodyweight, when known.
+  final double? addedKg;
+
+  /// Bodyweight + added load, when known.
+  final double? totalKg;
+
+  /// The E1RM of [totalKg], when known.
+  final double? totalE1rm;
+
+  /// [totalE1rm] − bodyweight, when both are known.
+  final double? addedE1rm;
+
   Map<String, Object?> toMap() => <String, Object?>{
         'slot': slot,
         'exerciseId': exerciseId,
@@ -119,9 +140,16 @@ class ShowcaseRecord {
         'formulaVersion': formulaVersion,
         'fingerprint': fingerprint,
         if (loadBasis != null) 'loadBasis': loadBasis,
+        if (addedKg != null) 'addedKg': addedKg,
+        if (totalKg != null) 'totalKg': totalKg,
+        if (totalE1rm != null) 'totalE1rm': totalE1rm,
+        if (addedE1rm != null) 'addedE1rm': addedE1rm,
         if (bodyweightKg != null) 'bodyweightKg': bodyweightKg,
         if (bodyweightDateKey != null) 'bodyweightDateKey': bodyweightDateKey,
       };
+
+  static double? _finite(Object? v) =>
+      (v is num && v.isFinite) ? v.toDouble() : null;
 
   static ShowcaseRecord? fromMap(Object? raw) {
     if (raw is! Map) return null;
@@ -130,6 +158,8 @@ class ShowcaseRecord {
     if (slot is! String || fp is! String) return null;
     final Object? bw = raw['bodyweightKg'];
     final Object? bwDate = raw['bodyweightDateKey'];
+    final double? totalKg = _finite(raw['totalKg']);
+    final double? totalE1rm = _finite(raw['totalE1rm']);
     return ShowcaseRecord(
       slot: slot,
       exerciseId: (raw['exerciseId'] as String?) ?? '',
@@ -144,6 +174,10 @@ class ShowcaseRecord {
       bodyweightKg:
           (bw is num && bw.isFinite && bw > 0) ? bw.toDouble() : null,
       bodyweightDateKey: (bwDate is String && bwDate.isNotEmpty) ? bwDate : null,
+      addedKg: _finite(raw['addedKg']),
+      totalKg: (totalKg != null && totalKg > 0) ? totalKg : null,
+      totalE1rm: (totalE1rm != null && totalE1rm > 0) ? totalE1rm : null,
+      addedE1rm: _finite(raw['addedE1rm']),
     );
   }
 }

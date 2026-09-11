@@ -10,6 +10,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp & Firestore
 import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
 import 'periodization_model_utils.dart';
+import 'bodyweight_load.dart';
 
 enum TrendRange { d14, m1, m6, y1, y2 }
 
@@ -288,6 +289,23 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   bool _includeRIRForTrend = true;
   String _rirToggleTextTrend() =>
       _includeRIRForTrend ? 'Including RIR' : 'Excluding RIR';
+
+  /// The load a set is charted and ranked at. For a bodyweight exercise that
+  /// is its TOTAL load at the bodyweight recorded on or before [date] —
+  /// WES2 stores the added load, the legacy screen stored the total
+  /// (bodyweight_load.dart) — or null when that total is unknown. Every other
+  /// exercise: the stored weight, exactly as before.
+  double? _chartWeight(SetDetails s, DateTime date) {
+    final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+      id: widget.exerciseId,
+      name: widget.exerciseName,
+    );
+    if (!isBw) return s.weight ?? 0.0;
+    return s
+        .bodyweightLoad(PeriodizationModelUtils.recordedBodyweightKgOnOrBefore(
+            uid: userId, asOf: date))
+        .totalKg;
+  }
 
   double calculateE1RM(double weight, double reps, double rir) {
     return PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
@@ -891,7 +909,13 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
         final String unit = (data['unit'] as String?) ?? 'kg';
         if (bw != null && bw > 0 && unit == 'kg') {
-          entries.add({'date': ts, 'weight': bw, 'unit': 'kg'});
+          entries.add({
+            'date': ts,
+            'weight': bw,
+            'unit': 'kg',
+            'tod': data['tod'],
+            'id': d.id,
+          });
         }
       }
       if (entries.isNotEmpty) {
@@ -986,15 +1010,17 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       matchedWorkouts++;
 
       final top = ex.sets.reduce((a, b) {
-        final aE1 = calculateE1RM(a.weight ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
-        final bE1 = calculateE1RM(b.weight ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
+        final aE1 = calculateE1RM(_chartWeight(a, workout.date) ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
+        final bE1 = calculateE1RM(_chartWeight(b, workout.date) ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
         return aE1 > bE1 ? a : b;
       });
 
-      final e1 = calculateE1RM(top.weight ?? 0.0, (top.reps ?? 0).toDouble(), _includeRIRForTrend ? (top.rir ?? 0.0) : 0.0);
+      final double? topW = _chartWeight(top, workout.date);
+      if (topW == null) continue;
+      final e1 = calculateE1RM(topW, (top.reps ?? 0).toDouble(), _includeRIRForTrend ? (top.rir ?? 0.0) : 0.0);
       series.add(E1RMPoint(workout.date, e1));
       _metaAllTop[workout.date] = _PointMeta(
-        (top.weight ?? 0.0),
+        topW,
         (top.reps ?? 0),
         (top.rir ?? 0.0),
       );
@@ -1073,7 +1099,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         SetDetails? topSetInc;
         double bestInc = double.negativeInfinity;
         for (final s in ex.sets) {
-          final w = s.weight ?? 0.0;
+          final w = _chartWeight(s, workout.date) ?? 0.0;
           final r = (s.reps ?? 0).toDouble();
           final rir = (s.rir ?? 0.0);
           if (w <= 0 || r <= 0) continue;
@@ -1091,7 +1117,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         if (!group.contains(topReps)) continue;
 
         // Y value depends on Include RIR toggle (same set selected above)
-        final w = topSetInc!.weight ?? 0.0;
+        final w = _chartWeight(topSetInc!, workout.date) ?? 0.0;
         final r = (topSetInc!.reps ?? 0).toDouble();
         final rirForY = _includeRIRForTarget ? (topSetInc!.rir ?? 0.0) : 0.0;
         final y = calculateE1RM(w, r, rirForY);
@@ -1725,45 +1751,51 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
           if (exercise.sets.isEmpty) return const SizedBox.shrink();
 
-          final topSet = exercise.sets.reduce((a, b) {
-            final aE1 = calculateE1RM(a.weight ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
-            final bE1 = calculateE1RM(b.weight ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
-            return aE1 > bE1 ? a : b;
-          });
-
           final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
             id: widget.exerciseId,
             name: widget.exerciseName,
           );
+          // Bodyweight exercises: WES2 stores the added load, the legacy
+          // screen stored the total (bodyweight_load.dart). Each set is read
+          // at the bodyweight recorded on or before this day and ranked on its
+          // TOTAL load.
+          final double? dayBw = isBw
+              ? PeriodizationModelUtils.recordedBodyweightKgOnOrBefore(
+                  uid: userId, asOf: workout.date)
+              : null;
+          double rankWeight(SetDetails s) => isBw
+              ? (s.bodyweightLoad(dayBw).totalKg ?? 0.0)
+              : (s.weight ?? 0.0);
 
-          final double displayWeight = isBw
-              ? PeriodizationModelUtils.toDisplayAddedWeight(
-                  uid: userId,
-                  absoluteKg: topSet.weight ?? 0.0,
-                  exerciseId: widget.exerciseId,
-                  exerciseName: widget.exerciseName,
-                  asOfDate: workout.date,
-                )
-              : (topSet.weight ?? 0.0);
+          final topSet = exercise.sets.reduce((a, b) {
+            final aE1 = calculateE1RM(rankWeight(a), (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
+            final bE1 = calculateE1RM(rankWeight(b), (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
+            return aE1 > bE1 ? a : b;
+          });
 
-          final double e1rm = isBw
-              ? PeriodizationModelUtils.e1rmForDisplay(
-                  uid: userId,
-                  absoluteKg: topSet.weight ?? 0.0,
-                  reps: topSet.reps ?? 0,
-                  rir: topSet.rir ?? 0.0,
-                  exerciseId: widget.exerciseId,
-                  exerciseName: widget.exerciseName,
-                  asOfDate: workout.date,
-                )
-              : calculateE1RM(topSet.weight ?? 0.0, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
-
-          final String weightLabel = isBw
-              ? '+${displayWeight.toStringAsFixed(1)} kg'
-              : '${displayWeight.toStringAsFixed(1)} kg';
-          final String e1rmLabel = isBw
-              ? '+${e1rm.toStringAsFixed(1)} kg'
-              : '${e1rm.toStringAsFixed(1)} kg';
+          final String weightLabel;
+          final String e1rmLabel;
+          if (isBw) {
+            final NormalizedLoad load = topSet.bodyweightLoad(dayBw);
+            final double? added = load.addedKg;
+            final double? total = load.totalKg;
+            weightLabel = added != null
+                ? '+${(added < 0 ? 0.0 : added).toStringAsFixed(1)} kg'
+                : '${(total ?? 0.0).toStringAsFixed(1)} kg total';
+            if (total != null && dayBw != null) {
+              final double e = calculateE1RM(
+                      total, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0) -
+                  dayBw;
+              e1rmLabel = '+${(e < 0 ? 0.0 : e).toStringAsFixed(1)} kg';
+            } else {
+              e1rmLabel = '— (BW not recorded)';
+            }
+          } else {
+            final double e1rm = calculateE1RM(topSet.weight ?? 0.0,
+                (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
+            weightLabel = '${(topSet.weight ?? 0.0).toStringAsFixed(1)} kg';
+            e1rmLabel = '${e1rm.toStringAsFixed(1)} kg';
+          }
 
           return ListTile(
             title: Text(
