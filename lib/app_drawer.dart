@@ -26,16 +26,30 @@ import 'create_new_account_screen.dart';
 
 
 class AppDrawer extends StatelessWidget {
-  const AppDrawer({super.key});
+  const AppDrawer({super.key, this.debugUserEmail});
 
+  /// Test seam: the email shown in the header, so the drawer can be laid out
+  /// without a Firebase app. Production leaves it null and reads FirebaseAuth.
+  @visibleForTesting
+  final String? debugUserEmail;
 
   @override
   Widget build(BuildContext context) {
-    final userEmail = FirebaseAuth.instance.currentUser?.email ?? 'User';
+    final userEmail =
+        debugUserEmail ?? FirebaseAuth.instance.currentUser?.email ?? 'User';
 
     return Drawer(
       child: ListView(
-        padding: EdgeInsets.zero,
+        // The top stays flush, so the header draws exactly as before. The
+        // bottom honours the system inset — Android's navigation bar or gesture
+        // area, the iOS home indicator — so Logout, and everything above it,
+        // can always be scrolled clear of the phone's own controls and tapped.
+        // `EdgeInsets.zero` here used to discard that inset and leave Logout
+        // underneath them. The inset comes from MediaQuery, not a device
+        // offset; the extra 12 is a margin, not a guess at a nav bar height.
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.paddingOf(context).bottom + 12,
+        ),
         children: [
           // 🧠 Custom compact header
           Container(
