@@ -14,7 +14,11 @@ import 'home_v2_calendar_service.dart';
 import 'home_v2_controller.dart';
 import 'main.dart';
 import 'planned_blocks_screen.dart';
+import 'profile/profile_screen.dart';
 import 'profile_page.dart';
+import 'social/feed_repository.dart';
+import 'social/home_feed_section.dart';
+import 'social/open_feed_post.dart';
 import 'templates.dart';
 import 'user_context.dart';
 import 'user_settings.dart';
@@ -22,7 +26,6 @@ import 'membership_gate.dart';
 import 'startup_trace.dart';
 
 // Private to this file — avoids name collision with home_screen.dart's SelectedFeed.
-enum _HomeV2Feed { home, points, leaderboard }
 
 class HomeScreen2 extends StatefulWidget {
   const HomeScreen2({super.key});
@@ -44,7 +47,10 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
 
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
-  _HomeV2Feed _selectedFeed = _HomeV2Feed.home;
+
+  /// The page's own scroll controller. The buddy feed below the calendar
+  /// pages from it instead of nesting a second scrollable inside this one.
+  final ScrollController _homeScrollCtrl = ScrollController();
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -84,6 +90,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     }
     routeObserver.unsubscribe(this);
     _ctrl.dispose();
+    _homeScrollCtrl.dispose();
     debugPrint('🏠 [HOME2] dispose()');
     super.dispose();
   }
@@ -331,6 +338,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
         child: _ctrl.isFirstTimeSetup
             ? _buildSetupBody()
             : SingleChildScrollView(
+                controller: _homeScrollCtrl,
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -632,101 +640,36 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                       ),
                     ),
 
-                    const SizedBox(height: 1),
+                    const SizedBox(height: 8),
 
-                    // ── Feed Switcher ─────────────────────────────────────────
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 2, vertical: 2),
-                      child: Row(
-                        children: [
-                          SegmentedButton<_HomeV2Feed>(
-                            showSelectedIcon: false,
-                            segments: const [
-                              ButtonSegment<_HomeV2Feed>(
-                                value: _HomeV2Feed.home,
-                                icon: Icon(Icons.photo_library_outlined,
-                                    size: 16),
-                                label: SizedBox.shrink(),
-                              ),
-                              ButtonSegment<_HomeV2Feed>(
-                                value: _HomeV2Feed.points,
-                                icon:
-                                    Icon(Icons.leaderboard_outlined, size: 16),
-                                label: SizedBox.shrink(),
-                              ),
-                              ButtonSegment<_HomeV2Feed>(
-                                value: _HomeV2Feed.leaderboard,
-                                icon:
-                                    Icon(Icons.emoji_events_outlined, size: 16),
-                                label: SizedBox.shrink(),
-                              ),
-                            ],
-                            selected: <_HomeV2Feed>{_selectedFeed},
-                            onSelectionChanged: (s) {
-                              final next = s.first;
-                              if (_selectedFeed == next) return;
-                              setState(() => _selectedFeed = next);
-                            },
-                            style: ButtonStyle(
-                              padding: MaterialStateProperty.all(
-                                  const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 2)),
-                              visualDensity: const VisualDensity(
-                                  horizontal: -4, vertical: -4),
-                              side: MaterialStateProperty.resolveWith((states) {
-                                final selected =
-                                    states.contains(MaterialState.selected);
-                                return BorderSide(
-                                    color: selected
-                                        ? Colors.white70
-                                        : Colors.white24,
-                                    width: 1);
-                              }),
-                              backgroundColor:
-                                  MaterialStateProperty.resolveWith((states) {
-                                final selected =
-                                    states.contains(MaterialState.selected);
-                                return selected
-                                    ? Colors.white12
-                                    : Colors.transparent;
-                              }),
-                              shape: MaterialStateProperty.all(
-                                RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10)),
-                              ),
-                              foregroundColor:
-                                  MaterialStateProperty.all(Colors.white),
-                            ),
-                          ),
-                        ],
-                      ),
+                    // ── Buddy feed ────────────────────────────────────────────
+                    // Directly beneath the calendar, with no switcher, tab or
+                    // heading in front of it. The three-icon selector that sat
+                    // here drove three empty stubs and has been removed; a
+                    // leaderboard toggle can come back when there is a
+                    // leaderboard to toggle to.
+                    //
+                    // It is the Buddy Hub's feed — the same BuddyFeedView,
+                    // repository, paging and cached cards — paging from this
+                    // page's scroll controller. It is always the SIGNED-IN
+                    // account's feed; when a coach is viewing an athlete the
+                    // section says so.
+                    HomeBuddyFeedSection(
+                      scrollController: _homeScrollCtrl,
+                      actingAsOtherAccount:
+                          !context.watch<UserContext>().isActingAsSelf,
+                      onOpenProfile: (String uid) =>
+                          Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) =>
+                            ProfileScreen(viewedUid: uid, readOnly: true),
+                      )),
+                      onOpenPost: (FeedItem item) => unawaited(openFeedPost(
+                        context,
+                        item,
+                        viewerUid:
+                            UserContext.of(context, listen: false).actorUid,
+                      )),
                     ),
-
-                    const SizedBox(height: 16),
-
-                    // ── Feed stubs ────────────────────────────────────────────
-                    if (_selectedFeed == _HomeV2Feed.home)
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 32),
-                          // child: Text('New Feed coming soon',style: TextStyle(color: Colors.white54),),
-                        ),
-                      )
-                    else if (_selectedFeed == _HomeV2Feed.points)
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 32),
-                          //child: Text('New Points feed coming soon',style: TextStyle(color: Colors.white54),),
-                        ),
-                      )
-                    else
-                      const Center(
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 32),
-                          // child: Text('New Leaderboard coming soon', style: TextStyle(color: Colors.white54),                        ),
-                        ),
-                      ),
                   ],
                 ),
               ),
