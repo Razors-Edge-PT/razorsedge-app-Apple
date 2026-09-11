@@ -149,10 +149,25 @@ labels are a 10-character hash prefix).
   before logout can still appear. The tray is cleared at logout, and a later
   tap does nothing unless its recipient is the signed-in account.
 * **Permission**: a one-time explanation is offered on Home about 3 s after it
-  settles, never over WES2, and only while the OS hasn't been asked. It is
-  followed by the OS prompt. A denial is respected. Settings → Notifications
-  then offers "Open settings" (the system notification settings) instead of
-  prompting again.
+  settles, never over WES2, and only while the OS hasn't been asked. Continue
+  shows the OS prompt; allowing it registers the token.
+  * On Android 13+ Firebase reports `denied` both BEFORE the prompt and after
+    a refusal, so the app keeps its own record of whether it has asked
+    (`push.osPermissionRequested.v1`). That record is separate from "the
+    explanation was shown" (`push.permissionPrimerShown.v1`) — see
+    `resolvePushPermission`. The adapter returns the raw plugin status; only
+    the service interprets it. Android 13+: `denied` + never asked = not asked
+    yet (explain / "Turn on"); `denied` + asked = denied ("Open settings").
+    Android 12 and earlier: `denied` means switched off in system settings
+    (there is no prompt). iOS statuses are taken as reported.
+  * "Not now" records only that the explanation was shown. Settings →
+    Notifications still offers "Turn on", which makes the real OS request.
+  * A request is recorded only once the OS has answered. A failed request
+    (plugin error) leaves "Turn on" available. Concurrent requests share one
+    OS prompt.
+  * After a recorded denial the app never prompts automatically. Settings
+    offers "Open settings", and returning from there with notifications
+    allowed registers on resume.
 * **Taps**: background (`onMessageOpenedApp`), cold start
   (`getInitialMessage`) and the foreground banner all go through
   `PushRouter`. It holds the tap until the recipient is signed in **and** a
@@ -163,6 +178,19 @@ labels are a 10-character hash prefix).
   changed. A tap for another account is refused with a message, and taps
   expire after 2 minutes of waiting. If the friendship ended, the DM tap falls
   back to the conversation list.
+  * `Navigator.push` completes only when the route is POPPED, so the router
+    never awaits it. A destination counts as opened once its push is issued,
+    and a second tap opens straight away on top of a screen that is still
+    open. Only the asynchronous check before a push (the DM access lookup) is
+    serialized. A tap that arrives meanwhile is held and opens next; the
+    latest tap wins.
+  * After that lookup the router re-checks that the tap is still for the
+    signed-in account, that no logout happened (logout bumps a generation),
+    and that its context is mounted. A lookup that returns after logout or an
+    account switch opens nothing.
+  * A repeat tap for the same destination within 2 s (a double tap, or the
+    same notification delivered twice) is ignored. A DM tap for the
+    conversation already on screen opens nothing.
 * **Foreground**: one compact tappable banner (root SnackBar), no OS
   duplicate. None while the matching conversation is the visible route and
   the app is resumed. A conversation merely mounted under another screen
@@ -208,7 +236,7 @@ Firebase console:
 | Functions unit | `cd functions; npm test` | `test/push_model.test.js` |
 | Rules (emulator) | `npm run test:rules` (Java 21: Android Studio `jbr`) | `test-rules/push_rules.spec.js` |
 | Delivery (emulator, FCM mocked) | `npm run test:emulator` | `test-emulator/push_delivery.spec.js` (+ updated `social_notifications.spec.js`) |
-| Flutter | `flutter test` | `test/push_notifications_test.dart` |
+| Flutter | `flutter test` | `test/push_notifications_test.dart`, `test/push_permission_routing_test.dart` (real adapter over Android 13+ raw `denied`; real Navigator routing) |
 
 ## Deployment
 

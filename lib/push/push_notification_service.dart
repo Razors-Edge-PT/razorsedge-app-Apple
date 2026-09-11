@@ -44,6 +44,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
@@ -74,9 +75,13 @@ class PushMessage {
 }
 
 /// The FCM surface the service uses. Faked in tests.
+///
+/// Permission calls return the RAW plugin status. Interpreting it needs the
+/// platform and whether GoodLift has asked before, which only the service
+/// knows — see [resolvePushPermission].
 abstract class PushMessagingAdapter {
-  Future<PushPermission> permissionStatus();
-  Future<PushPermission> requestPermission();
+  Future<AuthorizationStatus> osPermissionStatus();
+  Future<AuthorizationStatus> requestOsPermission();
 
   /// The FCM token, or null when it cannot be had yet (no APNs token, no
   /// network, no Play services).
@@ -109,6 +114,47 @@ abstract class PushLocalState {
   Future<void> setPendingTokenDelete(bool value);
   Future<bool> primerShown();
   Future<void> setPrimerShown();
+
+  /// Whether GoodLift has actually asked the OS for notification permission
+  /// on this device (a request that returned an answer). Separate from
+  /// [primerShown]: "Not now" on the explanation must leave "Turn on" in
+  /// Settings able to ask.
+  Future<bool> permissionRequested();
+  Future<void> setPermissionRequested();
+}
+
+/// The permission state the app acts on, from the plugin's raw [os] status.
+///
+/// On Android 13+ the plugin reports `denied` both before the runtime prompt
+/// has been shown and after the person refused it ("A denied value conveys an
+/// undetermined or denied permission state, and it will be up to you to track
+/// if a permission request has been made" — FlutterFire docs). So there,
+/// `denied` without a recorded request means NOT YET ASKED, and the app may
+/// explain and ask; after a recorded request it is a real denial, answered
+/// with system settings rather than another prompt.
+///
+/// Android 12 and earlier have no runtime prompt: `authorized` unless the
+/// person switched notifications off in system settings, which is a real
+/// denial. iOS reports `notDetermined` until asked, so its statuses are taken
+/// as they are.
+PushPermission resolvePushPermission({
+  required AuthorizationStatus os,
+  required PushPlatformInfo platform,
+  required bool requestedBefore,
+}) {
+  switch (os) {
+    case AuthorizationStatus.authorized:
+      return PushPermission.granted;
+    case AuthorizationStatus.provisional:
+      return PushPermission.provisional;
+    case AuthorizationStatus.notDetermined:
+      return PushPermission.notDetermined;
+    case AuthorizationStatus.denied:
+      if (platform.hasAmbiguousDenied && !requestedBefore) {
+        return PushPermission.notDetermined;
+      }
+      return PushPermission.denied;
+  }
 }
 
 class PushRegistrationRecord {
@@ -142,7 +188,9 @@ class PushNotificationService with WidgetsBindingObserver {
     DateTime Function()? clock,
     void Function(PushIntent intent, PushMessage message)? showBanner,
     bool? supported,
-  })  : _messagingOverride = messaging,
+    Future<PushPlatformInfo> Function()? platformInfo,
+  })  : _platformInfoOverride = platformInfo,
+        _messagingOverride = messaging,
         _store = store ?? FirestorePushRegistrationStore(),
         _local = local ?? SharedPrefsPushLocalState(),
         _router = router ?? PushRouter.instance,
@@ -156,6 +204,15 @@ class PushNotificationService with WidgetsBindingObserver {
         _supported = supported ?? _defaultSupported();
 
   static final PushNotificationService instance = PushNotificationService();
+
+  final Future<PushPlatformInfo> Function()? _platformInfoOverride;
+  Future<PushPlatformInfo>? _platformInfoCache;
+  Future<PushPlatformInfo> _platformInfo() =>
+      _platformInfoOverride?.call() ??
+      (_platformInfoCache ??= _detectPlatformInfo());
+
+  /// One OS permission request at a time; every caller shares it.
+  Future<PushPermission>? _permissionRequest;
 
   final PushMessagingAdapter? _messagingOverride;
   PushMessagingAdapter? _messagingDefault;
@@ -187,6 +244,22 @@ class PushNotificationService with WidgetsBindingObserver {
   static String _defaultPlatformName() {
     if (kIsWeb) return 'web';
     return Platform.isIOS ? 'ios' : 'android';
+  }
+
+  static Future<PushPlatformInfo> _detectPlatformInfo() async {
+    if (kIsWeb) return const PushPlatformInfo(platform: PushOsPlatform.other);
+    if (Platform.isIOS) return const PushPlatformInfo.ios();
+    if (Platform.isAndroid) {
+      try {
+        final AndroidDeviceInfo info = await DeviceInfoPlugin().androidInfo;
+        return PushPlatformInfo.android(info.version.sdkInt);
+      } catch (_) {
+        // Unknown: treat as 13+, where an unasked "denied" may still be asked
+        // about. On an older OS the request simply returns the real status.
+        return const PushPlatformInfo.android(33);
+      }
+    }
+    return const PushPlatformInfo(platform: PushOsPlatform.other);
   }
 
   static Future<String> _packageVersion() async {
@@ -292,7 +365,7 @@ class PushNotificationService with WidgetsBindingObserver {
       await (_startupCleanup ?? Future<void>.value());
       await _completePendingTokenDelete();
       if (gen != _gen) return;
-      final PushPermission permission = await _messaging.permissionStatus();
+      final PushPermission permission = await permissionStatus();
       if (!permission.allowsDelivery) return;
       final String? token = await _messaging.getToken();
       if (token == null || token.isEmpty) return;
@@ -451,24 +524,53 @@ class PushNotificationService with WidgetsBindingObserver {
 
   // ── Permission ────────────────────────────────────────────────────────────
 
+  /// The permission state to act on — see [resolvePushPermission].
   Future<PushPermission> permissionStatus() async {
     if (!_supported) return PushPermission.denied;
     try {
-      return await _messaging.permissionStatus();
-    } catch (_) {
+      final AuthorizationStatus os = await _messaging.osPermissionStatus();
+      final PushPlatformInfo platform = await _platformInfo();
+      final bool requested = await _local.permissionRequested();
+      return resolvePushPermission(
+        os: os,
+        platform: platform,
+        requestedBefore: requested,
+      );
+    } catch (e) {
+      debugPrint('[push] permission status unavailable: $e');
       return PushPermission.notDetermined;
     }
   }
 
-  /// Asks the OS (only ever in response to the person's own choice).
-  Future<PushPermission> requestPermission() async {
-    if (!_supported) return PushPermission.denied;
-    PushPermission status;
+  /// Asks the OS — only ever in response to the person's own choice
+  /// (Continue on the explanation, or Turn on in Settings).
+  ///
+  /// Concurrent callers share one request. The request is recorded only once
+  /// the OS has answered, so a request that fails (plugin error, activity
+  /// gone) leaves the person able to opt in later instead of being treated as
+  /// a denial.
+  Future<PushPermission> requestPermission() {
+    if (!_supported) return Future<PushPermission>.value(PushPermission.denied);
+    return _permissionRequest ??= _requestPermissionOnce()
+        .whenComplete(() => _permissionRequest = null);
+  }
+
+  Future<PushPermission> _requestPermissionOnce() async {
+    final AuthorizationStatus os;
     try {
-      status = await _messaging.requestPermission();
-    } catch (_) {
-      return PushPermission.notDetermined;
+      os = await _messaging.requestOsPermission();
+    } catch (e) {
+      debugPrint('[push] permission request failed: $e');
+      return permissionStatus();
     }
+    try {
+      await _local.setPermissionRequested();
+    } catch (_) {}
+    final PushPermission status = resolvePushPermission(
+      os: os,
+      platform: await _platformInfo(),
+      requestedBefore: true,
+    );
     if (status.allowsDelivery) unawaited(refreshRegistration(force: true));
     return status;
   }
@@ -528,30 +630,22 @@ class PushNotificationService with WidgetsBindingObserver {
 // ── Production adapters ─────────────────────────────────────────────────────
 
 class FirebasePushMessagingAdapter implements PushMessagingAdapter {
-  FirebaseMessaging get _fm => FirebaseMessaging.instance;
+  FirebasePushMessagingAdapter({FirebaseMessaging? messaging})
+      : _override = messaging;
 
-  static PushPermission _map(AuthorizationStatus s) {
-    switch (s) {
-      case AuthorizationStatus.authorized:
-        return PushPermission.granted;
-      case AuthorizationStatus.provisional:
-        return PushPermission.provisional;
-      case AuthorizationStatus.denied:
-        return PushPermission.denied;
-      case AuthorizationStatus.notDetermined:
-        return PushPermission.notDetermined;
-    }
-  }
+  final FirebaseMessaging? _override;
+  FirebaseMessaging get _fm => _override ?? FirebaseMessaging.instance;
+
+  // Raw status, deliberately NOT mapped here: on Android 13+ `denied` is
+  // ambiguous until GoodLift has asked. See resolvePushPermission.
+  @override
+  Future<AuthorizationStatus> osPermissionStatus() async =>
+      (await _fm.getNotificationSettings()).authorizationStatus;
 
   @override
-  Future<PushPermission> permissionStatus() async =>
-      _map((await _fm.getNotificationSettings()).authorizationStatus);
-
-  @override
-  Future<PushPermission> requestPermission() async => _map(
-        (await _fm.requestPermission(alert: true, badge: true, sound: true))
-            .authorizationStatus,
-      );
+  Future<AuthorizationStatus> requestOsPermission() async =>
+      (await _fm.requestPermission(alert: true, badge: true, sound: true))
+          .authorizationStatus;
 
   @override
   Future<String?> getToken() async {
@@ -626,6 +720,7 @@ class SharedPrefsPushLocalState implements PushLocalState {
   static const String _kAt = 'push.lastReg.at';
   static const String _kPendingDelete = 'push.pendingTokenDelete';
   static const String _kPrimer = 'push.permissionPrimerShown.v1';
+  static const String _kRequested = 'push.osPermissionRequested.v1';
 
   Future<SharedPreferences> get _p => SharedPreferences.getInstance();
 
@@ -678,4 +773,12 @@ class SharedPrefsPushLocalState implements PushLocalState {
 
   @override
   Future<void> setPrimerShown() async => (await _p).setBool(_kPrimer, true);
+
+  @override
+  Future<bool> permissionRequested() async =>
+      (await _p).getBool(_kRequested) ?? false;
+
+  @override
+  Future<void> setPermissionRequested() async =>
+      (await _p).setBool(_kRequested, true);
 }

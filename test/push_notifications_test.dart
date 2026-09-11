@@ -8,6 +8,7 @@
 import 'dart:async';
 
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
+import 'package:firebase_messaging/firebase_messaging.dart' show AuthorizationStatus;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/push/foreground_conversation.dart';
@@ -38,9 +39,12 @@ Map<String, dynamic> requestData({String to = alice, String from = bob}) => <Str
 
 // ── Fakes ───────────────────────────────────────────────────────────────────
 
+/// Adapter-level fake: returns RAW plugin statuses, as the production adapter
+/// does. (test/push_permission_routing_test.dart drives the real
+/// FirebasePushMessagingAdapter itself.)
 class FakeMessaging implements PushMessagingAdapter {
-  PushPermission status = PushPermission.granted;
-  PushPermission onRequest = PushPermission.granted;
+  AuthorizationStatus status = AuthorizationStatus.authorized;
+  AuthorizationStatus onRequest = AuthorizationStatus.authorized;
   String? token = 'token-1';
   Completer<String?>? tokenGate;
   bool deleteFails = false;
@@ -55,10 +59,10 @@ class FakeMessaging implements PushMessagingAdapter {
   final StreamController<PushMessage> opened = StreamController<PushMessage>.broadcast();
 
   @override
-  Future<PushPermission> permissionStatus() async => status;
+  Future<AuthorizationStatus> osPermissionStatus() async => status;
 
   @override
-  Future<PushPermission> requestPermission() async {
+  Future<AuthorizationStatus> requestOsPermission() async {
     requestCalls++;
     status = onRequest;
     return status;
@@ -124,6 +128,12 @@ class FakeLocal implements PushLocalState {
   PushRegistrationRecord? record;
   bool pending = false;
   bool primer = false;
+  bool requested = false;
+
+  @override
+  Future<bool> permissionRequested() async => requested;
+  @override
+  Future<void> setPermissionRequested() async => requested = true;
 
   @override
   Future<PushRegistrationRecord?> lastRegistration() async => record;
@@ -151,10 +161,14 @@ class FakePlatform extends NotificationPlatform {
 }
 
 class Harness {
-  Harness({String? uid = alice}) : authUid = uid {
+  Harness({String? uid = alice, this.device = const PushPlatformInfo.android(34)})
+      : authUid = uid {
     router = PushRouter(
       currentUid: () => authUid,
-      navigate: (BuildContext _, PushIntent i) async => navigated.add(i),
+      navigate: (BuildContext _, PushIntent i, bool Function() valid) async {
+        navigated.add(i);
+        return true;
+      },
       notify: notices.add,
       clock: () => now,
     );
@@ -170,9 +184,11 @@ class Harness {
       clock: () => now,
       showBanner: (PushIntent i, PushMessage m) => banners.add(i),
       supported: true,
+      platformInfo: () async => device,
     );
   }
 
+  final PushPlatformInfo device;
   String? authUid;
   DateTime now = DateTime(2026, 9, 11, 12);
   final FakeMessaging messaging = FakeMessaging();
@@ -336,11 +352,13 @@ void main() {
 
     test('does not register before permission, then registers once granted', () async {
       final Harness h = Harness();
-      h.messaging.status = PushPermission.notDetermined;
+      // Android 13+ before the prompt: the plugin says "denied".
+      h.messaging.status = AuthorizationStatus.denied;
       await h.service.onSignedIn(alice);
       expect(h.store.calls, isEmpty);
+      expect(await h.service.permissionStatus(), PushPermission.notDetermined);
 
-      h.messaging.onRequest = PushPermission.granted;
+      h.messaging.onRequest = AuthorizationStatus.authorized;
       expect(await h.service.requestPermission(), PushPermission.granted);
       await settle();
       expect(h.store.owners['token-1'], alice);
@@ -348,7 +366,8 @@ void main() {
 
     test('a denial stays respected: no registration, no re-prompt from the service', () async {
       final Harness h = Harness();
-      h.messaging.status = PushPermission.denied;
+      h.messaging.status = AuthorizationStatus.denied;
+      h.local.requested = true; // GoodLift asked before, and was refused
       await h.service.onSignedIn(alice);
       await h.service.refreshRegistration(force: true);
       expect(h.store.calls, isEmpty);
@@ -526,10 +545,15 @@ void main() {
   // ── Settings → Notifications ──────────────────────────────────────────────
 
   group('Settings → Notifications', () {
-    Future<(FakeFirebaseFirestore, Harness)> pumpScreen(WidgetTester tester, PushPermission status) async {
+    Future<(FakeFirebaseFirestore, Harness)> pumpScreen(
+      WidgetTester tester,
+      AuthorizationStatus status, {
+      bool requestedBefore = false,
+    }) async {
       final FakeFirebaseFirestore db = FakeFirebaseFirestore();
-      final Harness h = Harness();
+      final Harness h = Harness(); // Android 13+
       h.messaging.status = status;
+      h.local.requested = requestedBefore;
       await tester.pumpWidget(MaterialApp(
         home: NotificationSettingsScreen(service: h.service, firestore: db, uid: alice),
       ));
@@ -538,7 +562,7 @@ void main() {
     }
 
     testWidgets('three categories on, previews off, and toggles save to the account', (WidgetTester tester) async {
-      final (FakeFirebaseFirestore db, Harness _) = await pumpScreen(tester, PushPermission.granted);
+      final (FakeFirebaseFirestore db, Harness _) = await pumpScreen(tester, AuthorizationStatus.authorized);
       expect(find.text('Friend requests'), findsOneWidget);
       expect(find.text('Friend request accepted'), findsOneWidget);
       expect(find.text('Direct messages'), findsOneWidget);
@@ -559,7 +583,8 @@ void main() {
     });
 
     testWidgets('after a denial it offers the system settings, not another prompt', (WidgetTester tester) async {
-      final (FakeFirebaseFirestore _, Harness h) = await pumpScreen(tester, PushPermission.denied);
+      final (FakeFirebaseFirestore _, Harness h) =
+          await pumpScreen(tester, AuthorizationStatus.denied, requestedBefore: true);
       expect(find.byKey(const ValueKey<String>('push-turn-on')), findsNothing);
       await tester.tap(find.byKey(const ValueKey<String>('push-open-settings')));
       await tester.pump();
@@ -568,7 +593,8 @@ void main() {
     });
 
     testWidgets('before the OS has been asked, "Turn on" asks it', (WidgetTester tester) async {
-      final (FakeFirebaseFirestore _, Harness h) = await pumpScreen(tester, PushPermission.notDetermined);
+      // Android 13+ raw "denied" with no request recorded = not asked yet.
+      final (FakeFirebaseFirestore _, Harness h) = await pumpScreen(tester, AuthorizationStatus.denied);
       await tester.tap(find.byKey(const ValueKey<String>('push-turn-on')));
       await tester.pumpAndSettle();
       expect(h.messaging.requestCalls, 1);

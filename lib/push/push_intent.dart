@@ -24,6 +24,35 @@ extension PushPermissionX on PushPermission {
       this == PushPermission.granted || this == PushPermission.provisional;
 }
 
+enum PushOsPlatform { android, ios, other }
+
+/// What the permission rules need to know about this device.
+///
+/// Android 13 (API 33) introduced the runtime POST_NOTIFICATIONS prompt, and
+/// on 13+ Firebase reports `denied` BOTH before the prompt has ever been shown
+/// and after the person refused it — it is up to the app to remember whether
+/// it asked (see resolvePushPermission). Android 12 and earlier have no prompt
+/// at all: notifications are on unless switched off in system settings. iOS
+/// reports `notDetermined` until asked.
+class PushPlatformInfo {
+  const PushPlatformInfo({required this.platform, this.androidSdkInt = 0});
+
+  const PushPlatformInfo.android(int sdkInt)
+      : platform = PushOsPlatform.android,
+        androidSdkInt = sdkInt;
+
+  const PushPlatformInfo.ios()
+      : platform = PushOsPlatform.ios,
+        androidSdkInt = 0;
+
+  final PushOsPlatform platform;
+  final int androidSdkInt;
+
+  /// Android 13+ — where "denied" is ambiguous until the app has asked.
+  bool get hasAmbiguousDenied =>
+      platform == PushOsPlatform.android && androidSdkInt >= 33;
+}
+
 /// The conversation id both participants derive: the two uids, sorted, joined
 /// by `_`. Mirrors `convIdFor` in directMessages.dart and the server.
 String conversationIdFor(String a, String b) {
@@ -162,7 +191,9 @@ bool shouldShowForegroundBanner({
 ///
 /// Only when the OS has not been asked yet: a person who already allowed or
 /// denied notifications is never re-prompted (Android 12 and older, where
-/// there is no runtime prompt, reports [PushPermission.granted]).
+/// there is no runtime prompt, reports [PushPermission.granted]). [status] is
+/// the RESOLVED state from resolvePushPermission — on Android 13+ a raw
+/// "denied" that GoodLift never asked about arrives here as notDetermined.
 bool shouldOfferPermissionPrimer({
   required PushPermission status,
   required bool alreadyShown,
