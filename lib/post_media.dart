@@ -33,6 +33,7 @@ import 'profile/data/media_video_source.dart';
 import 'profile/ui/cached_network_image.dart';
 import 'profile/ui/live_identity.dart';
 import 'profile/ui/media_detail_page.dart';
+import 'social/ui/post_activity_scope.dart';
 
 // Local storage / utils
 
@@ -84,6 +85,12 @@ class PostDetailPage extends StatelessWidget {
   final Future<void> Function(Post, String) onAddComment;
   final bool canDelete;
 
+  /// A comment to reveal — the one a notification or an Activity row is about.
+  /// It is shown even when it is older than the page of comments this screen
+  /// loads, which is the only way a notification about an older comment can
+  /// lead anywhere.
+  final String? focusCommentId;
+
   const PostDetailPage({
     super.key,
     required this.post,
@@ -91,10 +98,20 @@ class PostDetailPage extends StatelessWidget {
     required this.onToggleGoodLift,
     required this.onAddComment,
     required this.canDelete,
+    this.focusCommentId,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Interactions with THIS post are marked read as they are actually shown —
+    // see PostActivityScope. Opening the page is not by itself reading.
+    return PostActivityScope(
+      postId: post.id,
+      child: _build(context),
+    );
+  }
+
+  Widget _build(BuildContext context) {
     // For brevity: simple viewer + action row with counts.
     return Scaffold(
       backgroundColor: Colors.black, // 👈 add this line
@@ -243,10 +260,13 @@ class PostDetailPage extends StatelessWidget {
               ),
             ),
 
-// --- Simple comments list (last 20) ---
+// --- Simple comments list (last 20, plus the one being revealed) ---
           SizedBox(
             height: 160,
-            child: _CommentsList(postId: post.id),
+            child: _CommentsList(
+              postId: post.id,
+              focusCommentId: focusCommentId,
+            ),
           ),
         ],
       ),
@@ -710,7 +730,12 @@ class _PostActionsBarState extends State<_PostActionsBar> {
 
 class _CommentsList extends StatefulWidget {
   final String postId;
-  const _CommentsList({required this.postId});
+
+  /// A comment to make sure is on screen, even if it is older than the page
+  /// this list loads.
+  final String? focusCommentId;
+
+  const _CommentsList({required this.postId, this.focusCommentId});
 
   @override
   State<_CommentsList> createState() => _CommentsListState();
@@ -720,6 +745,48 @@ class _CommentsListState extends State<_CommentsList> {
   // Track which comments are expanded
   final Set<String> _expanded = <String>{};
   final ScrollController _ctrl = ScrollController();
+
+  /// The comment a notification pointed at, when it is not in the loaded page.
+  /// Fetched once, by id, and shown at the top — one document read, rather
+  /// than paging backwards through a thread of unknown length.
+  Map<String, dynamic>? _pinnedData;
+  bool _pinnedMissing = false;
+  bool _pinnedRequested = false;
+
+  Future<void> _loadPinned() async {
+    final String? id = widget.focusCommentId;
+    if (id == null || _pinnedRequested) return;
+    _pinnedRequested = true;
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap =
+          await FirebaseFirestore.instance
+              .collection('posts')
+              .doc(widget.postId)
+              .collection('comments')
+              .doc(id)
+              .get();
+      if (!mounted) return;
+      setState(() {
+        _pinnedData = snap.data();
+        // Deleted, or no longer readable: say so quietly rather than leaving
+        // the person looking for something that is not there.
+        _pinnedMissing = !snap.exists || snap.data() == null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _pinnedMissing = true);
+    }
+  }
+
+  /// Tells the surrounding scope which comments are actually on screen, so
+  /// that exactly those count as read.
+  void _reportDisplayed(Iterable<String> ids) {
+    final PostActivityScopeState? scope = PostActivityScope.of(context);
+    if (scope == null) return;
+    // After the frame: this runs from build, and acknowledging writes state.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) scope.reportDisplayedComments(ids);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -743,20 +810,50 @@ class _CommentsListState extends State<_CommentsList> {
           );
         }
         final docs = snap.data?.docs ?? const [];
-        if (docs.isEmpty) {
-          return const Center(child: Text('No comments yet'));
+        final String? focusId = widget.focusCommentId;
+        final bool focusInPage =
+            focusId != null && docs.any((d) => d.id == focusId);
+        if (focusId != null && !focusInPage) {
+          // Not in the loaded window: fetch that one comment.
+          unawaited(_loadPinned());
         }
+        final Map<String, dynamic>? pinned = _pinnedData;
+        final bool showPinned = focusId != null && !focusInPage && pinned != null;
+
+        _reportDisplayed(<String>[
+          for (final d in docs) d.id,
+          if (showPinned) focusId,
+        ]);
+
+        if (docs.isEmpty && !showPinned) {
+          return Center(
+            child: Text(
+              focusId != null && _pinnedMissing
+                  ? 'That comment is no longer available'
+                  : 'No comments yet',
+            ),
+          );
+        }
+
+        // The comment being revealed goes first when it is not in the loaded
+        // page, so a notification about an older comment lands on something.
+        final List<MapEntry<String, Map<String, dynamic>>> rows =
+            <MapEntry<String, Map<String, dynamic>>>[
+          if (showPinned) MapEntry<String, Map<String, dynamic>>(focusId, pinned),
+          for (final d in docs)
+            MapEntry<String, Map<String, dynamic>>(d.id, d.data()),
+        ];
 
         return ListView.separated(
           key: PageStorageKey('comments-${widget.postId}'),
           controller: _ctrl,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          itemCount: docs.length,
+          itemCount: rows.length,
           separatorBuilder: (_, __) => const SizedBox(height: 6),
           itemBuilder: (_, i) {
-            final doc = docs[i];
-            final d = doc.data();
-            final cid = doc.id;
+            final d = rows[i].value;
+            final cid = rows[i].key;
+            final bool isFocused = focusId != null && cid == focusId;
             final text = (d['text'] ?? '') as String;
             final uid = (d['uid'] ?? '') as String;
             // The name this comment was written under. AUDIT DATA: it records
@@ -794,7 +891,7 @@ class _CommentsListState extends State<_CommentsList> {
               );
             }
 
-            return Row(
+            final Widget row = Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Icon(Icons.person_outline, size: 16),
@@ -807,6 +904,16 @@ class _CommentsListState extends State<_CommentsList> {
                   ),
                 ),
               ],
+            );
+            if (!isFocused) return row;
+            // A quiet marker on the comment the person came here to see.
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white10,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: row,
             );
           },
         );

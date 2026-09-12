@@ -1,27 +1,58 @@
 # Push notifications
 
-GoodLift sends **exactly three** push notifications. Nothing else in the app
-sends one: no coach, workout, streak, feed, reaction, marketing or reminder
-alerts.
+GoodLift notifies somebody about **things other people do to them or to their
+content**, and nothing else: no coach, workout, streak, marketing or reminder
+alerts, and no broadcast when a friend merely posts.
 
 | Event | Recipient | Default text | Tap opens |
 |---|---|---|---|
 | Incoming friend request | the receiver | "[Name] sent you a friend request" | Buddy Hub → People (REQUESTS) |
 | Friend request accepted | the original requester | "[Name] accepted your friend request" | Buddy Hub → People (NEW BUDDIES; marked seen once displayed) |
 | Direct message (text/photo/video) | the other participant | "[Name] sent you a message / a photo / a video" | that exact ConversationPage |
+| Reaction to a message | the message's **sender** | "[Name] reacted 🔥 to your message" | that conversation, scrolled to the message |
+| Comment on a post | the post's **owner** | "[Name] commented on your post" | the post, with that comment revealed |
+| Like on a post | the post's owner | "[Name] liked your post" | the post |
+| Good Lift on a video post | the post's owner | "[Name] gave your video a Good Lift" | the post |
+
+Nobody is ever notified about their own action. Removing a like or a Good Lift,
+changing or removing a reaction, editing or deleting a comment, deleting
+content, read acknowledgements and counter updates produce no alert at all.
+
+Post interactions are recorded against the POST, so it makes no difference
+whether the person reached it through the profile grid, the Home feed or the
+Buddy Hub.
 
 Message text appears in a notification only if the recipient turned on
-**Settings → Notifications → Show message previews** (default off). With it
-off, the text is never put in the FCM payload.
+**Settings → Notifications → Show message previews** (default off); a comment's
+words likewise need **Show comment previews** (default off). With them off the
+text is never put in the FCM payload. A reaction's emoji is shown either way —
+it is the reaction itself, and says nothing about the message it is attached
+to.
+
+### Interactions that exist and are deliberately NOT notified
+
+`comments` carry a `likeCount` field that nothing writes and no UI exposes, so
+there is no comment-like interaction to notify about. There are no replies,
+no mentions and no comment reactions in the app; if any are added, they get a
+trigger of their own rather than being folded into these.
 
 ## Architecture
 
 ```
 buddyInvites write ─► socialOnBuddyInviteWritten ─┬─ acceptance notice + friendAccepted job (one transaction)
                                                    └─ friendRequest job (create-if-absent)
-messages write ────► pushOnDirectMessageWritten ──── directMessage job (create-if-absent)
+messages write ────► pushOnDirectMessageWritten ──┬─ directMessage job (create-if-absent)
+                                                   └─ dmReaction job + activity record, per new reactor
+comments write ────► pushOnPostCommentWritten ────┐
+likes write ───────► pushOnPostLikeWritten ───────┼─ activity record + job, in ONE batch of creates
+goodLifts write ───► pushOnPostGoodLiftWritten ───┘
 pushOutbox create ─► pushOutboxOnCreated ─────────── validate → FCM sendEach → record per device
 ```
+
+Every trigger fires on the AUTHORITATIVE interaction document — the comment,
+the like, the Good Lift, the message — never on a denormalised counter
+(`likeCount`, `commentCount`), which is written by the visitor's own client,
+carries no identity and moves for removals and edits too.
 
 * `functions/push/push_model.js`: pure rules (occurrences, deliverability,
   wording, payloads, FCM error classes, job state machine).
@@ -40,6 +71,7 @@ pushOutbox create ─► pushOutboxOnCreated ─────────── v
 | `pushOutbox/{jobId}` | server | none |
 | `pushConfig/delivery` `{enabled}` | console/admin | none (kill switch) |
 | `users/{u}/socialNotifications/buddyAccepted_{a}.occurrenceKey` | server | unchanged rule (owner may only set `seen`/`seenAt`) |
+| `users/{u}/socialActivity/{activityId}` | server | owner read; the owner's ONE write is `read` false → true with `readAt == request.time`. Create, delete and un-read are denied to every client |
 
 These are top-level collections, so the `users/{userId}/{subcoll}` catch-all
 cannot grant anything on them.
@@ -67,6 +99,49 @@ still that same request. So a replayed or out-of-order old event neither
 revives a notice nor re-notifies. Marking a notice seen writes only
 `seen`/`seenAt`, which never reaches the trigger, so it can't push or reset
 the badge.
+
+### Social activity — the in-app record
+
+A push is a courtesy: it needs permission, a category left on, and it is gone
+once swiped. So every post interaction and message reaction also writes a
+durable record under the person it is addressed to, and the alert is a view OF
+that record. The unread badge, the Buddies → **ACTIVITY** list and the
+cancelling of phone alerts all come from this one collection. Turning a
+notification category off stops the alert only; the activity still appears.
+
+The record id is derived from the interaction's OCCURRENCE, so a replayed
+event, a retry or an out-of-order write finds it already there and writes
+nothing — an interaction already read is never resurrected as unread. A like
+removed and given again, or a reaction whose emoji is swapped, is the same
+occurrence: one record, one alert. Removal deliberately deletes nothing, since
+a deleted record could be recreated by the next like and alert again; the
+delivery worker re-checks the live interaction instead and drops an alert for
+something that has been taken back.
+
+**What counts as read.** Being PRESENTED, one interaction at a time — never
+"you opened a screen":
+
+* the post's likes and Good Lifts, when that post is the visible route and the
+  app is in front;
+* a comment, only if it is one of the comments actually on screen. A comment
+  older than the loaded window stays unread until it is shown, which is why a
+  notification about one pins it to the top of the list;
+* a reaction, only when its message is on screen;
+* an ACTIVITY row, only while it is visible in the selected tab.
+
+Opening Home, the profile grid or the Activity list therefore marks nothing
+read by itself, and an interaction that arrives during an acknowledgement is
+not in the set being acknowledged, so it stays unread with its alert intact.
+The write is one field, is not a transaction (so it applies offline at once)
+and the rules make it one-way: nothing can move an interaction back to unread.
+
+Reading an interaction cancels exactly its delivered alert, by the tag the
+server stamped on the record — `post|<post>|<activity>` and
+`dmr|<conversation>|<message>` — so another post's and another conversation's
+alerts are untouched. Startup and resume reconcile the tray against the
+records, which covers anything read on another device. Unread social activity
+is counted separately from unread MESSAGES: a reaction never moves the message
+count.
 
 ### Direct messages
 
@@ -291,7 +366,9 @@ Firebase console:
 | Functions unit | `cd functions; npm test` | `test/push_model.test.js` |
 | Rules (emulator) | `npm run test:rules` (Java 21: Android Studio `jbr`) | `test-rules/push_rules.spec.js` |
 | Delivery (emulator, FCM mocked) | `npm run test:emulator` | `test-emulator/push_delivery.spec.js` (+ updated `social_notifications.spec.js`) |
-| Flutter | `flutter test` | `test/push_notifications_test.dart`, `test/push_permission_routing_test.dart` (real adapter over Android 13+ raw `denied`; real Navigator routing), `test/dm_unread_test.dart` (ledger, read acknowledgement, targeted cancellation, avatars) |
+| Flutter | `flutter test` | `test/push_notifications_test.dart`, `test/push_permission_routing_test.dart` (real adapter over Android 13+ raw `denied`; real Navigator routing, including post destinations), `test/dm_unread_test.dart` (ledger, read acknowledgement, targeted cancellation, avatars), `test/social_activity_test.dart` (what counts as presented, per-post clearing, arrival during acknowledgement, account switch, tags) |
+| Interactions (emulator) | `npm run test:emulator` | `test-emulator/push_social_interactions.spec.js` (recipient, self-suppression, replays, edits, removals, emoji changes, deleted posts/comments/messages, preference and preview behaviour, no backlog on deploy) |
+| Activity records + rules | `npm test`, `npm run test:rules` | `test/push_activity.test.js`, `socialActivity` cases in `test-rules/push_rules.spec.js` |
 | Unread ledger (unit + emulator) | `npm test`, `npm run test:emulator` | `test/push_dm_unread.test.js`, `test-emulator/dm_unread.spec.js` |
 
 ## Deployment
@@ -301,9 +378,16 @@ Order (compatible with installed app versions, which don't register tokens):
 1. `firebase deploy --only firestore:rules,firestore:indexes --project goodlift-us-storage`.
    The rules are backwards compatible with every installed build's DM writes.
    Indexes adds only the `pushOutbox.purgeAt` TTL override.
-2. `firebase deploy --only functions:socialOnBuddyInviteWritten,functions:pushOnDirectMessageWritten,functions:pushOutboxOnCreated --project goodlift-us-storage`.
-   All three are 2nd gen, us-central1, with Firestore trigger region `nam5`.
-   No callable was added.
+2. `firebase deploy --only functions:socialOnBuddyInviteWritten,functions:pushOnDirectMessageWritten,functions:pushOnPostCommentWritten,functions:pushOnPostLikeWritten,functions:pushOnPostGoodLiftWritten,functions:pushOutboxOnCreated --project goodlift-us-storage --force`.
+   All are 2nd gen, us-central1, with Firestore trigger region `nam5`. No
+   callable was added. `--force` acknowledges the retry policy on the NEW
+   triggers non-interactively.
+
+   Every function that shares `push/outbox.js`, `push/push_model.js` or
+   `push/activity.js` is in that list — including `socialOnBuddyInviteWritten`,
+   which enqueues friend-request and acceptance jobs through the same helpers.
+   Deploying only the three original push functions is NOT sufficient for this
+   release.
 
 No backfill is performed. Triggers act only on writes after deployment, and
 only on transitions.
@@ -319,6 +403,12 @@ only on transitions.
   Jobs still enqueue harmlessly and are purged by TTL after 7 days.
 * **Remove DM enqueueing**:
   `firebase functions:delete pushOnDirectMessageWritten --region us-central1 --project goodlift-us-storage`.
+* **Stop post interactions only** (keeping friend, DM and reaction alerts):
+  delete `pushOnPostCommentWritten`, `pushOnPostLikeWritten` and
+  `pushOnPostGoodLiftWritten` the same way. Existing activity records stay
+  readable in the app; no new ones are written. To stop the alerts but KEEP the
+  in-app activity, turn the categories off instead — the records are written by
+  the same triggers, so deleting them stops both.
 * **Invite trigger**: keep it deployed. It owns the acceptance notices. To
   return it to the pre-push behaviour, redeploy it from the parent of the push
   commit. That also stops friend-request/acceptance jobs.

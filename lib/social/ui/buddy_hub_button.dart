@@ -28,6 +28,7 @@ import 'package:flutter/material.dart';
 
 import '../buddy_hub_screen.dart';
 import '../buddy_repository.dart';
+import '../social_activity_service.dart';
 import '../user_search_repository.dart';
 
 /// The largest number the badge spells out. Beyond it the exact count stops
@@ -42,12 +43,16 @@ class BuddyHubButton extends StatefulWidget {
     this.iconColor,
     this.iconSize = 24,
     this.actingAsOtherAccount = false,
+    this.activityService,
   });
 
   /// Injectable for tests. Production uses the default repositories, both of
   /// which resolve the AUTHENTICATED account.
   final BuddyRepository? buddies;
   final UserSearchRepository? search;
+
+  /// Injectable for tests. The unread social-activity count in the badge.
+  final SocialActivityService? activityService;
 
   /// True when the surrounding screen is showing somebody else — a coach with
   /// an athlete selected. Passed straight through to [BuddyHubScreen] so the
@@ -72,11 +77,16 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
   /// the app bar, and the app bar rebuilds constantly.
   late final Stream<BuddyBadge> _badge;
 
+  /// Unread social activity, from the shared auth-scoped subscription — no
+  /// extra query, and it follows the signed-in account like the rest.
+  late final Stream<SocialActivitySnapshot> _activity;
+
   @override
   void initState() {
     super.initState();
     _buddies = widget.buddies ?? BuddyRepository();
     _badge = _buddies.watchBadge();
+    _activity = (widget.activityService ?? SocialActivityService.instance).watch();
   }
 
   static String _tooltipFor(BuddyBadge badge) {
@@ -113,29 +123,48 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
         // A stream error is not a reason to hide the way into the Hub — the
         // icon still works, it just cannot say whether anything is waiting.
         final BuddyBadge badge = snap.data ?? const BuddyBadge();
-        final int count = badge.total;
-        return Stack(
-          alignment: Alignment.center,
-          clipBehavior: Clip.none,
-          children: <Widget>[
-            IconButton(
-              onPressed: _openHub,
-              tooltip: _tooltipFor(badge),
-              icon: Icon(
-                Icons.person_add_alt_1,
-                size: widget.iconSize,
-                color: color,
-              ),
-            ),
-            if (count > 0)
-              Positioned(
-                right: 6,
-                top: 6,
-                child: _PendingBadge(count: count),
-              ),
-          ],
+        return StreamBuilder<SocialActivitySnapshot>(
+          stream: _activity,
+          builder: (BuildContext context,
+              AsyncSnapshot<SocialActivitySnapshot> activity) {
+            // Requests and acceptances waiting, plus interactions with this
+            // account's posts and messages that have not been seen. One
+            // number, because they all lead to the same place.
+            final int count =
+                badge.total + (activity.data?.unreadCount ?? 0);
+            return _button(context, color, badge, count);
+          },
         );
       },
+    );
+  }
+
+  Widget _button(
+    BuildContext context,
+    Color color,
+    BuddyBadge badge,
+    int count,
+  ) {
+    return Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none,
+      children: <Widget>[
+        IconButton(
+          onPressed: _openHub,
+          tooltip: _tooltipFor(badge),
+          icon: Icon(
+            Icons.person_add_alt_1,
+            size: widget.iconSize,
+            color: color,
+          ),
+        ),
+        if (count > 0)
+          Positioned(
+            right: 6,
+            top: 6,
+            child: _PendingBadge(count: count),
+          ),
+      ],
     );
   }
 }

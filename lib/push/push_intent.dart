@@ -12,7 +12,34 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
-enum PushKind { friendRequest, friendAccepted, directMessage }
+enum PushKind {
+  friendRequest,
+  friendAccepted,
+  directMessage,
+
+  /// Somebody reacted with an emoji to a message THIS account sent.
+  dmReaction,
+
+  /// Somebody interacted with a post this account published. Where they found
+  /// it — profile grid, Home feed or Buddy Hub — makes no difference: the
+  /// interaction is recorded against the post.
+  postComment,
+  postLike,
+  postGoodLift,
+}
+
+extension PushKindX on PushKind {
+  /// True for the interactions that open a post.
+  bool get isPostInteraction =>
+      this == PushKind.postComment ||
+      this == PushKind.postLike ||
+      this == PushKind.postGoodLift;
+
+  /// True for the interactions that have an activity record behind them —
+  /// everything except the two friendship events, which have their own
+  /// established surface in the Buddy Hub.
+  bool get hasActivityRecord => isPostInteraction || this == PushKind.dmReaction;
+}
 
 /// OS permission for notifications on this device, independent of plugin
 /// types so the decisions below stay testable.
@@ -77,6 +104,26 @@ String pushDeviceIdForToken(String token) =>
 String dmConversationTagKey(String convId) =>
     sha256.convert(utf8.encode(convId)).toString().substring(0, 8);
 
+/// The same key for any subject a group of alerts belongs to — a conversation,
+/// or a post. Mirrors subjectTagKey in functions/push/push_model.js.
+String subjectTagKey(String id) =>
+    sha256.convert(utf8.encode(id)).toString().substring(0, 8);
+
+/// Every alert about one post starts with this — a comment, a like and a Good
+/// Lift alike. Reading that post cancels the lot, and nothing else.
+String postTagPrefix(String postId) => 'post|${subjectTagKey(postId)}|';
+
+/// The tag one post interaction's alert carries.
+String postActivityTag({required String postId, required String activityId}) =>
+    '${postTagPrefix(postId)}$activityId';
+
+/// Every reaction alert for one conversation starts with this.
+String dmReactionTagPrefix(String convId) => 'dmr|${subjectTagKey(convId)}|';
+
+/// The tag the alert for a reaction to one message carries.
+String dmReactionTag({required String convId, required String messageId}) =>
+    '${dmReactionTagPrefix(convId)}$messageId';
+
 /// Every alert for one conversation starts with this.
 String dmConversationTagPrefix(String convId) =>
     'dm|${dmConversationTagKey(convId)}|';
@@ -103,6 +150,9 @@ class PushIntent {
     this.convId,
     this.messageId,
     this.incomingSeq,
+    this.postId,
+    this.commentId,
+    this.activityId,
   });
 
   final PushKind kind;
@@ -124,6 +174,15 @@ class PushIntent {
   final String? messageId;
   final int? incomingSeq;
 
+  /// Post interactions only: the post to open, and — for a comment — the one
+  /// to reveal, which may be far outside the page the screen loads by default.
+  final String? postId;
+  final String? commentId;
+
+  /// The activity record this alert belongs to, so that opening it marks
+  /// exactly this interaction read rather than a screen's worth.
+  final String? activityId;
+
   final DateTime receivedAt;
 
   /// Parses the routing data the server attaches. Returns null for anything
@@ -140,6 +199,10 @@ class PushIntent {
       'friendRequest' => PushKind.friendRequest,
       'friendAccepted' => PushKind.friendAccepted,
       'directMessage' => PushKind.directMessage,
+      'dmReaction' => PushKind.dmReaction,
+      'postComment' => PushKind.postComment,
+      'postLike' => PushKind.postLike,
+      'postGoodLift' => PushKind.postGoodLift,
       _ => null,
     };
     final String? recipient = s('recipientUid');
@@ -148,12 +211,19 @@ class PushIntent {
     if (recipient == actor) return null;
 
     String? convId;
-    if (kind == PushKind.directMessage) {
+    if (kind == PushKind.directMessage || kind == PushKind.dmReaction) {
       convId = s('convId');
       if (convId == null || convId != conversationIdFor(recipient, actor)) {
         return null;
       }
     }
+    final String? postId = s('postId');
+    // A post interaction with nothing to open is not actionable.
+    if (kind.isPostInteraction && postId == null) return null;
+    // A reaction alert names the message it is about; without it there is
+    // nothing to reveal and nothing to cancel precisely.
+    if (kind == PushKind.dmReaction && s('msgId') == null) return null;
+
     return PushIntent(
       kind: kind,
       recipientUid: recipient,
@@ -161,6 +231,9 @@ class PushIntent {
       convId: convId,
       messageId: s('msgId'),
       incomingSeq: int.tryParse(s('seq') ?? ''),
+      postId: postId,
+      commentId: s('commentId'),
+      activityId: s('activityId'),
       receivedAt: now ?? DateTime.now(),
     );
   }
@@ -214,12 +287,23 @@ bool shouldShowForegroundBanner({
   required String? currentUid,
   required String? visibleConvId,
   required bool appResumed,
+  String? visiblePostId,
 }) {
   if (currentUid == null || currentUid != intent.recipientUid) return false;
-  if (intent.kind == PushKind.directMessage &&
-      appResumed &&
+  if (!appResumed) return true;
+  // The conversation in front of the person: a message or a reaction in it is
+  // already on screen.
+  if ((intent.kind == PushKind.directMessage ||
+          intent.kind == PushKind.dmReaction) &&
       visibleConvId != null &&
       visibleConvId == intent.convId) {
+    return false;
+  }
+  // The post in front of the person. Suppressed only for THIS post — an
+  // interaction on another post is still news, even while a post is open.
+  if (intent.kind.isPostInteraction &&
+      visiblePostId != null &&
+      visiblePostId == intent.postId) {
     return false;
   }
   return true;
@@ -250,19 +334,46 @@ class PushPreferences {
     this.friendRequests = true,
     this.friendAccepted = true,
     this.directMessages = true,
+    this.messageReactions = true,
+    this.postComments = true,
+    this.postReactions = true,
     this.messagePreviews = false,
+    this.commentPreviews = false,
   });
 
   final bool friendRequests;
   final bool friendAccepted;
   final bool directMessages;
+
+  /// Emoji reactions to messages this account sent.
+  final bool messageReactions;
+
+  /// Comments on this account's posts.
+  final bool postComments;
+
+  /// Likes and Good Lifts on this account's posts — one switch, because they
+  /// are the same gesture and splitting them would make the setting's effect
+  /// depend on whether the post happens to be a video.
+  final bool postReactions;
+
   final bool messagePreviews;
+
+  /// Whether a comment's words may appear in a notification.
+  final bool commentPreviews;
 
   static const String fFriendRequests = 'friendRequests';
   static const String fFriendAccepted = 'friendAccepted';
   static const String fDirectMessages = 'directMessages';
+  static const String fMessageReactions = 'messageReactions';
+  static const String fPostComments = 'postComments';
+  static const String fPostReactions = 'postReactions';
   static const String fMessagePreviews = 'messagePreviews';
+  static const String fCommentPreviews = 'commentPreviews';
 
+  /// Defaults mirror DEFAULT_PREFERENCES in functions/push/push_model.js. A
+  /// field an older build never wrote takes the default, so a new category is
+  /// on for existing accounts without a migration and without overwriting the
+  /// answers they have already given.
   static PushPreferences fromMap(Map<String, dynamic>? data) {
     bool b(String key, bool fallback) {
       final Object? v = data?[key];
@@ -273,7 +384,11 @@ class PushPreferences {
       friendRequests: b(fFriendRequests, true),
       friendAccepted: b(fFriendAccepted, true),
       directMessages: b(fDirectMessages, true),
+      messageReactions: b(fMessageReactions, true),
+      postComments: b(fPostComments, true),
+      postReactions: b(fPostReactions, true),
       messagePreviews: b(fMessagePreviews, false),
+      commentPreviews: b(fCommentPreviews, false),
     );
   }
 
@@ -282,7 +397,11 @@ class PushPreferences {
       friendRequests: field == fFriendRequests ? value : friendRequests,
       friendAccepted: field == fFriendAccepted ? value : friendAccepted,
       directMessages: field == fDirectMessages ? value : directMessages,
+      messageReactions: field == fMessageReactions ? value : messageReactions,
+      postComments: field == fPostComments ? value : postComments,
+      postReactions: field == fPostReactions ? value : postReactions,
       messagePreviews: field == fMessagePreviews ? value : messagePreviews,
+      commentPreviews: field == fCommentPreviews ? value : commentPreviews,
     );
   }
 
@@ -294,8 +413,16 @@ class PushPreferences {
         return friendAccepted;
       case fDirectMessages:
         return directMessages;
+      case fMessageReactions:
+        return messageReactions;
+      case fPostComments:
+        return postComments;
+      case fPostReactions:
+        return postReactions;
       case fMessagePreviews:
         return messagePreviews;
+      case fCommentPreviews:
+        return commentPreviews;
     }
     return false;
   }

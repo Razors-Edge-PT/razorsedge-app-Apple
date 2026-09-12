@@ -14,6 +14,7 @@ import 'dart:io';
 import 'profile/data/identity_repository.dart';
 import 'profile/ui/live_identity.dart';
 import 'social/dm_unread_service.dart';
+import 'social/social_activity_service.dart';
 import 'social/ui/user_row.dart' show LiveBuddyAvatar;
 import 'main.dart' show routeObserver;
 import 'push/foreground_conversation.dart';
@@ -298,14 +299,20 @@ class ConversationPage extends StatefulWidget {
   final String convId;
   final String otherUid;
 
-  /// Injectable for tests; production uses the shared instance.
+  /// A message to reveal — the one a reaction notification is about.
+  final String? focusMessageId;
+
+  /// Injectable for tests; production uses the shared instances.
   final DmUnreadService? unreadService;
+  final SocialActivityService? activityService;
 
   const ConversationPage({
     super.key,
     required this.convId,
     required this.otherUid,
+    this.focusMessageId,
     this.unreadService,
+    this.activityService,
   });
 
   @override
@@ -405,6 +412,27 @@ class _ConversationPageState extends State<ConversationPage>
 
   DmUnreadService get _unread => widget.unreadService ?? DmUnreadService.instance;
 
+  SocialActivityService get _activity =>
+      widget.activityService ?? SocialActivityService.instance;
+
+  /// Reactions to messages this account SENT, for the messages on screen.
+  ///
+  /// Kept apart from the message ledger above on purpose: a reaction is not an
+  /// incoming message, so acknowledging one can never move the unread-message
+  /// count, and reading messages can never silently swallow a reaction that is
+  /// still off screen.
+  void _acknowledgeDisplayedReactions() {
+    final List<SocialActivity> presented = presentedInConversation(
+      unread: _activity.snapshot.unread,
+      convId: widget.convId,
+      displayedMessageIds: <String>{
+        for (final QueryDocumentSnapshot<Object?> d in _displayed) d.id,
+      },
+    );
+    if (presented.isEmpty) return;
+    unawaited(_activity.acknowledge(presented));
+  }
+
   void _acknowledgeDisplayed() {
     final String? uid = FirebaseAuth.instance.currentUser?.uid;
     if (!mounted ||
@@ -416,6 +444,10 @@ class _ConversationPageState extends State<ConversationPage>
         )) {
       return;
     }
+
+    // Reactions to my own messages travel with the same "actually displayed"
+    // rule, and are counted separately from unread messages.
+    _acknowledgeDisplayedReactions();
 
     final DmReadBoundary boundary = computeReadBoundary(
       uid: uid!,
@@ -861,11 +893,19 @@ class _ConversationPageState extends State<ConversationPage>
                     }
                   }
 
-                  // One-time initial jump: to first unread, else bottom
+                  // One-time initial jump: to the message a reaction alert
+                  // pointed at, else first unread, else bottom.
                   if (!_didInitialJump && msgs.isNotEmpty) {
                     _didInitialJump = true;
+                    final String? focusId = widget.focusMessageId;
+                    final int focusIndex = focusId == null
+                        ? -1
+                        : msgs.indexWhere(
+                            (QueryDocumentSnapshot<Object?> d) => d.id == focusId);
                     WidgetsBinding.instance.addPostFrameCallback((_) {
-                      if (firstUnreadIndex != -1) {
+                      if (focusIndex != -1) {
+                        _jumpToIndex(focusIndex, alignment: 0.3);
+                      } else if (firstUnreadIndex != -1) {
                         _jumpToIndex(firstUnreadIndex, alignment: 0.1);
                       } else {
                         _jumpToIndex(_lastItemIndex, alignment: 1.0);

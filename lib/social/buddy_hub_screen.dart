@@ -29,11 +29,13 @@ import 'buddy_repository.dart';
 import 'feed_repository.dart';
 import 'feed_view.dart';
 import 'open_feed_post.dart';
+import 'social_activity_service.dart';
+import 'ui/activity_view.dart';
 import 'ui/user_row.dart';
 import 'user_search_repository.dart';
 import 'user_search_result.dart';
 
-enum BuddyHubTab { people, feed }
+enum BuddyHubTab { people, feed, activity }
 
 /// How long typing settles before a query is sent.
 ///
@@ -51,6 +53,7 @@ class BuddyHubScreen extends StatefulWidget {
     this.search,
     this.showOwnAccountNotice = false,
     this.notifications,
+    this.activityService,
   });
 
   /// Injectable for tests. Cancels the phone alerts for requests and
@@ -78,8 +81,37 @@ class BuddyHubScreen extends StatefulWidget {
   final BuddyRepository? buddies;
   final UserSearchRepository? search;
 
+  /// Injectable for tests. The ACTIVITY tab's records and unread count.
+  final SocialActivityService? activityService;
+
   @override
   State<BuddyHubScreen> createState() => _BuddyHubScreenState();
+}
+
+/// A small unread marker for the ACTIVITY tab.
+class _UnreadDot extends StatelessWidget {
+  const _UnreadDot({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: ProfilePalette.action,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Text(
+        count > 9 ? '9+' : '$count',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
 }
 
 class _BuddyHubScreenState extends State<BuddyHubScreen>
@@ -115,22 +147,34 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
   late final NotificationPlatform _notifications =
       widget.notifications ?? NotificationPlatform();
 
+  SocialActivityService get _activity =>
+      widget.activityService ?? SocialActivityService.instance;
+
   @override
   void initState() {
     super.initState();
     _tabs = TabController(
-      length: 2,
+      length: BuddyHubTab.values.length,
       vsync: this,
-      initialIndex: widget.initialTab == BuddyHubTab.feed ? 1 : 0,
+      initialIndex: widget.initialTab.index,
     );
+    // The ACTIVITY tab reads only what it actually shows, so it has to know
+    // when it becomes the selected one.
+    _tabs.addListener(_onTabChanged);
     _buddies = widget.buddies ?? BuddyRepository();
     _search = widget.search ?? UserSearchRepository();
+  }
+
+  void _onTabChanged() {
+    if (_tabs.indexIsChanging) return;
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
     _queryController.dispose();
+    _tabs.removeListener(_onTabChanged);
     _tabs.dispose();
     super.dispose();
   }
@@ -298,9 +342,28 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
           labelColor: ProfilePalette.textPrimary,
           unselectedLabelColor: ProfilePalette.textMuted,
           labelStyle: ProfileText.sectionTitle(context),
-          tabs: const <Widget>[
-            Tab(text: 'PEOPLE'),
-            Tab(text: 'FEED'),
+          tabs: <Widget>[
+            const Tab(text: 'PEOPLE'),
+            const Tab(text: 'FEED'),
+            Tab(
+              child: StreamBuilder<SocialActivitySnapshot>(
+                stream: _activity.watch(),
+                builder: (BuildContext context,
+                    AsyncSnapshot<SocialActivitySnapshot> snap) {
+                  final int unread = snap.data?.unreadCount ?? 0;
+                  return Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      const Text('ACTIVITY'),
+                      if (unread > 0) ...<Widget>[
+                        const SizedBox(width: 6),
+                        _UnreadDot(count: unread),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ),
           ],
         ),
       ),
@@ -313,6 +376,13 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
             onOpenProfile: _openProfile,
             onOpenPost: _openPost,
           )),
+          ActivityView(
+            active: _tabs.index == BuddyHubTab.activity.index,
+            service: widget.activityService,
+            search: _search,
+            viewerUid: _buddies.currentUid,
+            onOpenProfile: _openProfile,
+          ),
         ],
       ),
     );

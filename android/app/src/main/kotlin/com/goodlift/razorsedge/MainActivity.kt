@@ -72,10 +72,16 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * The three push categories, one stable channel each (ids mirror
+     * One stable channel per push category (ids mirror
      * functions/push/push_model.js ANDROID_CHANNEL). Creating an existing
      * channel again is a no-op, so the importance and sound a person chose
      * in system settings are never overridden.
+     *
+     * A channel MUST exist before a notification names it: Android drops a
+     * message addressed to an unknown channel without showing anything, which
+     * is a silent failure rather than a visible one. So every id the server can
+     * send is created here, including the ones added after this app version
+     * shipped its first channels.
      */
     private fun ensureNotificationChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -95,7 +101,24 @@ class MainActivity : FlutterActivity() {
                 "goodlift_direct_messages",
                 "Direct messages",
                 NotificationManager.IMPORTANCE_HIGH
-            ).apply { description = "When a friend sends you a message" }
+            ).apply { description = "When a friend sends you a message" },
+            NotificationChannel(
+                "goodlift_message_reactions",
+                "Message reactions",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply { description = "When someone reacts to a message you sent" },
+            NotificationChannel(
+                "goodlift_post_comments",
+                "Comments on your posts",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply { description = "When a friend comments on something you posted" },
+            NotificationChannel(
+                "goodlift_post_reactions",
+                "Likes and Good Lifts",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "When a friend likes your post or gives your video a Good Lift"
+            }
         )
         manager.createNotificationChannels(channels)
     }

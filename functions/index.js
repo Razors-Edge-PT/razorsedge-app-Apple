@@ -906,4 +906,7 @@ exports.feedOnBuddyAssignmentWritten = feed.feedOnBuddyAssignmentWritten;
 // docs/push_notifications.md (including rollback).
 const pushTriggers = require('./push/triggers');
 exports.pushOnDirectMessageWritten = pushTriggers.pushOnDirectMessageWritten;
+exports.pushOnPostCommentWritten = pushTriggers.pushOnPostCommentWritten;
+exports.pushOnPostLikeWritten = pushTriggers.pushOnPostLikeWritten;
+exports.pushOnPostGoodLiftWritten = pushTriggers.pushOnPostGoodLiftWritten;
 exports.pushOutboxOnCreated = pushTriggers.pushOutboxOnCreated;

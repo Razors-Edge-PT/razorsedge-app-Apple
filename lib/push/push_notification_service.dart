@@ -55,7 +55,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_check_ready.dart';
 import '../main.dart' show rootScaffoldMessengerKey;
 import '../social/dm_unread_service.dart';
+import '../social/social_activity_service.dart';
 import 'foreground_conversation.dart';
+import 'foreground_post.dart';
 import 'notification_platform.dart';
 import 'push_intent.dart';
 import 'push_router.dart';
@@ -191,7 +193,9 @@ class PushNotificationService with WidgetsBindingObserver {
     bool? supported,
     Future<PushPlatformInfo> Function()? platformInfo,
     DmUnreadService? unread,
+    SocialActivityService? activity,
   })  : _unread = unread ?? DmUnreadService.instance,
+        _activity = activity ?? SocialActivityService.instance,
         _platformInfoOverride = platformInfo,
         _messagingOverride = messaging,
         _store = store ?? FirestorePushRegistrationStore(),
@@ -209,6 +213,7 @@ class PushNotificationService with WidgetsBindingObserver {
   static final PushNotificationService instance = PushNotificationService();
 
   final DmUnreadService _unread;
+  final SocialActivityService _activity;
   final Future<PushPlatformInfo> Function()? _platformInfoOverride;
   Future<PushPlatformInfo>? _platformInfoCache;
   Future<PushPlatformInfo> _platformInfo() =>
@@ -301,9 +306,11 @@ class PushNotificationService with WidgetsBindingObserver {
     final int gen = ++_gen;
     _attachListeners(gen);
     _router.onAuthChanged();
-    // Unread counts follow the authenticated account, and stale alerts from a
-    // previous session are dropped once its state has loaded.
+    // Unread counts and social activity follow the authenticated account, and
+    // stale alerts from a previous session are dropped once their state has
+    // loaded.
     _unread.onAccountChanged(uid);
+    _activity.onAccountChanged(uid);
     unawaited(_reconcileDeliveredAlerts());
 
     if (!_observing) {
@@ -351,6 +358,13 @@ class PushNotificationService with WidgetsBindingObserver {
       await _unread.reconcileDeliveredAlerts();
     } catch (_) {
       // Offline or no conversations yet: nothing to reconcile.
+    }
+    try {
+      // The same for interactions read on another device, or read here in a
+      // session that ended before it could cancel their alerts.
+      await _activity.reconcileDeliveredAlerts();
+    } catch (_) {
+      // Offline or no activity yet.
     }
   }
 
@@ -463,6 +477,7 @@ class PushNotificationService with WidgetsBindingObserver {
     _detachListeners();
     _router.clear();
     _unread.onAccountChanged(null);
+    _activity.onAccountChanged(null);
 
     String? token = _lastToken;
     try {
@@ -513,12 +528,21 @@ class PushNotificationService with WidgetsBindingObserver {
       ));
       return;
     }
+    // An interaction this session has already acknowledged: the alert is
+    // stale, so it neither shows nor stays in the tray. Only a POSITIVE
+    // acknowledgement counts — a push normally arrives before Firestore
+    // delivers the record it is about.
+    if (intent.kind.hasActivityRecord &&
+        _activity.isAcknowledged(intent.activityId)) {
+      return;
+    }
     final bool resumed =
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     if (!shouldShowForegroundBanner(
       intent: intent,
       currentUid: _currentUid(),
       visibleConvId: ForegroundConversation.visibleConvId,
+      visiblePostId: ForegroundPost.visiblePostId,
       appResumed: resumed,
     )) {
       return;

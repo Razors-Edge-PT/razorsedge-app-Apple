@@ -94,6 +94,16 @@ test.before(async () => {
 
     await db.doc(`athleteAssignments/${ALICE}`).set({ coaches: { [COACH]: { approved: true } } });
     await db.doc(`accountEntitlements/${COACH}`).set({ coach: { state: 'active', source: 'manual_review' } });
+
+    // Social activity: one unread, one already read.
+    await db.doc(`users/${ALICE}/socialActivity/act1`).set({
+      type: 'postComment', actorUid: BOB, subject: 'post:p1', postId: 'p1',
+      commentId: 'c1', read: false, createdAt: new Date(),
+    });
+    await db.doc(`users/${ALICE}/socialActivity/act2`).set({
+      type: 'postLike', actorUid: BOB, subject: 'post:p1', postId: 'p1',
+      read: true, readAt: new Date(), createdAt: new Date(),
+    });
   });
 });
 
@@ -415,4 +425,65 @@ test('a coach cannot read or post in an athlete\'s conversations', async () => {
   await assertFails(as(COACH).doc(`conversations/${AB}/messages/c1`).set({
     senderId: COACH, type: 'text', text: 'x',
   }));
+});
+
+// ── socialActivity ──────────────────────────────────────────────────────────
+// Server-written, owner-read, and the owner's ONE write is marking something
+// read. Everything else — inventing an interaction, retargeting one, hiding
+// one, or taking one back to unread — is denied.
+
+test('only the owner can read their activity', async () => {
+  await assertSucceeds(as(ALICE).doc(`users/${ALICE}/socialActivity/act1`).get());
+  await assertFails(as(BOB).doc(`users/${ALICE}/socialActivity/act1`).get());
+  await assertFails(as(COACH).doc(`users/${ALICE}/socialActivity/act1`).get());
+  await assertFails(anon().doc(`users/${ALICE}/socialActivity/act1`).get());
+  // Nor can a friend enumerate them.
+  await assertFails(as(BOB).collection(`users/${ALICE}/socialActivity`).get());
+});
+
+test('the owner marks one read, at the server clock, and nothing else', async () => {
+  const ref = as(ALICE).doc(`users/${ALICE}/socialActivity/act1`);
+  await assertFails(ref.update({ read: true })); // no readAt
+  await assertFails(ref.update({ read: true, readAt: new Date() })); // client clock
+  await assertFails(ref.update({ read: true, readAt: serverTimestamp(), preview: 'x' }));
+  await assertFails(ref.update({ read: true, readAt: serverTimestamp(), actorUid: ALICE }));
+  await assertSucceeds(ref.update({ read: true, readAt: serverTimestamp() }));
+});
+
+test('read is one-way: nothing can take an interaction back to unread', async () => {
+  const ref = as(ALICE).doc(`users/${ALICE}/socialActivity/act2`);
+  await assertFails(ref.update({ read: false, readAt: serverTimestamp() }));
+  // Re-reading something already read is refused as well, so a replayed
+  // offline write cannot move `readAt` around.
+  await assertFails(ref.update({ read: true, readAt: serverTimestamp() }));
+});
+
+test('nobody can create, delete, or write into somebody else\'s activity', async () => {
+  await assertFails(as(ALICE).doc(`users/${ALICE}/socialActivity/forged`).set({
+    type: 'postLike', actorUid: BOB, subject: 'post:p1', read: false, createdAt: serverTimestamp(),
+  }));
+  await assertFails(as(ALICE).doc(`users/${ALICE}/socialActivity/act1`).delete());
+  await assertFails(as(BOB).doc(`users/${ALICE}/socialActivity/act1`).update({
+    read: true, readAt: serverTimestamp(),
+  }));
+  await assertFails(as(BOB).doc(`users/${ALICE}/socialActivity/planted`).set({
+    type: 'postLike', actorUid: BOB, subject: 'post:p1', read: false, createdAt: serverTimestamp(),
+  }));
+});
+
+test('the new notification categories are accepted; unknown fields are not', async () => {
+  const ref = as(ALICE).doc(`pushPreferences/${ALICE}`);
+  await assertSucceeds(ref.set({
+    friendRequests: true,
+    friendAccepted: true,
+    directMessages: true,
+    messageReactions: false,
+    postComments: true,
+    postReactions: false,
+    messagePreviews: false,
+    commentPreviews: true,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertFails(ref.set({ postComments: 'yes', updatedAt: serverTimestamp() }));
+  await assertFails(ref.set({ somethingElse: true, updatedAt: serverTimestamp() }));
 });

@@ -192,10 +192,14 @@ service cloud.firestore {
     //   socialNotifications — server-written; the owner may only mark one
     //     seen. A client that could create one could announce a friendship
     //     nobody accepted.
+    //   socialActivity — server-written record of what somebody did to your
+    //     content. The owner may only mark one READ, and only forwards: a
+    //     device that could create one could invent interactions, and one that
+    //     could un-read or delete one could hide them.
     function hasOwnWriteRule(subcoll) {
       return subcoll in [
         'showcase', 'showcaseDays', 'stories', 'feed', 'buddyInvites',
-        'socialNotifications',
+        'socialNotifications', 'socialActivity',
       ];
     }
 
@@ -419,6 +423,38 @@ service cloud.firestore {
                            .hasOnly(['seen', 'seenAt'])
                       && request.resource.data.seen == true
                       && request.resource.data.seenAt == request.time;
+
+        allow create, delete: if false;
+      }
+
+      // ---- Social activity ----
+      // users/{userId}/socialActivity/{activityId}
+      //
+      // "X commented on your post", "X liked your post", "X gave your video a
+      // Good Lift", "X reacted to your message" — written ONLY by the push
+      // triggers (functions/push/) through the Admin SDK, from the interaction
+      // documents themselves.
+      //
+      // Read is the owner's alone: an assigned coach does not see an athlete's
+      // social activity, and a friend cannot enumerate who reacted to whom.
+      //
+      // The ONE client write is the owner acknowledging that an interaction has
+      // actually been presented to them: `read` true with `readAt` at the
+      // server's clock, and nothing else changed. It is one-way — an update is
+      // allowed only on a record that is not already read — so read state is
+      // monotonic, and neither a replayed offline write nor another device can
+      // return something to unread. Create and delete are denied to every
+      // client, so nothing can be fabricated, retargeted or quietly hidden.
+      match /socialActivity/{activityId} {
+        allow read: if isSelf(userId) || isSuperAdmin();
+
+        allow update: if isSelf(userId)
+                      && resource.data.read != true
+                      && request.resource.data.diff(resource.data)
+                           .affectedKeys()
+                           .hasOnly(['read', 'readAt'])
+                      && request.resource.data.read == true
+                      && request.resource.data.readAt == request.time;
 
         allow create, delete: if false;
       }
@@ -1183,12 +1219,17 @@ service cloud.firestore {
         let d = request.resource.data;
         return d.keys().hasOnly([
             'friendRequests', 'friendAccepted', 'directMessages',
-            'messagePreviews', 'updatedAt'
+            'messageReactions', 'postComments', 'postReactions',
+            'messagePreviews', 'commentPreviews', 'updatedAt'
           ])
           && (!('friendRequests' in d) || d.friendRequests is bool)
           && (!('friendAccepted' in d) || d.friendAccepted is bool)
           && (!('directMessages' in d) || d.directMessages is bool)
+          && (!('messageReactions' in d) || d.messageReactions is bool)
+          && (!('postComments' in d) || d.postComments is bool)
+          && (!('postReactions' in d) || d.postReactions is bool)
           && (!('messagePreviews' in d) || d.messagePreviews is bool)
+          && (!('commentPreviews' in d) || d.commentPreviews is bool)
           && d.updatedAt == request.time;
       }
 

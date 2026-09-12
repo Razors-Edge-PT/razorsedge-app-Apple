@@ -14,6 +14,8 @@
 /// page and its callbacks are the existing ones, unchanged.
 library;
 
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -33,26 +35,51 @@ Future<void> openFeedPost(
   FeedItem item, {
   required String? viewerUid,
   FirebaseFirestore? firestore,
+}) =>
+    openPostById(
+      context,
+      item.postId,
+      viewerUid: viewerUid,
+      firestore: firestore,
+    );
+
+/// Opens one post by id — the path a notification tap and an Activity row take.
+///
+/// [focusCommentId] is the comment to reveal, which the detail page shows even
+/// when it is older than the page of comments it loads.
+///
+/// Access is decided by the rules, not here: a post the viewer may no longer
+/// read (the friendship ended) fails the read and is reported as unavailable,
+/// exactly as a deleted one is. Returns true when a screen was opened.
+Future<bool> openPostById(
+  BuildContext context,
+  String postId, {
+  required String? viewerUid,
+  String? focusCommentId,
+  FirebaseFirestore? firestore,
 }) async {
   final FirebaseFirestore db = firestore ?? FirebaseFirestore.instance;
   DocumentSnapshot<Map<String, dynamic>> snap;
   try {
-    snap = await db.collection('posts').doc(item.postId).get();
+    snap = await db.collection('posts').doc(postId).get();
   } catch (_) {
     if (context.mounted) showAppSnack("Couldn't open that post.");
-    return;
+    return false;
   }
-  if (!context.mounted) return;
+  if (!context.mounted) return false;
   if (!snap.exists || snap.data() == null) {
     showAppSnack('That post is no longer available.');
-    return;
+    return false;
   }
 
   final Post post = Post.fromSnap(snap);
-  await Navigator.of(context).push(
+  // Not awaited: `Navigator.push` completes when the route is POPPED, and a
+  // caller that waited for that would stall every following notification tap.
+  unawaited(Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => PostDetailPage(
         post: post,
+        focusCommentId: focusCommentId,
         onToggleLike: (Post p) => PostService.instance.toggleLike(p.id),
         onToggleGoodLift: (Post p) => PostService.instance
             .toggleGoodLift(p.id, isVideo: p.mediaType == 'video'),
@@ -63,5 +90,6 @@ Future<void> openFeedPost(
         canDelete: viewerUid != null && viewerUid == post.ownerUid,
       ),
     ),
-  );
+  ));
+  return true;
 }

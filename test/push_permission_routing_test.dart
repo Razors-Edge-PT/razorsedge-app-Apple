@@ -20,6 +20,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/push/foreground_conversation.dart';
+import 'package:localtest222/push/foreground_post.dart';
 import 'package:localtest222/push/notification_platform.dart';
 import 'package:localtest222/push/notification_settings_screen.dart';
 import 'package:localtest222/push/push_intent.dart';
@@ -439,6 +440,7 @@ void main() {
     late DateTime now;
     late List<String> notices;
     late Map<String, Completer<bool?>> lookups;
+    late Set<String> missingPosts;
     late _PushCounter observer;
 
     PushIntent dm(String from, {String to = alice}) =>
@@ -465,6 +467,23 @@ void main() {
             final Completer<bool?>? gate = lookups[convId];
             return gate == null ? Future<bool?>.value(true) : gate.future;
           },
+          openPost: (BuildContext c, PushIntent i) async {
+            // Stands in for the real fetch-then-open: a post that is gone
+            // reports itself and opens nothing.
+            if (missingPosts.contains(i.postId)) {
+              notices.add('That post is no longer available.');
+              return false;
+            }
+            unawaited(Navigator.of(c, rootNavigator: true).push(
+              MaterialPageRoute<void>(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(),
+                  body: Text('POST ${i.postId} comment=${i.commentId ?? '-'}'),
+                ),
+              ),
+            ));
+            return true;
+          },
           notice: notices.add,
         );
 
@@ -473,6 +492,8 @@ void main() {
       now = DateTime(2026, 9, 12, 9);
       notices = <String>[];
       lookups = <String, Completer<bool?>>{};
+      missingPosts = <String>{};
+      ForegroundPost.reset();
       observer = _PushCounter();
       final PushRouter router = PushRouter(
         currentUid: () => authUid,
@@ -520,6 +541,108 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.text('sets: 1'), findsOneWidget, reason: 'workout state survived');
+    });
+
+    PushIntent postIntent({
+      required String type,
+      required String postId,
+      String? commentId,
+      String from = bob,
+    }) =>
+        PushIntent.fromData(<String, dynamic>{
+          'type': type,
+          'recipientUid': alice,
+          'actorUid': from,
+          'postId': postId,
+          if (commentId != null) 'commentId': commentId,
+          'activityId': 'act_$postId',
+        }, now: now)!;
+
+    testWidgets('a comment tap opens the post with the comment to reveal, and '
+        'the workout underneath survives', (WidgetTester tester) async {
+      final PushRouter router = await restoredWorkout(tester);
+      await tester.tap(find.text('add set'));
+      await tester.pump();
+
+      router.submit(postIntent(type: 'postComment', postId: 'p1', commentId: 'c7'));
+      await tester.pumpAndSettle();
+      expect(find.text('POST p1 comment=c7'), findsOneWidget);
+
+      // A like on a DIFFERENT post opens on top of it.
+      now = now.add(const Duration(seconds: 5));
+      router.submit(postIntent(type: 'postLike', postId: 'p2'));
+      await tester.pumpAndSettle();
+      expect(find.text('POST p2 comment=-'), findsOneWidget);
+      expect(observer.pushes, 2);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.text('POST p1 comment=c7'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.text('sets: 1'), findsOneWidget, reason: 'workout state survived');
+    });
+
+    testWidgets('two taps about the same post and comment do not stack',
+        (WidgetTester tester) async {
+      final PushRouter router = await restoredWorkout(tester);
+      router.submit(postIntent(type: 'postComment', postId: 'p1', commentId: 'c7'));
+      await tester.pumpAndSettle();
+      // The same notification delivered twice, inside the duplicate window.
+      now = now.add(const Duration(milliseconds: 300));
+      router.submit(postIntent(type: 'postComment', postId: 'p1', commentId: 'c7'));
+      await tester.pumpAndSettle();
+      expect(observer.pushes, 1);
+
+      // A different comment on the same post is not a duplicate.
+      now = now.add(const Duration(seconds: 5));
+      router.submit(postIntent(type: 'postComment', postId: 'p1', commentId: 'c9'));
+      await tester.pumpAndSettle();
+      expect(find.text('POST p1 comment=c9'), findsOneWidget);
+      expect(observer.pushes, 2);
+    });
+
+    testWidgets('a tap about the post already in front opens nothing',
+        (WidgetTester tester) async {
+      final PushRouter router = await restoredWorkout(tester);
+      ForegroundPost.shown('p1');
+      addTearDown(ForegroundPost.reset);
+
+      router.submit(postIntent(type: 'postLike', postId: 'p1'));
+      await tester.pumpAndSettle();
+      expect(observer.pushes, 0, reason: 'it is already on screen');
+
+      // Another post still opens.
+      now = now.add(const Duration(seconds: 5));
+      router.submit(postIntent(type: 'postLike', postId: 'p2'));
+      await tester.pumpAndSettle();
+      expect(find.text('POST p2 comment=-'), findsOneWidget);
+    });
+
+    testWidgets('a tap about a deleted post says so and opens nothing',
+        (WidgetTester tester) async {
+      final PushRouter router = await restoredWorkout(tester);
+      missingPosts.add('gone');
+      router.submit(postIntent(type: 'postComment', postId: 'gone', commentId: 'c1'));
+      await tester.pumpAndSettle();
+      expect(observer.pushes, 0);
+      expect(notices, contains('That post is no longer available.'));
+      expect(find.text('sets: 0'), findsOneWidget, reason: 'nothing else disturbed');
+    });
+
+    testWidgets('a reaction tap opens that conversation', (WidgetTester tester) async {
+      final PushRouter router = await restoredWorkout(tester);
+      final PushIntent reaction = PushIntent.fromData(<String, dynamic>{
+        'type': 'dmReaction',
+        'recipientUid': alice,
+        'actorUid': carol,
+        'convId': conversationIdFor(alice, carol),
+        'msgId': 'm9',
+        'activityId': 'dr_1',
+      }, now: now)!;
+      router.submit(reaction);
+      await tester.pumpAndSettle();
+      expect(find.text('CHAT ${conversationIdFor(alice, carol)}'), findsOneWidget);
     });
 
     testWidgets('a tap for the conversation already on screen opens nothing; another thread opens',

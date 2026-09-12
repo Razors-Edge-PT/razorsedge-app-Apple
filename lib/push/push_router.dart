@@ -38,8 +38,10 @@ import 'package:provider/provider.dart';
 import '../directMessages.dart';
 import '../main.dart' show showAppSnack;
 import '../social/buddy_hub_screen.dart';
+import '../social/open_feed_post.dart';
 import '../user_context.dart';
 import 'foreground_conversation.dart';
+import 'foreground_post.dart';
 import 'push_intent.dart';
 
 /// Opens [intent] from [context]. Returns true when a route was pushed.
@@ -135,7 +137,14 @@ class PushRouter {
 
   static String _destinationKey(PushIntent i) => switch (i.kind) {
         PushKind.friendRequest || PushKind.friendAccepted => 'buddyHub',
-        PushKind.directMessage => 'dm:${i.convId}',
+        PushKind.directMessage || PushKind.dmReaction => 'dm:${i.convId}',
+        // Per post AND per comment: two interactions with one post are one
+        // destination, but a tap that reveals a different comment is not a
+        // duplicate of the one before it.
+        PushKind.postComment ||
+        PushKind.postLike ||
+        PushKind.postGoodLift =>
+          'post:${i.postId}:${i.commentId ?? ''}',
       };
 
   void _schedule() {
@@ -209,6 +218,7 @@ class PushDestinations {
     this.conversation = _defaultConversation,
     this.conversationList = _defaultConversationList,
     this.conversationAccessible = defaultConversationAccessible,
+    this.openPost = _defaultOpenPost,
     this.notice = showAppSnack,
   });
 
@@ -219,6 +229,11 @@ class PushDestinations {
 
   /// false: the rules now deny it, or it is gone. null: unknown (offline).
   final Future<bool?> Function(String convId) conversationAccessible;
+
+  /// Opens the post detail page, revealing a comment when the tap is about
+  /// one. Returns true when a screen was opened. Injectable for tests.
+  final Future<bool> Function(BuildContext context, PushIntent intent) openPost;
+
   final void Function(String message) notice;
 
   Future<bool> navigate(
@@ -243,6 +258,20 @@ class PushDestinations {
           builder: (_) => buddyHub(intent, actingAsOther),
         )));
         return true;
+      case PushKind.postComment:
+      case PushKind.postLike:
+      case PushKind.postGoodLift:
+        // Already looking at this post: the interaction is on screen, and the
+        // scope there has marked it read. Opening a second copy would only
+        // bury the one being read.
+        if (ForegroundPost.visiblePostId == intent.postId) return false;
+        if (!stillValid()) return false;
+        // The post is fetched first: a deleted post, or one whose owner is no
+        // longer a friend, says so instead of opening an empty screen. The
+        // lookup takes time, so everything is re-checked after it.
+        return openPost(context, intent);
+
+      case PushKind.dmReaction:
       case PushKind.directMessage:
         final String convId = intent.convId!;
         // Already the thread in front of the person: nothing to open.
@@ -276,6 +305,18 @@ Widget _defaultBuddyHub(PushIntent intent, bool actingAsOtherAccount) =>
 Widget _defaultConversation(PushIntent intent) => ConversationPage(
       convId: intent.convId!,
       otherUid: intent.actorUid,
+      // A reaction alert points at the message that was reacted to.
+      focusMessageId:
+          intent.kind == PushKind.dmReaction ? intent.messageId : null,
+    );
+
+/// Fetches the post and opens it, revealing the comment when there is one.
+Future<bool> _defaultOpenPost(BuildContext context, PushIntent intent) =>
+    openPostById(
+      context,
+      intent.postId!,
+      viewerUid: intent.recipientUid,
+      focusCommentId: intent.commentId,
     );
 
 Widget _defaultConversationList() => const DirectMessages();

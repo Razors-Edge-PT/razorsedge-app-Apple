@@ -122,14 +122,50 @@ test('forged or inconsistent messages have no recipient', () => {
 
 // ── Preferences and presentation ────────────────────────────────────────────
 
-test('categories default ON, message previews default OFF', () => {
+test('categories default ON, previews default OFF', () => {
   assert.deepEqual(P.preferencesFrom(null), {
-    friendRequests: true, friendAccepted: true, directMessages: true, messagePreviews: false,
+    friendRequests: true,
+    friendAccepted: true,
+    directMessages: true,
+    messageReactions: true,
+    postComments: true,
+    postReactions: true,
+    messagePreviews: false,
+    commentPreviews: false,
   });
   const p = P.preferencesFrom({ directMessages: false, messagePreviews: 'yes' });
   assert.equal(P.typeEnabled(p, 'directMessage'), false);
   assert.equal(P.typeEnabled(p, 'friendRequest'), true);
   assert.equal(p.messagePreviews, false, 'a malformed value never turns previews on');
+});
+
+test('a saved preference document from an older build keeps its answers, and '
+  + 'gets the new categories switched on', () => {
+  // What an account that opened Settings before this release has stored.
+  const saved = {
+    friendRequests: false,
+    friendAccepted: true,
+    directMessages: true,
+    messagePreviews: true,
+  };
+  const p = P.preferencesFrom(saved);
+  assert.equal(p.friendRequests, false, 'their answer is not overwritten');
+  assert.equal(p.messagePreviews, true);
+  assert.equal(P.typeEnabled(p, 'postComment'), true);
+  assert.equal(P.typeEnabled(p, 'postLike'), true);
+  assert.equal(P.typeEnabled(p, 'postGoodLift'), true);
+  assert.equal(P.typeEnabled(p, 'dmReaction'), true);
+  assert.equal(p.commentPreviews, false, 'a new preview switch starts off');
+});
+
+test('likes and Good Lifts share one switch; comments have their own', () => {
+  const off = P.preferencesFrom({ postReactions: false });
+  assert.equal(P.typeEnabled(off, 'postLike'), false);
+  assert.equal(P.typeEnabled(off, 'postGoodLift'), false);
+  assert.equal(P.typeEnabled(off, 'postComment'), true, 'comments are separate');
+  const noComments = P.preferencesFrom({ postComments: false });
+  assert.equal(P.typeEnabled(noComments, 'postComment'), false);
+  assert.equal(P.typeEnabled(noComments, 'postLike'), true);
 });
 
 test('notification wording for the three events', () => {
@@ -241,7 +277,125 @@ test('delivery windows are bounded well under FCM\'s 28-day default', () => {
     assert.ok(P.PREFERENCE_FIELD[t], t);
     assert.ok(P.ANDROID_CHANNEL[t], t);
   }
-  assert.deepEqual(P.ALL_TYPES.sort(), ['directMessage', 'friendAccepted', 'friendRequest']);
+  assert.deepEqual(P.ALL_TYPES.slice().sort(), [
+    'directMessage', 'dmReaction', 'friendAccepted', 'friendRequest',
+    'postComment', 'postGoodLift', 'postLike',
+  ]);
+});
+
+// ── Post interactions and message reactions ─────────────────────────────────
+
+test('only an ARRIVING like or Good Lift is an event', () => {
+  assert.equal(P.isNewReaction(null, { createdAt: 1 }), true);
+  assert.equal(P.isNewReaction({ createdAt: 1 }, null), false, 'un-liking says nothing');
+  assert.equal(P.isNewReaction({ createdAt: 1 }, { createdAt: 2 }), false, 'a touch is not new');
+  assert.equal(P.isNewReaction(null, null), false);
+});
+
+test('a like taken back and given again is the SAME occurrence', () => {
+  const first = P.postOccurrence({ kind: 'like', postId: 'p1', actorUid: 'u2' });
+  const again = P.postOccurrence({ kind: 'like', postId: 'p1', actorUid: 'u2' });
+  assert.equal(first, again);
+  assert.equal(
+    P.jobIdFor('postLike', 'owner', first),
+    P.jobIdFor('postLike', 'owner', again),
+    'so it lands on one job and cannot alert twice',
+  );
+  // A different person, or a different post, is a different occurrence.
+  assert.notEqual(first, P.postOccurrence({ kind: 'like', postId: 'p1', actorUid: 'u3' }));
+  assert.notEqual(first, P.postOccurrence({ kind: 'like', postId: 'p2', actorUid: 'u2' }));
+  // A Good Lift on the same post by the same person is its own occurrence.
+  assert.notEqual(first, P.postOccurrence({ kind: 'goodLift', postId: 'p1', actorUid: 'u2' }));
+});
+
+test('only a NEW comment is an event: not an edit, not a deletion', () => {
+  assert.equal(P.isNewComment(null, { uid: 'u2', text: 'nice' }), true);
+  assert.equal(P.isNewComment({ uid: 'u2', text: 'nice' }, { uid: 'u2', text: 'edited' }), false);
+  assert.equal(P.isNewComment({ uid: 'u2', text: 'nice' }, null), false);
+  assert.equal(P.isNewComment(null, { text: 'no author' }), false);
+});
+
+test('a reaction arriving is an event; changing or removing one is not', () => {
+  const msg = (reactions) => ({ senderId: 'u1', text: 'x', reactions });
+  assert.deepEqual(
+    P.newReactors(msg({}), msg({ u2: '🔥' })),
+    [{ actorUid: 'u2', emoji: '🔥' }],
+  );
+  assert.deepEqual(
+    P.newReactors(msg({ u2: '🔥' }), msg({ u2: '❤️' })),
+    [],
+    'swapping the emoji must not alert again',
+  );
+  assert.deepEqual(P.newReactors(msg({ u2: '🔥' }), msg({})), [], 'removing says nothing');
+  assert.deepEqual(
+    P.newReactors(msg({ u2: '🔥' }), msg({ u2: '🔥', u3: '👏' })),
+    [{ actorUid: 'u3', emoji: '👏' }],
+    'a second person is a separate interaction',
+  );
+  // A message with no reactions field at all.
+  assert.deepEqual(P.newReactors({ senderId: 'u1' }, { senderId: 'u1' }), []);
+});
+
+test('wording for post interactions and reactions', () => {
+  assert.deepEqual(P.renderNotification({ type: 'postLike', actorName: 'Sam' }),
+    { title: 'New like', body: 'Sam liked your post' });
+  assert.deepEqual(P.renderNotification({ type: 'postGoodLift', actorName: 'Sam' }),
+    { title: 'Good lift!', body: 'Sam gave your video a Good Lift' });
+  assert.deepEqual(P.renderNotification({ type: 'dmReaction', actorName: 'Sam', emoji: '🔥' }),
+    { title: 'New reaction', body: 'Sam reacted 🔥 to your message' });
+  assert.equal(P.renderNotification({ type: 'dmReaction', actorName: 'Sam' }).body,
+    'Sam reacted to your message');
+});
+
+test('a comment\'s words appear only with comment previews on', () => {
+  const text = 'my gym door code is 4417';
+  const off = P.renderNotification({ type: 'postComment', actorName: 'Sam', text });
+  assert.deepEqual(off, { title: 'New comment', body: 'Sam commented on your post' });
+  assert.ok(!JSON.stringify(off).includes('4417'), 'the text never enters the payload');
+  // The DM preview switch does not speak for comments.
+  const dmOnly = P.renderNotification({ type: 'postComment', actorName: 'Sam', text, previews: true });
+  assert.equal(dmOnly.body, 'Sam commented on your post');
+  const on = P.renderNotification({ type: 'postComment', actorName: 'Sam', text, commentPreviews: true });
+  assert.deepEqual(on, { title: 'Sam commented', body: text });
+});
+
+test('tags group a post\'s alerts, and a reaction replaces its own', () => {
+  const like = { type: 'postLike', postId: 'p1', actorUid: 'u2', activityId: 'pl_abc', id: 'j1' };
+  const comment = { type: 'postComment', postId: 'p1', actorUid: 'u3', activityId: 'pc_def', id: 'j2' };
+  const other = { type: 'postLike', postId: 'p2', actorUid: 'u2', activityId: 'pl_ghi', id: 'j3' };
+  const prefix = `post|${P.subjectTagKey('p1')}|`;
+  assert.ok(P.presentationTag(like).startsWith(prefix));
+  assert.ok(P.presentationTag(comment).startsWith(prefix));
+  assert.ok(!P.presentationTag(other).startsWith(prefix), 'another post is untouched');
+  assert.notEqual(P.presentationTag(like), P.presentationTag(comment),
+    'two interactions on one post are two alerts');
+
+  const react = { type: 'dmReaction', conversationId: 'a_b', messageId: 'm9', actorUid: 'u2' };
+  assert.equal(P.presentationTag(react), `dmr|${P.subjectTagKey('a_b')}|m9`);
+  assert.notEqual(P.presentationTag(react),
+    P.presentationTag({ type: 'directMessage', conversationId: 'a_b', messageId: 'm9' }),
+    'a reaction alert is not the message alert');
+});
+
+test('routing carries what the app needs to open and to acknowledge', () => {
+  const comment = P.routingData({
+    type: 'postComment', recipientUid: 'owner', actorUid: 'u2',
+    postId: 'p1', commentId: 'c7', activityId: 'pc_def',
+  });
+  assert.equal(comment.postId, 'p1');
+  assert.equal(comment.commentId, 'c7');
+  assert.equal(comment.activityId, 'pc_def');
+  const react = P.routingData({
+    type: 'dmReaction', recipientUid: 'owner', actorUid: 'u2',
+    conversationId: 'a_b', messageId: 'm9', activityId: 'dr_x',
+  });
+  assert.equal(react.convId, 'a_b');
+  assert.equal(react.msgId, 'm9');
+  assert.equal(react.activityId, 'dr_x');
+  // Values are all strings: FCM data payloads carry nothing else.
+  for (const v of Object.values({ ...comment, ...react })) {
+    assert.equal(typeof v, 'string');
+  }
 });
 
 test('the push module is wired into index.js and changes nothing else', () => {
@@ -250,5 +404,11 @@ test('the push module is wired into index.js and changes nothing else', () => {
   assert.ok(idx.pushOutboxOnCreated);
   assert.ok(idx.socialOnBuddyInviteWritten);
   const pushExports = Object.keys(idx).filter((k) => /^push/.test(k));
-  assert.deepEqual(pushExports.sort(), ['pushOnDirectMessageWritten', 'pushOutboxOnCreated']);
+  assert.deepEqual(pushExports.sort(), [
+    'pushOnDirectMessageWritten',
+    'pushOnPostCommentWritten',
+    'pushOnPostGoodLiftWritten',
+    'pushOnPostLikeWritten',
+    'pushOutboxOnCreated',
+  ], 'every trigger that must be deployed is exported');
 });

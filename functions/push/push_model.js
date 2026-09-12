@@ -38,15 +38,36 @@ const PushType = {
   FRIEND_REQUEST: 'friendRequest',
   FRIEND_ACCEPTED: 'friendAccepted',
   DIRECT_MESSAGE: 'directMessage',
+  DM_REACTION: 'dmReaction',
+  POST_COMMENT: 'postComment',
+  POST_LIKE: 'postLike',
+  POST_GOOD_LIFT: 'postGoodLift',
 };
 
 const ALL_TYPES = Object.values(PushType);
 
-/** Preference field that switches each type on and off. */
+/** The types that are an interaction with a POST, wherever it was opened from. */
+const POST_TYPES = new Set([
+  PushType.POST_COMMENT,
+  PushType.POST_LIKE,
+  PushType.POST_GOOD_LIFT,
+]);
+
+/**
+ * Preference field that switches each type on and off.
+ *
+ * Likes and Good Lifts share one switch: they are the same gesture to the
+ * person receiving them ("somebody reacted to my post"), and splitting them
+ * would mean a setting whose effect depends on whether the post is a video.
+ */
 const PREFERENCE_FIELD = {
   [PushType.FRIEND_REQUEST]: 'friendRequests',
   [PushType.FRIEND_ACCEPTED]: 'friendAccepted',
   [PushType.DIRECT_MESSAGE]: 'directMessages',
+  [PushType.DM_REACTION]: 'messageReactions',
+  [PushType.POST_COMMENT]: 'postComments',
+  [PushType.POST_LIKE]: 'postReactions',
+  [PushType.POST_GOOD_LIFT]: 'postReactions',
 };
 
 /** Android notification channel per type. Mirrors MainActivity.kt. */
@@ -54,6 +75,10 @@ const ANDROID_CHANNEL = {
   [PushType.FRIEND_REQUEST]: 'goodlift_friend_requests',
   [PushType.FRIEND_ACCEPTED]: 'goodlift_friend_accepted',
   [PushType.DIRECT_MESSAGE]: 'goodlift_direct_messages',
+  [PushType.DM_REACTION]: 'goodlift_message_reactions',
+  [PushType.POST_COMMENT]: 'goodlift_post_comments',
+  [PushType.POST_LIKE]: 'goodlift_post_reactions',
+  [PushType.POST_GOOD_LIFT]: 'goodlift_post_reactions',
 };
 
 const ANDROID_ICON = 'ic_stat_goodlift';
@@ -70,6 +95,10 @@ const DELIVERY_WINDOW_MS = {
   [PushType.FRIEND_REQUEST]: 24 * HOUR_MS,
   [PushType.FRIEND_ACCEPTED]: 24 * HOUR_MS,
   [PushType.DIRECT_MESSAGE]: 12 * HOUR_MS,
+  [PushType.DM_REACTION]: 12 * HOUR_MS,
+  [PushType.POST_COMMENT]: 24 * HOUR_MS,
+  [PushType.POST_LIKE]: 24 * HOUR_MS,
+  [PushType.POST_GOOD_LIFT]: 24 * HOUR_MS,
 };
 
 /** Outbox documents are removed by a Firestore TTL policy on `purgeAt`. */
@@ -148,15 +177,41 @@ function inviteOccurrence(inviteData, eventId) {
   return `e:${eventId || 'unknown'}`;
 }
 
+const TYPE_PREFIX = {
+  [PushType.FRIEND_REQUEST]: 'fr',
+  [PushType.FRIEND_ACCEPTED]: 'fa',
+  [PushType.DIRECT_MESSAGE]: 'dm',
+  [PushType.DM_REACTION]: 'dr',
+  [PushType.POST_COMMENT]: 'pc',
+  [PushType.POST_LIKE]: 'pl',
+  [PushType.POST_GOOD_LIFT]: 'pg',
+};
+
 /** Deterministic outbox id for one notification occurrence. */
 function jobIdFor(type, recipientUid, occurrence) {
-  const short = {
-    [PushType.FRIEND_REQUEST]: 'fr',
-    [PushType.FRIEND_ACCEPTED]: 'fa',
-    [PushType.DIRECT_MESSAGE]: 'dm',
-  }[type];
+  const short = TYPE_PREFIX[type];
   if (!short) throw new Error(`unknown push type ${type}`);
   return `${short}_${sha256Hex(`${type}|${recipientUid}|${occurrence}`).slice(0, 40)}`;
+}
+
+/**
+ * The identity of one INTERACTION, independent of how many times it changes.
+ *
+ * A like removed and given again, a Good Lift toggled, a reaction switched
+ * from 👍 to ❤️ — each is the same person reacting to the same thing, so each
+ * maps to the same occurrence and therefore the same job and the same activity
+ * record. That is what stops a fidgeting thumb producing a stream of alerts,
+ * and it is why removal is not itself an event: nothing is deleted, so nothing
+ * can be recreated.
+ */
+function postOccurrence({ kind, postId, actorUid, commentId }) {
+  return kind === 'comment'
+    ? `post|${postId}|comment|${commentId}`
+    : `post|${postId}|${kind}|${actorUid}`;
+}
+
+function dmReactionOccurrence({ convId, messageId, actorUid }) {
+  return `dmr|${convId}|${messageId}|${actorUid}`;
 }
 
 // ── Friend requests ─────────────────────────────────────────────────────────
@@ -261,13 +316,86 @@ function resolveDmParties({ convId, messageData, conversationData }) {
   return { senderUid, recipientUid };
 }
 
+// ── Post interactions ───────────────────────────────────────────────────────
+
+/**
+ * True when a like / Good Lift write is the interaction ARRIVING.
+ *
+ * Only a creation counts. Removing one is not an event — a person un-liking a
+ * post should not tell the owner anything — and re-adding it lands on the same
+ * occurrence, so it cannot produce a second alert either. A touched document
+ * (a field written again with the same meaning) is not an arrival.
+ */
+function isNewReaction(beforeData, afterData) {
+  return !beforeData && !!afterData;
+}
+
+/**
+ * True when a comment write is a NEW comment.
+ *
+ * An edit changes `text` on a document that already existed, and a deletion
+ * removes it; neither tells the post's owner anything new, and neither is
+ * allowed to resurrect an alert for a comment they have already read.
+ */
+function isNewComment(beforeData, afterData) {
+  if (!afterData) return false;
+  if (beforeData) return false;
+  return isNonEmptyString(afterData.uid);
+}
+
+/** The author of a comment document, or null. */
+function commentAuthor(data) {
+  return data && isNonEmptyString(data.uid) ? data.uid : null;
+}
+
+// ── Direct-message reactions ────────────────────────────────────────────────
+
+function reactionsOf(data) {
+  const r = data && data.reactions;
+  return r && typeof r === 'object' ? r : {};
+}
+
+/**
+ * Who has just reacted to this message, and with what.
+ *
+ * An emoji CHANGED by somebody who had already reacted is deliberately not an
+ * arrival: they are still reacting to the same message, the recipient has
+ * already been told, and telling them again every time the emoji is swapped is
+ * exactly the spam this coalescing exists to prevent. (The occurrence would
+ * collapse it to one alert anyway; this keeps the job from being touched at
+ * all.) Removing a reaction is not an arrival either.
+ */
+function newReactors(beforeData, afterData) {
+  const before = reactionsOf(beforeData);
+  const after = reactionsOf(afterData);
+  const out = [];
+  for (const [uid, emoji] of Object.entries(after)) {
+    if (!isNonEmptyString(uid) || !isNonEmptyString(emoji)) continue;
+    if (before[uid] !== undefined) continue;
+    out.push({ actorUid: uid, emoji: String(emoji).slice(0, 8) });
+  }
+  return out;
+}
+
 // ── Preferences ─────────────────────────────────────────────────────────────
 
+/**
+ * Defaults for an account that has never opened Settings → Notifications.
+ *
+ * Categories are ON and previews OFF, and the server applies exactly these to
+ * a missing document OR a missing field — so adding a category here switches
+ * it on for existing accounts without touching, or needing to migrate, the
+ * preferences they have already saved.
+ */
 const DEFAULT_PREFERENCES = Object.freeze({
   friendRequests: true,
   friendAccepted: true,
   directMessages: true,
+  messageReactions: true,
+  postComments: true,
+  postReactions: true,
   messagePreviews: false,
+  commentPreviews: false,
 });
 
 function preferencesFrom(data) {
@@ -306,13 +434,32 @@ function truncate(text, max) {
  * previews on; otherwise it never enters the payload at all, so it cannot
  * appear on a lock screen, in a notification log, or on a watch.
  */
-function renderNotification({ type, actorName, kind, text, previews }) {
+function renderNotification({ type, actorName, kind, text, previews, emoji, commentPreviews }) {
   const name = actorName || 'A GoodLift member';
   switch (type) {
     case PushType.FRIEND_REQUEST:
       return { title: 'Friend request', body: `${name} sent you a friend request` };
     case PushType.FRIEND_ACCEPTED:
       return { title: 'Friend request accepted', body: `${name} accepted your friend request` };
+    case PushType.POST_COMMENT:
+      // The comment's words are the same kind of private content a message is,
+      // so they appear only when this account asked for previews.
+      return commentPreviews && isNonEmptyString(text)
+        ? { title: `${name} commented`, body: truncate(text, DM_PREVIEW_MAX) }
+        : { title: 'New comment', body: `${name} commented on your post` };
+    case PushType.POST_LIKE:
+      return { title: 'New like', body: `${name} liked your post` };
+    case PushType.POST_GOOD_LIFT:
+      return { title: 'Good lift!', body: `${name} gave your video a Good Lift` };
+    case PushType.DM_REACTION:
+      // The emoji IS the reaction, not the message it is attached to — showing
+      // it reveals nothing about what was said, so previews do not gate it.
+      return {
+        title: 'New reaction',
+        body: isNonEmptyString(emoji)
+          ? `${name} reacted ${emoji} to your message`
+          : `${name} reacted to your message`,
+      };
     case PushType.DIRECT_MESSAGE: {
       if (previews) {
         if (kind === 'photo') return { title: name, body: '📷 Photo' };
@@ -340,6 +487,19 @@ function presentationTag(job) {
       return `fr_${job.actorUid}`;
     case PushType.FRIEND_ACCEPTED:
       return `fa_${job.actorUid}`;
+    case PushType.POST_COMMENT:
+    case PushType.POST_LIKE:
+    case PushType.POST_GOOD_LIFT:
+      // `post|<post>|<activity>`. The post part is what lets the app cancel
+      // exactly one post's alerts when that post is read — including alerts
+      // the OS posted while Dart was not running, which it can only match by
+      // tag — while leaving every other post's alerts alone. Mirrored by
+      // postTagPrefix in lib/push/push_intent.dart.
+      return `post|${subjectTagKey(job.postId)}|${job.activityId || job.id}`;
+    case PushType.DM_REACTION:
+      // Per reacted-to MESSAGE, so switching emoji replaces the alert rather
+      // than stacking a new one.
+      return `dmr|${subjectTagKey(job.conversationId)}|${job.messageId}`;
     case PushType.DIRECT_MESSAGE:
       // `dm|<conversation>|<message>`. The conversation part lets the app
       // cancel exactly one thread's delivered alerts when that thread is
@@ -358,6 +518,13 @@ function conversationTagKey(conversationId) {
   return sha256Hex(String(conversationId)).slice(0, 8);
 }
 
+/**
+ * The same short key for any subject a group of alerts belongs to — a
+ * conversation, or a post. Hashed and truncated because an APNs collapse id is
+ * capped at 64 bytes and these ids are long.
+ */
+const subjectTagKey = conversationTagKey;
+
 /** Routing data the app needs to open the right screen. Strings only. */
 function routingData(job) {
   const data = {
@@ -374,6 +541,19 @@ function routingData(job) {
     if (job.messageId) data.msgId = String(job.messageId);
     if (Number.isFinite(job.incomingSeq)) data.seq = String(job.incomingSeq);
   }
+  if (job.type === PushType.DM_REACTION) {
+    data.convId = job.conversationId;
+    if (job.messageId) data.msgId = String(job.messageId);
+  }
+  if (POST_TYPES.has(job.type)) {
+    // The post to open, and — for a comment — the one to reveal, which may be
+    // far outside the page of comments the screen loads by default.
+    data.postId = String(job.postId);
+    if (job.commentId) data.commentId = String(job.commentId);
+  }
+  // The activity record this alert belongs to, so reading it in the app marks
+  // exactly this interaction read rather than a whole screen's worth.
+  if (job.activityId) data.activityId = String(job.activityId);
   return data;
 }
 
@@ -499,6 +679,7 @@ function statusAfterAttempt(deviceStates) {
 module.exports = {
   PushType,
   ALL_TYPES,
+  POST_TYPES,
   PREFERENCE_FIELD,
   ANDROID_CHANNEL,
   ANDROID_ICON,
@@ -517,6 +698,13 @@ module.exports = {
   millisOf,
   inviteOccurrence,
   jobIdFor,
+  postOccurrence,
+  dmReactionOccurrence,
+  isNewReaction,
+  isNewComment,
+  commentAuthor,
+  reactionsOf,
+  newReactors,
   isNewPendingRequest,
   inviteMatchesPath,
   parseConversationId,
@@ -530,6 +718,7 @@ module.exports = {
   renderNotification,
   presentationTag,
   conversationTagKey,
+  subjectTagKey,
   routingData,
   buildMessage,
   classifySendError,

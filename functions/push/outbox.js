@@ -52,6 +52,7 @@ const logger = require('firebase-functions/logger');
 
 const P = require('./push_model');
 const U = require('./dm_unread');
+const A = require('./activity');
 const M = require('../social/buddy_model');
 
 const COL_OUTBOX = 'pushOutbox';
@@ -233,6 +234,213 @@ async function enqueueDirectMessage(db, {
   };
 }
 
+// ── Post interactions and message reactions ─────────────────────────────────
+//
+// One interaction produces two documents: the durable activity record the
+// person sees in the app, and the delivery job for the phone alert. They are
+// written in ONE batch of `create`s, so a replayed event finds them both
+// already there and writes neither — the record cannot be resurrected as
+// unread, and the alert cannot be sent twice.
+
+/**
+ * Writes the activity record and its delivery job, once.
+ *
+ * Returns `{ enqueued, reason, jobId, activityId }`. `enqueued: false` with
+ * reason `duplicate` is the normal outcome of a retry.
+ */
+async function enqueueInteraction(db, {
+  type,
+  recipientUid,
+  actorUid,
+  occurrence,
+  sourceEventId,
+  eventTimeMs,
+  nowMs,
+  postId,
+  commentId,
+  conversationId,
+  messageId,
+  emoji,
+  preview,
+}) {
+  if (!recipientUid || !actorUid) return { enqueued: false, reason: 'missing-party' };
+  // Never tell somebody what they just did themselves.
+  if (recipientUid === actorUid) return { enqueued: false, reason: 'self-action' };
+
+  const activityId = A.activityIdFor(type, recipientUid, occurrence);
+  const job = newJob({
+    type,
+    recipientUid,
+    actorUid,
+    occurrence,
+    sourceEventId,
+    eventTimeMs,
+    nowMs: nowMs == null ? Date.now() : nowMs,
+    extra: {
+      activityId,
+      ...(postId ? { postId } : {}),
+      ...(commentId ? { commentId } : {}),
+      ...(conversationId ? { conversationId } : {}),
+      ...(messageId ? { messageId } : {}),
+      ...(emoji ? { emoji } : {}),
+    },
+  });
+  const tag = P.presentationTag({ ...job.data, id: job.id, activityId });
+
+  const batch = db.batch();
+  batch.create(
+    A.activityRef(db, recipientUid, activityId),
+    A.activityRecord({
+      type,
+      actorUid,
+      occurrence,
+      postId,
+      commentId,
+      conversationId,
+      messageId,
+      emoji,
+      preview,
+      tag,
+      now: FieldValue().serverTimestamp(),
+    }),
+  );
+  batch.create(outboxRef(db, job.id), job.data);
+  try {
+    await batch.commit();
+    return { enqueued: true, reason: 'enqueued', jobId: job.id, activityId };
+  } catch (err) {
+    if (isAlreadyExists(err)) {
+      return { enqueued: false, reason: 'duplicate', jobId: job.id, activityId };
+    }
+    throw err;
+  }
+}
+
+/** The post, and whether [actorUid] may interact with it at all. */
+async function postAudience(db, postId, actorUid) {
+  const post = dataOf(await db.collection('posts').doc(postId).get());
+  if (!post) return { reason: 'post-gone' };
+  const ownerUid = post.ownerUid;
+  if (typeof ownerUid !== 'string' || !ownerUid) return { reason: 'post-has-no-owner' };
+  if (ownerUid === actorUid) return { reason: 'self-action' };
+  // The rules already require the actor to be social with the owner, but a
+  // friendship can end between the write and this trigger, and a post can be
+  // hidden. Deciding it here keeps the job out of the outbox entirely.
+  if (!(await mutualFriends(db, ownerUid, actorUid))) return { reason: 'not-friends' };
+  return { ownerUid, post };
+}
+
+/**
+ * "X commented on your post" for a NEW comment. Edits and deletions are not
+ * interactions: they tell the owner nothing they have not already been told.
+ */
+async function enqueuePostComment(db, {
+  postId, commentId, beforeData, afterData, eventId, eventTimeMs, nowMs,
+}) {
+  if (!P.isNewComment(beforeData, afterData)) {
+    return { enqueued: false, reason: 'not-a-new-comment' };
+  }
+  const actorUid = P.commentAuthor(afterData);
+  if (!actorUid) return { enqueued: false, reason: 'no-author' };
+  const audience = await postAudience(db, postId, actorUid);
+  if (audience.reason) return { enqueued: false, reason: audience.reason };
+
+  return enqueueInteraction(db, {
+    type: P.PushType.POST_COMMENT,
+    recipientUid: audience.ownerUid,
+    actorUid,
+    occurrence: P.postOccurrence({ kind: 'comment', postId, commentId }),
+    sourceEventId: eventId,
+    eventTimeMs,
+    nowMs,
+    postId,
+    commentId,
+    preview: typeof afterData.text === 'string' ? afterData.text : '',
+  });
+}
+
+/**
+ * "X liked your post" / "X gave your video a Good Lift" for a new like or
+ * Good Lift. [kind] is `like` or `goodLift`.
+ */
+async function enqueuePostReaction(db, {
+  kind, postId, actorUid, beforeData, afterData, eventId, eventTimeMs, nowMs,
+}) {
+  if (!P.isNewReaction(beforeData, afterData)) {
+    return { enqueued: false, reason: 'not-a-new-reaction' };
+  }
+  const audience = await postAudience(db, postId, actorUid);
+  if (audience.reason) return { enqueued: false, reason: audience.reason };
+
+  return enqueueInteraction(db, {
+    type: kind === 'goodLift' ? P.PushType.POST_GOOD_LIFT : P.PushType.POST_LIKE,
+    recipientUid: audience.ownerUid,
+    actorUid,
+    occurrence: P.postOccurrence({ kind, postId, actorUid }),
+    sourceEventId: eventId,
+    eventTimeMs,
+    nowMs,
+    postId,
+  });
+}
+
+/**
+ * "X reacted 🔥 to your message" — for the person who SENT the message.
+ *
+ * A reaction is not a message: it never touches the unread-message ledger, so
+ * the number beside the messages icon cannot move because somebody tapped an
+ * emoji.
+ */
+async function enqueueDmReactions(db, {
+  convId, messageId, beforeData, afterData, eventId, eventTimeMs, nowMs,
+}) {
+  const arrivals = P.newReactors(beforeData, afterData);
+  if (arrivals.length === 0) return { enqueued: false, reason: 'no-new-reaction' };
+  const senderUid = afterData && afterData.senderId;
+  if (typeof senderUid !== 'string' || !senderUid) {
+    return { enqueued: false, reason: 'no-sender' };
+  }
+  const pair = P.parseConversationId(convId);
+  if (!pair || !pair.includes(senderUid)) {
+    return { enqueued: false, reason: 'bad-conversation-id' };
+  }
+
+  const results = [];
+  for (const { actorUid, emoji } of arrivals) {
+    // Only the other participant can react in this conversation, and only a
+    // current friend may still be told about it.
+    if (!pair.includes(actorUid) || actorUid === senderUid) {
+      results.push({ enqueued: false, reason: 'not-a-participant' });
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await mutualFriends(db, senderUid, actorUid))) {
+      results.push({ enqueued: false, reason: 'not-friends' });
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const result = await enqueueInteraction(db, {
+      type: P.PushType.DM_REACTION,
+      recipientUid: senderUid,
+      actorUid,
+      occurrence: P.dmReactionOccurrence({ convId, messageId, actorUid }),
+      sourceEventId: eventId,
+      eventTimeMs,
+      nowMs,
+      conversationId: convId,
+      messageId,
+      emoji,
+    });
+    results.push(result);
+  }
+  const enqueued = results.filter((r) => r.enqueued).length;
+  return {
+    enqueued: enqueued > 0,
+    reason: enqueued > 0 ? 'enqueued' : (results[0] && results[0].reason) || 'no-new-reaction',
+    results,
+  };
+}
+
 // ── Validation at delivery ──────────────────────────────────────────────────
 
 async function mutualFriends(db, a, b) {
@@ -241,6 +449,18 @@ async function mutualFriends(db, a, b) {
     db.collection(M.COL_ASSIGNMENTS).doc(b).get(),
   ]);
   return M.areMutualFriends(dataOf(sa), dataOf(sb), a, b);
+}
+
+/**
+ * True when the person has already read this interaction in the app — here,
+ * or on another device, before the first attempt or between retries. An alert
+ * for something already seen is noise, and the record is the one place that
+ * knows.
+ */
+async function isActivityRead(db, recipientUid, activityId) {
+  if (!activityId) return false;
+  const record = dataOf(await A.activityRef(db, recipientUid, activityId).get());
+  return !!record && record.read === true;
 }
 
 /**
@@ -282,6 +502,54 @@ async function checkValidity(db, job) {
       return { ok: false, reason: 'not-friends' };
     }
     return { ok: true };
+  }
+
+  // A post interaction is worth delivering only while the post, the
+  // interaction and the friendship all still exist — and only while the
+  // person has not already read it in the app, on this device or another.
+  if (P.POST_TYPES.has(type)) {
+    if (await isActivityRead(db, recipientUid, job.activityId)) {
+      return { ok: false, reason: 'already-read' };
+    }
+    const post = dataOf(await db.collection('posts').doc(job.postId).get());
+    if (!post) return { ok: false, reason: 'post-gone' };
+    if (post.ownerUid !== recipientUid) return { ok: false, reason: 'post-owner-changed' };
+    if (!(await mutualFriends(db, recipientUid, actorUid))) {
+      return { ok: false, reason: 'not-friends' };
+    }
+    const postRef = db.collection('posts').doc(job.postId);
+
+    if (type === P.PushType.POST_COMMENT) {
+      const comment = dataOf(await postRef.collection('comments').doc(job.commentId).get());
+      if (!comment) return { ok: false, reason: 'comment-gone' };
+      if (comment.uid !== actorUid) return { ok: false, reason: 'comment-author-changed' };
+      return { ok: true, text: typeof comment.text === 'string' ? comment.text : '' };
+    }
+
+    const sub = type === P.PushType.POST_GOOD_LIFT ? 'goodLifts' : 'likes';
+    const reaction = await postRef.collection(sub).doc(actorUid).get();
+    // Taken back before the alert went out: say nothing.
+    if (!reaction.exists) return { ok: false, reason: 'reaction-withdrawn' };
+    return { ok: true };
+  }
+
+  if (type === P.PushType.DM_REACTION) {
+    if (await isActivityRead(db, recipientUid, job.activityId)) {
+      return { ok: false, reason: 'already-read' };
+    }
+    const msg = dataOf(await db
+      .collection('conversations').doc(job.conversationId)
+      .collection('messages').doc(job.messageId).get());
+    if (!msg) return { ok: false, reason: 'message-gone' };
+    if (msg.senderId !== recipientUid) return { ok: false, reason: 'not-my-message' };
+    const emoji = P.reactionsOf(msg)[actorUid];
+    // Withdrawn before delivery. A CHANGED emoji still delivers: it is the
+    // same reaction, and the job carries what it was when it arrived.
+    if (!emoji) return { ok: false, reason: 'reaction-withdrawn' };
+    if (!(await mutualFriends(db, recipientUid, actorUid))) {
+      return { ok: false, reason: 'not-friends' };
+    }
+    return { ok: true, emoji: job.emoji || String(emoji).slice(0, 8) };
   }
 
   if (type === P.PushType.DIRECT_MESSAGE) {
@@ -494,6 +762,8 @@ async function processJob(db, jobId, deps = {}) {
       kind: validity.kind,
       text: validity.text,
       previews: prefs.messagePreviews === true,
+      emoji: validity.emoji,
+      commentPreviews: prefs.commentPreviews === true,
     });
     const base = P.buildMessage({ job, rendered, nowMs: sendStartMs });
 
@@ -598,6 +868,12 @@ module.exports = {
   enqueueFriendRequest,
   friendAcceptedJob,
   enqueueDirectMessage,
+  enqueueInteraction,
+  enqueuePostComment,
+  enqueuePostReaction,
+  enqueueDmReactions,
+  postAudience,
+  isActivityRead,
   checkValidity,
   guardedDeleteDevice,
   processJob,

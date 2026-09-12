@@ -157,6 +157,26 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                               'Direct messages',
                               'When a friend sends you a message',
                             ),
+                            _toggle(
+                              prefs,
+                              PushPreferences.fMessageReactions,
+                              'Message reactions',
+                              'When someone reacts to a message you sent',
+                            ),
+                            const Divider(height: 1),
+                            _toggle(
+                              prefs,
+                              PushPreferences.fPostComments,
+                              'Comments on your posts',
+                              'When a friend comments on something you posted',
+                            ),
+                            _toggle(
+                              prefs,
+                              PushPreferences.fPostReactions,
+                              'Likes and Good Lifts',
+                              'When a friend likes your post or gives your '
+                                  'video a Good Lift',
+                            ),
                             const Divider(height: 1),
                             _toggle(
                               prefs,
@@ -164,6 +184,13 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                               'Show message previews',
                               'Include the message text. When off, '
                                   'notifications only say who messaged you.',
+                            ),
+                            _toggle(
+                              prefs,
+                              PushPreferences.fCommentPreviews,
+                              'Show comment previews',
+                              'Include the comment text. When off, '
+                                  'notifications only say who commented.',
                             ),
                           ],
                         ),
@@ -174,7 +201,10 @@ class _NotificationSettingsScreenState extends State<NotificationSettingsScreen>
                         child: Text(
                           'These settings belong to your account and apply on '
                           'every device you sign in to. Coaching an athlete '
-                          'never changes them.',
+                          'never changes them.\n\n'
+                          'Turning a category off stops the phone alert only. '
+                          'Comments, likes, Good Lifts and reactions still '
+                          'appear in Buddies → ACTIVITY.',
                           style: TextStyle(fontSize: 12, color: Colors.white60),
                         ),
                       ),
