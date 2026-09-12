@@ -9,6 +9,7 @@ import 'app_theme.dart';
 import 'bb3_week_planner.dart';
 import 'coach_home_screen.dart';
 import 'coach_mode/athlete_coaching_screen.dart';
+import 'exercise_details_screen.dart';
 import 'home_v2_app_bar.dart';
 import 'home_v2_calendar_service.dart';
 import 'home_v2_controller.dart';
@@ -511,7 +512,9 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                 },
                               ),
                             ),
-                            // Column 4: Settings / Coach Dashboard (coach only)
+                            // Column 4: Settings / Coach Dashboard (coach) or
+                            // Analytics (non-coach — directly right of Week
+                            // Planner, underneath Settings).
                             _buildQAColumn(
                               _buildQACard(
                                 icon: Icons.settings_outlined,
@@ -530,9 +533,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   );
                                 },
                               ),
-                              // Coaches get the Coach Dashboard; everyone else
-                              // gets the athlete Coaching area (accept/decline
-                              // invitations, see and remove current coaches).
+                              // Coaches keep the Coach Dashboard here
+                              // unchanged; everyone else gets Analytics.
                               // hasCoachMode prefers the server-authoritative
                               // entitlement over the mirrored claim, so a
                               // suspended coach falls back to the athlete view.
@@ -556,6 +558,51 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                       },
                                     )
                                   : _buildQACard(
+                                      icon: Icons.insights,
+                                      label: 'Analytics',
+                                      onTap: () {
+                                        final uc = UserContext.of(context,
+                                            listen: false);
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                ChangeNotifierProvider<
+                                                    UserContext>.value(
+                                              value: uc,
+                                              child:
+                                                  const ExerciseDetailsScreen(),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                            ),
+                            // Column 5: Coaching (moved here for non-coach
+                            // accounts, since Analytics now sits in their
+                            // column-4 second row) / Analytics (coach
+                            // accounts — Coach Dashboard is retained above).
+                            _buildQAColumn(
+                              UserContext.of(context).hasCoachMode
+                                  ? _buildQACard(
+                                      icon: Icons.insights,
+                                      label: 'Analytics',
+                                      onTap: () {
+                                        final uc = UserContext.of(context,
+                                            listen: false);
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                ChangeNotifierProvider<
+                                                    UserContext>.value(
+                                              value: uc,
+                                              child:
+                                                  const ExerciseDetailsScreen(),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    )
+                                  : _buildQACard(
                                       icon: Icons.supervisor_account_outlined,
                                       label: 'Coaching',
                                       onTap: () => Navigator.of(context).push(
@@ -565,6 +612,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                         ),
                                       ),
                                     ),
+                              const SizedBox(
+                                  width: kFeatureCardWidth, height: 130),
                             ),
                           ],
                         ),

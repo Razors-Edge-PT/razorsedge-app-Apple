@@ -8,11 +8,263 @@ import 'periodization_model_utils.dart';
 import 'warmup_service.dart';
 import 'app_theme.dart';
 import 'dart:async' show unawaited;
+import 'dart:ui' as ui;
 
 import 'block_repository.dart';
 
 enum TrendRange { d14, m30, m90, m180, y365 }
 enum BodyWeightAverageSource { am, pm }
+
+/// Preset cycle order: 14 days → 1 month → 3 months → 6 months → 1 year → 14 days.
+TrendRange nextTrendRange(TrendRange current) {
+  const order = [
+    TrendRange.d14,
+    TrendRange.m30,
+    TrendRange.m90,
+    TrendRange.m180,
+    TrendRange.y365,
+  ];
+  final i = order.indexOf(current);
+  return order[(i + 1) % order.length];
+}
+
+int trendRangeDays(TrendRange t) {
+  switch (t) {
+    case TrendRange.d14:
+      return 14;
+    case TrendRange.m30:
+      return 30;
+    case TrendRange.m90:
+      return 90;
+    case TrendRange.m180:
+      return 180;
+    case TrendRange.y365:
+      return 365;
+  }
+}
+
+/// The preset's current start date (inclusive), matching the "last N days"
+/// cutoff already used by `_buildSeries`/`_buildSeriesByTod`. Used only to
+/// seed the custom range picker's initial selection.
+DateTime trendPresetStart(TrendRange preset, DateTime now) {
+  final cutoff = now.subtract(Duration(days: trendRangeDays(preset) - 1));
+  return DateTime(cutoff.year, cutoff.month, cutoff.day);
+}
+
+/// Clamps [range] so both ends fall within [firstDate, lastDate] and
+/// start <= end.
+DateTimeRange clampDateRange(
+  DateTimeRange range, {
+  required DateTime firstDate,
+  required DateTime lastDate,
+}) {
+  DateTime start = range.start;
+  DateTime end = range.end;
+  if (start.isBefore(firstDate)) start = firstDate;
+  if (start.isAfter(lastDate)) start = lastDate;
+  if (end.isAfter(lastDate)) end = lastDate;
+  if (end.isBefore(firstDate)) end = firstDate;
+  if (end.isBefore(start)) end = start;
+  return DateTimeRange(start: start, end: end);
+}
+
+/// Compact custom-range label, e.g. "1 Mar – 21 Aug", with abbreviated years
+/// added whenever the range isn't wholly within [now]'s year.
+String customTrendRangeLabel(DateTimeRange r, DateTime now) {
+  final sameYearAsNow = r.start.year == now.year && r.end.year == now.year;
+  final fmt = DateFormat(sameYearAsNow ? 'd MMM' : 'd MMM yy');
+  return '${fmt.format(r.start)} – ${fmt.format(r.end)}';
+}
+
+/// Chooses which observation indices get an x-axis label: always the first
+/// and last, thinned to about six labels total. Ported from
+/// `computeXTickIndices` in exercise_details_screen.dart so index-based
+/// thinning (not calendar-day math) also governs the bodyweight custom
+/// range, keeping labels readable however sparse or dense the data is.
+Set<int> bwCustomTickIndices(int n) {
+  if (n <= 0) return <int>{};
+  final last = n - 1;
+  const maxLabels = 6;
+  if (n <= maxLabels) return {for (int i = 0; i < n; i++) i};
+  final ticks = <int>{0, last};
+  final step = last / (maxLabels - 1);
+  for (int k = 1; k < maxLabels - 1; k++) {
+    ticks.add((k * step).round().clamp(0, last));
+  }
+  return ticks;
+}
+
+/// One point per calendar day per AM/PM bucket, newest wins, chronological,
+/// filtered to the inclusive [start, end] window. Legacy records without
+/// `tod` are treated as AM. Mirrors `_buildSeriesByTod`'s classification
+/// rules but windowed by an explicit range instead of a "last N days" cutoff,
+/// so it can serve an arbitrary custom range without another Firestore query.
+List<Map<String, dynamic>> buildBodyWeightSeriesForRange({
+  required List<Map<String, dynamic>> weights,
+  required DateTime start,
+  required DateTime end,
+  required String tod, // "am" or "pm"
+}) {
+  final DateTime startDay = DateTime(start.year, start.month, start.day);
+  final DateTime endInclusive =
+      DateTime(end.year, end.month, end.day, 23, 59, 59, 999);
+
+  final Map<String, Map<String, dynamic>> byDay = {};
+  for (final w in weights) {
+    final DateTime d = w['date'] as DateTime;
+    if (d.isBefore(startDay) || d.isAfter(endInclusive)) continue;
+
+    final String recTod = () {
+      final storedTod = (w['tod'] as String?)?.toLowerCase().trim();
+      if (storedTod == 'am' || storedTod == 'pm') return storedTod!;
+      return 'am'; // back-compat: no tod field → always AM
+    }();
+    if (recTod != tod) continue;
+
+    final key = "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
+    // _weights is newest-first, so the first one seen per day wins.
+    byDay.putIfAbsent(key, () => {
+          'date': DateTime(d.year, d.month, d.day),
+          'weight': (w['weight'] as num).toDouble(),
+        });
+  }
+
+  final list = byDay.values.toList()
+    ..sort((a, b) => (a['date'] as DateTime).compareTo(b['date'] as DateTime));
+  return list;
+}
+
+/// The full "Weight Trend • {range}" label when it fits [maxWidth] at
+/// [fontSize]; otherwise just the compact range, so narrow phones show
+/// something readable instead of a FittedBox-shrunk sliver of text.
+String fitCustomTrendTitle({
+  required String rangeLabel,
+  required double maxWidth,
+  double fontSize = 20,
+}) {
+  final full = 'Weight Trend • $rangeLabel';
+  final painter = TextPainter(
+    text: TextSpan(
+      text: full,
+      style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.bold),
+    ),
+    maxLines: 1,
+    textDirection: ui.TextDirection.ltr,
+  )..layout();
+  return painter.width <= maxWidth ? full : rangeLabel;
+}
+
+/// Compact calendar button opening the custom date-range picker for the
+/// bodyweight trend chart. Styling/interaction ported from
+/// `_rangePickerButton` in exercise_details_screen.dart (E1RM Trend chart).
+class BwRangePickerButton extends StatelessWidget {
+  final bool active;
+  final Color accent;
+  final VoidCallback onTap;
+
+  const BwRangePickerButton({
+    super.key,
+    required this.active,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Custom date range',
+      child: SizedBox(
+        width: 34,
+        height: 32,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              border: Border.all(color: accent),
+              borderRadius: BorderRadius.circular(8),
+              color: accent.withOpacity(active ? 0.28 : 0.08),
+            ),
+            child: Icon(Icons.date_range, size: 16, color: accent),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Chart title row: centre preset/custom-range title (tap to cycle presets),
+/// calendar button, and the caller-supplied trailing menu. The leading
+/// spacer's width matches the trailing controls' combined width so the title
+/// stays genuinely centred instead of drifting toward the menu side.
+class BwTrendTitleRow extends StatelessWidget {
+  final String presetLabel;
+  final bool customActive;
+  final String customRangeLabel;
+  final VoidCallback onTitleTap;
+  final VoidCallback onCalendarTap;
+  final Widget menu;
+  final Color accentColor;
+
+  const BwTrendTitleRow({
+    super.key,
+    required this.presetLabel,
+    required this.customActive,
+    required this.customRangeLabel,
+    required this.onTitleTap,
+    required this.onCalendarTap,
+    required this.menu,
+    required this.accentColor,
+  });
+
+  // gap + calendar button + gap + menu box, balanced by an equal leading spacer.
+  static const double sideControlsWidth = 6 + 34 + 6 + 48;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const SizedBox(width: sideControlsWidth),
+        Expanded(
+          child: GestureDetector(
+            onTap: onTitleTap,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final text = customActive
+                    ? fitCustomTrendTitle(
+                        rangeLabel: customRangeLabel,
+                        maxWidth: constraints.maxWidth,
+                      )
+                    : presetLabel;
+                return FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    text,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        BwRangePickerButton(
+          active: customActive,
+          accent: accentColor,
+          onTap: onCalendarTap,
+        ),
+        const SizedBox(width: 6),
+        SizedBox(width: 48, child: menu),
+      ],
+    );
+  }
+}
 
 class _LegendDot extends StatelessWidget {
   final Color color;
@@ -53,6 +305,7 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
       "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
 
   TrendRange _trend = TrendRange.y365;
+  DateTimeRange? _customTrend; // custom date-range for the trend chart
   bool _showSecondWeighIn = false; // controls expansion + 2nd line visibility
   BodyWeightAverageSource _averageSource = BodyWeightAverageSource.am;
   List<Map<String, dynamic>> _series14 = [];
@@ -240,6 +493,57 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
     if (picked != null) {
       setState(() => _selectedDate = picked);
     }
+  }
+
+  /// Tapping the centre title always cycles the retained preset and clears
+  /// custom mode, whether or not a custom range was active.
+  void _cycleTrend() {
+    setState(() {
+      _trend = nextTrendRange(_trend);
+      _customTrend = null;
+    });
+  }
+
+  /// Native Material range picker for the bodyweight trend chart, adapted
+  /// from `_pickCustomRange` in exercise_details_screen.dart (E1RM Trend
+  /// chart). No extra history fetch is needed: `_weights` already holds the
+  /// full bodyweight history.
+  Future<void> _pickCustomTrendRange() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final firstDate = DateTime(2000, 1, 1); // matches the weigh-in entry editor's boundary
+
+    final existing = _customTrend;
+    final seed = existing ??
+        DateTimeRange(start: trendPresetStart(_trend, now), end: today);
+    final initial =
+        clampDateRange(seed, firstDate: firstDate, lastDate: today);
+
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: firstDate,
+      lastDate: today,
+      initialDateRange: initial,
+      helpText: 'Weight trend range',
+      saveText: 'Apply',
+      builder: (ctx, child) {
+        final accent = Theme.of(ctx).colorScheme.tertiary;
+        return Theme(
+          data: ThemeData.dark().copyWith(
+            colorScheme: ColorScheme.dark(
+              primary: accent,
+              onPrimary: Colors.black,
+              surface: Colors.grey.shade900,
+              onSurface: Colors.white,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() => _customTrend = picked);
   }
 
   // REPLACE the whole _recomputeSeries() body:
@@ -932,17 +1236,32 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
               builder: (_) {
                 // Resolve the active AM/PM series for current range
                 List<Map<String, dynamic>> am, pm;
-                switch (_trend) {
-                  case TrendRange.d14:
-                    am = _series14Am; pm = _series14Pm; break;
-                  case TrendRange.m30:
-                    am = _series30Am; pm = _series30Pm; break;
-                  case TrendRange.m90:
-                    am = _series90Am; pm = _series90Pm; break;
-                  case TrendRange.m180:
-                    am = _series180Am; pm = _series180Pm; break;
-                  case TrendRange.y365:
-                    am = _series365Am; pm = _series365Pm; break;
+                if (_customTrend != null) {
+                  am = buildBodyWeightSeriesForRange(
+                    weights: _weights,
+                    start: _customTrend!.start,
+                    end: _customTrend!.end,
+                    tod: 'am',
+                  );
+                  pm = buildBodyWeightSeriesForRange(
+                    weights: _weights,
+                    start: _customTrend!.start,
+                    end: _customTrend!.end,
+                    tod: 'pm',
+                  );
+                } else {
+                  switch (_trend) {
+                    case TrendRange.d14:
+                      am = _series14Am; pm = _series14Pm; break;
+                    case TrendRange.m30:
+                      am = _series30Am; pm = _series30Pm; break;
+                    case TrendRange.m90:
+                      am = _series90Am; pm = _series90Pm; break;
+                    case TrendRange.m180:
+                      am = _series180Am; pm = _series180Pm; break;
+                    case TrendRange.y365:
+                      am = _series365Am; pm = _series365Pm; break;
+                  }
                 }
 
                 // Decide which series to show
@@ -955,99 +1274,75 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                   children: [
                     const SizedBox(height: 20),
 
-                    // 🔹 Chart title row with 3-dot menu
-                    Row(
-                      children: [
-                        const SizedBox(width: 48),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                _trend = () {
-                                  switch (_trend) {
-                                    case TrendRange.d14:  return TrendRange.m30;
-                                    case TrendRange.m30:  return TrendRange.m90;
-                                    case TrendRange.m90:  return TrendRange.m180;
-                                    case TrendRange.m180: return TrendRange.y365;
-                                    case TrendRange.y365: return TrendRange.d14;
-                                  }
-                                }();
-                              });
-                            },
-                            child: Text(
-                              () {
-                                switch (_trend) {
-                                  case TrendRange.d14:  return '14-Day Trend';
-                                  case TrendRange.m30:  return '1-Month Trend';
-                                  case TrendRange.m90:  return '3-Month Trend';
-                                  case TrendRange.m180: return '6-Month Trend';
-                                  case TrendRange.y365: return '1-Year Trend';
-                                }
-                              }(),
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                    // 🔹 Chart title row: preset/custom-range title, calendar
+                    // button, and the 3-dot AM/PM settings menu.
+                    BwTrendTitleRow(
+                      presetLabel: () {
+                        switch (_trend) {
+                          case TrendRange.d14:  return '14-Day Trend';
+                          case TrendRange.m30:  return '1-Month Trend';
+                          case TrendRange.m90:  return '3-Month Trend';
+                          case TrendRange.m180: return '6-Month Trend';
+                          case TrendRange.y365: return '1-Year Trend';
+                        }
+                      }(),
+                      customActive: _customTrend != null,
+                      customRangeLabel: _customTrend != null
+                          ? customTrendRangeLabel(_customTrend!, DateTime.now())
+                          : '',
+                      onTitleTap: _cycleTrend,
+                      onCalendarTap: _pickCustomTrendRange,
+                      accentColor: Theme.of(context).colorScheme.tertiary,
+                      menu: PopupMenuButton<String>(
+                        icon: const Icon(Icons.more_vert),
+                        onSelected: (value) {
+                          setState(() {
+                            switch (value) {
+                              case 'toggle_second':
+                                _showSecondWeighIn = !_showSecondWeighIn;
+                                break;
+                              case 'avg_am':
+                                _averageSource = BodyWeightAverageSource.am;
+                                break;
+                              case 'avg_pm':
+                                _averageSource = BodyWeightAverageSource.pm;
+                                break;
+                            }
+                          });
+                        },
+                        itemBuilder: (_) => [
+                          PopupMenuItem<String>(
+                            value: 'toggle_second',
+                            child: Text(_showSecondWeighIn
+                                ? 'Hide 2nd weigh-in'
+                                : 'Add 2nd weigh-in'),
+                          ),
+                          PopupMenuItem<String>(
+                            value: 'avg_am',
+                            child: Row(
+                              children: [
+                                const Expanded(
+                                  child: Text('Use AM weigh-in for average'),
+                                ),
+                                if (_averageSource == BodyWeightAverageSource.am)
+                                  const Icon(Icons.check, size: 18),
+                              ],
                             ),
                           ),
-                        ),
-                        SizedBox(
-                          width: 48,
-                          child: PopupMenuButton<String>(
-                            icon: const Icon(Icons.more_vert),
-                            onSelected: (value) {
-                              setState(() {
-                                switch (value) {
-                                  case 'toggle_second':
-                                    _showSecondWeighIn = !_showSecondWeighIn;
-                                    break;
-                                  case 'avg_am':
-                                    _averageSource = BodyWeightAverageSource.am;
-                                    break;
-                                  case 'avg_pm':
-                                    _averageSource = BodyWeightAverageSource.pm;
-                                    break;
-                                }
-                              });
-                            },
-                            itemBuilder: (_) => [
-                              PopupMenuItem<String>(
-                                value: 'toggle_second',
-                                child: Text(_showSecondWeighIn
-                                    ? 'Hide 2nd weigh-in'
-                                    : 'Add 2nd weigh-in'),
-                              ),
-                              PopupMenuItem<String>(
-                                value: 'avg_am',
-                                child: Row(
-                                  children: [
-                                    const Expanded(
-                                      child: Text('Use AM weigh-in for average'),
-                                    ),
-                                    if (_averageSource == BodyWeightAverageSource.am)
-                                      const Icon(Icons.check, size: 18),
-                                  ],
+                          PopupMenuItem<String>(
+                            value: 'avg_pm',
+                            child: Row(
+                              children: [
+                                const Expanded(
+                                  child: Text('Use PM weigh-in for average'),
                                 ),
-                              ),
-                              PopupMenuItem<String>(
-                                value: 'avg_pm',
-                                child: Row(
-                                  children: [
-                                    const Expanded(
-                                      child: Text('Use PM weigh-in for average'),
-                                    ),
-                                    if (_averageSource == BodyWeightAverageSource.pm)
-                                      const Icon(Icons.check, size: 18),
-                                  ],
-                                ),
-                              ),
-                            ],
+                                if (_averageSource == BodyWeightAverageSource.pm)
+                                  const Icon(Icons.check, size: 18),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
 
                     const SizedBox(height: 6),
@@ -1068,6 +1363,16 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                       final double maxY = allY.reduce((a, b) => a > b ? a : b) + 1;
                       final double rawMaxX = (hasAm ? am.length - 1 : pm.length - 1).toDouble();
                       final double maxX = rawMaxX < 1.0 ? 1.0 : rawMaxX;
+                      // Custom ranges thin labels by observation index (like
+                      // computeXTickIndices), not by calendar-day math, so
+                      // labels stay readable whatever the date span looks like.
+                      final Set<int>? customTicks = _customTrend != null
+                          ? bwCustomTickIndices(baseSeries.length)
+                          : null;
+                      final bool customMultiYear = _customTrend != null &&
+                          baseSeries.isNotEmpty &&
+                          (baseSeries.first['date'] as DateTime).year !=
+                              (baseSeries.last['date'] as DateTime).year;
                       return SizedBox(
                       height: 200,
                       child: LineChart(
@@ -1084,21 +1389,30 @@ class _BodyWeightTrackerState extends State<BodyWeightTracker> {
                                   final series = baseSeries;
                                   if (i < 0 || i >= series.length) return const SizedBox.shrink();
 
-                                  // Label density by range
-                                  int showEvery;
-                                  switch (_trend) {
-                                    case TrendRange.d14:  showEvery = 1;  break;
-                                    case TrendRange.m30:  showEvery = 2;  break;
-                                    case TrendRange.m90:  showEvery = 7;  break;
-                                    case TrendRange.m180: showEvery = 14; break;
-                                    case TrendRange.y365: showEvery = 30; break;
-                                  }
-                                  if (i % showEvery != 0 && i != series.length - 1) {
-                                    return const SizedBox.shrink();
+                                  if (customTicks != null) {
+                                    // Custom range: thin by index, not by day-count.
+                                    if (!customTicks.contains(i)) {
+                                      return const SizedBox.shrink();
+                                    }
+                                  } else {
+                                    // Label density by range
+                                    int showEvery;
+                                    switch (_trend) {
+                                      case TrendRange.d14:  showEvery = 1;  break;
+                                      case TrendRange.m30:  showEvery = 2;  break;
+                                      case TrendRange.m90:  showEvery = 7;  break;
+                                      case TrendRange.m180: showEvery = 14; break;
+                                      case TrendRange.y365: showEvery = 30; break;
+                                    }
+                                    if (i % showEvery != 0 && i != series.length - 1) {
+                                      return const SizedBox.shrink();
+                                    }
                                   }
 
                                   final date = series[i]['date'] as DateTime;
-                                  final label = DateFormat('d MMM').format(date);
+                                  final label = DateFormat(
+                                          customMultiYear ? 'd MMM yy' : 'd MMM')
+                                      .format(date);
 
                                   return Transform.rotate(
                                     angle: -0.5,
