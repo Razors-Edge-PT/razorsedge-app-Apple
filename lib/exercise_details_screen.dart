@@ -7,12 +7,12 @@ import 'package:intl/intl.dart';
 import 'workout_model.dart';
 import 'user_context.dart';
 import 'dart:async';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp & Firestore
 import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
 import 'periodization_model_utils.dart';
 import 'bodyweight_load.dart';
 import 'exercise_catalog.dart';
+import 'analytics_history_loader.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 enum TrendRange { d14, m1, m6, y1, y2 }
@@ -208,6 +208,79 @@ bool exerciseEntryMatches(
     return targetId != null && targetId.isNotEmpty && id == targetId;
   }
   return targetName != null && (entryName ?? '') == targetName;
+}
+
+/// The E1RM/rep-target chart's [Workout] list for one exercise, derived
+/// from shared raw docs (analytics_history_loader.dart) rather than a
+/// per-exercise fetch — a top-level pure function so it's directly testable
+/// without mounting the screen (see test/exercise_analytics_derivation_test.dart).
+List<Workout> deriveWorkoutsForExercise({
+  required List<RawWorkoutDoc> docs,
+  required String? targetId,
+  String? targetName,
+}) {
+  final out = <Workout>[];
+  for (final raw in docs) {
+    final matching = <Exercise>[];
+    for (final e in raw.exercises) {
+      final id = (e['id'] ?? e['exerciseId'])?.toString();
+      final name = (e['name'])?.toString();
+      if (exerciseEntryMatches(id, name, targetId: targetId, targetName: targetName)) {
+        matching.add(Exercise.fromFirestore(e));
+      }
+    }
+    if (matching.isEmpty) continue;
+    out.add(Workout(name: 'Workout', date: raw.date, exercises: matching));
+  }
+  return out;
+}
+
+/// Every valid [VelocitySample] for one exercise, derived from shared raw
+/// docs — scans EVERY matching entry per day (not just an E1RM winner), so
+/// a fastest set outside the winning workout is never missed. A top-level
+/// pure function for the same testability reason as [deriveWorkoutsForExercise].
+List<VelocitySample> deriveVelocitySamplesForExercise({
+  required List<RawWorkoutDoc> docs,
+  required String? targetId,
+  String? targetName,
+}) {
+  final out = <VelocitySample>[];
+  for (final raw in docs) {
+    for (final e in raw.exercises) {
+      final rid = (e['id'] ?? e['exerciseId'])?.toString();
+      final rname = (e['name'])?.toString();
+      if (!exerciseEntryMatches(rid, rname, targetId: targetId, targetName: targetName)) {
+        continue;
+      }
+      final sets = (e['sets'] as List?) ?? const [];
+      for (final s in sets.cast<Map<String, dynamic>>()) {
+        // Same parsing conventions as SetDetails.fromFirestore.
+        final int? reps = (s['reps'] is int)
+            ? s['reps'] as int
+            : (s['reps'] is double)
+                ? (s['reps'] as double).toInt()
+                : int.tryParse(s['reps']?.toString() ?? '');
+        final double? weight =
+            (s['weight'] is num) ? (s['weight'] as num).toDouble() : null;
+        final double? velocity = (s['velocity'] is num)
+            ? (s['velocity'] as num).toDouble()
+            : double.tryParse(s['velocity']?.toString() ?? '');
+
+        if (reps == null || reps <= 0) continue;
+        if (weight == null || weight <= 0) continue;
+        // Valid, finite, positive only — absent/invalid values are
+        // excluded outright, never coerced to zero (section 4).
+        if (velocity == null || !velocity.isFinite || velocity <= 0) continue;
+        out.add(VelocitySample(
+          date: raw.date,
+          reps: reps,
+          weight: weight,
+          velocity: velocity,
+        ));
+      }
+    }
+  }
+  return out;
 }
 
 /// Inclusive local-time window deciding WHICH observations a chart shows.
@@ -445,11 +518,24 @@ class ExerciseDetailsScreen extends StatefulWidget {
 }
 
 class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
-  /// The default initial chart window (matches [TrendRange.d14]). Cold entry
-  /// fetches only this much; longer presets/custom ranges extend it on demand
-  /// (see [_ensureHistoryLoadedFrom]) instead of eagerly scanning years of
-  /// history that a 14-day view will never show.
-  static const int _initialLookbackDays = 14;
+  /// Earliest date any picker/range in this screen will look back to —
+  /// matches the bodyweight entry editor's boundary (body_weight_tracker.dart).
+  static DateTime get _minSupportedDate => DateTime(2000, 1, 1);
+
+  /// Every workout document for the current athlete, deduplicated by
+  /// document id, with coalesced coverage requests and authoritative
+  /// refreshes (analytics_history_loader.dart). ONE instance per athlete —
+  /// exercise selection never resets it, since raw documents belong to the
+  /// athlete, not to whichever exercise happened to trigger a fetch that
+  /// read them (this is what makes switching exercises mid-fetch safe:
+  /// there is no such thing as "the previous exercise's fetch", only "more
+  /// of this athlete's history", merged in regardless of what's currently
+  /// selected — see issue 1 in the review of commit 53df026f).
+  AnalyticsHistoryLoader? _loader;
+
+  void _onLoaderChanged() {
+    if (mounted) setState(() {});
+  }
 
   /// The currently displayed exercise. Starts as [ExerciseDetailsScreen]'s
   /// constructor values (BB3/WES2/workout-history preselect it); Home leaves
@@ -460,12 +546,11 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
   bool get _hasExercise => _activeExerciseId != null || _activeExerciseName != null;
 
-  // --- Exercise picker (Home entry only shows this; BB3/WES2 skip it since
-  // they already preselect) ---
-  final List<ExerciseHistoryOption> _historyExerciseOptions = [];
-  bool _discoveringExercises = false;
-  bool _exerciseDiscoveryComplete = false;
   bool _restoringLastExercise = false;
+
+  /// Extends [_loader]'s coverage all the way back once a user explicitly
+  /// asks for older exercises in the picker (never automatic — see issue 3).
+  bool _loadingOlderExercises = false;
 
   TrendRange _trend = TrendRange.d14; // 👈 our new toggle state
 
@@ -473,12 +558,6 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   DateTimeRange? _customTrend; // E1RM Trend chart
   DateTimeRange? _customTarget; // Rep Target chart
 
-  /// Oldest date currently held in [_workouts].
-  DateTime _loadedSince =
-      DateTime.now().subtract(const Duration(days: _initialLookbackDays));
-
-  /// True while a deeper history fetch triggered by a custom range is running.
-  bool _loadingMore = false;
   String get userId => UserContext.of(context, listen: false).currentUid;
 
   bool _includeRIRForTrend = true;
@@ -490,17 +569,18 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
   // --- Velocity state: kept entirely separate from the E1RM trend state so
   // switching metrics restores each mode's own view (section 3/4). No
-  // velocity fetch or processing happens until the user switches to this
-  // mode (section 6) — see _ensureVelocitySamplesLoaded.
+  // velocity fetch/processing happens until the user switches to this mode
+  // (section 6) — see _onVelocitySelected. Samples themselves are derived
+  // from _loader's shared raw docs, not fetched separately (issue 1/3).
   TrendRange _velocityTrend = TrendRange.d14;
   DateTimeRange? _customVelocityTrend;
-  bool _velocityLoading = false;
-  bool _velocityLoaded = false;
-  DateTime? _velocityLoadedSince;
-  List<VelocitySample> _velocitySamples = const [];
   int? _selectedVelocityReps;
   double? _selectedVelocityWeight;
-  String? _velocityError;
+
+  /// Weigh-ins are athlete-scoped, not exercise-scoped, so this only ever
+  /// needs to run once per athlete session (issue 6's "never fetch weigh-ins
+  /// for a non-BW exercise" performance fix, made idempotent).
+  bool _bwPrimed = false;
 
   /// The load a set is charted and ranked at. For a bodyweight exercise that
   /// is its TOTAL load at the bodyweight recorded on or before [date] —
@@ -525,8 +605,36 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
 
 
-  List<Workout> _workouts = [];
-  bool _loading = true;
+  /// The E1RM/rep-target chart data, freshly derived from [_loader]'s shared
+  /// raw docs every time this is read — never cached per-exercise, so an
+  /// in-flight fetch that resolves after the user switches exercises can
+  /// only ever contribute more of the athlete's raw history, never
+  /// "the previous exercise's data" (issue 1).
+  List<Workout> _deriveWorkouts() {
+    final loader = _loader;
+    if (loader == null || !_hasExercise) return const [];
+    return deriveWorkoutsForExercise(
+      docs: loader.docs,
+      targetId: _activeExerciseId,
+      targetName: _activeExerciseName,
+    );
+  }
+
+  /// The deepest coverage the E1RM trend and rep-target charts currently
+  /// need — they share one fetch, so requesting coverage for one must
+  /// account for the other's independently-selected range too (issue 2).
+  DateTime _deepestE1rmCutoff() {
+    final trendCutoff = _customTrend?.start ?? _cutoffFor(_trend);
+    final targetCutoff = _customTarget?.start ?? _cutoffFor(_trendTarget);
+    return trendCutoff.isBefore(targetCutoff) ? trendCutoff : targetCutoff;
+  }
+
+  /// True once the currently active E1RM/rep-target window is fully,
+  /// authoritatively loaded — never true merely because SOME data has
+  /// arrived (issue 2: a preview must stay visibly distinct from "finished
+  /// loading the selected period").
+  bool get _e1rmWindowReady =>
+      _loader != null && _loader!.coversSince(_deepestE1rmCutoff());
 
   DateTime _cutoffFor(TrendRange t) {
     final now = DateTime.now();
@@ -564,146 +672,6 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     return preset == TrendRange.d14 || preset == TrendRange.m1;
   }
 
-  Future<List<Workout>> _fetchHistoryForExercise({
-    required String exerciseId,
-    String? exerciseName,  // optional fallback
-    String? uidOverride,
-    int lookbackDays = _initialLookbackDays,
-    DateTime? since,
-    int batchSize = 50,
-  }) async {
-    // Prefer selected user if provided; fallback to logged-in only if needed
-    String? userId = uidOverride ?? FirebaseAuth.instance.currentUser?.uid;
-    if (userId == null) return [];
-
-    final cutoff =
-        since ?? DateTime.now().subtract(Duration(days: lookbackDays));
-
-    // Keep only ONE workout per local day: the one with the best top-set E1RM (incl RIR)
-    final Map<String, double> bestScoreByDay = {};
-    final Map<String, Workout> bestWorkoutByDay = {};
-
-    DocumentSnapshot? lastDoc;
-    int page = 0;
-
-    try {
-      while (true) {
-        page++;
-        Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .collection('workouts')
-            .orderBy('date', descending: true)
-            .limit(batchSize);
-
-        if (lastDoc != null) q = q.startAfterDocument(lastDoc);
-
-        final snap = await q.get();
-        if (snap.docs.isEmpty) break;
-
-        for (final doc in snap.docs) {
-          final data = doc.data();
-
-          // Parse date (Timestamp or ISO string)
-          final rawDate = data['date'];
-          DateTime? workoutDate;
-          if (rawDate is Timestamp) {
-            workoutDate = rawDate.toDate();
-          } else if (rawDate is String) {
-            workoutDate = DateTime.tryParse(rawDate);
-          }
-          if (workoutDate == null || workoutDate.isBefore(cutoff)) continue;
-
-          final rawEx = data['exercises'];
-          if (rawEx is! List) continue;
-
-          // Does this workout contain the exercise?
-          final matches = rawEx.any((e) {
-            final m = e as Map<String, dynamic>;
-            final rid = (m['id'] ?? m['exerciseId'])?.toString();
-            final rname = (m['name'])?.toString();
-            return exerciseEntryMatches(rid, rname,
-                targetId: exerciseId, targetName: exerciseName);
-          });
-          if (!matches) continue;
-
-          // Compute THIS WORKOUT'S top-set E1RM (including RIR) for the exercise
-          double workoutBestE1 = double.negativeInfinity;
-          for (final e in rawEx.cast<Map<String, dynamic>>()) {
-            final rid = (e['id'] ?? e['exerciseId'])?.toString();
-            final rname = (e['name'])?.toString();
-            final isMatch = exerciseEntryMatches(rid, rname,
-                targetId: exerciseId, targetName: exerciseName);
-            if (!isMatch) continue;
-
-            final sets = (e['sets'] as List?) ?? const [];
-            for (final s in sets.cast<Map<String, dynamic>>()) {
-              final weight = (s['weight'] as num?)?.toDouble() ?? 0.0;
-              final reps   = (s['reps']   as num?)?.toDouble() ?? 0.0;
-              final rir    = (s['rir']    as num?)?.toDouble() ?? 0.0;
-              if (weight <= 0 || reps <= 0) continue;
-
-              final e1 = calculateE1RM(weight, reps, rir); // ✅ include RIR
-              if (e1 > workoutBestE1) workoutBestE1 = e1;
-            }
-          }
-          if (!workoutBestE1.isFinite) continue;
-
-          // Day key (local midnight)
-          final day = DateTime(workoutDate.year, workoutDate.month, workoutDate.day);
-          final key = '${day.year.toString().padLeft(4, '0')}-'
-              '${day.month.toString().padLeft(2, '0')}-'
-              '${day.day.toString().padLeft(2, '0')}';
-
-          // If this workout beats the current day's best, keep this whole workout
-          final prev = bestScoreByDay[key];
-          if (prev == null || workoutBestE1 > prev) {
-            // Map the workout doc to your model
-            List<Exercise> exercises = [];
-            try {
-              exercises = (rawEx as List)
-                  .map((e) => Exercise.fromFirestore(e as Map<String, dynamic>))
-                  .toList();
-            } catch (_) {}
-
-            bestScoreByDay[key] = workoutBestE1;
-            bestWorkoutByDay[key] = Workout(
-              name: (data['name'] ?? 'Unnamed Workout') as String,
-              date: workoutDate,
-              exercises: exercises,
-            );
-          }
-        }
-
-        lastDoc = snap.docs.last;
-
-        // Early exit if the last item on this page is older than cutoff
-        final lastData = snap.docs.last.data();
-        DateTime? lastDate;
-        final lastRaw = lastData['date'];
-        if (lastRaw is Timestamp) lastDate = lastRaw.toDate();
-        if (lastRaw is String)    lastDate = DateTime.tryParse(lastRaw);
-        if (lastDate != null && lastDate.isBefore(cutoff)) break;
-
-        if (snap.docs.length < batchSize) break; // no more pages
-      }
-
-      // Build final list (one workout per day), ascending
-      final out = bestWorkoutByDay.values.toList()
-        ..sort((a, b) => a.date.compareTo(b.date));
-
-      print('🟦 [Details] Daily top-set fetch: ${out.length} days '
-          '(pages=$page, id="$exerciseId", name="${exerciseName ?? "null"}")');
-      if (out.isNotEmpty) {
-        print('🟦 [Details] Range: ${out.first.date.toIso8601String()} → ${out.last.date.toIso8601String()}');
-      }
-      return out;
-    } catch (e) {
-      print('❌ [Details] fetch error (daily top-set): $e');
-      return [];
-    }
-  }
-
 
   void _cycleTrend() {
     final values = TrendRange.values;
@@ -715,7 +683,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     // Longer presets may reach further back than what's loaded — extend the
     // window on demand instead of eagerly preloading years of history.
     // ignore: discarded_futures
-    _ensureHistoryLoadedFrom(_cutoffFor(_trend));
+    _loader?.requestCoverage(_deepestE1rmCutoff());
   }
 
   /// Compact custom-range label, e.g. "1 Mar – 21 Aug".
@@ -735,6 +703,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   Widget _rangePickerButton({required bool forRepTarget}) {
     final accent = Theme.of(context).colorScheme.tertiary;
     final bool active = (forRepTarget ? _customTarget : _customTrend) != null;
+    final bool loading = _loader?.loading ?? false;
 
     return Tooltip(
       message: 'Custom date range',
@@ -743,9 +712,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         height: 32,
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          onTap: _loadingMore
-              ? null
-              : () => _pickCustomRange(forRepTarget: forRepTarget),
+          onTap: loading ? null : () => _pickCustomRange(forRepTarget: forRepTarget),
           child: Container(
             alignment: Alignment.center,
             decoration: BoxDecoration(
@@ -753,7 +720,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
               borderRadius: BorderRadius.circular(8),
               color: accent.withOpacity(active ? 0.28 : 0.08),
             ),
-            child: _loadingMore
+            child: loading
                 ? SizedBox(
                     width: 14,
                     height: 14,
@@ -808,7 +775,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         );
       },
     );
-    if (picked == null || !mounted) return;
+    if (picked == null || !mounted) return; // cancelling changes nothing
 
     setState(() {
       if (forRepTarget) {
@@ -818,191 +785,78 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       }
     });
 
-    await _ensureHistoryLoadedFrom(picked.start);
-  }
-
-  /// A custom range may reach past the history loaded on open. Fetch the extra
-  /// span (once) rather than silently omitting those observations.
-  Future<void> _ensureHistoryLoadedFrom(DateTime start) async {
-    if (!_hasExercise) return; // Home's picker hasn't chosen one yet
-    final needed = DateTime(start.year, start.month, start.day);
-    if (_loadingMore || !needed.isBefore(_loadedSince)) return;
-
-    final uid = UserContext.of(context, listen: false).currentUid;
-    // Small buffer so a nearby second pick is served from what we already have.
-    final since = needed.subtract(const Duration(days: 7));
-
-    setState(() => _loadingMore = true);
-
-    final list = await _fetchHistoryForExercise(
-      exerciseId: _activeExerciseId ?? '',
-      exerciseName: _activeExerciseName,
-      uidOverride: uid,
-      since: since,
-    );
-    if (!mounted) return;
-
-    setState(() {
-      // The deeper query is a superset of what we hold; only accept it as one.
-      if (list.length >= _workouts.length) {
-        _workouts = list..sort((a, b) => a.date.compareTo(b.date));
-        _loadedSince = since;
-      }
-      _loadingMore = false;
-    });
+    // ignore: discarded_futures
+    _loader?.requestCoverage(picked.start);
   }
 
   // ───────────────────────── Velocity (section 4) ─────────────────────────
   //
-  // Deliberately separate from the E1RM fetch above: E1RM only ever keeps
-  // one "winning" workout per day, but a velocity trend must consider EVERY
-  // matching set from EVERY matching workout/entry that day, so it cannot
-  // reuse that collapsed data. This fetch runs ONLY once the user switches to
-  // Velocity mode (see _ensureVelocitySamplesLoaded / _setMetric) — opening
-  // in E1RM mode never touches it (section 6).
+  // Deliberately no separate fetch: velocity is derived from the SAME
+  // shared raw docs E1RM uses (_deriveVelocitySamples), just scanning every
+  // matching entry per day instead of collapsing to one winner — so it
+  // needs zero Firestore work of its own once the athlete's raw history
+  // already covers the relevant window (section 6/issue 3). What it DOES
+  // need is coverage older than E1RM's window typically requests, to find
+  // combinations that haven't been used recently (issue 4) —
+  // _discoverVelocityHistoryProgressively extends the SAME loader for that,
+  // but only ever starting once the user actually selects Velocity mode.
+
+  bool _velocityDiscoveryInFlight = false;
+
+  /// True once we've CONFIRMED there's nothing older left to find — never
+  /// true merely because the current chart window happens to be loaded
+  /// (issue 4: "no history" must never be claimed before discovery
+  /// completes).
+  bool get _velocityDiscoveryComplete =>
+      _loader?.coversSince(_minSupportedDate) ?? false;
 
   /// Every recorded set for the active exercise carrying a valid velocity,
   /// scanning every matching entry per day (not just that day's E1RM
   /// winner) so a fastest set outside the winning workout is never missed.
-  Future<List<VelocitySample>> _fetchVelocitySamplesForExercise({
-    required String exerciseId,
-    String? exerciseName,
-    required String uidOverride,
-    required DateTime since,
-    int batchSize = 50,
-  }) async {
-    final cutoff = DateTime(since.year, since.month, since.day);
-    final samples = <VelocitySample>[];
-    DocumentSnapshot? lastDoc;
-
-    try {
-      while (true) {
-        Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-            .collection('users')
-            .doc(uidOverride)
-            .collection('workouts')
-            .orderBy('date', descending: true)
-            .limit(batchSize);
-        if (lastDoc != null) q = q.startAfterDocument(lastDoc);
-
-        final snap = await q.get();
-        if (snap.docs.isEmpty) break;
-
-        for (final doc in snap.docs) {
-          final data = doc.data();
-          final rawDate = data['date'];
-          DateTime? workoutDate;
-          if (rawDate is Timestamp) workoutDate = rawDate.toDate();
-          if (rawDate is String) workoutDate = DateTime.tryParse(rawDate);
-          if (workoutDate == null || workoutDate.isBefore(cutoff)) continue;
-
-          final rawEx = data['exercises'];
-          if (rawEx is! List) continue;
-
-          final day =
-              DateTime(workoutDate.year, workoutDate.month, workoutDate.day);
-
-          for (final e in rawEx.cast<Map<String, dynamic>>()) {
-            final rid = (e['id'] ?? e['exerciseId'])?.toString();
-            final rname = (e['name'])?.toString();
-            if (!exerciseEntryMatches(rid, rname,
-                targetId: exerciseId, targetName: exerciseName)) continue;
-
-            final sets = (e['sets'] as List?) ?? const [];
-            for (final s in sets.cast<Map<String, dynamic>>()) {
-              // Same parsing conventions as SetDetails.fromFirestore.
-              final int? reps = (s['reps'] is int)
-                  ? s['reps'] as int
-                  : (s['reps'] is double)
-                      ? (s['reps'] as double).toInt()
-                      : int.tryParse(s['reps']?.toString() ?? '');
-              final double? weight =
-                  (s['weight'] is num) ? (s['weight'] as num).toDouble() : null;
-              final double? velocity = (s['velocity'] is num)
-                  ? (s['velocity'] as num).toDouble()
-                  : double.tryParse(s['velocity']?.toString() ?? '');
-
-              if (reps == null || reps <= 0) continue;
-              if (weight == null || weight <= 0) continue;
-              // Valid, finite, positive only — absent/invalid values are
-              // excluded outright, never coerced to zero (section 4).
-              if (velocity == null || !velocity.isFinite || velocity <= 0) {
-                continue;
-              }
-
-              samples.add(VelocitySample(
-                date: day,
-                reps: reps,
-                weight: weight,
-                velocity: velocity,
-              ));
-            }
-          }
-        }
-
-        lastDoc = snap.docs.last;
-        final lastData = snap.docs.last.data();
-        DateTime? lastDate;
-        final lastRaw = lastData['date'];
-        if (lastRaw is Timestamp) lastDate = lastRaw.toDate();
-        if (lastRaw is String) lastDate = DateTime.tryParse(lastRaw);
-        if (lastDate != null && lastDate.isBefore(cutoff)) break;
-        if (snap.docs.length < batchSize) break;
-      }
-      return samples;
-    } catch (e) {
-      debugPrint('❌ [Details] velocity fetch error: $e');
-      rethrow; // surfaced as a distinct error state, not silent empty data
-    }
+  /// Derived fresh from [_loader]'s shared raw docs — never fetched
+  /// separately, and never affected by which exercise happened to be
+  /// selected when any given raw document was originally read (issue 1).
+  List<VelocitySample> _deriveVelocitySamples() {
+    final loader = _loader;
+    if (loader == null || !_hasExercise) return const [];
+    return deriveVelocitySamplesForExercise(
+      docs: loader.docs,
+      targetId: _activeExerciseId,
+      targetName: _activeExerciseName,
+    );
   }
 
-  /// Loads (or extends) the velocity samples for the active exercise. A
-  /// no-op once the requested window is already covered, so switching back
-  /// to Velocity mode, or re-selecting the same combination, does no work.
-  Future<void> _ensureVelocitySamplesLoaded({DateTime? since}) async {
-    if (!_hasExercise) return;
-    final targetSince = since ?? _cutoffFor(_velocityTrend);
-    final targetDay =
-        DateTime(targetSince.year, targetSince.month, targetSince.day);
-    if (_velocityLoaded &&
-        _velocityLoadedSince != null &&
-        !targetDay.isBefore(_velocityLoadedSince!)) {
-      return;
-    }
-    if (_velocityLoading) return;
-
-    setState(() {
-      _velocityLoading = true;
-      _velocityError = null;
-    });
-    final uid = UserContext.of(context, listen: false).currentUid;
-    final fetchSince = targetDay.subtract(const Duration(days: 7));
-
-    List<VelocitySample>? samples;
-    String? error;
+  /// Progressively extends [_loader]'s coverage back to [_minSupportedDate]
+  /// so older velocity combinations become discoverable (issue 4), in
+  /// stages so the UI updates as each one lands rather than blocking on the
+  /// whole history at once. Only ever started from [_setMetric] switching
+  /// INTO Velocity mode — never automatically (issue 3/6).
+  Future<void> _discoverVelocityHistoryProgressively() async {
+    if (_velocityDiscoveryInFlight || _velocityDiscoveryComplete) return;
+    final loader = _loader;
+    if (loader == null) return;
+    _velocityDiscoveryInFlight = true;
     try {
-      samples = await _fetchVelocitySamplesForExercise(
-        exerciseId: _activeExerciseId ?? '',
-        exerciseName: _activeExerciseName,
-        uidOverride: uid,
-        since: fetchSince,
-      );
-    } catch (e) {
-      error = 'Could not load velocity data. Please try again.';
-    }
-    if (!mounted) return;
-    setState(() {
-      if (samples != null) {
-        // A deeper fetch is a superset of what we hold; only accept it as one.
-        if (samples.length >= _velocitySamples.length) {
-          _velocitySamples = samples;
-          _velocityLoadedSince = fetchSince;
+      final now = DateTime.now();
+      final stages = <DateTime>[
+        now.subtract(const Duration(days: 365)),
+        now.subtract(const Duration(days: 365 * 3)),
+        _minSupportedDate,
+      ];
+      for (final stageTarget in stages) {
+        final target =
+            stageTarget.isBefore(_minSupportedDate) ? _minSupportedDate : stageTarget;
+        try {
+          await loader.requestCoverage(target);
+        } catch (_) {
+          break; // the loader's own error state already surfaces this
         }
-        _velocityLoaded = true;
+        if (!mounted || loader != _loader) return;
+        if (!target.isAfter(_minSupportedDate)) break;
       }
-      _velocityError = error;
-      _velocityLoading = false;
-    });
+    } finally {
+      _velocityDiscoveryInFlight = false;
+    }
   }
 
   void _setMetric(AnalyticsMetric metric) {
@@ -1010,9 +864,9 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     setState(() => _metric = metric);
     if (metric == AnalyticsMetric.velocity) {
       // First switch into Velocity mode for this exercise — the only place
-      // any velocity work is triggered (section 6).
+      // any velocity-specific work is triggered (section 6).
       // ignore: discarded_futures
-      _ensureVelocitySamplesLoaded();
+      _discoverVelocityHistoryProgressively();
     }
   }
 
@@ -1025,7 +879,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     });
     // Date changes must never reset the selected reps/load combination.
     // ignore: discarded_futures
-    _ensureVelocitySamplesLoaded(since: _cutoffFor(_velocityTrend));
+    _loader?.requestCoverage(_cutoffFor(_velocityTrend));
   }
 
   /// Native Material range picker for the velocity chart — mirrors
@@ -1034,7 +888,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   Future<void> _pickCustomVelocityRange() async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final firstDate = DateTime(today.year - 10, 1, 1);
+    final firstDate = _minSupportedDate;
 
     final existing = _customVelocityTrend;
     final presetStart = _cutoffFor(_velocityTrend);
@@ -1072,7 +926,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     setState(() => _customVelocityTrend = picked);
     // The selected combination is deliberately left untouched here.
-    await _ensureVelocitySamplesLoaded(since: picked.start);
+    // ignore: discarded_futures
+    _loader?.requestCoverage(picked.start);
   }
 
   // ─────────────────── Exercise identity / picker (section 2) ───────────────────
@@ -1107,128 +962,104 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     } catch (_) {/* best-effort only */}
   }
 
-  /// Discovers every exercise this athlete has recorded history for, so
-  /// Home's picker has something to offer (section 2). Streams results into
-  /// [_historyExerciseOptions] page by page — this NEVER blocks an already
-  /// selected exercise's initial chart, and runs fully in the background.
-  Future<void> _discoverExercisesWithHistory(String uid) async {
-    if (_discoveringExercises || _exerciseDiscoveryComplete) return;
-    setState(() => _discoveringExercises = true);
+  /// Best-effort catalogue name lookup, loaded once per athlete session —
+  /// used only to prefer a current/renamed display name over whatever a
+  /// workout document happened to store; a failure just falls back to the
+  /// stored name, which is exactly right for a historical/deleted exercise.
+  Map<String, String>? _catalogNameById;
 
-    Map<String, String> catalogNameById = const {};
+  Future<void> _loadCatalogNames(String uid) async {
     try {
       final catalog = await ExerciseCatalog.loadCombinedExercisesForUser(uid);
-      catalogNameById = {for (final c in catalog) c.id: c.name};
+      if (!mounted) return;
+      setState(() {
+        _catalogNameById = {for (final c in catalog) c.id: c.name};
+      });
     } catch (_) {
-      /* best-effort: fall back to whatever name the workout doc stored */
-    }
-
-    final seen = <String, ExerciseHistoryOption>{};
-    DocumentSnapshot? lastDoc;
-    const batchSize = 100;
-
-    try {
-      while (true) {
-        Query<Map<String, dynamic>> q = FirebaseFirestore.instance
-            .collection('users')
-            .doc(uid)
-            .collection('workouts')
-            .orderBy('date', descending: true)
-            .limit(batchSize);
-        if (lastDoc != null) q = q.startAfterDocument(lastDoc);
-
-        final snap = await q.get();
-        if (snap.docs.isEmpty) break;
-
-        for (final doc in snap.docs) {
-          final rawEx = doc.data()['exercises'];
-          if (rawEx is! List) continue;
-          for (final e in rawEx.cast<Map<String, dynamic>>()) {
-            final id = (e['id'] ?? e['exerciseId'])?.toString();
-            final rawName = (e['name'] ?? '').toString();
-            final validId = (id != null && id.isNotEmpty) ? id : null;
-            if (rawName.isEmpty && validId == null) continue;
-            // Prefer the catalogue's current name (handles a rename);
-            // otherwise fall back to whatever this workout stored — the
-            // sensible behaviour for a historical/deleted exercise label.
-            final displayName = (validId != null &&
-                    catalogNameById.containsKey(validId))
-                ? catalogNameById[validId]!
-                : rawName;
-            final option = ExerciseHistoryOption(
-              id: validId,
-              name: displayName.isEmpty ? 'Unnamed exercise' : displayName,
-            );
-            seen.putIfAbsent(option.key, () => option);
-          }
-        }
-
-        lastDoc = snap.docs.last;
-        if (mounted) {
-          setState(() {
-            _historyExerciseOptions
-              ..clear()
-              ..addAll(seen.values)
-              ..sort((a, b) =>
-                  a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-          });
-        }
-        if (snap.docs.length < batchSize) break;
-      }
-    } catch (e) {
-      debugPrint('❌ [Details] exercise discovery error: $e');
-    } finally {
-      if (mounted) {
-        setState(() {
-          _discoveringExercises = false;
-          _exerciseDiscoveryComplete = true;
-        });
-      }
+      /* keep falling back to stored names */
     }
   }
 
-  void _primeBwHistoryIfNeeded(String uid) {
+  /// Every exercise this athlete has recorded history for WITHIN whatever
+  /// [_loader] currently covers — derived synchronously from the same raw
+  /// docs E1RM/velocity already use (issue 3: reuse raw documents already
+  /// read; avoid a duplicate discovery fetch). Grows automatically as
+  /// coverage deepens (an explicit "load older" tap, or velocity's
+  /// progressive discovery), and always includes the active exercise even
+  /// if it falls outside the currently-loaded window.
+  List<ExerciseHistoryOption> _deriveExerciseOptions() {
+    final loader = _loader;
+    final catalogNameById = _catalogNameById;
+    final seen = <String, ExerciseHistoryOption>{};
+    if (loader != null) {
+      for (final raw in loader.docs) {
+        for (final e in raw.exercises) {
+          final id = (e['id'] ?? e['exerciseId'])?.toString();
+          final rawName = (e['name'] ?? '').toString();
+          final validId = (id != null && id.isNotEmpty) ? id : null;
+          if (rawName.isEmpty && validId == null) continue;
+          final displayName =
+              (validId != null && catalogNameById != null && catalogNameById.containsKey(validId))
+                  ? catalogNameById[validId]!
+                  : rawName;
+          final option = ExerciseHistoryOption(
+            id: validId,
+            name: displayName.isEmpty ? 'Unnamed exercise' : displayName,
+          );
+          seen.putIfAbsent(option.key, () => option);
+        }
+      }
+    }
+    if (_hasExercise) {
+      final active = ExerciseHistoryOption(
+          id: _activeExerciseId, name: _activeExerciseName ?? '(unnamed)');
+      seen.putIfAbsent(active.key, () => active);
+    }
+    final list = seen.values.toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return list;
+  }
+
+  /// Extends coverage all the way back so older exercises become
+  /// discoverable — only ever run from an explicit picker interaction
+  /// (issue 3), never automatically.
+  Future<void> _loadOlderExercises() async {
+    if (_loadingOlderExercises) return;
+    setState(() => _loadingOlderExercises = true);
+    try {
+      await _loader?.requestCoverage(_minSupportedDate);
+    } catch (_) {
+      /* the loader's own error state already surfaces this */
+    } finally {
+      if (mounted) setState(() => _loadingOlderExercises = false);
+    }
+  }
+
+  void _maybePrimeBodyweight(String uid) {
+    if (_bwPrimed) return; // athlete-scoped: needed at most once (section 6)
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
       id: _activeExerciseId,
       name: _activeExerciseName,
     );
-    if (!isBw) return; // section 6: never fetch weigh-ins for a non-BW exercise
+    if (!isBw) return; // never fetch weigh-ins for a non-BW exercise
+    _bwPrimed = true;
     _primeBwHistory(uid).then((_) {
-      if (mounted && _workouts.isNotEmpty) setState(() {});
+      if (mounted) setState(() {});
     });
   }
 
-  void _fetchInitialHistoryForActiveExercise(String uid) {
-    _fetchHistoryForExercise(
-      exerciseId: _activeExerciseId ?? '',
-      exerciseName: _activeExerciseName,
-      uidOverride: uid,
-      since: _loadedSince,
-    ).then((list) {
-      if (!mounted) return;
-      setState(() {
-        _workouts = list..sort((a, b) => a.date.compareTo(b.date));
-        _loading = false;
-      });
-    });
-  }
-
-  /// Switches the active exercise (Home's picker) — resets every piece of
-  /// per-exercise state and re-fetches for the new one. [persist] is true
-  /// only for an explicit user pick, not for the initial restore, so opening
-  /// with a restored exercise doesn't needlessly rewrite the same value.
+  /// Switches the active exercise (Home's picker). Deliberately lightweight:
+  /// raw history is athlete-scoped, not exercise-scoped, so switching
+  /// exercises needs no new fetch and cannot be corrupted by one already in
+  /// flight (issue 1) — only the exercise-specific selection resets.
+  /// [persist] is true only for an explicit user pick, not the initial
+  /// restore, so opening with a restored exercise doesn't rewrite the same
+  /// value right back.
   void _selectExercise(ExerciseHistoryOption option, {bool persist = false}) {
     final uid = UserContext.of(context, listen: false).currentUid;
     setState(() {
       _activeExerciseId = option.id;
       _activeExerciseName = option.name;
-      _workouts = [];
-      _loading = true;
-      _loadedSince =
-          DateTime.now().subtract(const Duration(days: _initialLookbackDays));
-      _velocitySamples = const [];
-      _velocityLoaded = false;
-      _velocityLoadedSince = null;
       _selectedVelocityReps = null;
       _selectedVelocityWeight = null;
     });
@@ -1236,11 +1067,15 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       // ignore: discarded_futures
       _persistLastSelectedExercise(uid, option);
     }
-    _primeBwHistoryIfNeeded(uid);
-    _fetchInitialHistoryForActiveExercise(uid);
+    _maybePrimeBodyweight(uid);
+    // Defensive: coverage is athlete-wide, so this is normally already
+    // satisfied, but an exercise switch must never leave the retained
+    // visible window under-covered (issue 2) regardless of ordering.
+    // ignore: discarded_futures
+    _loader?.requestCoverage(_deepestE1rmCutoff());
     if (_metric == AnalyticsMetric.velocity) {
       // ignore: discarded_futures
-      _ensureVelocitySamplesLoaded();
+      _discoverVelocityHistoryProgressively();
     }
   }
 
@@ -1268,14 +1103,29 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             id: _activeExerciseId, name: _activeExerciseName ?? '(unnamed)')
         : null;
 
-    final items = <ExerciseHistoryOption>[..._historyExerciseOptions];
-    if (activeOption != null && !items.contains(activeOption)) {
-      items.add(activeOption);
-    }
-    items.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final items = _deriveExerciseOptions();
+    // Distinct from "nothing found in what's loaded so far" (issue 3) —
+    // only true once discovery has actually reached the supported minimum.
+    final bool fullyDiscovered =
+        _loader?.coversSince(_minSupportedDate) ?? false;
+
+    Widget loadOlderButton() => Align(
+          alignment: Alignment.center,
+          child: TextButton(
+            onPressed: _loadingOlderExercises ? null : _loadOlderExercises,
+            child: _loadingOlderExercises
+                ? SizedBox(
+                    height: 14,
+                    width: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: accent),
+                  )
+                : Text('Load older exercises',
+                    style: TextStyle(color: accent, fontSize: 12)),
+          ),
+        );
 
     if (items.isEmpty) {
-      if (_discoveringExercises || _restoringLastExercise) {
+      if (_restoringLastExercise || (_loader?.loading ?? false)) {
         return const Padding(
           padding: EdgeInsets.symmetric(vertical: 6),
           child: Center(
@@ -1287,50 +1137,70 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           ),
         );
       }
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 6),
-        child: Text(
-          'No exercises with recorded history yet.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.white70),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          children: [
+            Text(
+              fullyDiscovered
+                  ? 'No exercises with recorded history yet.'
+                  : 'No exercises found in the loaded range yet.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white70),
+            ),
+            if (!fullyDiscovered) ...[
+              const SizedBox(height: 4),
+              loadOlderButton(),
+            ],
+          ],
         ),
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(
-        border: Border.all(color: accent),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<ExerciseHistoryOption>(
-          isExpanded: true,
-          value: activeOption,
-          hint: const Text('Select an exercise',
-              style: TextStyle(color: Colors.white70)),
-          dropdownColor: Colors.grey[900],
-          icon: Icon(Icons.arrow_drop_down, color: accent),
-          items: [
-            for (final o in items)
-              DropdownMenuItem(
-                value: o,
-                child: Text(o.name,
-                    style: const TextStyle(color: Colors.white),
-                    overflow: TextOverflow.ellipsis),
-              ),
-          ],
-          onChanged: (picked) {
-            if (picked == null || picked == activeOption) return;
-            _selectExercise(picked, persist: true);
-          },
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            border: Border.all(color: accent),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<ExerciseHistoryOption>(
+              isExpanded: true,
+              value: activeOption,
+              hint: const Text('Select an exercise',
+                  style: TextStyle(color: Colors.white70)),
+              dropdownColor: Colors.grey[900],
+              icon: Icon(Icons.arrow_drop_down, color: accent),
+              items: [
+                for (final o in items)
+                  DropdownMenuItem(
+                    value: o,
+                    child: Text(o.name,
+                        style: const TextStyle(color: Colors.white),
+                        overflow: TextOverflow.ellipsis),
+                  ),
+              ],
+              onChanged: (picked) {
+                if (picked == null || picked == activeOption) return;
+                _selectExercise(picked, persist: true);
+              },
+            ),
+          ),
         ),
-      ),
+        if (!fullyDiscovered) ...[
+          const SizedBox(height: 2),
+          loadOlderButton(),
+        ],
+      ],
     );
   }
 
   Widget _buildNoExerciseSelectedState(BuildContext context) {
-    final message = (_exerciseDiscoveryComplete && _historyExerciseOptions.isEmpty)
+    final bool fullyDiscovered =
+        _loader?.coversSince(_minSupportedDate) ?? false;
+    final message = (fullyDiscovered && _deriveExerciseOptions().isEmpty)
         ? 'No exercises with recorded history yet.'
         : 'Pick an exercise above to see its analytics.';
     return Padding(
@@ -1389,6 +1259,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   Widget _velocityRangePickerButton() {
     final accent = Theme.of(context).colorScheme.tertiary;
     final bool active = _customVelocityTrend != null;
+    final bool loading = _loader?.loading ?? false;
     return Tooltip(
       message: 'Custom date range',
       child: SizedBox(
@@ -1396,7 +1267,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
         height: 32,
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
-          onTap: _velocityLoading ? null : _pickCustomVelocityRange,
+          onTap: loading ? null : _pickCustomVelocityRange,
           child: Container(
             alignment: Alignment.center,
             decoration: BoxDecoration(
@@ -1404,7 +1275,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
               borderRadius: BorderRadius.circular(8),
               color: accent.withOpacity(active ? 0.28 : 0.08),
             ),
-            child: _velocityLoading
+            child: loading
                 ? SizedBox(
                     width: 14,
                     height: 14,
@@ -1504,26 +1375,62 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           ),
         );
 
-    if (_velocityError != null) {
-      return [titleRow, message(_velocityError!)];
-    }
-    if (_velocityLoading && _velocitySamples.isEmpty && !_velocityLoaded) {
-      return [
-        titleRow,
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 40),
-          child: Center(child: CircularProgressIndicator()),
-        ),
-      ];
-    }
+    final velocitySamples = _deriveVelocitySamples();
+    final loader = _loader;
+    final bool discoveryComplete = _velocityDiscoveryComplete;
+    final String? loaderError = loader?.error;
+    final bool discovering = (loader?.loading ?? false) || _velocityDiscoveryInFlight;
 
-    final combos = VelocityCombinations.fromSamples(_velocitySamples);
-    if (combos.reps.isEmpty) {
+    Widget discoveringNote() => Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SizedBox(
+                  height: 12, width: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: accent)),
+              const SizedBox(width: 6),
+              Text('Looking for older recorded data…',
+                  style: TextStyle(color: accent.withValues(alpha: 0.8), fontSize: 11)),
+            ],
+          ),
+        );
+
+    if (velocitySamples.isEmpty) {
+      if (loaderError != null) {
+        return [
+          titleRow,
+          message('Could not load velocity data. Tap to retry.'),
+          Center(
+            child: TextButton(
+              onPressed: () {
+                // ignore: discarded_futures
+                _discoverVelocityHistoryProgressively();
+              },
+              child: Text('Retry', style: TextStyle(color: accent)),
+            ),
+          ),
+        ];
+      }
+      if (!discoveryComplete) {
+        // Discovery hasn't finished — this must never be reported as "no
+        // history" (issue 4), whether or not a fetch happens to be running
+        // right this instant.
+        return [
+          titleRow,
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+          discoveringNote(),
+        ];
+      }
       return [
         titleRow,
         message('No recorded velocity data for this exercise yet.'),
       ];
     }
+
+    final combos = VelocityCombinations.fromSamples(velocitySamples);
 
     // Keep a valid selection; drop it only if it no longer exists at all
     // (date-window changes must never clear a still-valid combination).
@@ -1542,32 +1449,37 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     final dropdownsRow = Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: _velocityDropdown<int>(
-              label: 'Reps',
-              value: reps,
-              items: combos.reps,
-              display: (r) => '$r reps',
-              onChanged: (v) => setState(() {
-                _selectedVelocityReps = v;
-                _selectedVelocityWeight = null; // weight is dependent on reps
-              }),
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: _velocityDropdown<int>(
+                  label: 'Reps',
+                  value: reps,
+                  items: combos.reps,
+                  display: (r) => '$r reps',
+                  onChanged: (v) => setState(() {
+                    _selectedVelocityReps = v;
+                    _selectedVelocityWeight = null; // weight is dependent on reps
+                  }),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _velocityDropdown<double>(
+                  label: 'Load',
+                  value: weight,
+                  items: weightsForReps,
+                  display: _formatKg,
+                  onChanged: reps == null
+                      ? null
+                      : (v) => setState(() => _selectedVelocityWeight = v),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _velocityDropdown<double>(
-              label: 'Load',
-              value: weight,
-              items: weightsForReps,
-              display: _formatKg,
-              onChanged: reps == null
-                  ? null
-                  : (v) => setState(() => _selectedVelocityWeight = v),
-            ),
-          ),
+          if (!discoveryComplete && discovering) discoveringNote(),
         ],
       ),
     );
@@ -1582,7 +1494,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     final window = _windowFor(_velocityTrend, _customVelocityTrend);
     final points = dailyMaxVelocity(
-      samples: _velocitySamples,
+      samples: velocitySamples,
       reps: reps,
       weight: weight,
     ).where((p) => window.contains(p.date)).toList();
@@ -1713,7 +1625,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       _customTarget = null; // picking a preset leaves custom mode
     });
     // ignore: discarded_futures
-    _ensureHistoryLoadedFrom(_cutoffFor(_trendTarget));
+    _loader?.requestCoverage(_deepestE1rmCutoff());
   }
 
   String _repTargetLabel() => _multiRepLabel();
@@ -1853,26 +1765,44 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     _activeExerciseId = widget.exerciseId;
     _activeExerciseName = widget.exerciseName;
 
-    // Exercise discovery always runs in the background (Home's picker needs
-    // it eventually) but never blocks an already-preselected chart, and
-    // never delays behind a full-history scan (section 2/6).
+    final loader = AnalyticsHistoryLoader(
+      uid: selectedUid,
+      fetcher: ({required since}) =>
+          fetchRawWorkoutDocsFromFirestore(uid: selectedUid, since: since),
+    );
+    loader.addListener(_onLoaderChanged);
+    _loader = loader;
+
+    // Best-effort catalogue names for the picker (a rename, or a nicer
+    // label than a raw stored one) — never blocks anything.
     // ignore: discarded_futures
-    _discoverExercisesWithHistory(selectedUid);
+    _loadCatalogNames(selectedUid);
 
     if (_hasExercise) {
-      // BB3/WES2/workout-history entry: preselected, render immediately.
-      _primeBwHistoryIfNeeded(selectedUid);
-      _fetchInitialHistoryForActiveExercise(selectedUid);
+      // BB3/WES2/workout-history entry: preselected, render immediately —
+      // only the active window's coverage is requested (section 6), never
+      // a full-history scan.
+      // ignore: discarded_futures
+      loader.requestCoverage(_deepestE1rmCutoff());
+      _maybePrimeBodyweight(selectedUid);
     } else {
-      // Home entry with nothing preselected: restore the last valid
-      // selection for this athlete if there is one, without waiting for the
-      // full exercise-discovery scan above to finish.
+      // Home entry with nothing preselected: request enough recent history
+      // for the picker to be usable immediately (issue 3 — bounded, not a
+      // full scan), and separately restore this athlete's last valid
+      // selection without waiting for that fetch to finish.
+      // ignore: discarded_futures
+      loader.requestCoverage(DateTime.now().subtract(const Duration(days: 90)));
+
       setState(() => _restoringLastExercise = true);
       _readLastSelectedExercise(selectedUid).then((restored) {
         if (!mounted) return;
         setState(() => _restoringLastExercise = false);
         if (restored != null) {
           _selectExercise(restored); // not persisted again — already stored
+          // The restored exercise renders immediately from whatever's
+          // already loaded/loading; ensure its own default window too.
+          // ignore: discarded_futures
+          loader.requestCoverage(_cutoffFor(TrendRange.d14));
         }
       });
     }
@@ -1881,14 +1811,17 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   @override
   void dispose() {
     _repTargetCtrl.dispose();
+    _loader?.removeListener(_onLoaderChanged);
+    _loader?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Full history (used by the list below)
-    final List<Workout> sortedWorkouts =
-    [..._workouts]..sort((a, b) => a.date.compareTo(b.date));
+    // Full history (used by the list below), freshly derived from the
+    // shared raw-doc cache every build — never stale per-exercise (issue 1).
+    final List<Workout> sortedWorkouts = _deriveWorkouts()
+      ..sort((a, b) => a.date.compareTo(b.date));
 
     final List<E1RMPoint> series = [];
     final Map<DateTime, _PointMeta> _metaAllTop = {};
@@ -1925,7 +1858,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     }
 
-    print('📊 [Details] Workouts total=${_workouts.length}, matched=$matchedWorkouts, points=${series.length}');
+    print('📊 [Details] Workouts total=${sortedWorkouts.length}, matched=$matchedWorkouts, points=${series.length}');
 
     // ===== Rep-target series (second chart) — Multi-line support =====
 // One line per COMMA token; dash ranges collapse into a single line.
@@ -2238,6 +2171,48 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             ),
           ),
 
+          // A preview must stay visibly distinct from "finished loading the
+          // selected period" (issue 2) — shown additively, without touching
+          // the title row/controls above.
+          if (!_e1rmWindowReady && (_loader?.loading ?? false))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    height: 12,
+                    width: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.6,
+                      color: Theme.of(context).colorScheme.tertiary,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Loading the full selected period…',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.tertiary.withValues(alpha: 0.8),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (!_e1rmWindowReady && _loader?.error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Center(
+                child: TextButton(
+                  onPressed: () {
+                    // ignore: discarded_futures
+                    _loader?.requestCoverage(_deepestE1rmCutoff());
+                  },
+                  child: Text('Could not load the full period. Tap to retry.',
+                      style: TextStyle(color: Theme.of(context).colorScheme.tertiary)),
+                ),
+              ),
+            ),
 
           // 🔥 Graph
           Padding(
