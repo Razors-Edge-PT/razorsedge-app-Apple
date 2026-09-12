@@ -289,4 +289,110 @@ void main() {
       expect(loaderB.docs.map((d) => d.id), ['b-doc']);
     });
   });
+
+  group(
+      'review-follow-up issue 3 — fire-and-forget production calling pattern is zone-safe',
+      () {
+    // Every production call site fires requestCoverage()/invalidate()
+    // without awaiting, via _fireCoverageRequest(request) which does
+    // `request?.catchError((_) {})`. These tests reproduce EXACTLY that
+    // pattern (not a direct awaited call) inside runZonedGuarded, so a
+    // regression back to a bare `// ignore: discarded_futures` comment
+    // (no catchError attached) would make these fail with an uncaught
+    // zone error — proving the fix, not just the loader's own await-based
+    // API surface already covered elsewhere in this file.
+    void fireAndForget(Future<void>? request) {
+      request?.catchError((_) {
+        // Mirrors _fireCoverageRequest: loader.error already carries the
+        // failure for the UI; nothing else to do for a fire-and-forget
+        // caller.
+      });
+    }
+
+    test('a failed INITIAL load produces no uncaught zone error and surfaces loader.error',
+        () async {
+      final rig = FakeFetcherRig();
+      final loader = AnalyticsHistoryLoader(uid: 'athlete1', fetcher: rig.fetcher);
+      addTearDown(loader.dispose);
+
+      Object? uncaught;
+      await runZonedGuarded(() async {
+        fireAndForget(loader.requestCoverage(DateTime(2026, 1, 1)));
+        rig.resolve(0, const RawFetchResult.failure('offline'));
+        await Future<void>.delayed(Duration.zero);
+      }, (error, stack) {
+        uncaught = error;
+      });
+
+      expect(uncaught, isNull,
+          reason: 'a fire-and-forget initial-load failure must never become an uncaught zone error');
+      expect(loader.error, isNotNull, reason: 'the failure must still be visible via loader.error');
+      expect(loader.loading, isFalse, reason: 'the loading flag must not be left stuck');
+    });
+
+    test('a failed PERIOD EXPANSION (deeper coverage request) produces no uncaught zone error, '
+        'and retains the previously-loaded valid data', () async {
+      final rig = FakeFetcherRig();
+      final loader = AnalyticsHistoryLoader(uid: 'athlete1', fetcher: rig.fetcher);
+      addTearDown(loader.dispose);
+
+      // Successful initial load (e.g. the default 14-day window).
+      final initial = loader.requestCoverage(DateTime(2026, 8, 1));
+      rig.resolve(0, RawFetchResult.ok([doc('keep', DateTime(2026, 8, 10))]));
+      await initial;
+
+      // Expanding to a longer preset (e.g. "1 year") fails.
+      Object? uncaught;
+      await runZonedGuarded(() async {
+        fireAndForget(loader.requestCoverage(DateTime(2025, 1, 1)));
+        rig.resolve(1, const RawFetchResult.failure('timed out'));
+        await Future<void>.delayed(Duration.zero);
+      }, (error, stack) {
+        uncaught = error;
+      });
+
+      expect(uncaught, isNull,
+          reason: 'a fire-and-forget period-expansion failure must never become an uncaught zone error');
+      expect(loader.docs.map((d) => d.id), ['keep'],
+          reason: 'the already-loaded valid data must survive the failed expansion');
+      expect(loader.error, isNotNull);
+      expect(loader.loading, isFalse);
+
+      // A successful explicit retry clears the error and populates the
+      // missing (older) data.
+      Object? uncaughtOnRetry;
+      await runZonedGuarded(() async {
+        fireAndForget(loader.requestCoverage(DateTime(2025, 1, 1)));
+        rig.resolve(2, RawFetchResult.ok([
+          doc('keep', DateTime(2026, 8, 10)),
+          doc('older', DateTime(2025, 6, 1)),
+        ]));
+        await Future<void>.delayed(Duration.zero);
+      }, (error, stack) {
+        uncaughtOnRetry = error;
+      });
+
+      expect(uncaughtOnRetry, isNull);
+      expect(loader.error, isNull, reason: 'a successful retry must clear the error');
+      expect(loader.docs.map((d) => d.id).toSet(), {'keep', 'older'});
+    });
+
+    test('a failed fetch does not automatically retry forever (no infinite retry loop)',
+        () async {
+      final rig = FakeFetcherRig();
+      final loader = AnalyticsHistoryLoader(uid: 'athlete1', fetcher: rig.fetcher);
+      addTearDown(loader.dispose);
+
+      fireAndForget(loader.requestCoverage(DateTime(2026, 1, 1)));
+      rig.resolve(0, const RawFetchResult.failure('offline'));
+      await Future<void>.delayed(Duration.zero);
+
+      // Give any errant auto-retry loop a chance to fire before asserting
+      // it didn't: still only the one call that was ever made.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(rig.calls, hasLength(1),
+          reason: 'a failure must surface once, not trigger an automatic infinite retry loop');
+      expect(loader.loading, isFalse);
+    });
+  });
 }

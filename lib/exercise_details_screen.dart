@@ -214,12 +214,48 @@ bool exerciseEntryMatches(
 /// from shared raw docs (analytics_history_loader.dart) rather than a
 /// per-exercise fetch — a top-level pure function so it's directly testable
 /// without mounting the screen (see test/exercise_analytics_derivation_test.dart).
+/// One calendar day, local midnight — the grouping key for the day-winner
+/// selection below.
+String _dayKey(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
+    '${d.month.toString().padLeft(2, '0')}-'
+    '${d.day.toString().padLeft(2, '0')}';
+
+/// This document's best E1RM (including RIR) among its sets matching the
+/// target exercise, using the RAW stored weight — never bodyweight-adjusted.
+/// This is deliberately the same approximation the pre-refactor fetch used
+/// to pick a day's winning workout (commit 53df026f and earlier): bodyweight
+/// normalisation needs the athlete's per-date weigh-ins, which the actual
+/// chart-value/tooltip selection applies afterwards via `_chartWeight` on
+/// whichever workout wins here.
+double _rawBestE1rm(List<Exercise> matchingExercises) {
+  double best = double.negativeInfinity;
+  for (final ex in matchingExercises) {
+    for (final s in ex.sets) {
+      final weight = s.weight ?? 0.0;
+      final reps = (s.reps ?? 0).toDouble();
+      final rir = s.rir ?? 0.0;
+      if (weight <= 0 || reps <= 0) continue;
+      final e1 = PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
+      if (e1 > best) best = e1;
+    }
+  }
+  return best;
+}
+
+/// One [Workout] per calendar day: the "winning" raw document for the
+/// target exercise on that day, by best raw-weight E1RM (including RIR) —
+/// restoring the pre-loader-refactor selection so two workouts logged the
+/// same day don't both plot on the E1RM/rep-target charts. Velocity does
+/// NOT use this — see [deriveVelocitySamplesForExercise], which considers
+/// every matching set from every workout that day, on purpose.
 List<Workout> deriveWorkoutsForExercise({
   required List<RawWorkoutDoc> docs,
   required String? targetId,
   String? targetName,
 }) {
-  final out = <Workout>[];
+  final Map<String, double> bestScoreByDay = {};
+  final Map<String, Workout> bestWorkoutByDay = {};
+
   for (final raw in docs) {
     final matching = <Exercise>[];
     for (final e in raw.exercises) {
@@ -230,9 +266,18 @@ List<Workout> deriveWorkoutsForExercise({
       }
     }
     if (matching.isEmpty) continue;
-    out.add(Workout(name: 'Workout', date: raw.date, exercises: matching));
+
+    final docBestE1 = _rawBestE1rm(matching);
+    if (!docBestE1.isFinite) continue; // no valid (weight>0, reps>0) set at all
+
+    final key = _dayKey(raw.date);
+    final prev = bestScoreByDay[key];
+    if (prev == null || docBestE1 > prev) {
+      bestScoreByDay[key] = docBestE1;
+      bestWorkoutByDay[key] = Workout(name: 'Workout', date: raw.date, exercises: matching);
+    }
   }
-  return out;
+  return bestWorkoutByDay.values.toList();
 }
 
 /// Every valid [VelocitySample] for one exercise, derived from shared raw
@@ -281,6 +326,58 @@ List<VelocitySample> deriveVelocitySamplesForExercise({
     }
   }
   return out;
+}
+
+/// The production explicit-refresh action (issue 2, review of commit
+/// d957efea): re-verifies the E1RM/rep-target window (accounting for their
+/// independent ranges) and, when Velocity is the active metric, its own
+/// window too — via [AnalyticsHistoryLoader.invalidate], which re-fetches
+/// and authoritatively merges that interval regardless of whether it's
+/// already "covered", and without touching data outside it.
+///
+/// This is the SAME function the AppBar's refresh button and the
+/// app-resume lifecycle hook call — extracted to the top level (rather than
+/// left as a private State method) specifically so it's directly testable
+/// without mounting the screen, following this codebase's established
+/// pattern of testing an extracted production widget/function directly
+/// (see test/wes2_app_bar_test.dart for the same approach applied to a
+/// widget). A null [loader] (no athlete/exercise session yet) is a no-op.
+Future<void> refreshLoadedCoverage({
+  required AnalyticsHistoryLoader? loader,
+  required DateTime e1rmCutoff,
+  required AnalyticsMetric metric,
+  required DateTime velocityCutoff,
+  DateTime? customVelocityStart,
+}) {
+  if (loader == null) return Future<void>.value();
+  var since = e1rmCutoff;
+  if (metric == AnalyticsMetric.velocity) {
+    final velocitySince = customVelocityStart ?? velocityCutoff;
+    if (velocitySince.isBefore(since)) since = velocitySince;
+  }
+  return loader.invalidate(since);
+}
+
+/// The velocity chart's CURRENTLY SELECTED period status — deliberately
+/// separate from older-combination discovery completeness and from whether
+/// any velocity samples exist elsewhere (issue 4, review of commit
+/// d957efea). [_buildVelocitySection] uses this directly (not a
+/// reimplementation) to decide whether "No data for this range" can
+/// honestly be shown yet, and whether a load/refresh failure must be
+/// surfaced even while an already-valid chart is on screen: a loader error
+/// only means THIS window failed when the window itself isn't covered —
+/// once it IS covered, a later error can only be from unrelated background
+/// discovery, and must not mark this window incomplete.
+enum VelocityWindowStatus { ready, loading, failed }
+
+VelocityWindowStatus velocityWindowStatus({
+  required AnalyticsHistoryLoader? loader,
+  required DateTime windowSince,
+}) {
+  if (loader == null) return VelocityWindowStatus.loading;
+  if (loader.coversSince(windowSince)) return VelocityWindowStatus.ready;
+  if (loader.error != null) return VelocityWindowStatus.failed;
+  return VelocityWindowStatus.loading;
 }
 
 /// Inclusive local-time window deciding WHICH observations a chart shows.
@@ -517,7 +614,8 @@ class ExerciseDetailsScreen extends StatefulWidget {
   State<ExerciseDetailsScreen> createState() => _ExerciseDetailsScreenState();
 }
 
-class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
+class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
+    with WidgetsBindingObserver {
   /// Earliest date any picker/range in this screen will look back to —
   /// matches the bodyweight entry editor's boundary (body_weight_tracker.dart).
   static DateTime get _minSupportedDate => DateTime(2000, 1, 1);
@@ -535,6 +633,51 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
   void _onLoaderChanged() {
     if (mounted) setState(() {});
+  }
+
+  /// Fires a coverage/invalidate request without awaiting it (preset
+  /// cycling, custom-range pickers, exercise selection, initial load,
+  /// retry). [AnalyticsHistoryLoader] already surfaces failures via its own
+  /// `error` field, read reactively through [_onLoaderChanged] — this
+  /// exists ONLY to stop the discarded Future's rejection from becoming an
+  /// unhandled asynchronous error, never to suppress or hide the failure
+  /// itself. Every production call site uses this instead of a bare
+  /// `// ignore: discarded_futures` comment (issue 3 in the review of
+  /// commit d957efea).
+  void _fireCoverageRequest(Future<void>? request) {
+    request?.catchError((_) {
+      // loader.error is already set; nothing else to do for a
+      // fire-and-forget caller.
+    });
+  }
+
+  /// Re-verifies whatever's currently loaded — the E1RM/rep-target window
+  /// (accounting for their independent ranges) and, if active, the velocity
+  /// chart's own window — WITHOUT requiring a deeper coverage request to
+  /// trigger a fetch, and without touching data outside that interval
+  /// (issue 2). Exercise/metric/date/rep-load selections are untouched:
+  /// this only asks the loader to re-fetch: everything else is derived
+  /// fresh from its (possibly-updated) docs on the next build.
+  void _refreshLoadedData() {
+    if (!_hasExercise) return;
+    _fireCoverageRequest(refreshLoadedCoverage(
+      loader: _loader,
+      e1rmCutoff: _deepestE1rmCutoff(),
+      metric: _metric,
+      customVelocityStart: _customVelocityTrend?.start,
+      velocityCutoff: _cutoffFor(_velocityTrend),
+    ));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Workouts may have been logged elsewhere (WES2/BB3, another device)
+      // while this screen sat backgrounded — re-verify what's currently
+      // shown without leaving the page or losing the current chart
+      // (mirrors WES2_screen's own resume-refresh pattern).
+      _refreshLoadedData();
+    }
   }
 
   /// The currently displayed exercise. Starts as [ExerciseDetailsScreen]'s
@@ -682,8 +825,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     });
     // Longer presets may reach further back than what's loaded — extend the
     // window on demand instead of eagerly preloading years of history.
-    // ignore: discarded_futures
-    _loader?.requestCoverage(_deepestE1rmCutoff());
+    _fireCoverageRequest(_loader?.requestCoverage(_deepestE1rmCutoff()));
   }
 
   /// Compact custom-range label, e.g. "1 Mar – 21 Aug".
@@ -785,8 +927,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       }
     });
 
-    // ignore: discarded_futures
-    _loader?.requestCoverage(picked.start);
+    _fireCoverageRequest(_loader?.requestCoverage(picked.start));
   }
 
   // ───────────────────────── Velocity (section 4) ─────────────────────────
@@ -878,8 +1019,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       _customVelocityTrend = null;
     });
     // Date changes must never reset the selected reps/load combination.
-    // ignore: discarded_futures
-    _loader?.requestCoverage(_cutoffFor(_velocityTrend));
+    _fireCoverageRequest(_loader?.requestCoverage(_cutoffFor(_velocityTrend)));
   }
 
   /// Native Material range picker for the velocity chart — mirrors
@@ -926,8 +1066,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
     setState(() => _customVelocityTrend = picked);
     // The selected combination is deliberately left untouched here.
-    // ignore: discarded_futures
-    _loader?.requestCoverage(picked.start);
+    _fireCoverageRequest(_loader?.requestCoverage(picked.start));
   }
 
   // ─────────────────── Exercise identity / picker (section 2) ───────────────────
@@ -1071,8 +1210,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     // Defensive: coverage is athlete-wide, so this is normally already
     // satisfied, but an exercise switch must never leave the retained
     // visible window under-covered (issue 2) regardless of ordering.
-    // ignore: discarded_futures
-    _loader?.requestCoverage(_deepestE1rmCutoff());
+    _fireCoverageRequest(_loader?.requestCoverage(_deepestE1rmCutoff()));
     if (_metric == AnalyticsMetric.velocity) {
       // ignore: discarded_futures
       _discoverVelocityHistoryProgressively();
@@ -1378,8 +1516,29 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     final velocitySamples = _deriveVelocitySamples();
     final loader = _loader;
     final bool discoveryComplete = _velocityDiscoveryComplete;
-    final String? loaderError = loader?.error;
     final bool discovering = (loader?.loading ?? false) || _velocityDiscoveryInFlight;
+
+    // The currently SELECTED chart period's own coverage — kept separate
+    // from combo-discovery completeness (issue 4). A combination can be
+    // selectable (discovered anywhere in history) while the specific date
+    // window currently shown for it still needs its own fetch.
+    final DateTime velocityWindowSince =
+        _customVelocityTrend?.start ?? _cutoffFor(_velocityTrend);
+    final velocityStatus =
+        velocityWindowStatus(loader: loader, windowSince: velocityWindowSince);
+    final bool windowReady = velocityStatus == VelocityWindowStatus.ready;
+    final bool windowLoadFailed = velocityStatus == VelocityWindowStatus.failed;
+    final bool discoveryOnlyFailed =
+        loader?.error != null && windowReady && !discoveryComplete;
+
+    void retryWindow() {
+      _fireCoverageRequest(loader?.requestCoverage(velocityWindowSince));
+    }
+
+    void retryDiscovery() {
+      // ignore: discarded_futures
+      _discoverVelocityHistoryProgressively();
+    }
 
     Widget discoveringNote() => Padding(
           padding: const EdgeInsets.only(top: 6),
@@ -1395,19 +1554,54 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           ),
         );
 
+    Widget discoveryFailedNote() => Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Center(
+            child: TextButton(
+              onPressed: retryDiscovery,
+              child: Text('Some older periods may not be available. Tap to search again.',
+                  style: TextStyle(color: accent.withValues(alpha: 0.8), fontSize: 11)),
+            ),
+          ),
+        );
+
+    Widget windowStatus() {
+      if (windowReady) return const SizedBox.shrink();
+      if (windowLoadFailed) {
+        return Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Center(
+            child: TextButton(
+              onPressed: retryWindow,
+              child: Text('Could not load this period. Tap to retry.',
+                  style: TextStyle(color: accent)),
+            ),
+          ),
+        );
+      }
+      return Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SizedBox(
+                height: 12, width: 12, child: CircularProgressIndicator(strokeWidth: 1.6, color: accent)),
+            const SizedBox(width: 6),
+            Text('Loading the full selected period…',
+                style: TextStyle(color: accent.withValues(alpha: 0.8), fontSize: 11)),
+          ],
+        ),
+      );
+    }
+
     if (velocitySamples.isEmpty) {
-      if (loaderError != null) {
+      if (loader?.error != null && !discoveryComplete) {
         return [
           titleRow,
-          message('Could not load velocity data. Tap to retry.'),
+          message('Could not load velocity data.'),
           Center(
-            child: TextButton(
-              onPressed: () {
-                // ignore: discarded_futures
-                _discoverVelocityHistoryProgressively();
-              },
-              child: Text('Retry', style: TextStyle(color: accent)),
-            ),
+            child: TextButton(onPressed: retryDiscovery,
+                child: Text('Retry', style: TextStyle(color: accent))),
           ),
         ];
       }
@@ -1480,6 +1674,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             ],
           ),
           if (!discoveryComplete && discovering) discoveringNote(),
+          if (discoveryOnlyFailed) discoveryFailedNote(),
         ],
       ),
     );
@@ -1500,6 +1695,12 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
     ).where((p) => window.contains(p.date)).toList();
 
     if (points.isEmpty) {
+      if (!windowReady) {
+        // The selected period hasn't finished loading — never claim "no
+        // data for this range" before that range has actually been
+        // covered (issue 4). The selection itself is preserved above.
+        return [titleRow, dropdownsRow, windowStatus()];
+      }
       return [titleRow, dropdownsRow, message('No data for this range')];
     }
 
@@ -1608,7 +1809,11 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       ),
     );
 
-    return [titleRow, dropdownsRow, chart];
+    // The chart is shown whenever points exist — even mid-load/failed —
+    // with the loading/error status appended alongside it (issue 4: never
+    // hide a valid partial/complete chart, and never hide a load/refresh
+    // failure just because some data already renders).
+    return [titleRow, dropdownsRow, chart, windowStatus()];
   }
 
   // --- Rep-target chart state ---
@@ -1624,8 +1829,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       _trendTarget = vals[(i + 1) % vals.length];
       _customTarget = null; // picking a preset leaves custom mode
     });
-    // ignore: discarded_futures
-    _loader?.requestCoverage(_deepestE1rmCutoff());
+    _fireCoverageRequest(_loader?.requestCoverage(_deepestE1rmCutoff()));
   }
 
   String _repTargetLabel() => _multiRepLabel();
@@ -1759,6 +1963,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _onRepTargetChanged(_repTargetCtrl.text); // seed groups from "5"
     final selectedUid = UserContext.of(context, listen: false).currentUid;
 
@@ -1782,16 +1987,15 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       // BB3/WES2/workout-history entry: preselected, render immediately —
       // only the active window's coverage is requested (section 6), never
       // a full-history scan.
-      // ignore: discarded_futures
-      loader.requestCoverage(_deepestE1rmCutoff());
+      _fireCoverageRequest(loader.requestCoverage(_deepestE1rmCutoff()));
       _maybePrimeBodyweight(selectedUid);
     } else {
       // Home entry with nothing preselected: request enough recent history
       // for the picker to be usable immediately (issue 3 — bounded, not a
       // full scan), and separately restore this athlete's last valid
       // selection without waiting for that fetch to finish.
-      // ignore: discarded_futures
-      loader.requestCoverage(DateTime.now().subtract(const Duration(days: 90)));
+      _fireCoverageRequest(
+          loader.requestCoverage(DateTime.now().subtract(const Duration(days: 90))));
 
       setState(() => _restoringLastExercise = true);
       _readLastSelectedExercise(selectedUid).then((restored) {
@@ -1801,8 +2005,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
           _selectExercise(restored); // not persisted again — already stored
           // The restored exercise renders immediately from whatever's
           // already loaded/loading; ensure its own default window too.
-          // ignore: discarded_futures
-          loader.requestCoverage(_cutoffFor(TrendRange.d14));
+          _fireCoverageRequest(loader.requestCoverage(_cutoffFor(TrendRange.d14)));
         }
       });
     }
@@ -1810,6 +2013,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _repTargetCtrl.dispose();
     _loader?.removeListener(_onLoaderChanged);
     _loader?.dispose();
@@ -2087,6 +2291,22 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
             ),
           ],
         ),
+        actions: [
+          if (_hasExercise)
+            IconButton(
+              tooltip: 'Refresh',
+              icon: (_loader?.loading ?? false)
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                    )
+                  : const Icon(Icons.refresh),
+              // Explicit refresh of already-loaded data — no date-range or
+              // navigation change (issue 2).
+              onPressed: (_loader?.loading ?? false) ? null : _refreshLoadedData,
+            ),
+        ],
       ),
     body: SingleChildScrollView(
     keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -2173,7 +2393,11 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
 
           // A preview must stay visibly distinct from "finished loading the
           // selected period" (issue 2) — shown additively, without touching
-          // the title row/controls above.
+          // the title row/controls above. A REFRESH of already-complete
+          // coverage gets its own (subtler) loading/error states below,
+          // since _e1rmWindowReady stays true throughout a refresh — a
+          // refresh failure must still be visible, not hidden just because
+          // the previously-loaded chart is still valid and shown.
           if (!_e1rmWindowReady && (_loader?.loading ?? false))
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -2204,12 +2428,51 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
               padding: const EdgeInsets.only(top: 4),
               child: Center(
                 child: TextButton(
-                  onPressed: () {
-                    // ignore: discarded_futures
-                    _loader?.requestCoverage(_deepestE1rmCutoff());
-                  },
+                  onPressed: () =>
+                      _fireCoverageRequest(_loader?.requestCoverage(_deepestE1rmCutoff())),
                   child: Text('Could not load the full period. Tap to retry.',
                       style: TextStyle(color: Theme.of(context).colorScheme.tertiary)),
+                ),
+              ),
+            )
+          else if (_e1rmWindowReady && (_loader?.loading ?? false))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    height: 10,
+                    width: 10,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.4,
+                      color: Theme.of(context).colorScheme.tertiary.withValues(alpha: 0.6),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Refreshing…',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.tertiary.withValues(alpha: 0.6),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else if (_e1rmWindowReady && _loader?.error != null)
+            // The chart shown IS the complete, valid selected period — a
+            // refresh attempt afterwards failed, and that must still be
+            // visible (issue 2) rather than hidden because the data on
+            // screen still looks fine.
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Center(
+                child: TextButton(
+                  onPressed: _refreshLoadedData,
+                  child: Text('Could not refresh. Tap to retry.',
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.tertiary, fontSize: 12)),
                 ),
               ),
             ),
