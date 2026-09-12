@@ -54,6 +54,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_check_ready.dart';
 import '../main.dart' show rootScaffoldMessengerKey;
+import '../social/dm_unread_service.dart';
 import 'foreground_conversation.dart';
 import 'notification_platform.dart';
 import 'push_intent.dart';
@@ -189,7 +190,9 @@ class PushNotificationService with WidgetsBindingObserver {
     void Function(PushIntent intent, PushMessage message)? showBanner,
     bool? supported,
     Future<PushPlatformInfo> Function()? platformInfo,
-  })  : _platformInfoOverride = platformInfo,
+    DmUnreadService? unread,
+  })  : _unread = unread ?? DmUnreadService.instance,
+        _platformInfoOverride = platformInfo,
         _messagingOverride = messaging,
         _store = store ?? FirestorePushRegistrationStore(),
         _local = local ?? SharedPrefsPushLocalState(),
@@ -205,6 +208,7 @@ class PushNotificationService with WidgetsBindingObserver {
 
   static final PushNotificationService instance = PushNotificationService();
 
+  final DmUnreadService _unread;
   final Future<PushPlatformInfo> Function()? _platformInfoOverride;
   Future<PushPlatformInfo>? _platformInfoCache;
   Future<PushPlatformInfo> _platformInfo() =>
@@ -297,6 +301,10 @@ class PushNotificationService with WidgetsBindingObserver {
     final int gen = ++_gen;
     _attachListeners(gen);
     _router.onAuthChanged();
+    // Unread counts follow the authenticated account, and stale alerts from a
+    // previous session are dropped once its state has loaded.
+    _unread.onAccountChanged(uid);
+    unawaited(_reconcileDeliveredAlerts());
 
     if (!_observing) {
       _observing = true;
@@ -324,6 +332,25 @@ class PushNotificationService with WidgetsBindingObserver {
     // week-old registration is refreshed.
     if (state == AppLifecycleState.resumed && _uid != null) {
       unawaited(refreshRegistration());
+      // Alerts for conversations read elsewhere (another device, or here
+      // before the app was killed) should not still be sitting in the tray.
+      unawaited(_reconcileDeliveredAlerts());
+    }
+  }
+
+  /// Gives the unread state a moment to load, then cancels delivered alerts
+  /// for conversations that are no longer unread. Best effort.
+  Future<void> _reconcileDeliveredAlerts() async {
+    try {
+      if (!_unread.snapshot.loaded) {
+        await _unread
+            .watch()
+            .firstWhere((DmUnreadSnapshot s) => s.loaded)
+            .timeout(const Duration(seconds: 8));
+      }
+      await _unread.reconcileDeliveredAlerts();
+    } catch (_) {
+      // Offline or no conversations yet: nothing to reconcile.
     }
   }
 
@@ -435,6 +462,7 @@ class PushNotificationService with WidgetsBindingObserver {
     _uid = null;
     _detachListeners();
     _router.clear();
+    _unread.onAccountChanged(null);
 
     String? token = _lastToken;
     try {
@@ -474,6 +502,17 @@ class PushNotificationService with WidgetsBindingObserver {
   void _onForeground(PushMessage m) {
     final PushIntent? intent = PushIntent.fromData(m.data, now: _clock());
     if (intent == null) return;
+    // Already read in the app (here or on another device): the alert is
+    // stale, so it neither shows nor stays in the tray.
+    if (intent.kind == PushKind.directMessage &&
+        intent.convId != null &&
+        _unread.isAcknowledged(intent.convId!, intent.incomingSeq)) {
+      unawaited(_unread.clearConversationAlerts(
+        intent.convId!,
+        messageIds: <String>[if (intent.messageId != null) intent.messageId!],
+      ));
+      return;
+    }
     final bool resumed =
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     if (!shouldShowForegroundBanner(

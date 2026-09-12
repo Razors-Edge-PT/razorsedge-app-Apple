@@ -17,7 +17,7 @@
     "backfill:social-projections": "node scripts/backfill_social_projections.js",
     "verify:social-projections": "node scripts/verify_social_projections.js",
     "gen:search-vectors": "node scripts/gen_search_vectors.js",
-    "test:emulator": "firebase emulators:exec --only firestore,auth,storage --project rules-test \"node --test --test-concurrency=1 test-emulator/showcase_concurrency.spec.js test-emulator/showcase_bodyweight.spec.js test-emulator/social_notifications.spec.js test-emulator/push_delivery.spec.js\""
+    "test:emulator": "firebase emulators:exec --only firestore,auth,storage --project rules-test \"node --test --test-concurrency=1 test-emulator/showcase_concurrency.spec.js test-emulator/showcase_bodyweight.spec.js test-emulator/social_notifications.spec.js test-emulator/push_delivery.spec.js test-emulator/dm_unread.spec.js\""
   },
   "engines": {
     "node": "22"

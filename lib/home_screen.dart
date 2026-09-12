@@ -16,7 +16,6 @@ import 'profile_page.dart';
 import 'user_settings.dart';
 import 'warmup_service.dart';
 import 'dart:async';
-import 'directMessages.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'feed_post_card.dart';
@@ -35,6 +34,7 @@ import 'social/feed_repository.dart';
 import 'social/feed_view.dart';
 import 'social/open_feed_post.dart';
 import 'social/ui/buddy_hub_button.dart';
+import 'social/ui/dm_badge_button.dart';
 
 enum SelectedFeed { home, points, leaderboard }
 
@@ -1467,8 +1467,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
-    final uc = context.watch<UserContext>();
-    final dmUid = uc.currentUid;
+    // Unchanged rebuild behaviour; see home_v2_app_bar.dart — the message
+    // badge belongs to the signed-in account, not the selected athlete.
+    context.watch<UserContext>();
 
     return Scaffold(
       key: _scaffoldKey,
@@ -1625,90 +1626,10 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
                   const SizedBox(width: 1),
 
-                  // 📩 Direct Messages icon with unread badge
-                  StreamBuilder<QuerySnapshot>(
-                    stream: dmUid.isEmpty
-                        ? const Stream<QuerySnapshot>.empty()
-                        : FirebaseFirestore.instance
-                            .collection('conversations')
-                            .where('participants.$dmUid', isEqualTo: true)
-                            .snapshots(),
-                    builder: (context, snapshot) {
-                      if (snapshot.hasError) {
-                        return IconButton(
-                          icon: Icon(
-                            Icons.message_outlined,
-                            size: 26,
-                            color: Theme.of(context).colorScheme.secondary,
-                          ),
-                          onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const DirectMessages(),
-                              ),
-                            );
-                          },
-                        );
-                      }
-
-                      int unreadCount = 0;
-
-                      final me = FirebaseAuth.instance.currentUser?.uid;
-
-                      if (snapshot.hasData && me != null) {
-                        for (var doc in snapshot.data!.docs) {
-                          final data = doc.data() as Map<String, dynamic>;
-
-                          final state = data['participantState']?[me];
-                          final count =
-                              (state is Map && state['unreadCount'] is int)
-                                  ? state['unreadCount'] as int
-                                  : 0;
-
-                          unreadCount += count;
-                        }
-                      }
-
-                      return Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          IconButton(
-                            icon: Icon(Icons.message_outlined,
-                                size: 26,
-                                color: Theme.of(context).colorScheme.secondary),
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => const DirectMessages(),
-                                ),
-                              );
-                            },
-                          ),
-                          if (unreadCount > 0)
-                            Positioned(
-                              right: 6,
-                              top: 6,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.redAccent,
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Text(
-                                  unreadCount.toString(),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      );
-                    },
-                  ),
+                  // 📩 Direct Messages icon with unread badge —
+                  // the signed-in account, shared with HomeScreen2 and the
+                  // Messages list (see DmUnreadService).
+                  const DmBadgeButton(),
 
                   const SizedBox(width: 1),
 

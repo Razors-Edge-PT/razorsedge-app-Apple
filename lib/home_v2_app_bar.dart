@@ -1,14 +1,13 @@
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
-import 'directMessages.dart';
 import 'profile_page.dart';
 import 'social/ui/buddy_hub_button.dart';
+import 'social/ui/dm_badge_button.dart';
 import 'user_context.dart';
 
 /// AppBar for HomeScreen2. Extracted from home_screen_2.dart as a
@@ -78,8 +77,10 @@ class _HomeV2AppBarState extends State<HomeV2AppBar> {
 
   @override
   Widget build(BuildContext context) {
-    final uc = context.watch<UserContext>();
-    final dmUid = uc.currentUid;
+    // Keeps this bar rebuilding on UserContext changes as before. There is no
+    // dm uid here any more: messages belong to the signed-in account, not to
+    // the athlete a coach is viewing — DmBadgeButton resolves it itself.
+    context.watch<UserContext>();
 
     return AppBar(
       title: null,
@@ -214,7 +215,7 @@ class _HomeV2AppBarState extends State<HomeV2AppBar> {
                 //
                 // The SAME control HomeScreen uses. It was a separate legacy
                 // dialog here, streaming `UserContext.actingAsUid` and calling
-                // acceptBuddyInvite(buddyUid: actingAsUid) — so a coach with an
+                // acceptBuddyInvite(buddyUid: actingAsUid) â€” so a coach with an
                 // athlete selected was one tap from accepting or declining that
                 // athlete's buddy requests. Friendships belong to the person,
                 // not to the coaching session, so this control derives its
@@ -225,84 +226,7 @@ class _HomeV2AppBarState extends State<HomeV2AppBar> {
                 ),
 
                 // DM badge
-                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance
-                      .collection('users')
-                      .doc(dmUid)
-                      .collection('conversations')
-                      .where('participants.$dmUid', isEqualTo: true)
-                      .snapshots(),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasError) {
-                      return IconButton(
-                        icon: Icon(Icons.message_outlined,
-                            size: 26,
-                            color: Theme.of(context).colorScheme.secondary),
-                        onPressed: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => const DirectMessages(),
-                            ),
-                          );
-                        },
-                      );
-                    }
-
-                    int unreadCount = 0;
-                    final me = FirebaseAuth.instance.currentUser?.uid;
-
-                    if (snapshot.hasData && me != null) {
-                      for (var doc in snapshot.data!.docs) {
-                        final data = doc.data();
-                        final state = data['participantState']?[me];
-                        final count =
-                            (state is Map && state['unreadCount'] is int)
-                                ? state['unreadCount'] as int
-                                : 0;
-                        unreadCount += count;
-                      }
-                    }
-
-                    return Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.message_outlined,
-                              size: 26,
-                              color: Theme.of(context).colorScheme.secondary),
-                          onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const DirectMessages(),
-                              ),
-                            );
-                          },
-                        ),
-                        if (unreadCount > 0)
-                          Positioned(
-                            right: 6,
-                            top: 6,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.redAccent,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                unreadCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                      ],
-                    );
-                  },
-                ),
+                const DmBadgeButton(),
 
                 const SizedBox(width: 1),
 

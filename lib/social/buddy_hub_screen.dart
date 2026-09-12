@@ -21,6 +21,9 @@ import 'package:flutter/material.dart';
 
 import '../main.dart' show showAppSnack;
 import '../profile/profile_screen.dart';
+import '../push/notification_platform.dart';
+import '../push/push_intent.dart'
+    show friendAcceptedTag, friendRequestTag;
 import '../profile/ui/profile_theme.dart';
 import 'buddy_repository.dart';
 import 'feed_repository.dart';
@@ -47,7 +50,12 @@ class BuddyHubScreen extends StatefulWidget {
     this.buddies,
     this.search,
     this.showOwnAccountNotice = false,
+    this.notifications,
   });
+
+  /// Injectable for tests. Cancels the phone alerts for requests and
+  /// acceptances once they are actually on screen.
+  final NotificationPlatform? notifications;
 
   final BuddyHubTab initialTab;
 
@@ -98,6 +106,14 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
   /// Notice ids already sent for acknowledgement, so no rebuild sends one
   /// twice.
   final Set<String> _acknowledging = <String>{};
+
+  /// People whose phone alerts this visit has already cancelled, so a rebuild
+  /// does not call the platform again.
+  final Set<String> _alertedRequests = <String>{};
+  final Set<String> _alertedAccepted = <String>{};
+
+  late final NotificationPlatform _notifications =
+      widget.notifications ?? NotificationPlatform();
 
   @override
   void initState() {
@@ -197,6 +213,25 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
   /// the one on screen, no search is replacing the list, and this route is the
   /// top one — so a badge is never cleared by something the person did not
   /// see. A write that fails is retried on a later build.
+  /// Removes the phone alerts for the requests and acceptances now on screen.
+  ///
+  /// Seeing a request is NOT answering it: the invite keeps its pending
+  /// status, the row keeps its Accept and Decline buttons, and the Buddy Hub
+  /// badge still counts it. Only the notification goes.
+  void _clearSocialAlerts({
+    required Iterable<String> requestFrom,
+    required Iterable<String> acceptedFrom,
+  }) {
+    final List<String> tags = <String>[
+      for (final String uid in requestFrom)
+        if (_alertedRequests.add(uid)) friendRequestTag(uid),
+      for (final String uid in acceptedFrom)
+        if (_alertedAccepted.add(uid)) friendAcceptedTag(uid),
+    ];
+    if (tags.isEmpty) return;
+    unawaited(_notifications.clearNotifications(tags: tags));
+  }
+
   void _acknowledgeShown(List<AcceptedNotice> shown) {
     final List<AcceptedNotice> fresh = shown
         .where((AcceptedNotice n) => !_acknowledging.contains(n.id))
@@ -445,6 +480,13 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
         // sees, so the acceptances among them can now count as seen.
         if (people.connectionState == ConnectionState.done) {
           _acknowledgeShown(state.newBuddies);
+          // The rows below are what the person sees, so the matching phone
+          // alerts have done their job.
+          _clearSocialAlerts(
+            requestFrom:
+                state.incoming.map((IncomingRequest r) => r.fromUid),
+            acceptedFrom: newRows.map((AcceptedNotice n) => n.uid),
+          );
         }
         return ListView(
           children: <Widget>[

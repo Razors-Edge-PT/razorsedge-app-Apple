@@ -38,6 +38,34 @@ import UserNotifications
       case "clearDelivered":
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         result(nil)
+      case "clearNotifications":
+        // Targeted removal: only delivered alerts whose identifier matches a
+        // tag/prefix the app asked for, or whose payload names one of the
+        // conversations (which covers alerts sent before the identifier
+        // carried the conversation). The identifier of a remote notification
+        // is its apns-collapse-id, which the server sets to the same tag
+        // Android uses.
+        let args = call.arguments as? [String: Any] ?? [:]
+        let prefixes = args["tagPrefixes"] as? [String] ?? []
+        let tags = args["tags"] as? [String] ?? []
+        let convIds = args["convIds"] as? [String] ?? []
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { delivered in
+          let ids: [String] = delivered.compactMap { note in
+            let identifier = note.request.identifier
+            if tags.contains(identifier) { return identifier }
+            if prefixes.contains(where: { !$0.isEmpty && identifier.hasPrefix($0) }) { return identifier }
+            if let conv = note.request.content.userInfo["convId"] as? String,
+               convIds.contains(conv) {
+              return identifier
+            }
+            return nil
+          }
+          if !ids.isEmpty {
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+          }
+          DispatchQueue.main.async { result(ids.count) }
+        }
       default:
         result(FlutterMethodNotImplemented)
       }

@@ -810,6 +810,22 @@ service cloud.firestore {
         return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
       }
 
+      // ── The unread ledger is the server's ──────────────────────────────
+      // participantState.{uid}.incoming counts the deliverable messages sent
+      // TO that person, and is written only by the DM trigger
+      // (functions/push/dm_unread.js). A client that could move it could
+      // inflate the other person's badge, or silently hide messages from
+      // them, and could make the delivery worker skip a real message as
+      // "already read". Clients still own their own `readIncoming`,
+      // `lastReadAt` and the legacy `unreadCount`.
+      function incomingOf(data, uid) {
+        return data.get('participantState', {}).get(uid, {}).get('incoming', 0);
+      }
+
+      function ledgerUnchanged(uid) {
+        return incomingOf(request.resource.data, uid) == incomingOf(resource.data, uid);
+      }
+
       // Read: participant + confirmed friend; super admin read-only for moderation.
       allow read: if (isParticipant() && isConvFriend()) || isSuperAdmin();
 
@@ -829,6 +845,8 @@ service cloud.firestore {
                          .hasAll([convId[0:28], convId[29:57]])
                     && request.resource.data.participants[convId[0:28]] == true
                     && request.resource.data.participants[convId[29:57]] == true
+                    && incomingOf(request.resource.data, convId[0:28]) == 0
+                    && incomingOf(request.resource.data, convId[29:57]) == 0
                     && isConvFriend();
 
       // Update: participant + still a confirmed friend — and never the
@@ -839,7 +857,9 @@ service cloud.firestore {
       // bootstrap that repeats the SAME map) leaves `participants` unchanged.
       allow update: if isParticipant() && isConvFriend()
                     && !request.resource.data.diff(resource.data)
-                          .affectedKeys().hasAny(['participants']);
+                          .affectedKeys().hasAny(['participants'])
+                    && ledgerUnchanged(convId[0:28])
+                    && ledgerUnchanged(convId[29:57]);
 
       // Conversations are never deleted via client.
       allow delete: if false;
@@ -865,8 +885,12 @@ service cloud.firestore {
         // `senderId: <own uid>`; binding it here means a participant cannot
         // post a message as the other person — which push delivery would
         // otherwise announce to that person's friend under the wrong name.
+        // `incomingSeq` is the recipient's ledger position, stamped by the DM
+        // trigger. A client-supplied one would let a sender pick the other
+        // person's unread number.
         allow create: if convParticipant() && msgConvFriend()
-                      && request.resource.data.senderId == request.auth.uid;
+                      && request.resource.data.senderId == request.auth.uid
+                      && !('incomingSeq' in request.resource.data);
 
         // Update: `senderId` is immutable. The SENDER may complete their own
         // message (the photo/video URL attached after upload); anyone else in
@@ -876,7 +900,7 @@ service cloud.firestore {
         // sender's.
         allow update: if convParticipant() && msgConvFriend()
                       && !request.resource.data.diff(resource.data)
-                            .affectedKeys().hasAny(['senderId'])
+                            .affectedKeys().hasAny(['senderId', 'incomingSeq'])
                       && (
                            resource.data.get('senderId', '') == request.auth.uid
                            || request.resource.data.diff(resource.data)

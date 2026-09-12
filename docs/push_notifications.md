@@ -92,6 +92,58 @@ Rules hardened for this (installed builds' writes all still pass; see
 * conversation `participants` must be exactly the two ids in the conversation
   id (both `true`) on create, and can't be changed on update.
 
+### Unread counts, reading, and clearing alerts
+
+The unread number and the phone alerts are two views of one fact, so they are
+driven by the same ledger.
+
+| Field | Owner | Meaning |
+|---|---|---|
+| `conversations/{c}.participantState.{uid}.incoming` | server (`push/dm_unread.js`) | deliverable messages sent to that person, monotonic |
+| `conversations/{c}/messages/{m}.incomingSeq` | server | that message's position in the ledger |
+| `conversations/{c}.participantState.{uid}.readIncoming` | the reader's app | the highest position it has actually DISPLAYED |
+| `…unreadCount` | installed builds | legacy counter, still written and still shown by older apps |
+
+`unread = max(0, incoming - readIncoming)`, falling back to the legacy counter
+for a conversation that has had no message since the ledger began (the first
+new message carries the old number forward). Rules keep clients out of
+`incoming` and `incomingSeq`; the reader only ever writes its own
+`readIncoming`.
+
+Counting happens on the same "this message is deliverable" decision the push
+uses, so text, a finished photo upload and a finished video upload each count
+once, shells/failed uploads/reactions/read receipts/URL rewrites never count,
+and the count is right even for someone with notifications off. The sequence
+is stamped on the message, so retries and duplicate events cannot double-count.
+
+Reading is an acknowledgement of a POSITION, never a reset: `ConversationPage`
+takes the highest incoming `incomingSeq` it is displaying while its route is
+visible and the app is resumed, and `DmUnreadService.acknowledge` records it.
+A message arriving mid-acknowledgement has a higher position and stays unread;
+a chat under another route, an app in the background, opening the Messages
+list, and swiping a notification away all read nothing. The write is not a
+transaction, so it applies immediately offline and syncs on reconnect; it
+never moves backwards, and a server value behind this session is re-asserted.
+
+Badges come from one shared, auth-scoped subscription (`DmUnreadService`) used
+by both Home headers and the Messages rows — no per-badge queries, no message
+history scans, and a coach viewing an athlete still sees their own messages.
+
+Reading a conversation also cancels that conversation's delivered alerts (tag
+prefix `dm|<conversation>|`), and only those; Buddy Hub cancels `fr_`/`fa_`
+alerts for the requests and acceptances it actually shows (seeing a request
+does not answer it). Startup and resume reconcile the tray against the ledger,
+which covers alerts read on another device. Cancellation goes through
+`NotificationPlatform.clearNotifications` to `getActiveNotifications`
+(Android) and `getDeliveredNotifications` (iOS), so alerts the system posted
+while Dart was not running are matched by their tag/identifier; no
+notification-listener access is requested. Whole-app clearing is still used
+for explicit logout only.
+
+Limits worth stating plainly: an alert already handed to FCM/APNs cannot be
+withdrawn, and another device that is offline or terminated clears its copy
+when it next runs and reconciles — not at the moment of reading.
+
 ### Delivery worker
 
 1. **Claim** in a transaction: terminal jobs are skipped, jobs past their
@@ -101,6 +153,9 @@ Rules hardened for this (installed builds' writes all still pass; see
    still pending and the same occurrence; notice the same occurrence and
    **not yet seen**; message still deliverable from the same sender; pair
    still mutual friends; category enabled; kill switch not set.
+   A DM whose `incomingSeq` the recipient has already acknowledged is skipped
+   as `already-read` — judged per message, never on `unreadCount == 0`, since
+   the message write and a counter write arrive separately.
 3. **Send**, outside any transaction, with `sendEach` to the recipient's
    registrations that haven't had this job. Registrations not refreshed for
    60 days are pruned instead.
@@ -236,7 +291,8 @@ Firebase console:
 | Functions unit | `cd functions; npm test` | `test/push_model.test.js` |
 | Rules (emulator) | `npm run test:rules` (Java 21: Android Studio `jbr`) | `test-rules/push_rules.spec.js` |
 | Delivery (emulator, FCM mocked) | `npm run test:emulator` | `test-emulator/push_delivery.spec.js` (+ updated `social_notifications.spec.js`) |
-| Flutter | `flutter test` | `test/push_notifications_test.dart`, `test/push_permission_routing_test.dart` (real adapter over Android 13+ raw `denied`; real Navigator routing) |
+| Flutter | `flutter test` | `test/push_notifications_test.dart`, `test/push_permission_routing_test.dart` (real adapter over Android 13+ raw `denied`; real Navigator routing), `test/dm_unread_test.dart` (ledger, read acknowledgement, targeted cancellation, avatars) |
+| Unread ledger (unit + emulator) | `npm test`, `npm run test:emulator` | `test/push_dm_unread.test.js`, `test-emulator/dm_unread.spec.js` |
 
 ## Deployment
 

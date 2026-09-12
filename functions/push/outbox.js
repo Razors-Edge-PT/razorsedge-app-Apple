@@ -51,6 +51,7 @@ const admin = require('firebase-admin');
 const logger = require('firebase-functions/logger');
 
 const P = require('./push_model');
+const U = require('./dm_unread');
 const M = require('../social/buddy_model');
 
 const COL_OUTBOX = 'pushOutbox';
@@ -202,6 +203,17 @@ async function enqueueDirectMessage(db, {
   });
   if (checked.reason) return { enqueued: false, reason: checked.reason };
 
+  // Count it for the recipient FIRST, and once. This is the unread ledger the
+  // app's badges read, and it runs whether or not a push is ever sent (the
+  // person may have notifications off). It also gives this message the
+  // sequence the delivery worker uses to tell "already read" from "new".
+  const incomingSeq = await U.countIncomingMessage(db, {
+    convId,
+    messageId,
+    recipientUid: checked.recipientUid,
+  });
+  if (incomingSeq === null) return { enqueued: false, reason: 'conversation-gone' };
+
   const job = newJob({
     type: P.PushType.DIRECT_MESSAGE,
     recipientUid: checked.recipientUid,
@@ -210,10 +222,15 @@ async function enqueueDirectMessage(db, {
     sourceEventId: eventId,
     eventTimeMs,
     nowMs: nowMs == null ? Date.now() : nowMs,
-    extra: { conversationId: convId, messageId },
+    extra: { conversationId: convId, messageId, incomingSeq },
   });
   const created = await enqueueJob(db, job);
-  return { enqueued: created, reason: created ? 'enqueued' : 'duplicate', jobId: job.id };
+  return {
+    enqueued: created,
+    reason: created ? 'enqueued' : 'duplicate',
+    jobId: job.id,
+    incomingSeq,
+  };
 }
 
 // ── Validation at delivery ──────────────────────────────────────────────────
@@ -288,6 +305,14 @@ async function checkValidity(db, job) {
     }
     const kind = P.messageKind(msgData);
     if (!kind) return { ok: false, reason: 'not-deliverable' };
+    // Already read in the app — on this or another device, before the first
+    // attempt or between retries. Judged on THIS message's sequence, never on
+    // a zero counter: a counter write and a message write arrive separately,
+    // so a zero proves nothing about a message that has just landed.
+    const seq = Number(job.incomingSeq);
+    if (U.isAcknowledged(convData, recipientUid, seq)) {
+      return { ok: false, reason: 'already-read' };
+    }
     if (!(await mutualFriends(db, recipientUid, actorUid))) {
       return { ok: false, reason: 'not-friends' };
     }

@@ -32,9 +32,43 @@ class MainActivity : FlutterActivity() {
                         NotificationManagerCompat.from(this).cancelAll()
                         result.success(null)
                     }
+                    "clearNotifications" -> {
+                        val prefixes = call.argument<List<String>>("tagPrefixes") ?: emptyList()
+                        val tags = call.argument<List<String>>("tags") ?: emptyList()
+                        result.success(cancelMatching(prefixes, tags))
+                    }
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * Cancels only this app's delivered notifications whose tag starts with
+     * one of [prefixes] or equals one of [tags], and returns how many were
+     * cancelled.
+     *
+     * getActiveNotifications() lists THIS app's posted notifications only, so
+     * it also covers the ones the system posted from FCM while the app was not
+     * running — which is the whole point, since Dart never saw those. It needs
+     * no special permission and cannot see other apps' notifications.
+     */
+    private fun cancelMatching(prefixes: List<String>, tags: List<String>): Int {
+        val manager = getSystemService(NotificationManager::class.java) ?: return 0
+        var cancelled = 0
+        try {
+            for (posted in manager.activeNotifications) {
+                val tag = posted.tag ?: continue
+                val matches = tags.contains(tag) || prefixes.any { it.isNotEmpty() && tag.startsWith(it) }
+                if (matches) {
+                    manager.cancel(tag, posted.id)
+                    cancelled++
+                }
+            }
+        } catch (e: SecurityException) {
+            // Some OEM builds restrict the query; nothing else to do.
+            return cancelled
+        }
+        return cancelled
     }
 
     /**

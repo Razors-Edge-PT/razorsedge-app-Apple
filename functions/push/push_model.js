@@ -341,10 +341,21 @@ function presentationTag(job) {
     case PushType.FRIEND_ACCEPTED:
       return `fa_${job.actorUid}`;
     case PushType.DIRECT_MESSAGE:
-      return `dm_${job.messageId}`;
+      // `dm|<conversation>|<message>`. The conversation part lets the app
+      // cancel exactly one thread's delivered alerts when that thread is
+      // read — including alerts the OS posted while the app was not running,
+      // which it can only match by tag. Hashed and truncated because an APNs
+      // collapse id is limited to 64 bytes and a conversation id is 57.
+      // Mirrored by dmConversationTagPrefix in lib/push/push_intent.dart.
+      return `dm|${conversationTagKey(job.conversationId)}|${job.messageId}`;
     default:
       return job.id;
   }
+}
+
+/** Short, stable key for a conversation id inside a notification tag. */
+function conversationTagKey(conversationId) {
+  return sha256Hex(String(conversationId)).slice(0, 8);
 }
 
 /** Routing data the app needs to open the right screen. Strings only. */
@@ -355,7 +366,14 @@ function routingData(job) {
     recipientUid: job.recipientUid,
     actorUid: job.actorUid,
   };
-  if (job.type === PushType.DIRECT_MESSAGE) data.convId = job.conversationId;
+  if (job.type === PushType.DIRECT_MESSAGE) {
+    data.convId = job.conversationId;
+    // The message this alert is about, so the app can cancel exactly it and
+    // can tell an already-read message from a new one before showing a
+    // foreground banner. Older payloads carry neither; the app copes.
+    if (job.messageId) data.msgId = String(job.messageId);
+    if (Number.isFinite(job.incomingSeq)) data.seq = String(job.incomingSeq);
+  }
   return data;
 }
 
@@ -511,6 +529,7 @@ module.exports = {
   displayNameFrom,
   renderNotification,
   presentationTag,
+  conversationTagKey,
   routingData,
   buildMessage,
   classifySendError,

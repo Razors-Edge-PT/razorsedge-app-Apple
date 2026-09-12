@@ -66,6 +66,33 @@ String conversationIdFor(String a, String b) {
 String pushDeviceIdForToken(String token) =>
     sha256.convert(utf8.encode(token)).toString();
 
+// ── Notification tags ───────────────────────────────────────────────────────
+// The OS keeps a delivered notification's tag (Android) / identifier (iOS),
+// and that is ALL the app has to go on for an alert the system posted while
+// Dart was not running. These mirror presentationTag() in
+// functions/push/push_model.js exactly.
+
+/// Short key for a conversation inside a notification tag (the server hashes
+/// because an APNs collapse id is capped at 64 bytes).
+String dmConversationTagKey(String convId) =>
+    sha256.convert(utf8.encode(convId)).toString().substring(0, 8);
+
+/// Every alert for one conversation starts with this.
+String dmConversationTagPrefix(String convId) =>
+    'dm|${dmConversationTagKey(convId)}|';
+
+/// The tag one message's alert carries.
+String dmMessageTag({required String convId, required String messageId}) =>
+    '${dmConversationTagPrefix(convId)}$messageId';
+
+/// Alerts sent by builds before the conversation-scoped tag existed. They can
+/// still be cancelled when the message id is known.
+String dmLegacyMessageTag(String messageId) => 'dm_$messageId';
+
+String friendRequestTag(String actorUid) => 'fr_$actorUid';
+
+String friendAcceptedTag(String actorUid) => 'fa_$actorUid';
+
 /// What a tapped (or foreground-received) notification asks the app to open.
 class PushIntent {
   const PushIntent({
@@ -74,6 +101,8 @@ class PushIntent {
     required this.actorUid,
     required this.receivedAt,
     this.convId,
+    this.messageId,
+    this.incomingSeq,
   });
 
   final PushKind kind;
@@ -87,6 +116,13 @@ class PushIntent {
 
   /// Direct messages only: the exact conversation.
   final String? convId;
+
+  /// Direct messages only, and only from 1.7.24 onwards: which message this
+  /// alert is about, and its position in the recipient's unread ledger. Used
+  /// to cancel exactly this alert and to drop a banner for a message already
+  /// read. Older payloads have neither.
+  final String? messageId;
+  final int? incomingSeq;
 
   final DateTime receivedAt;
 
@@ -123,6 +159,8 @@ class PushIntent {
       recipientUid: recipient,
       actorUid: actor,
       convId: convId,
+      messageId: s('msgId'),
+      incomingSeq: int.tryParse(s('seq') ?? ''),
       receivedAt: now ?? DateTime.now(),
     );
   }

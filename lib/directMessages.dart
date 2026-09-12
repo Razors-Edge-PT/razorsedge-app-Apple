@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
 import 'dart:math';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:flutter/services.dart';
@@ -10,7 +11,10 @@ import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import 'dart:io';
 
+import 'profile/data/identity_repository.dart';
 import 'profile/ui/live_identity.dart';
+import 'social/dm_unread_service.dart';
+import 'social/ui/user_row.dart' show LiveBuddyAvatar;
 import 'main.dart' show routeObserver;
 import 'push/foreground_conversation.dart';
 
@@ -69,11 +73,9 @@ class BuddyPickerPage extends StatelessWidget {
                       .toString();
 
               return ListTile(
-                  leading: const CircleAvatar(
-                    radius: 20,
-                    backgroundImage:
-                        AssetImage('assets/InApp/Placeholder_profilepic.png'),
-                  ),
+                  // The buddy's own picture, live and cached — not a generic
+                  // placeholder, and never the signed-in user's.
+                  leading: LiveBuddyAvatar(uid: buddyUid, size: 40),
                   title: LiveUserName(
                     uid: buddyUid,
                     fallback: fallbackName,
@@ -124,11 +126,28 @@ class BuddyPickerPage extends StatelessWidget {
 }
 
 class DirectMessages extends StatelessWidget {
-  const DirectMessages({super.key});
+  const DirectMessages({
+    super.key,
+    this.unreadService,
+    this.firestore,
+    this.uid,
+    this.identity,
+  });
+
+  /// Injectable for tests; production uses the shared instances and the
+  /// signed-in account.
+  final DmUnreadService? unreadService;
+  final FirebaseFirestore? firestore;
+  final String? uid;
+  final IdentityRepository? identity;
 
   @override
   Widget build(BuildContext context) {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
+    // The SIGNED-IN account's conversations — a coach reviewing an athlete
+    // still sees their own messages.
+    final String uid = this.uid ?? FirebaseAuth.instance.currentUser!.uid;
+    final FirebaseFirestore db = firestore ?? FirebaseFirestore.instance;
+    final DmUnreadService unread = unreadService ?? DmUnreadService.instance;
 
     return Scaffold(
       appBar: AppBar(
@@ -147,7 +166,7 @@ class DirectMessages extends StatelessWidget {
       ),
       body: StreamBuilder<QuerySnapshot>(
         // NO orderBy here → avoids composite index requirement.
-        stream: FirebaseFirestore.instance
+        stream: db
             .collection('conversations')
             .where('participants.$uid', isEqualTo: true)
             .snapshots(),
@@ -187,10 +206,10 @@ class DirectMessages extends StatelessWidget {
 
               final lastMsg = (data['lastMessage']?['text'] ?? '') as String;
               final updatedAt = (data['updatedAt'] as Timestamp?)?.toDate();
-              final state = data['participantState']?[uid];
-              final unreadCount = (state != null && state['unreadCount'] is int)
-                  ? state['unreadCount'] as int
-                  : 0;
+              // The same count the message icon's badge adds up: the server's
+              // ledger minus what this account has acknowledged reading.
+              final unreadCount =
+                  DmConversationUnread.fromDoc(uid, convId, data)?.unread ?? 0;
 
               // A one-shot users_public read used to name this row, so a rename
               // made while the list was open never appeared, and the raw uid
@@ -199,13 +218,16 @@ class DirectMessages extends StatelessWidget {
               return Builder(
                 builder: (context) {
                   return ListTile(
-                    leading: const CircleAvatar(
-                      radius: 20,
-                      backgroundImage:
-                          AssetImage('assets/InApp/Placeholder_profilepic.png'),
+                    // The OTHER participant's picture, resolved from the
+                    // conversation's participants against the signed-in uid.
+                    leading: LiveBuddyAvatar(
+                      uid: otherUid,
+                      size: 40,
+                      identity: identity,
                     ),
                     title: LiveUserName(
                       uid: otherUid,
+                      identity: identity,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
@@ -256,6 +278,7 @@ class DirectMessages extends StatelessWidget {
                           builder: (_) => ConversationPage(
                             convId: convId,
                             otherUid: otherUid,
+                            unreadService: unread,
                           ),
                         ),
                       );
@@ -275,17 +298,22 @@ class ConversationPage extends StatefulWidget {
   final String convId;
   final String otherUid;
 
+  /// Injectable for tests; production uses the shared instance.
+  final DmUnreadService? unreadService;
+
   const ConversationPage({
     super.key,
     required this.convId,
     required this.otherUid,
+    this.unreadService,
   });
 
   @override
   State<ConversationPage> createState() => _ConversationPageState();
 }
 
-class _ConversationPageState extends State<ConversationPage> with RouteAware {
+class _ConversationPageState extends State<ConversationPage>
+    with RouteAware, WidgetsBindingObserver {
   // ── Push: is this thread the one actually on screen? ───────────────────
   // Reported to ForegroundConversation as this route becomes visible, is
   // covered, or is popped, so a DM notification for THIS thread shows no
@@ -306,19 +334,38 @@ class _ConversationPageState extends State<ConversationPage> with RouteAware {
   }
 
   @override
-  void didPush() => ForegroundConversation.shown(widget.convId);
+  void didPush() => _becameVisible();
 
   @override
-  void didPopNext() => ForegroundConversation.shown(widget.convId);
+  void didPopNext() => _becameVisible();
 
   @override
-  void didPushNext() => ForegroundConversation.hidden(widget.convId);
+  void didPushNext() => _becameHidden();
 
   @override
-  void didPop() => ForegroundConversation.hidden(widget.convId);
+  void didPop() => _becameHidden();
+
+  void _becameVisible() {
+    ForegroundConversation.shown(widget.convId);
+    _routeVisible = true;
+    _acknowledgeDisplayed();
+  }
+
+  void _becameHidden() {
+    ForegroundConversation.hidden(widget.convId);
+    _routeVisible = false;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back to a chat that is still on screen reads what arrived while
+    // the app was away; going away never marks anything read.
+    if (state == AppLifecycleState.resumed) _acknowledgeDisplayed();
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     routeObserver.unsubscribe(this);
     ForegroundConversation.hidden(widget.convId);
     super.dispose();
@@ -341,18 +388,63 @@ class _ConversationPageState extends State<ConversationPage> with RouteAware {
   String? _lastLatestMsgId; // for "auto-scroll on my new message"
   Timestamp? _initialLastReadAt; // from my participantState at page open
   bool _gotInitialLastReadAt = false;
-  bool _didMarkOnOpen = false; // ensures we only write once on open
 
-  // mark-as-read when near bottom
-  Future<void> _markAsRead() async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    await FirebaseFirestore.instance
-        .collection('conversations')
-        .doc(widget.convId)
-        .update({
-      'participantState.$uid.unreadCount': 0,
-      'participantState.$uid.lastReadAt': FieldValue.serverTimestamp(),
-    });
+  // ── Reading this conversation ─────────────────────────────────────────────
+  // Reading is acknowledging a POSITION that was actually displayed — the
+  // highest `incomingSeq` among the incoming messages this page is showing —
+  // not a blind `unreadCount = 0`. A message that arrives while the chat is
+  // opening carries a higher position, so it stays unread instead of being
+  // swallowed; and the acknowledgement only happens while this route is the
+  // visible one and the app is in the foreground, so a chat sitting under
+  // another screen, or an app in the background, reads nothing.
+  bool _routeVisible = false;
+  int _ackedSeq = 0;
+  final Set<String> _ackedMessageIds = <String>{};
+  List<QueryDocumentSnapshot<Object?>> _displayed =
+      const <QueryDocumentSnapshot<Object?>>[];
+
+  DmUnreadService get _unread => widget.unreadService ?? DmUnreadService.instance;
+
+  void _acknowledgeDisplayed() {
+    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (!mounted ||
+        !shouldAcknowledgeRead(
+          routeVisible: _routeVisible,
+          appResumed: WidgetsBinding.instance.lifecycleState ==
+              AppLifecycleState.resumed,
+          signedIn: uid != null,
+        )) {
+      return;
+    }
+
+    final DmReadBoundary boundary = computeReadBoundary(
+      uid: uid!,
+      messages: <DmDisplayedMessage>[
+        for (final QueryDocumentSnapshot<Object?> d in _displayed)
+          (
+            id: d.id,
+            senderId: (Map<String, dynamic>.from(
+                        d.data() as Map? ?? const <String, dynamic>{})['senderId'] ??
+                    '')
+                .toString(),
+            incomingSeq: (Map<String, dynamic>.from(
+                d.data() as Map? ?? const <String, dynamic>{})['incomingSeq']) as int?,
+          ),
+      ],
+    );
+
+    final bool nothingNew = boundary.upToSeq <= _ackedSeq &&
+        boundary.incomingIds.every(_ackedMessageIds.contains);
+    if (nothingNew) return;
+    _ackedSeq = boundary.upToSeq > _ackedSeq ? boundary.upToSeq : _ackedSeq;
+    _ackedMessageIds.addAll(boundary.incomingIds);
+    final List<String> ids = boundary.incomingIds;
+    unawaited(_unread.acknowledge(
+      convId: widget.convId,
+      upToSeq: boundary.upToSeq,
+      // Enough to cancel alerts from builds that tagged per message id.
+      messageIds: ids.length > 50 ? ids.sublist(ids.length - 50) : ids,
+    ));
   }
 
   // ---- DEBUG: live watcher for a single message doc ----
@@ -654,15 +746,10 @@ class _ConversationPageState extends State<ConversationPage> with RouteAware {
   void initState() {
     super.initState();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted || _didMarkOnOpen) return;
-      _didMarkOnOpen = true;
-      try {
-        await _markAsRead();
-      } catch (e) {
-        // optional: debugPrint('⚠️ mark-on-open failed: $e');
-      }
-    });
+    WidgetsBinding.instance.addObserver(this);
+    // Reading is driven by what the message list actually displays while this
+    // route is visible (see _acknowledgeDisplayed), not by an unconditional
+    // write on open and not by scroll position.
     // Listen for bottom reach (you already have this if you followed earlier steps)
     _itemPositionsListener.itemPositions.addListener(() {
       final positions = _itemPositionsListener.itemPositions.value;
@@ -683,10 +770,9 @@ class _ConversationPageState extends State<ConversationPage> with RouteAware {
       if (_isAtBottom != atBottomNow) {
         _isAtBottom = atBottomNow;
       }
-
-      if (atBottomNow) {
-        _markAsRead();
-      }
+      // Scrolling no longer writes read state: the old "last visible item"
+      // fallback treated any scroll as reaching the bottom, and reading is
+      // now about what was displayed, not where the list sits.
     });
 
     // 👇 One-time fetch of my lastReadAt from the conversation doc
@@ -742,6 +828,13 @@ class _ConversationPageState extends State<ConversationPage> with RouteAware {
 
                       return ts(a).compareTo(ts(b));
                     });
+
+                  // What this build is about to show is what may be
+                  // acknowledged as read — after the frame, and only while
+                  // this route is visible and the app is in front.
+                  _displayed = msgs;
+                  WidgetsBinding.instance.addPostFrameCallback(
+                      (_) => _acknowledgeDisplayed());
 
                   final int listCount =
                       msgs.length + 1; // +1 tail spacer prevents bottom cutoff
@@ -1102,6 +1195,10 @@ class _MessageComposerState extends State<_MessageComposer> {
     await convRef.update({
       'lastMessage': {'text': '📷 Photo', 'senderId': uid, 'sentAt': now},
       'updatedAt': now,
+      // The legacy counter installed builds still display. This app counts
+      // from the server ledger instead, which already covers media; without
+      // this line a photo stayed invisible to an older recipient's badge.
+      'participantState.${widget.otherUid}.unreadCount': FieldValue.increment(1),
     });
   }
 
@@ -1138,6 +1235,8 @@ class _MessageComposerState extends State<_MessageComposer> {
     await convRef.update({
       'lastMessage': {'text': '🎬 Video', 'senderId': uid, 'sentAt': now},
       'updatedAt': now,
+      // See _pickAndSendImage: legacy counter for installed builds only.
+      'participantState.${widget.otherUid}.unreadCount': FieldValue.increment(1),
     });
   }
 

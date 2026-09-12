@@ -18,6 +18,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../profile/data/identity_repository.dart';
 import '../../profile/ui/cached_network_image.dart';
 import '../../profile/ui/profile_theme.dart';
 import '../buddy_repository.dart';
@@ -68,6 +69,50 @@ class BuddyAvatar extends StatelessWidget {
         border: Border.all(color: ring, width: 1.5),
       ),
       child: image,
+    );
+  }
+}
+
+/// [BuddyAvatar] for a uid, kept current by the identity stream.
+///
+/// The picture comes from `users_public/{uid}.photoURL` through
+/// [IdentityRepository.watchPublicIdentity], the same live flow as
+/// [LiveUserName], so changing a profile picture updates every visible row
+/// without a restart. The cached image layer underneath ([CachedProfileImage])
+/// keeps scrolling free of repeated fetches, serves the picture offline once
+/// seen, and falls back to the neutral avatar when there is no photo or the
+/// image cannot be loaded.
+class LiveBuddyAvatar extends StatelessWidget {
+  const LiveBuddyAvatar({
+    super.key,
+    required this.uid,
+    this.size = 44,
+    this.fallbackPhotoURL,
+    this.ringColor,
+    this.identity,
+  });
+
+  final String uid;
+  final double size;
+  final String? fallbackPhotoURL;
+  final Color? ringColor;
+
+  /// Overrides the shared repository. For tests.
+  final IdentityRepository? identity;
+
+  @override
+  Widget build(BuildContext context) {
+    final IdentityRepository repo = identity ?? IdentityRepository.shared;
+    return StreamBuilder<PublicIdentity>(
+      stream: repo.watchPublicIdentity(uid),
+      initialData: repo.cachedPublicIdentity(uid),
+      builder: (BuildContext context, AsyncSnapshot<PublicIdentity> snap) {
+        final String? live = snap.data?.photoURL;
+        final String url = (live != null && live.isNotEmpty)
+            ? live
+            : (fallbackPhotoURL ?? '');
+        return BuddyAvatar(photoURL: url, size: size, ringColor: ringColor);
+      },
     );
   }
 }

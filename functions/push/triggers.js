@@ -37,6 +37,9 @@ const pushOnDirectMessageWritten = onDocumentWritten(
     const { convId, messageId } = event.params;
     const before = event.data && event.data.before;
     const after = event.data && event.data.after;
+    // Counting happens here too, on the same "this message is deliverable"
+    // decision, so the unread number is right even when this person has push
+    // switched off or has never granted the OS permission. See dm_unread.js.
     const result = await O.enqueueDirectMessage(admin.firestore(), {
       convId,
       messageId,

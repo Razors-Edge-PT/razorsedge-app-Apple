@@ -167,13 +167,17 @@ test('the FCM message is user-visible, routable, expiring and collapsible', () =
   };
   const msg = P.buildMessage({ job, rendered: { title: 't', body: 'b' }, nowMs });
   assert.deepEqual(msg.notification, { title: 't', body: 'b' });
-  assert.deepEqual(msg.data, { v: '1', type: 'directMessage', recipientUid: B, actorUid: A, convId: CONV });
+  assert.deepEqual(msg.data, {
+    v: '1', type: 'directMessage', recipientUid: B, actorUid: A, convId: CONV, msgId: 'm1',
+  });
   for (const v of Object.values(msg.data)) assert.equal(typeof v, 'string');
   assert.equal(msg.android.ttl, 3600_000);
   assert.equal(msg.android.notification.channelId, 'goodlift_direct_messages');
-  assert.equal(msg.android.notification.tag, 'dm_m1');
+  // Conversation-scoped so reading one thread can cancel exactly its alerts.
+  const dmTag = `dm|${P.conversationTagKey(CONV)}|m1`;
+  assert.equal(msg.android.notification.tag, dmTag);
   assert.equal(msg.android.notification.icon, 'ic_stat_goodlift');
-  assert.equal(msg.apns.headers['apns-collapse-id'], 'dm_m1');
+  assert.equal(msg.apns.headers['apns-collapse-id'], dmTag);
   assert.equal(msg.apns.headers['apns-expiration'], String(Math.floor((nowMs + 3600_000) / 1000)));
   assert.equal(msg.apns.headers['apns-push-type'], 'alert');
   assert.ok(Buffer.byteLength(msg.apns.headers['apns-collapse-id']) <= 64);

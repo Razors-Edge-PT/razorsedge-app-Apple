@@ -408,8 +408,16 @@ test('dm: text goes to the other participant only; no preview by default', async
   assert.equal(m.notification.title, 'New message');
   assert.equal(m.notification.body, 'Quin Q sent you a message');
   assert.ok(!JSON.stringify(m).includes('4321'), 'message text is not in the payload');
-  assert.deepEqual(m.data, { v: '1', type: 'directMessage', recipientUid: u.rae, actorUid: u.quin, convId: cid });
-  assert.equal(m.android.notification.tag, 'dm_m1');
+  assert.deepEqual(m.data, {
+    v: '1',
+    type: 'directMessage',
+    recipientUid: u.rae,
+    actorUid: u.quin,
+    convId: cid,
+    msgId: 'm1',
+    seq: '1',
+  });
+  assert.equal(m.android.notification.tag, `dm|${P.conversationTagKey(cid)}|m1`);
 
   // A reaction and a read receipt afterwards create nothing.
   assert.equal((await writeMessage(cid, 'm1', text, { ...text, reactions: { [u.rae]: '🔥' } })).enqueued, false);

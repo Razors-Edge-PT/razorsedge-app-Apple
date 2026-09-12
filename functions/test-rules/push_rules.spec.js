@@ -335,6 +335,81 @@ test('a new conversation must name exactly the two accounts in its id', async ()
   }));
 });
 
+// ── The unread ledger is the server's ───────────────────────────────────────
+
+test('a participant records their own reading, and the legacy counter still works', async () => {
+  const conv = as(ALICE).doc(`conversations/${AB}`);
+  await assertSucceeds(conv.update({
+    [`participantState.${ALICE}.readIncoming`]: 4,
+    [`participantState.${ALICE}.lastReadAt`]: serverTimestamp(),
+    [`participantState.${ALICE}.unreadCount`]: 0,
+  }));
+  // Installed builds still bump the other person's legacy counter when they
+  // send; that must keep working.
+  await assertSucceeds(conv.update({
+    [`participantState.${BOB}.unreadCount`]: increment(1),
+    updatedAt: serverTimestamp(),
+  }));
+});
+
+test('nobody can move the ledger — their own or the other person\'s', async () => {
+  // The server has counted messages for both participants.
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc(`conversations/${AB}`).set({
+      participantState: { [ALICE]: { incoming: 3 }, [BOB]: { incoming: 2 } },
+    }, { merge: true });
+  });
+  const conv = as(ALICE).doc(`conversations/${AB}`);
+  // Inflating or clearing my own count.
+  await assertFails(conv.update({ [`participantState.${ALICE}.incoming`]: 99 }));
+  await assertFails(conv.update({ [`participantState.${ALICE}.incoming`]: 0 }));
+  // Hiding messages from the other person, or inflating their badge.
+  await assertFails(conv.update({ [`participantState.${BOB}.incoming`]: 0 }));
+  await assertFails(conv.update({ [`participantState.${BOB}.incoming`]: 50 }));
+  await assertFails(as(BOB).doc(`conversations/${AB}`).update({
+    [`participantState.${ALICE}.incoming`]: 1,
+  }));
+  // Smuggled alongside a legitimate read.
+  await assertFails(conv.update({
+    [`participantState.${ALICE}.readIncoming`]: 2,
+    [`participantState.${ALICE}.incoming`]: 2,
+  }));
+  // A whole-map rewrite cannot drop it either.
+  await assertFails(conv.update({
+    participantState: { [ALICE]: { readIncoming: 1 }, [BOB]: { unreadCount: 0 } },
+  }));
+});
+
+test('a new conversation cannot be opened with a ledger already in it', async () => {
+  const cid = convIdFor(ALICE, CAROL);
+  await assertFails(as(ALICE).doc(`conversations/${cid}`).set({
+    participants: { [ALICE]: true, [CAROL]: true },
+    participantState: { [ALICE]: { incoming: 7 }, [CAROL]: { unreadCount: 0 } },
+  }));
+  await assertSucceeds(as(ALICE).doc(`conversations/${cid}`).set({
+    participants: { [ALICE]: true, [CAROL]: true },
+    participantState: { [ALICE]: { unreadCount: 0 }, [CAROL]: { unreadCount: 0 } },
+  }));
+});
+
+test('a message\'s ledger position cannot be set or changed by a client', async () => {
+  const msgs = as(ALICE).doc(`conversations/${AB}`).collection('messages');
+  await assertFails(msgs.doc('seeded').set({
+    senderId: ALICE, type: 'text', text: 'hi', incomingSeq: 99, sentAt: serverTimestamp(),
+  }));
+  await assertSucceeds(msgs.doc('plain').set({
+    senderId: ALICE, type: 'text', text: 'hi', sentAt: serverTimestamp(),
+  }));
+  await assertFails(msgs.doc('plain').update({ incomingSeq: 99 }));
+  // Not by the recipient either, alongside a reaction.
+  await assertFails(as(BOB).doc(`conversations/${AB}/messages/plain`).update({
+    [`reactions.${BOB}`]: '🔥', incomingSeq: 1,
+  }));
+  await assertSucceeds(as(BOB).doc(`conversations/${AB}/messages/plain`).update({
+    [`reactions.${BOB}`]: '🔥',
+  }));
+});
+
 test('a coach cannot read or post in an athlete\'s conversations', async () => {
   await assertFails(as(COACH).doc(`conversations/${AB}`).get());
   await assertFails(as(COACH).doc(`conversations/${AB}/messages/c1`).set({
