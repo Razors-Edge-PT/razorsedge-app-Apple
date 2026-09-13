@@ -389,15 +389,29 @@ class _ConversationPageState extends State<ConversationPage>
     super.dispose();
   }
 
-  /// The message a newer alert points at, once this thread is already open.
-  String? _requestedFocusId;
+  /// The newest focus request this thread has acted on.
+  ///
+  /// Compared by SERIAL, not by target id. Comparing ids meant that tapping
+  /// the same reaction alert again — after scrolling away from the message it
+  /// is about — did nothing at all, for the rest of the page's life.
+  int _seenFocusSerial = 0;
 
   void _onFocusRequest() {
     final FocusRequest? req = ForegroundFocus.requests.value;
-    if (req == null || !req.isFor(widget.convId) || !mounted) return;
-    if (req.targetId == _requestedFocusId) return;
-    _requestedFocusId = req.targetId;
-    _scrollToMessage(req.targetId);
+    if (!mounted ||
+        !shouldActOnFocus(
+          req: req,
+          subjectId: widget.convId,
+          lastSerial: _seenFocusSerial,
+          viewerUid: FirebaseAuth.instance.currentUser?.uid,
+        )) {
+      return;
+    }
+    _seenFocusSerial = req!.serial;
+    final String? activityId = req.activityId;
+    if (activityId != null) unawaited(_resolveFocusActivity(activityId));
+    final String? target = req.targetId;
+    if (target != null) _scrollToMessage(target);
   }
 
   /// Scrolls a message into view by id, if it is in the loaded thread.
@@ -505,7 +519,7 @@ class _ConversationPageState extends State<ConversationPage>
     final Map<String, SocialActivity> known = <String, SocialActivity>{
       for (final SocialActivity a in _activity.snapshot.unread) a.id: a,
       for (final SocialActivity a in _subjectActivity) a.id: a,
-      if (_focusRecord != null) _focusRecord!.id: _focusRecord!,
+      ..._focusRecords,
     };
     final List<SocialActivity> presented = presentedInConversation(
       unread: known.values.toList(growable: false),
@@ -533,24 +547,36 @@ class _ConversationPageState extends State<ConversationPage>
   bool _fetchingSubjectActivity = false;
   final Set<String> _askedAboutMessages = <String>{};
 
-  /// The reaction record this page was opened for, read by id.
-  SocialActivity? _focusRecord;
-  bool _focusResolved = false;
+  /// The reaction records taps have named, read by id — independent of every
+  /// query window, so an old reaction is still readable when it is opened.
+  final Map<String, SocialActivity> _focusRecords = <String, SocialActivity>{};
+  final Set<String> _focusAsked = <String>{};
 
-  Future<void> _resolveFocusActivity() async {
-    final String? id = widget.focusActivityId;
-    if (id == null || _focusResolved) return;
-    _focusResolved = true;
+  /// Rises with every focus given to this page, so an answer that arrives
+  /// after a newer request cannot overwrite it.
+  int _focusGeneration = 0;
+
+  Future<void> _resolveFocusActivity([String? activityId]) async {
+    final String? id = activityId ?? widget.focusActivityId;
+    if (id == null || !_focusAsked.add(id)) return;
     final String? owner = _activity.snapshot.uid;
+    _focusGeneration++;
+    final int generation = _focusGeneration;
     try {
       final SocialActivity? found = await _activity.activityById(id);
-      if (!mounted || found == null) return;
-      if (_activity.snapshot.uid != owner) return;
+      if (!mounted ||
+          found == null ||
+          _activity.snapshot.uid != owner ||
+          generation != _focusGeneration) {
+        if (generation != _focusGeneration) _focusAsked.remove(id);
+        return;
+      }
       if (found.convId != widget.convId) return;
-      _focusRecord = found;
+      _focusRecords[found.id] = found;
       _acknowledgeDisplayedReactions();
     } catch (_) {
       // Offline: the live view still covers everything recent.
+      _focusAsked.remove(id);
     }
   }
 

@@ -263,92 +263,123 @@ async function enqueueInteraction(db, {
   emoji,
   preview,
   canonical,
+  parentRef,
 }) {
   if (!recipientUid || !actorUid) return { enqueued: false, reason: 'missing-party' };
   // Never tell somebody what they just did themselves.
   if (recipientUid === actorUid) return { enqueued: false, reason: 'self-action' };
 
   const activityId = A.activityIdFor(type, recipientUid, occurrence);
+  const recordRef = A.activityRef(db, recipientUid, activityId);
+  const at = nowMs == null ? Date.now() : nowMs;
 
-  // Does the interaction still exist? The event says one happened; it does not
-  // say one is there now. A creation event redelivered after the like was
-  // taken back, or arriving after its own deletion event, must not produce
-  // unread activity pointing at nothing — and if a record is already there,
-  // current state decides whether it counts, not the fact of a replay.
-  if (canonical) {
-    const live = canonical.state(await canonical.ref.get());
-    if (!live || !live.present) {
-      const settled = await A.settleActivity(db, {
-        recipientUid,
-        activityId,
-        canonical,
-        reason: 'interaction-gone',
+  // ── Why the whole decision is one transaction ─────────────────────────────
+  // Reading the interaction, then committing a batch, leaves a window that
+  // real sequences fall into. A like read as present, deleted while the batch
+  // was in flight, and whose deletion handler ran before the record existed,
+  // produced an active unread record and an alert for a like nobody could see
+  // — neither handler was wrong on its own. And a comment edited before its
+  // own creation event was processed had the record written with the event's
+  // stale words, because the live text was read for the presence check and
+  // then not used.
+  //
+  // So the interaction, its parent, and whether a record already exists are
+  // all read in ONE transaction, and the record and its job are written in
+  // that same transaction, from that same authoritative state. A concurrent
+  // deletion now either loses the race and is retired afterwards by its own
+  // handler, or wins it and makes this write see the interaction as gone.
+  //
+  // Delivery stays outside: the network send is the worker's, on the job this
+  // commits.
+  const result = await db.runTransaction(async (tx) => {
+    // ALL reads first — a Firestore transaction allows nothing else after a
+    // write.
+    const record = await tx.get(recordRef);
+    const liveSnap = canonical ? await tx.get(canonical.ref) : null;
+    const parentSnap = parentRef ? await tx.get(parentRef) : null;
+    const live = canonical && liveSnap
+      ? (canonical.state(liveSnap) || { present: false })
+      : { present: true };
+
+    // The post (or conversation) this interaction hangs off. A post deleted
+    // concurrently retires its records by subject; without this check a
+    // comment event still in flight would write a fresh one straight after.
+    const parentGone = parentRef && (!parentSnap || !parentSnap.exists);
+
+    if (parentGone || !live.present) {
+      if (!record.exists) {
+        return {
+          enqueued: false,
+          reason: parentGone ? 'parent-gone' : 'interaction-gone',
+          activityId,
+        };
+      }
+      const settled = A.settleWithin(tx, {
+        ref: recordRef,
+        record,
+        live: parentGone ? { present: false } : live,
+        reason: parentGone ? 'parent-deleted' : 'interaction-gone',
       });
       return {
         enqueued: false,
-        reason: settled === 'no-record' ? 'interaction-gone' : `interaction-gone:${settled}`,
+        reason: `${parentGone ? 'parent-gone' : 'interaction-gone'}:${settled}`,
         activityId,
       };
     }
-  }
-  const job = newJob({
-    type,
-    recipientUid,
-    actorUid,
-    occurrence,
-    sourceEventId,
-    eventTimeMs,
-    nowMs: nowMs == null ? Date.now() : nowMs,
-    extra: {
-      activityId,
-      ...(postId ? { postId } : {}),
-      ...(commentId ? { commentId } : {}),
-      ...(conversationId ? { conversationId } : {}),
-      ...(messageId ? { messageId } : {}),
-      ...(emoji ? { emoji } : {}),
-    },
-  });
-  const tag = P.presentationTag({ ...job.data, id: job.id, activityId });
 
-  const batch = db.batch();
-  batch.create(
-    A.activityRef(db, recipientUid, activityId),
-    A.activityRecord({
-      type,
-      actorUid,
-      occurrence,
-      postId,
-      commentId,
-      conversationId,
-      messageId,
-      emoji,
-      preview,
-      tag,
-      now: FieldValue().serverTimestamp(),
-    }),
-  );
-  batch.create(outboxRef(db, job.id), job.data);
-  try {
-    await batch.commit();
-    return { enqueued: true, reason: 'enqueued', jobId: job.id, activityId };
-  } catch (err) {
-    if (isAlreadyExists(err)) {
-      // The same occurrence again. Whether that means anything depends on the
-      // interaction itself, which was just confirmed present: a record that
-      // had been withdrawn counts again, with no second alert; one that never
-      // stopped counting is simply a duplicate event.
-      const settled = canonical
-        ? await A.settleActivity(db, { recipientUid, activityId, canonical })
-        : 'unchanged';
+    // Already recorded: the same occurrence, however it arrived. It never
+    // alerts twice — it only comes back to counting if it had been withdrawn,
+    // and takes its wording from the live document.
+    if (record.exists) {
+      const settled = A.settleWithin(tx, { ref: recordRef, record, live });
       return {
         enqueued: false,
         reason: settled === 'revived' ? 'revived' : 'duplicate',
-        jobId: job.id,
         activityId,
       };
     }
-    throw err;
-  }
+
+    // New. Everything written here comes from the state just read.
+    const livePreview = live.preview !== undefined ? live.preview : preview;
+    const liveEmoji = live.emoji !== undefined ? live.emoji : emoji;
+    const job = newJob({
+      type,
+      recipientUid,
+      actorUid,
+      occurrence,
+      sourceEventId,
+      eventTimeMs,
+      nowMs: at,
+      extra: {
+        activityId,
+        ...(postId ? { postId } : {}),
+        ...(commentId ? { commentId } : {}),
+        ...(conversationId ? { conversationId } : {}),
+        ...(messageId ? { messageId } : {}),
+        ...(liveEmoji ? { emoji: liveEmoji } : {}),
+      },
+    });
+    const tag = P.presentationTag({ ...job.data, id: job.id, activityId });
+    tx.create(
+      recordRef,
+      A.activityRecord({
+        type,
+        actorUid,
+        occurrence,
+        postId,
+        commentId,
+        conversationId,
+        messageId,
+        emoji: liveEmoji,
+        preview: livePreview,
+        tag,
+        now: FieldValue().serverTimestamp(),
+      }),
+    );
+    tx.create(outboxRef(db, job.id), job.data);
+    return { enqueued: true, reason: 'enqueued', jobId: job.id, activityId };
+  });
+  return result;
 }
 
 /** The post, and whether [actorUid] may interact with it at all. */
@@ -423,6 +454,7 @@ async function enqueuePostComment(db, {
     commentId,
     preview: typeof afterData.text === 'string' ? afterData.text : '',
     canonical: A.canonicalComment(db, postId, commentId, actorUid),
+    parentRef: db.collection('posts').doc(postId),
   });
 }
 
@@ -487,6 +519,7 @@ async function enqueuePostReaction(db, {
     nowMs,
     postId,
     canonical,
+    parentRef: db.collection('posts').doc(postId),
   });
 }
 
@@ -589,6 +622,7 @@ async function enqueueDmReactions(db, {
       messageId,
       emoji,
       canonical: A.canonicalDmReaction(db, convId, messageId, actorUid),
+      parentRef: db.collection('conversations').doc(convId),
     });
     results.push(result);
   }

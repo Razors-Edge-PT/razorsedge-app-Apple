@@ -100,6 +100,10 @@ class PostDetailPage extends StatefulWidget {
   /// inside any query window.
   final String? focusActivityId;
 
+  /// The signed-in account, when the caller knows it: a focus request
+  /// addressed to another account is never acted on here.
+  final String? viewerUid;
+
   /// Injectable for tests; production uses the shared instances.
   final FirebaseFirestore? firestore;
   final IdentityRepository? identity;
@@ -114,6 +118,7 @@ class PostDetailPage extends StatefulWidget {
     required this.canDelete,
     this.focusCommentId,
     this.focusActivityId,
+    this.viewerUid,
     this.firestore,
     this.identity,
     this.activityService,
@@ -134,6 +139,12 @@ class _PostDetailPageState extends State<PostDetailPage> {
   /// and moves when another alert about this same post points elsewhere.
   String? _focusCommentId;
 
+  /// The interaction the page is currently dealing with. A later tap about
+  /// this same post replaces it, so the record that gets read is the one the
+  /// person actually tapped — including a like or Good Lift, which has no
+  /// comment to scroll to but still has a badge and an alert of its own.
+  String? _focusActivityId;
+
   /// Bumped for EVERY focus request, including a repeat of the one already
   /// showing. Tapping the same alert again after scrolling away has to bring
   /// that comment back; comparing ids alone made the second tap do nothing.
@@ -143,6 +154,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
   void initState() {
     super.initState();
     _focusCommentId = widget.focusCommentId;
+    _focusActivityId = widget.focusActivityId;
     ForegroundFocus.requests.addListener(_onFocusRequest);
   }
 
@@ -153,6 +165,10 @@ class _PostDetailPageState extends State<PostDetailPage> {
         widget.focusCommentId != null) {
       _focusCommentId = widget.focusCommentId;
       _focusSerial++;
+    }
+    if (old.focusActivityId != widget.focusActivityId &&
+        widget.focusActivityId != null) {
+      _focusActivityId = widget.focusActivityId;
     }
   }
 
@@ -166,12 +182,30 @@ class _PostDetailPageState extends State<PostDetailPage> {
   /// at the same one again.
   void _onFocusRequest() {
     final FocusRequest? req = ForegroundFocus.requests.value;
-    if (req == null || !req.isFor(post.id) || !mounted) return;
+    if (!mounted ||
+        !shouldActOnFocus(
+          req: req,
+          subjectId: post.id,
+          lastSerial: _seenFocusSerial,
+          viewerUid: widget.viewerUid,
+        )) {
+      return;
+    }
+    _seenFocusSerial = req!.serial;
     setState(() {
-      _focusCommentId = req.targetId;
-      _focusSerial++;
+      // A like or Good Lift names no comment; the post itself presents it, so
+      // the list is left where it is and only the record changes.
+      if (req.targetId != null) {
+        _focusCommentId = req.targetId;
+        _focusSerial++;
+      }
+      if (req.activityId != null) _focusActivityId = req.activityId;
     });
   }
+
+  /// The newest request this page has acted on, so a rebuild does not replay
+  /// one and a genuine repeat is never mistaken for it.
+  int _seenFocusSerial = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -179,7 +213,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
     // see PostActivityScope. Opening the page is not by itself reading.
     return PostActivityScope(
       postId: post.id,
-      focusActivityId: widget.focusActivityId,
+      focusActivityId: _focusActivityId,
       service: widget.activityService,
       child: _build(context),
     );

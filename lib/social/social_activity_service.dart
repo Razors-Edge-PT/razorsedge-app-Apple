@@ -448,69 +448,6 @@ class SocialActivityService {
     }
   }
 
-  /// Everything older than [anchor], newest first, as a LIVE query.
-  ///
-  /// Anchored on the anchor's own document rather than on a timestamp, so
-  /// records sharing a timestamp to the millisecond are neither dropped nor
-  /// repeated at the boundary — document order breaks the tie, exactly as it
-  /// does inside the page above. Anchored on a FIXED document rather than on
-  /// "the fiftieth newest", so new arrivals at the top cannot shift the
-  /// boundary underneath the person.
-  ///
-  /// It stays a subscription because these rows are not a snapshot of the
-  /// past: one of them being read here, or withdrawn by its author, has to
-  /// show, and a cached copy would go on claiming otherwise.
-  /// Deliberately not an `async*` generator: cancelling a subscription to one
-  /// that is suspended in `yield*` over a stream that never ends does not
-  /// complete, and a list disposing its older pages would hang on it.
-  Stream<List<SocialActivity>> watchOlderThan({
-    required SocialActivity anchor,
-    int limit = kListLimit,
-  }) {
-    final String? uid = _uidOrNull();
-    if (uid == null) {
-      return Stream<List<SocialActivity>>.value(const <SocialActivity>[]);
-    }
-    late final StreamController<List<SocialActivity>> out;
-    StreamSubscription<List<SocialActivity>>? sub;
-
-    Future<void> start() async {
-      try {
-        final DocumentSnapshot<Map<String, dynamic>> cursor =
-            await _collection(uid).doc(anchor.id).get();
-        Query<Map<String, dynamic>> q =
-            _live(uid).orderBy('createdAt', descending: true);
-        if (cursor.exists) {
-          q = q.startAfterDocument(cursor);
-        } else {
-          // The anchor has gone: its timestamp is all that is left to position
-          // by, and anything sharing that instant is on the page above.
-          final DateTime? at = anchor.createdAt;
-          if (at == null) {
-            out.add(const <SocialActivity>[]);
-            return;
-          }
-          q = q.where('createdAt', isLessThan: Timestamp.fromDate(at));
-        }
-        if (out.isClosed) return;
-        sub = q.limit(limit).snapshots().map(_mapDocs).listen(
-              out.add,
-              onError: out.addError,
-              onDone: out.close,
-            );
-      } catch (e) {
-        debugPrint('[activity] could not load older activity: $e');
-        if (!out.isClosed) out.add(const <SocialActivity>[]);
-      }
-    }
-
-    out = StreamController<List<SocialActivity>>(
-      onListen: () => unawaited(start()),
-      onCancel: () async => sub?.cancel(),
-    );
-    return out.stream;
-  }
-
   List<SocialActivity> _mapDocs(QuerySnapshot<Map<String, dynamic>> q) {
     final List<SocialActivity> out = <SocialActivity>[];
     for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
@@ -656,12 +593,18 @@ class SocialActivityService {
   }
 
   /// The Activity list: recent interactions, read and unread, newest first.
-  Stream<List<SocialActivity>> watchRecent() {
+  ///
+  /// [limit] is how far back the list currently reaches. "Show older activity"
+  /// grows it rather than opening a second query beside this one: two windows
+  /// meant a boundary, and a boundary anchored on a record that the newest
+  /// window later pushed out left a hole in the middle of the list that every
+  /// new arrival widened. One window cannot have a hole in it.
+  Stream<List<SocialActivity>> watchRecent({int limit = kListLimit}) {
     final String? uid = _uidOrNull();
     if (uid == null) return Stream<List<SocialActivity>>.value(const <SocialActivity>[]);
     return _live(uid)
         .orderBy('createdAt', descending: true)
-        .limit(kListLimit)
+        .limit(limit)
         .snapshots()
         .map(_mapDocs);
   }

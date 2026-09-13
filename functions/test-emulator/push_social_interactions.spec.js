@@ -213,6 +213,105 @@ test('a creation event replayed after the like was taken back does not revive it
       'the like is not there, so neither is the activity');
   });
 
+test('a like deleted WHILE its creation is being handled leaves nothing behind',
+  async () => {
+    // The interleaving, not a sequence: the creation handler is in flight when
+    // the like is deleted and its own deletion handler runs to completion.
+    // Before the creation became one transaction, the deletion found no record
+    // to retire and the creation then wrote an active one, with a job, for a
+    // like that was already gone.
+    const { owner, friend } = people('owner', 'friend');
+    await Promise.all([befriend(owner, friend), register(owner, 'tok-race')]);
+
+    // Repeated, with the delete released at a different point each time: the
+    // window is small, and one lucky interleaving would prove nothing.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const postId = `pc1_${attempt}`;
+      await post(owner, postId);
+      const like = { createdAt: Timestamp().fromMillis(Date.now()) };
+      await db().doc(`posts/${postId}/likes/${friend}`).set(like);
+
+      const creation = O.enqueuePostReaction(db(), {
+        kind: 'like', postId, actorUid: friend, beforeData: null, afterData: like, eventId: 'e1',
+      });
+      // Let the creation get some way in, then delete and run ITS handler
+      // while the creation is still going.
+      for (let tick = 0; tick < attempt; tick++) await Promise.resolve();
+      await db().doc(`posts/${postId}/likes/${friend}`).delete();
+      const deletion = await O.enqueuePostReaction(db(), {
+        kind: 'like', postId, actorUid: friend, beforeData: like, afterData: null, eventId: 'e2',
+      });
+      const created = await creation;
+      assert.ok(created.reason && deletion.reason);
+
+      // Whichever way the two interleaved, the end state has to agree with the
+      // store: there is no like, so nothing counts and nothing is delivered.
+      const records = (await activityList(owner))
+        .filter((r) => r.subject === `post:${postId}`);
+      for (const r of records) {
+        assert.equal(r.invalidated, true,
+          `attempt ${attempt}: ${r.id} still counts for a like that is gone`);
+      }
+      const jobs = await db().collection('pushOutbox')
+        .where('recipientUid', '==', owner).get();
+      for (const d of jobs.docs) {
+        if (d.get('postId') !== postId) continue;
+        const out = await run(d.id, fakeMessaging());
+        assert.notEqual(out.status, 'sent',
+          `attempt ${attempt}: a job for a withdrawn like must never be sent`);
+      }
+    }
+  });
+
+test('a comment edited before its creation is handled is recorded with the '
+  + 'CURRENT words', async () => {
+  const { owner, friend } = people('owner', 'friend');
+  await Promise.all([befriend(owner, friend), register(owner, 'tok-pre')]);
+  await post(owner, 'pc2');
+  const original = { uid: friend, text: 'old words' };
+  const edited = { uid: friend, text: 'current words' };
+  // The comment is written and edited; only the edit is in the store.
+  await db().doc('posts/pc2/comments/c1').set(edited);
+
+  // The edit's event is handled first, and finds no record yet.
+  const editFirst = await O.enqueuePostComment(db(), {
+    postId: 'pc2', commentId: 'c1', beforeData: original, afterData: edited, eventId: 'e2',
+  });
+  assert.equal(editFirst.reason, 'no-such-activity');
+
+  // The creation event arrives late, carrying the ORIGINAL words.
+  const created = await O.enqueuePostComment(db(), {
+    postId: 'pc2', commentId: 'c1', beforeData: null, afterData: original, eventId: 'e1',
+  });
+  assert.equal(created.enqueued, true);
+
+  const record = await activityOf(owner, created.activityId);
+  assert.equal(record.preview, 'current words',
+    'the row says what the comment says, not what the late event carried');
+});
+
+test('a post deleted while a comment creation is in flight leaves no activity',
+  async () => {
+    const { owner, friend } = people('owner', 'friend');
+    await Promise.all([befriend(owner, friend), register(owner, 'tok-pd')]);
+    await post(owner, 'pc3');
+    const c = await comment('pc3', 'c1', friend, 'nice');
+    const postData = (await db().doc('posts/pc3').get()).data();
+
+    const creation = O.enqueuePostComment(db(), {
+      postId: 'pc3', commentId: 'c1', beforeData: null, afterData: c, eventId: 'e1',
+    });
+    // The post goes while that is in flight, and its cascade runs.
+    await db().doc('posts/pc3').delete();
+    await O.retirePostActivity(db(), { postId: 'pc3', beforeData: postData });
+    await creation;
+
+    for (const r of await activityList(owner)) {
+      assert.equal(r.invalidated, true,
+        'nothing may count against a post that is gone');
+    }
+  });
+
 test('a deletion processed before the creation leaves no active activity',
   async () => {
     const { owner, friend } = people('owner', 'friend');

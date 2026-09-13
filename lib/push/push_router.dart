@@ -280,13 +280,17 @@ class PushDestinations {
         // staring at an unchanged screen.) A like or Good Lift has nothing to
         // reveal: the post is already showing it.
         if (ForegroundPost.visiblePostId == intent.postId) {
-          final String? commentId = intent.commentId;
-          if (commentId == null) return false;
-          ForegroundFocus.request(
+          // A like or Good Lift has nothing to scroll to — the post is already
+          // showing it — but it does have a record, and that record is what
+          // has to be read and its alert cleared. Returning false here left an
+          // older like unread for good, since nothing else would ever ask
+          // about it.
+          return ForegroundFocus.request(
             subjectId: intent.postId!,
-            targetId: commentId,
+            targetId: intent.commentId,
+            activityId: intent.activityId,
+            recipientUid: intent.recipientUid,
           );
-          return true;
         }
         // The post is fetched first: a deleted post, or one whose owner is no
         // longer a friend, says so instead of opening an empty screen. The
@@ -302,12 +306,14 @@ class PushDestinations {
         // the thread — so ask the open page to scroll there. A plain message
         // alert for the thread on screen has nothing to add.
         if (ForegroundConversation.visibleConvId == convId) {
-          final String? messageId = intent.messageId;
-          if (intent.kind != PushKind.dmReaction || messageId == null) {
-            return false;
-          }
-          ForegroundFocus.request(subjectId: convId, targetId: messageId);
-          return true;
+          // A plain message alert for the thread on screen has nothing to add.
+          if (intent.kind != PushKind.dmReaction) return false;
+          return ForegroundFocus.request(
+            subjectId: convId,
+            targetId: intent.messageId,
+            activityId: intent.activityId,
+            recipientUid: intent.recipientUid,
+          );
         }
         final bool? accessible = await conversationAccessible(convId);
         // The lookup took time: the account may have logged out or switched,

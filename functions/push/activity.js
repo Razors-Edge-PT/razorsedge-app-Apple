@@ -242,39 +242,56 @@ async function settleActivity(db, { recipientUid, activityId, canonical, reason 
     const record = await tx.get(ref);
     if (!record.exists) return 'no-record';
     const liveSnap = await tx.get(canonical.ref);
-    const live = canonical.state(liveSnap) || { present: false };
-    const wasInvalid = record.get('invalidated') === true;
-
-    if (!live.present) {
-      if (wasInvalid) return 'unchanged';
-      tx.update(ref, {
-        invalidated: true,
-        invalidatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        ...(reason ? { invalidReason: String(reason).slice(0, 40) } : {}),
-      });
-      return 'retired';
-    }
-
-    const patch = {};
-    if (wasInvalid) {
-      patch.invalidated = false;
-      patch.invalidatedAt = admin.firestore.FieldValue.delete();
-      patch.invalidReason = admin.firestore.FieldValue.delete();
-    }
-    if (live.preview !== undefined) {
-      const preview = truncatePreview(live.preview);
-      if (preview !== (record.get('preview') || '')) patch.preview = preview;
-    }
-    if (live.emoji !== undefined) {
-      const emoji = String(live.emoji).slice(0, 8);
-      if (emoji !== record.get('emoji')) patch.emoji = emoji;
-    }
-    if (Object.keys(patch).length === 0) return 'unchanged';
-    tx.update(ref, patch);
-    // `read` is never touched here, in either direction: an interaction that
-    // comes back comes back as it was, and none of this is a second alert.
-    return wasInvalid ? 'revived' : 'refreshed';
+    return settleWithin(tx, {
+      ref,
+      record,
+      live: canonical.state(liveSnap),
+      reason,
+    });
   });
+}
+
+/**
+ * The settle decision itself, applied to a record ALREADY read inside [tx].
+ *
+ * Split out so that creating a record and correcting one are the same decision
+ * taken in the same transaction: the creation path has to read the interaction
+ * anyway, and when a record turns out to be there already it must reach
+ * exactly the conclusion the update path would.
+ */
+function settleWithin(tx, { ref, record, live, reason }) {
+  const state = live || { present: false };
+  const wasInvalid = record.get('invalidated') === true;
+
+  if (!state.present) {
+    if (wasInvalid) return 'unchanged';
+    tx.update(ref, {
+      invalidated: true,
+      invalidatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...(reason ? { invalidReason: String(reason).slice(0, 40) } : {}),
+    });
+    return 'retired';
+  }
+
+  const patch = {};
+  if (wasInvalid) {
+    patch.invalidated = false;
+    patch.invalidatedAt = admin.firestore.FieldValue.delete();
+    patch.invalidReason = admin.firestore.FieldValue.delete();
+  }
+  if (state.preview !== undefined) {
+    const preview = truncatePreview(state.preview);
+    if (preview !== (record.get('preview') || '')) patch.preview = preview;
+  }
+  if (state.emoji !== undefined) {
+    const emoji = String(state.emoji).slice(0, 8);
+    if (emoji !== record.get('emoji')) patch.emoji = emoji;
+  }
+  if (Object.keys(patch).length === 0) return 'unchanged';
+  tx.update(ref, patch);
+  // `read` is never touched here, in either direction: an interaction that
+  // comes back comes back as it was, and none of this is a second alert.
+  return wasInvalid ? 'revived' : 'refreshed';
 }
 
 /**
@@ -327,6 +344,7 @@ module.exports = {
   retireActivity,
   retireSubject,
   settleActivity,
+  settleWithin,
   canonicalComment,
   canonicalPostReaction,
   canonicalDmReaction,

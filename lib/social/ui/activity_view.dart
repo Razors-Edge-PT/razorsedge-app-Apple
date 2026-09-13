@@ -70,51 +70,74 @@ class _ActivityViewState extends State<ActivityView> {
   Map<String, UserSearchResult> _people = const <String, UserSearchResult>{};
   final Set<String> _lookedUp = <String>{};
 
-  /// Everything below the live page, as a LIVE query anchored on one fixed
-  /// record. Growing [_olderLimit] asks for more of the same query rather than
-  /// stitching pages together, so there is exactly one boundary in the list
-  /// and it cannot drift: no record can fall between two pages, and none can
-  /// appear in both. Rows here are current — read one and it shows as read;
-  /// its author withdraws it and it leaves the list.
-  SocialActivity? _olderAnchor;
-  int _olderLimit = 0;
+  /// ── One window, grown, rather than two windows stitched together ──────────
+  /// This used to be a moving newest-fifty query plus a second query anchored
+  /// after whatever record happened to be fiftieth when "show older" was
+  /// tapped. The anchor was fixed and the first window was not: one new
+  /// interaction pushed the anchor record out of the top query while the
+  /// bottom query still began after it, so that record vanished from the list,
+  /// and every further arrival widened the hole.
+  ///
+  /// So there is one live query, and asking for older activity simply asks it
+  /// for more. Nothing can fall between two windows when there is only one,
+  /// arrivals shift the whole list down together, and every row on screen —
+  /// old or new — stays live: read one elsewhere and it shows as read, have
+  /// its author withdraw it and it leaves.
+  int _limit = SocialActivityService.kListLimit;
+  StreamSubscription<List<SocialActivity>>? _sub;
+  List<SocialActivity> _items = const <SocialActivity>[];
+  bool _loaded = false;
+  bool _failed = false;
   bool _loadingOlder = false;
-  bool _noMoreOlder = false;
-  List<SocialActivity> _older = const <SocialActivity>[];
-  StreamSubscription<List<SocialActivity>>? _olderSub;
 
-  void _loadOlder(SocialActivity after) {
-    if (_loadingOlder || _noMoreOlder) return;
+  void _subscribe() {
+    _sub?.cancel();
+    _sub = _service.watchRecent(limit: _limit).listen(
+      (List<SocialActivity> rows) {
+        if (!mounted) return;
+        setState(() {
+          _items = rows;
+          _loaded = true;
+          _failed = false;
+          _loadingOlder = false;
+        });
+      },
+      onError: (Object e) {
+        if (!mounted) return;
+        setState(() {
+          _loaded = true;
+          _failed = true;
+          _loadingOlder = false;
+        });
+      },
+    );
+  }
+
+  void _loadOlder() {
+    if (_loadingOlder) return;
     setState(() {
-      _olderAnchor ??= after;
-      _olderLimit += SocialActivityService.kListLimit;
+      _limit += SocialActivityService.kListLimit;
       _loadingOlder = true;
     });
-    _olderSub?.cancel();
-    _olderSub = _service
-        .watchOlderThan(anchor: _olderAnchor!, limit: _olderLimit)
-        .listen((List<SocialActivity> page) {
-      if (!mounted) return;
-      setState(() {
-        _older = page;
-        _loadingOlder = false;
-        // Short of what was asked for: this is the end of the list.
-        _noMoreOlder = page.length < _olderLimit;
-      });
-    }, onError: (Object _) {
-      if (mounted) setState(() => _loadingOlder = false);
-    });
+    _subscribe();
   }
 
   @override
   void initState() {
     super.initState();
     _search = widget.search ?? UserSearchRepository();
+    _subscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant ActivityView old) {
+    super.didUpdateWidget(old);
+    if (old.service != widget.service) _subscribe();
   }
 
   @override
   void dispose() {
-    _olderSub?.cancel();
+    _sub?.cancel();
     super.dispose();
   }
 
@@ -198,80 +221,63 @@ class _ActivityViewState extends State<ActivityView> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<SocialActivity>>(
-      stream: _service.watchRecent(),
-      builder: (BuildContext context, AsyncSnapshot<List<SocialActivity>> snap) {
-        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
-          return const Center(
-            child: CircularProgressIndicator(color: ProfilePalette.action),
+    if (!_loaded) {
+      return const Center(
+        child: CircularProgressIndicator(color: ProfilePalette.action),
+      );
+    }
+    // One window, newest first. The service already excludes withdrawn
+    // records, so anything dropped here is only a kind this build cannot draw.
+    final List<SocialActivity> rows = _items;
+    final List<SocialActivity> items = rows
+        .where((SocialActivity a) => a.isRenderable)
+        .toList(growable: false);
+    // More was returned than the eye can use? There is more to ask for. A page
+    // of records this build cannot render must not become a dead end with real
+    // activity stranded behind it, so the decision is made on the RAW count.
+    final bool canLoadMore = rows.length >= _limit;
+    if (items.isEmpty && !canLoadMore) {
+      return _ActivityEmpty(failed: _failed);
+    }
+    _resolvePeople(items);
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: ProfileSpacing.sm),
+      itemCount: items.length + (canLoadMore ? 1 : 0),
+      itemBuilder: (BuildContext context, int i) {
+        if (i == items.length) {
+          // Older activity is a tap away rather than lost behind the newest
+          // page — an unread interaction from last month is still reachable,
+          // and still readable.
+          return Padding(
+            padding: const EdgeInsets.symmetric(
+                vertical: ProfileSpacing.md, horizontal: ProfileSpacing.lg),
+            child: Center(
+              child: _loadingOlder
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: ProfilePalette.action),
+                    )
+                  : TextButton(
+                      key: const ValueKey<String>('activity-load-older'),
+                      onPressed: _loadOlder,
+                      child: const Text('Show older activity'),
+                    ),
+            ),
           );
         }
-        // The live page, then everything older. A record cannot appear twice,
-        // and both halves are live, so a row read or withdrawn since it was
-        // fetched shows its current state rather than a stale copy.
-        final List<SocialActivity> live =
-            snap.data ?? const <SocialActivity>[];
-        final Map<String, SocialActivity> merged = <String, SocialActivity>{
-          for (final SocialActivity a in live) a.id: a,
-        };
-        for (final SocialActivity a in _older) {
-          merged.putIfAbsent(a.id, () => a);
-        }
-        final List<SocialActivity> items = merged.values
-            .where((SocialActivity a) => a.isRenderable)
-            .toList(growable: false)
-          ..sort((SocialActivity a, SocialActivity b) =>
-              (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
-        // An anchor for "older" even when nothing on this page can be drawn —
-        // a page of records this build does not know how to render must not
-        // become a dead end with real activity stranded behind it.
-        final SocialActivity? anchor =
-            items.isNotEmpty ? items.last : (live.isNotEmpty ? live.last : null);
-        if (items.isEmpty && (anchor == null || _noMoreOlder)) {
-          return _ActivityEmpty(failed: snap.hasError);
-        }
-        _resolvePeople(items);
-
-        final bool canLoadMore = !_noMoreOlder && anchor != null;
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(vertical: ProfileSpacing.sm),
-          itemCount: items.length + (canLoadMore ? 1 : 0),
-          itemBuilder: (BuildContext context, int i) {
-            if (i == items.length) {
-              // Older activity is a tap away rather than lost behind the
-              // newest page — an unread interaction from last month is still
-              // reachable, and still readable.
-              return Padding(
-                padding: const EdgeInsets.symmetric(
-                    vertical: ProfileSpacing.md, horizontal: ProfileSpacing.lg),
-                child: Center(
-                  child: _loadingOlder
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: ProfilePalette.action),
-                        )
-                      : TextButton(
-                          key: const ValueKey<String>('activity-load-older'),
-                          onPressed: () => _loadOlder(anchor!),
-                          child: const Text('Show older activity'),
-                        ),
-                ),
-              );
-            }
-            final SocialActivity item = items[i];
-            return _ActivityRow(
-              key: Key('activity-${item.id}'),
-              item: item,
-              person: _people[item.actorUid],
-              now: widget.now,
-              onTap: () => _open(item),
-              onOpenProfile: widget.onOpenProfile == null
-                  ? null
-                  : () => widget.onOpenProfile!(item.actorUid),
-            );
-          },
+        final SocialActivity item = items[i];
+        return _ActivityRow(
+          key: Key('activity-${item.id}'),
+          item: item,
+          person: _people[item.actorUid],
+          now: widget.now,
+          onTap: () => _open(item),
+          onOpenProfile: widget.onOpenProfile == null
+              ? null
+              : () => widget.onOpenProfile!(item.actorUid),
         );
       },
     );

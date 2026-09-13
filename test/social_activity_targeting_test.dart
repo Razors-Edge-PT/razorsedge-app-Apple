@@ -145,6 +145,23 @@ Post samplePost(String id) => Post(
       createdAt: Timestamp.fromDate(DateTime.utc(2026, 9, 1)),
     );
 
+/// The little unread dot an Activity row draws for an interaction not yet read.
+bool unreadDotShown(WidgetTester t, String id) {
+  final Finder row = find.byKey(Key('activity-$id'));
+  if (row.evaluate().isEmpty) return false;
+  return find
+      .descendant(
+        of: row,
+        matching: find.byWidgetPredicate((Widget w) =>
+            w is Container &&
+            w.constraints != null &&
+            w.constraints!.maxWidth == 8 &&
+            w.constraints!.maxHeight == 8),
+      )
+      .evaluate()
+      .isNotEmpty;
+}
+
 Future<bool> readInStore(FakeFirebaseFirestore db, String id) async {
   final DocumentSnapshot<Map<String, dynamic>> s = await db
       .collection('users')
@@ -543,34 +560,126 @@ void main() {
   group('older activity pages without dropping or repeating anything', () {
     testWidgets('more than fifty records share one timestamp and all appear',
         (WidgetTester t) async {
-      // Every record at the SAME instant. A `createdAt < cursor` page boundary
-      // loses the whole tied group; document order is the only thing that can
-      // separate them.
+      // Every record at the SAME instant. A `createdAt < cursor` boundary
+      // loses the whole tied group; one window with document order behind it
+      // cannot.
       final DateTime same = DateTime.utc(2026, 9, 1, 10);
       for (int i = 0; i < 60; i++) {
         await seedActivity(db, id: 'tie${i.toString().padLeft(2, '0')}',
             type: 'postLike', postId: 'P$i', at: same);
       }
+      final List<SocialActivity> first =
+          await service.watchRecent(limit: 50).first;
+      final List<SocialActivity> grown =
+          await service.watchRecent(limit: 100).first;
+      final List<String> ids =
+          grown.map((SocialActivity a) => a.id).toList(growable: false);
+      expect(first.length, 50);
+      expect(ids.length, 60, reason: 'asking for more reaches all of them');
+      expect(ids.toSet().length, 60, reason: 'and none of them twice');
+    });
 
-      // The two windows the list is built from, as the list gets them.
-      final List<SocialActivity> live = await service.watchRecent().first;
-      final List<List<SocialActivity>> older = <List<SocialActivity>>[];
-      final StreamSubscription<List<SocialActivity>> sub = service
-          .watchOlderThan(anchor: live.last, limit: 50)
-          .listen(older.add);
+    testWidgets('records at the old boundary stay listed exactly once as new '
+        'activity arrives', (WidgetTester t) async {
+      // 60 records: the list reaches past its first window only by growing.
+      for (int i = 0; i < 60; i++) {
+        await seedActivity(db, id: 'r${i.toString().padLeft(2, '0')}',
+            type: 'postLike', postId: 'P$i', minutesAgo: 100 + i);
+      }
+      await t.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 600,
+            child: ActivityView(
+              active: true,
+              service: service,
+              search: UserSearchRepository(firestore: db),
+              viewerUid: me,
+            ),
+          ),
+        ),
+      ));
       await settle(t);
-      unawaited(sub.cancel());
 
-      final List<String> ids = <String>[
-        for (final SocialActivity a in live) a.id,
-        for (final SocialActivity a in older.isEmpty ? const <SocialActivity>[] : older.last)
-          a.id,
-      ];
-      expect(ids.toSet().length, ids.length, reason: 'nothing is listed twice');
-      expect(ids.length, 60,
-          reason: 'and nothing falls between the pages either');
+      Future<void> showOlder() async {
+        for (int i = 0; i < 40; i++) {
+          final Finder more =
+              find.byKey(const ValueKey<String>('activity-load-older'));
+          if (more.evaluate().isNotEmpty) {
+            await t.tap(more);
+            await settle(t);
+            return;
+          }
+          await t.drag(find.byType(ListView), const Offset(0, -400));
+          await settle(t);
+        }
+      }
 
-      // And the list really does render the tail of that tied group.
+      /// Scrolls the whole list and returns how many times each id is drawn.
+      Future<Map<String, int>> census(List<String> wanted) async {
+        final Map<String, int> counts = <String, int>{
+          for (final String id in wanted) id: 0,
+        };
+        void look() {
+          for (final String id in wanted) {
+            final int n = find.byKey(Key('activity-$id')).evaluate().length;
+            if (n > counts[id]!) counts[id] = n;
+          }
+        }
+
+        // Back to the top, then down the whole list.
+        for (int i = 0; i < 40; i++) {
+          await t.drag(find.byType(ListView), const Offset(0, 400));
+          await settle(t);
+        }
+        look();
+        for (int i = 0; i < 60; i++) {
+          await t.drag(find.byType(ListView), const Offset(0, -300));
+          await settle(t);
+          look();
+        }
+        return counts;
+      }
+
+      await showOlder();
+      // The records either side of the first window's edge.
+      const List<String> boundary = <String>['r48', 'r49', 'r50', 'r51'];
+      Map<String, int> counts = await census(boundary);
+      for (final String id in boundary) {
+        expect(counts[id], 1, reason: '$id before any arrival');
+      }
+
+      // One newer interaction arrives — this is what used to push r49 out of
+      // the top window while the bottom window still began after it.
+      await seedActivity(db, id: 'new0', type: 'postComment',
+          postId: 'NEW0', commentId: 'c0', minutesAgo: 1);
+      await settle(t);
+      counts = await census(boundary);
+      for (final String id in boundary) {
+        expect(counts[id], 1, reason: '$id after one arrival');
+      }
+
+      // And several more.
+      for (int i = 1; i < 6; i++) {
+        await seedActivity(db, id: 'new$i', type: 'postLike',
+            postId: 'NEW$i', minutesAgo: 1);
+      }
+      await settle(t);
+      counts = await census(<String>[...boundary, 'r59', 'new5']);
+      for (final String id in <String>[...boundary, 'r59']) {
+        expect(counts[id], 1, reason: '$id after six arrivals');
+      }
+      expect(counts['new5'], 1, reason: 'and the new one is listed too');
+    });
+
+    testWidgets('reading and withdrawing older records updates the list',
+        (WidgetTester t) async {
+      for (int i = 0; i < 60; i++) {
+        await seedActivity(db, id: 'w${i.toString().padLeft(2, '0')}',
+            type: 'postLike', postId: 'P$i', minutesAgo: 100 + i);
+      }
+      service.watch();
+      await settle(t);
       await t.pumpWidget(MaterialApp(
         home: Scaffold(
           body: SizedBox(
@@ -596,13 +705,34 @@ void main() {
         await t.drag(find.byType(ListView), const Offset(0, -400));
         await settle(t);
       }
+
+      // An older record, well past the first window, is read elsewhere.
+      await db
+          .collection('users')
+          .doc(me)
+          .collection('socialActivity')
+          .doc('w55')
+          .update(<String, Object?>{'read': true});
+      await settle(t);
       for (int i = 0; i < 60; i++) {
-        if (find.byKey(const Key('activity-tie59')).evaluate().isNotEmpty) break;
-        await t.drag(find.byType(ListView), const Offset(0, -400));
+        if (find.byKey(const Key('activity-w55')).evaluate().isNotEmpty) break;
+        await t.drag(find.byType(ListView), const Offset(0, -300));
         await settle(t);
       }
-      expect(find.byKey(const Key('activity-tie59')), findsOneWidget,
-          reason: 'the last of the tied records is reachable on screen');
+      expect(find.byKey(const Key('activity-w55')), findsOneWidget);
+      expect(unreadDotShown(t, 'w55'), isFalse,
+          reason: 'an older row shows a read that happened after it loaded');
+
+      // And another is withdrawn.
+      await db
+          .collection('users')
+          .doc(me)
+          .collection('socialActivity')
+          .doc('w56')
+          .update(<String, Object?>{'invalidated': true});
+      await settle(t);
+      expect(find.byKey(const Key('activity-w56')), findsNothing,
+          reason: 'a withdrawn older row leaves the list');
     });
 
     testWidgets('an older row shows a read that happened after it was fetched',

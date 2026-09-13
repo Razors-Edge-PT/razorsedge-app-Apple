@@ -92,6 +92,7 @@ Future<bool> openPostById(
         post: post,
         focusCommentId: focusCommentId,
         focusActivityId: focusActivityId,
+        viewerUid: viewerUid,
         onToggleLike: (Post p) => PostService.instance.toggleLike(p.id),
         onToggleGoodLift: (Post p) => PostService.instance
             .toggleGoodLift(p.id, isVideo: p.mediaType == 'video'),

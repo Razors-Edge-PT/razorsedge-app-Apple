@@ -91,9 +91,16 @@ class PostActivityScopeState extends State<PostActivityScope>
   bool _fetchingSubject = false;
   bool _askedOnOpen = false;
 
-  /// The record named by the notification, resolved by id.
-  SocialActivity? _focusRecord;
-  bool _focusResolved = false;
+  /// The records named by taps that have reached this page, resolved by id.
+  ///
+  /// A map rather than one value: a second tap while the post is open does not
+  /// undo the first, and both interactions still have to be acknowledged.
+  final Map<String, SocialActivity> _focusRecords = <String, SocialActivity>{};
+  final Set<String> _focusAsked = <String>{};
+
+  /// Rises with every focus this page is given, so a lookup that returns after
+  /// a newer one has arrived cannot put the older answer back.
+  int _focusGeneration = 0;
 
   @override
   void initState() {
@@ -120,8 +127,7 @@ class PostActivityScopeState extends State<PostActivityScope>
   void didUpdateWidget(covariant PostActivityScope old) {
     super.didUpdateWidget(old);
     if (old.focusActivityId != widget.focusActivityId) {
-      _focusResolved = false;
-      _focusRecord = null;
+      _focusGeneration++;
       _maybeAcknowledge();
     }
   }
@@ -192,7 +198,7 @@ class PostActivityScopeState extends State<PostActivityScope>
     final Map<String, SocialActivity> byId = <String, SocialActivity>{
       for (final SocialActivity a in _service.snapshot.unread) a.id: a,
       for (final SocialActivity a in _subjectUnread) a.id: a,
-      if (_focusRecord != null) _focusRecord!.id: _focusRecord!,
+      ..._focusRecords,
     };
     return byId.values.toList(growable: false);
   }
@@ -229,7 +235,7 @@ class PostActivityScopeState extends State<PostActivityScope>
     } else if (_needsSubjectLookup(presented)) {
       unawaited(_refreshSubjectUnread());
     }
-    if (!_focusResolved) unawaited(_resolveFocus());
+    unawaited(_resolveFocus());
   }
 
   /// True when a comment is on screen that nothing known accounts for.
@@ -282,20 +288,28 @@ class PostActivityScopeState extends State<PostActivityScope>
   /// acknowledgeable.
   Future<void> _resolveFocus() async {
     final String? id = widget.focusActivityId;
-    if (id == null || _focusResolved) {
-      _focusResolved = true;
-      return;
-    }
-    _focusResolved = true;
+    if (id == null || !_focusAsked.add(id)) return;
     final String? owner = _owner;
+    final int generation = _focusGeneration;
     try {
       final SocialActivity? found = await _service.activityById(id);
-      if (!mounted || found == null || _service.snapshot.uid != owner) return;
+      // A lookup outlives what asked for it. If the account changed, the page
+      // went, or a NEWER focus has arrived since, this answer is no longer the
+      // one to act on.
+      if (!mounted ||
+          found == null ||
+          _service.snapshot.uid != owner ||
+          generation != _focusGeneration) {
+        if (generation != _focusGeneration) _focusAsked.remove(id);
+        return;
+      }
       if (found.subject != postSubject(widget.postId)) return;
-      _focusRecord = found;
+      _focusRecords[found.id] = found;
       _maybeAcknowledge();
     } catch (_) {
-      // Offline: the ordinary paths still cover anything recent.
+      // Offline: the ordinary paths still cover anything recent, and a later
+      // attempt may succeed.
+      _focusAsked.remove(id);
     }
   }
 
