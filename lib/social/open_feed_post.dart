@@ -51,22 +51,32 @@ Future<void> openFeedPost(
 /// Access is decided by the rules, not here: a post the viewer may no longer
 /// read (the friendship ended) fails the read and is reported as unavailable,
 /// exactly as a deleted one is. Returns true when a screen was opened.
+///
+/// [stillValid] is re-checked immediately before navigating, after the fetch.
+/// The fetch is a network round trip, and in that time the person may have
+/// logged out or switched accounts — `context.mounted` alone does not notice
+/// either, and the post would open for whoever is signed in now. Callers that
+/// act on a notification or an Activity row pass their own account check.
 Future<bool> openPostById(
   BuildContext context,
   String postId, {
   required String? viewerUid,
   String? focusCommentId,
   FirebaseFirestore? firestore,
+  bool Function()? stillValid,
 }) async {
   final FirebaseFirestore db = firestore ?? FirebaseFirestore.instance;
+  bool valid() => (stillValid == null || stillValid()) && context.mounted;
+  if (!valid()) return false;
   DocumentSnapshot<Map<String, dynamic>> snap;
   try {
     snap = await db.collection('posts').doc(postId).get();
   } catch (_) {
-    if (context.mounted) showAppSnack("Couldn't open that post.");
+    if (valid()) showAppSnack("Couldn't open that post.");
     return false;
   }
-  if (!context.mounted) return false;
+  // Re-checked AFTER the fetch, not just for a mounted context.
+  if (!valid()) return false;
   if (!snap.exists || snap.data() == null) {
     showAppSnack('That post is no longer available.');
     return false;

@@ -310,7 +310,15 @@ async function enqueueInteraction(db, {
     return { enqueued: true, reason: 'enqueued', jobId: job.id, activityId };
   } catch (err) {
     if (isAlreadyExists(err)) {
-      return { enqueued: false, reason: 'duplicate', jobId: job.id, activityId };
+      // The same occurrence again. If it had been withdrawn, it is back — the
+      // record returns to counting, with no second alert.
+      const revived = await A.reviveActivity(db, recipientUid, activityId);
+      return {
+        enqueued: false,
+        reason: revived ? 'revived' : 'duplicate',
+        jobId: job.id,
+        activityId,
+      };
     }
     throw err;
   }
@@ -330,13 +338,57 @@ async function postAudience(db, postId, actorUid) {
   return { ownerUid, post };
 }
 
+/** The post's owner, or null when the post has gone. */
+async function postOwner(db, postId) {
+  const post = dataOf(await db.collection('posts').doc(postId).get());
+  const ownerUid = post && post.ownerUid;
+  return typeof ownerUid === 'string' && ownerUid ? ownerUid : null;
+}
+
 /**
- * "X commented on your post" for a NEW comment. Edits and deletions are not
- * interactions: they tell the owner nothing they have not already been told.
+ * "X commented on your post" for a NEW comment.
+ *
+ * An edit or a deletion is never a new interaction — it tells the owner
+ * nothing they have not been told — but it does change what is true about one
+ * they already have: a deleted comment stops counting and loses its alert, and
+ * an edited one has its Activity row corrected. Neither enqueues anything.
  */
 async function enqueuePostComment(db, {
   postId, commentId, beforeData, afterData, eventId, eventTimeMs, nowMs,
 }) {
+  if (beforeData && !afterData) {
+    const ownerUid = await postOwner(db, postId);
+    if (!ownerUid) return { enqueued: false, reason: 'post-gone' };
+    const retired = await A.retireActivity(
+      db,
+      ownerUid,
+      A.activityIdFor(
+        P.PushType.POST_COMMENT,
+        ownerUid,
+        P.postOccurrence({ kind: 'comment', postId, commentId }),
+      ),
+      'comment-deleted',
+    );
+    return { enqueued: false, reason: retired ? 'comment-retired' : 'no-such-activity' };
+  }
+  if (beforeData && afterData) {
+    if (beforeData.text === afterData.text) {
+      return { enqueued: false, reason: 'not-a-new-comment' };
+    }
+    const ownerUid = await postOwner(db, postId);
+    if (!ownerUid) return { enqueued: false, reason: 'post-gone' };
+    const refreshed = await A.refreshActivity(
+      db,
+      ownerUid,
+      A.activityIdFor(
+        P.PushType.POST_COMMENT,
+        ownerUid,
+        P.postOccurrence({ kind: 'comment', postId, commentId }),
+      ),
+      { preview: typeof afterData.text === 'string' ? afterData.text : '' },
+    );
+    return { enqueued: false, reason: refreshed ? 'comment-refreshed' : 'not-a-new-comment' };
+  }
   if (!P.isNewComment(beforeData, afterData)) {
     return { enqueued: false, reason: 'not-a-new-comment' };
   }
@@ -366,6 +418,24 @@ async function enqueuePostComment(db, {
 async function enqueuePostReaction(db, {
   kind, postId, actorUid, beforeData, afterData, eventId, eventTimeMs, nowMs,
 }) {
+  // Taken back. The record stays — so giving it again is still the same
+  // occurrence and still cannot alert twice — but it stops counting and its
+  // alert is cancelled.
+  if (beforeData && !afterData) {
+    const ownerUid = await postOwner(db, postId);
+    if (!ownerUid) return { enqueued: false, reason: 'post-gone' };
+    const retired = await A.retireActivity(
+      db,
+      ownerUid,
+      A.activityIdFor(
+        kind === 'goodLift' ? P.PushType.POST_GOOD_LIFT : P.PushType.POST_LIKE,
+        ownerUid,
+        P.postOccurrence({ kind, postId, actorUid }),
+      ),
+      'reaction-withdrawn',
+    );
+    return { enqueued: false, reason: retired ? 'reaction-retired' : 'no-such-activity' };
+  }
   if (!P.isNewReaction(beforeData, afterData)) {
     return { enqueued: false, reason: 'not-a-new-reaction' };
   }
@@ -385,6 +455,42 @@ async function enqueuePostReaction(db, {
 }
 
 /**
+ * Bring the sender's records into line with reactions that were withdrawn or
+ * changed on their message. Returns a reason when something was written, so a
+ * write that is only a withdrawal still logs as something rather than as
+ * "no new reaction".
+ */
+async function settleDmReactionChanges(db, { convId, messageId, beforeData, afterData }) {
+  const senderUid = (afterData && afterData.senderId)
+    || (beforeData && beforeData.senderId);
+  if (typeof senderUid !== 'string' || !senderUid) return null;
+  const activityIdOf = (actorUid) => A.activityIdFor(
+    P.PushType.DM_REACTION,
+    senderUid,
+    P.dmReactionOccurrence({ convId, messageId, actorUid }),
+  );
+
+  let retired = 0;
+  let refreshed = 0;
+  for (const { actorUid } of P.goneReactors(beforeData, afterData)) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await A.retireActivity(db, senderUid, activityIdOf(actorUid),
+      afterData ? 'reaction-withdrawn' : 'message-deleted')) {
+      retired += 1;
+    }
+  }
+  for (const { actorUid, emoji } of P.changedReactors(beforeData, afterData)) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await A.refreshActivity(db, senderUid, activityIdOf(actorUid), { emoji })) {
+      refreshed += 1;
+    }
+  }
+  if (retired > 0) return 'reaction-retired';
+  if (refreshed > 0) return 'reaction-refreshed';
+  return null;
+}
+
+/**
  * "X reacted 🔥 to your message" — for the person who SENT the message.
  *
  * A reaction is not a message: it never touches the unread-message ledger, so
@@ -394,8 +500,16 @@ async function enqueuePostReaction(db, {
 async function enqueueDmReactions(db, {
   convId, messageId, beforeData, afterData, eventId, eventTimeMs, nowMs,
 }) {
+  // Reactions that went away — taken back, or carried off with a deleted
+  // message — and ones whose emoji was swapped. Neither is an arrival, but
+  // both make an existing record wrong.
+  const settled = await settleDmReactionChanges(db, {
+    convId, messageId, beforeData, afterData,
+  });
   const arrivals = P.newReactors(beforeData, afterData);
-  if (arrivals.length === 0) return { enqueued: false, reason: 'no-new-reaction' };
+  if (arrivals.length === 0) {
+    return { enqueued: false, reason: settled || 'no-new-reaction' };
+  }
   const senderUid = afterData && afterData.senderId;
   if (typeof senderUid !== 'string' || !senderUid) {
     return { enqueued: false, reason: 'no-sender' };
@@ -441,6 +555,26 @@ async function enqueueDmReactions(db, {
   };
 }
 
+/**
+ * A deleted post takes its whole conversation with it: every comment, like and
+ * Good Lift on it stops counting and every alert for it is cancelled. The
+ * per-comment and per-reaction triggers cannot do this — Firestore does not
+ * fire them for the subcollection documents a deleted post leaves behind.
+ */
+async function retirePostActivity(db, { postId, beforeData }) {
+  const ownerUid = beforeData && beforeData.ownerUid;
+  if (typeof ownerUid !== 'string' || !ownerUid) {
+    return { retired: 0, reason: 'post-has-no-owner' };
+  }
+  const retired = await A.retireSubject(
+    db,
+    ownerUid,
+    A.subjectOf({ type: P.PushType.POST_LIKE, postId }),
+    'post-deleted',
+  );
+  return { retired, reason: retired > 0 ? 'post-retired' : 'no-such-activity' };
+}
+
 // ── Validation at delivery ──────────────────────────────────────────────────
 
 async function mutualFriends(db, a, b) {
@@ -460,7 +594,9 @@ async function mutualFriends(db, a, b) {
 async function isActivityRead(db, recipientUid, activityId) {
   if (!activityId) return false;
   const record = dataOf(await A.activityRef(db, recipientUid, activityId).get());
-  return !!record && record.read === true;
+  if (!record) return false;
+  // A withdrawn interaction is settled too: there is nothing left to announce.
+  return record.read === true || record.invalidated === true;
 }
 
 /**
@@ -872,6 +1008,7 @@ module.exports = {
   enqueuePostComment,
   enqueuePostReaction,
   enqueueDmReactions,
+  retirePostActivity,
   postAudience,
   isActivityRead,
   checkValidity,

@@ -173,8 +173,99 @@ test('an edit and a deletion are not new comments', async () => {
   })).reason, 'not-a-new-comment');
   assert.equal((await O.enqueuePostComment(db(), {
     postId: 'p3', commentId: 'c1', beforeData: first, afterData: null, eventId: 'e3',
-  })).reason, 'not-a-new-comment');
+  })).reason, 'no-such-activity', 'nothing was ever recorded, so nothing to retire');
   assert.deepEqual(await activityList(owner), []);
+});
+
+test('a deleted comment stops counting but is not forgotten', async () => {
+  const { owner, friend } = people('owner', 'friend');
+  await Promise.all([befriend(owner, friend), register(owner, 'tok-del')]);
+  await post(owner, 'pd1');
+  const data = await comment('pd1', 'c1', friend, 'oops wrong post');
+  const res = await O.enqueuePostComment(db(), {
+    postId: 'pd1', commentId: 'c1', beforeData: null, afterData: data, eventId: 'e1',
+  });
+  assert.equal(res.enqueued, true);
+
+  await db().doc(`posts/pd1/comments/c1`).delete();
+  const gone = await O.enqueuePostComment(db(), {
+    postId: 'pd1', commentId: 'c1', beforeData: data, afterData: null, eventId: 'e2',
+  });
+  assert.equal(gone.reason, 'comment-retired');
+
+  const record = await activityOf(owner, res.activityId);
+  assert.equal(record.invalidated, true, 'out of the badge and the list');
+  assert.equal(record.invalidReason, 'comment-deleted');
+
+  // Nothing left to announce, so a job still waiting is dropped rather than
+  // sent — and the record is still there, so a replayed create cannot alert
+  // a second time.
+  const fcm = fakeMessaging();
+  const out = await run(res.jobId, fcm);
+  assert.equal(fcm.calls.length, 0, 'a comment that is gone is never announced');
+  assert.notEqual(out.status, 'sent');
+
+  const replay = await O.enqueuePostComment(db(), {
+    postId: 'pd1', commentId: 'c1', beforeData: null, afterData: data, eventId: 'e1',
+  });
+  assert.equal(replay.enqueued, false, 'no second alert');
+  assert.equal((await activityList(owner)).length, 1, 'and no second record');
+});
+
+test('an edited comment corrects its Activity row without alerting again', async () => {
+  const { owner, friend } = people('owner', 'friend');
+  await Promise.all([befriend(owner, friend), register(owner, 'tok-ed')]);
+  await post(owner, 'pe1');
+  const first = await comment('pe1', 'c1', friend, 'grate set');
+  const res = await O.enqueuePostComment(db(), {
+    postId: 'pe1', commentId: 'c1', beforeData: null, afterData: first, eventId: 'e1',
+  });
+  assert.equal(res.enqueued, true);
+
+  const edited = { ...first, text: 'great set' };
+  const after = await O.enqueuePostComment(db(), {
+    postId: 'pe1', commentId: 'c1', beforeData: first, afterData: edited, eventId: 'e2',
+  });
+  assert.equal(after.enqueued, false, 'a typo fixed is not news');
+  assert.equal(after.reason, 'comment-refreshed');
+
+  const record = await activityOf(owner, res.activityId);
+  assert.equal(record.preview, 'great set');
+  assert.equal(record.read, false, 'still unread — it was never presented');
+  assert.equal(record.invalidated, false);
+  const jobs = await db().collection('pushOutbox')
+    .where('recipientUid', '==', owner).get();
+  assert.equal(jobs.size, 1, 'one interaction, one job');
+});
+
+test('deleting the post retires everything on it', async () => {
+  const { owner, friend, other } = people('owner', 'friend', 'other');
+  await Promise.all([befriend(owner, friend), befriend(owner, other)]);
+  await post(owner, 'pk1');
+  const c = await comment('pk1', 'c1', friend, 'strong');
+  const commented = await O.enqueuePostComment(db(), {
+    postId: 'pk1', commentId: 'c1', beforeData: null, afterData: c, eventId: 'e1',
+  });
+  const liked = await O.enqueuePostReaction(db(), {
+    kind: 'like', postId: 'pk1', actorUid: other, beforeData: null, afterData: {}, eventId: 'e2',
+  });
+  assert.equal(commented.enqueued, true);
+  assert.equal(liked.enqueued, true);
+
+  const postData = (await db().doc('posts/pk1').get()).data();
+  await db().doc('posts/pk1').delete();
+  const out = await O.retirePostActivity(db(), { postId: 'pk1', beforeData: postData });
+  assert.equal(out.retired, 2, 'the comment and the like both stop counting');
+
+  for (const id of [commented.activityId, liked.activityId]) {
+    const record = await activityOf(owner, id);
+    assert.equal(record.invalidated, true, id);
+    assert.equal(record.invalidReason, 'post-deleted', id);
+  }
+  // Running it again is harmless and writes nothing further.
+  assert.equal((await O.retirePostActivity(db(), {
+    postId: 'pk1', beforeData: postData,
+  })).retired, 0);
 });
 
 test('a replayed event neither alerts twice nor un-reads what was read',
@@ -293,20 +384,28 @@ test('a like tells the owner once, however often it is taken back and given agai
     await run(first.jobId, fcm);
     assert.equal(fcm.calls[0].notification.body, 'Sam liked your post');
 
-    // Un-like: not an event at all.
+    // Un-like: no new alert, and the like stops counting.
     const removed = await O.enqueuePostReaction(db(), {
       kind: 'like', postId: 'p9', actorUid: friend, beforeData: like, afterData: null, eventId: 'e2',
     });
-    assert.equal(removed.reason, 'not-a-new-reaction');
+    assert.equal(removed.reason, 'reaction-retired');
+    assert.equal((await activityOf(owner, first.activityId)).invalidated, true);
 
-    // Re-like: the same occurrence, so no second job and no second record.
+    // Re-like: the same occurrence, so no second job and no second record —
+    // the one that is already there simply counts again.
     await db().doc(`posts/p9/likes/${friend}`).set(like);
     const again = await O.enqueuePostReaction(db(), {
       kind: 'like', postId: 'p9', actorUid: friend, beforeData: null, afterData: like, eventId: 'e3',
     });
     assert.equal(again.enqueued, false);
-    assert.equal(again.reason, 'duplicate');
+    assert.equal(again.reason, 'revived');
+    const record = await activityOf(owner, first.activityId);
+    assert.equal(record.invalidated, false);
+    assert.equal(record.read, false, 'it was never presented, so it is still unread');
     assert.equal((await activityList(owner)).length, 1);
+    const jobs = await db().collection('pushOutbox')
+      .where('recipientUid', '==', owner).get();
+    assert.equal(jobs.size, 1, 'one alert, however many times they change their mind');
   });
 
 test('a Good Lift is its own alert, with its own wording', async () => {
@@ -449,16 +548,49 @@ test('changing the emoji, and removing it, do not alert again', async () => {
   });
   assert.equal(first.enqueued, true);
 
+  const activityId = first.results[0].activityId;
+
   const changed = await O.enqueueDmReactions(db(), {
     convId, messageId: 'm1', beforeData: withFire, afterData: withHeart, eventId: 'e2',
   });
   assert.equal(changed.enqueued, false, 'a swapped emoji is not a new interaction');
+  assert.equal(changed.reason, 'reaction-refreshed');
+  // The list must not go on showing the emoji they changed their mind about.
+  assert.equal((await activityOf(sender, activityId)).emoji, '❤️');
 
   const removed = await O.enqueueDmReactions(db(), {
     convId, messageId: 'm1', beforeData: withHeart, afterData: base, eventId: 'e3',
   });
   assert.equal(removed.enqueued, false);
+  assert.equal(removed.reason, 'reaction-retired');
+  assert.equal((await activityOf(sender, activityId)).invalidated, true,
+    'a reaction that is no longer there stops counting');
   assert.equal((await activityList(sender)).length, 1, 'one record throughout');
+});
+
+test('deleting the message takes its reaction activity with it', async () => {
+  const { sender, other } = people('sender', 'other');
+  const convId = convIdFor(sender, other);
+  await Promise.all([befriend(sender, other), register(sender, 'tok-md')]);
+  await db().doc(`conversations/${convId}`).set({
+    participants: { [sender]: true, [other]: true },
+  });
+  const base = { senderId: sender, text: 'hi' };
+  const after = { ...base, reactions: { [other]: '👏' } };
+  await db().doc(`conversations/${convId}/messages/m1`).set(after);
+  const res = await O.enqueueDmReactions(db(), {
+    convId, messageId: 'm1', beforeData: base, afterData: after, eventId: 'e1',
+  });
+  const activityId = res.results[0].activityId;
+
+  await db().doc(`conversations/${convId}/messages/m1`).delete();
+  const gone = await O.enqueueDmReactions(db(), {
+    convId, messageId: 'm1', beforeData: after, afterData: null, eventId: 'e2',
+  });
+  assert.equal(gone.reason, 'reaction-retired');
+  const record = await activityOf(sender, activityId);
+  assert.equal(record.invalidated, true);
+  assert.equal(record.invalidReason, 'message-deleted');
 });
 
 test('reacting to your own message tells nobody', async () => {

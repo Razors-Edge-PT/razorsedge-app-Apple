@@ -377,6 +377,40 @@ function newReactors(beforeData, afterData) {
   return out;
 }
 
+/**
+ * Who has taken their reaction back. The alert and the Activity row are about
+ * an emoji that is no longer there, so both have to go.
+ */
+function goneReactors(beforeData, afterData) {
+  const before = reactionsOf(beforeData);
+  const after = reactionsOf(afterData);
+  const out = [];
+  for (const [uid, emoji] of Object.entries(before)) {
+    if (!isNonEmptyString(uid) || !isNonEmptyString(emoji)) continue;
+    if (isNonEmptyString(after[uid])) continue;
+    out.push({ actorUid: uid, emoji: String(emoji).slice(0, 8) });
+  }
+  return out;
+}
+
+/**
+ * Who has swapped their emoji for a different one. Still the same reaction, so
+ * still no new alert — but the Activity list must not go on showing the emoji
+ * they changed their mind about.
+ */
+function changedReactors(beforeData, afterData) {
+  const before = reactionsOf(beforeData);
+  const after = reactionsOf(afterData);
+  const out = [];
+  for (const [uid, emoji] of Object.entries(after)) {
+    if (!isNonEmptyString(uid) || !isNonEmptyString(emoji)) continue;
+    const was = before[uid];
+    if (!isNonEmptyString(was) || was === emoji) continue;
+    out.push({ actorUid: uid, emoji: String(emoji).slice(0, 8) });
+  }
+  return out;
+}
+
 // ── Preferences ─────────────────────────────────────────────────────────────
 
 /**
@@ -497,9 +531,13 @@ function presentationTag(job) {
       // postTagPrefix in lib/push/push_intent.dart.
       return `post|${subjectTagKey(job.postId)}|${job.activityId || job.id}`;
     case PushType.DM_REACTION:
-      // Per reacted-to MESSAGE, so switching emoji replaces the alert rather
-      // than stacking a new one.
-      return `dmr|${subjectTagKey(job.conversationId)}|${job.messageId}`;
+      // `dmr|<conversation>|<activity>`. The activity part is the SAME record
+      // for one person's reaction to one message however the emoji changes,
+      // so switching emoji replaces the alert rather than stacking a new one —
+      // and, like the post tag, it lets the app find the record behind a
+      // delivered alert it never saw arrive. Mirrored by dmReactionTag in
+      // lib/push/push_intent.dart.
+      return `dmr|${subjectTagKey(job.conversationId)}|${job.activityId || job.id}`;
     case PushType.DIRECT_MESSAGE:
       // `dm|<conversation>|<message>`. The conversation part lets the app
       // cancel exactly one thread's delivered alerts when that thread is
@@ -705,6 +743,8 @@ module.exports = {
   commentAuthor,
   reactionsOf,
   newReactors,
+  goneReactors,
+  changedReactors,
   isNewPendingRequest,
   inviteMatchesPath,
   parseConversationId,

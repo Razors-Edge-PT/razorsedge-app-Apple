@@ -38,6 +38,14 @@ import UserNotifications
       case "clearDelivered":
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         result(nil)
+      case "deliveredTags":
+        // Identifiers of this app's delivered notifications. For a remote
+        // notification the identifier is its apns-collapse-id, which the
+        // server sets to the same tag Android uses.
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
+          let ids = delivered.map { $0.request.identifier }
+          DispatchQueue.main.async { result(ids) }
+        }
       case "clearNotifications":
         // Targeted removal: only delivered alerts whose identifier matches a
         // tag/prefix the app asked for, or whose payload names one of the

@@ -336,6 +336,32 @@ test('a reaction arriving is an event; changing or removing one is not', () => {
   assert.deepEqual(P.newReactors({ senderId: 'u1' }, { senderId: 'u1' }), []);
 });
 
+test('a reaction that goes away, and one that changes, are told apart', () => {
+  const msg = (reactions) => ({ senderId: 'u1', text: 'x', reactions });
+  assert.deepEqual(
+    P.goneReactors(msg({ u2: '🔥' }), msg({})),
+    [{ actorUid: 'u2', emoji: '🔥' }],
+    'taken back: the record for it must stop counting',
+  );
+  assert.deepEqual(P.goneReactors(msg({ u2: '🔥' }), msg({ u2: '❤️' })), [],
+    'a swap is not a withdrawal');
+  assert.deepEqual(P.goneReactors(msg({ u2: '🔥' }), null),
+    [{ actorUid: 'u2', emoji: '🔥' }],
+    'a deleted message takes its reactions with it');
+  assert.deepEqual(P.goneReactors(msg({}), msg({ u2: '🔥' })), []);
+
+  assert.deepEqual(
+    P.changedReactors(msg({ u2: '🔥' }), msg({ u2: '❤️' })),
+    [{ actorUid: 'u2', emoji: '❤️' }],
+    'the list must not go on showing the emoji they changed their mind about',
+  );
+  assert.deepEqual(P.changedReactors(msg({ u2: '🔥' }), msg({ u2: '🔥' })), [],
+    'unchanged is nothing to do');
+  assert.deepEqual(P.changedReactors(msg({}), msg({ u2: '🔥' })), [],
+    'an arrival is an arrival, not a change');
+  assert.deepEqual(P.changedReactors(msg({ u2: '🔥' }), msg({})), []);
+});
+
 test('wording for post interactions and reactions', () => {
   assert.deepEqual(P.renderNotification({ type: 'postLike', actorName: 'Sam' }),
     { title: 'New like', body: 'Sam liked your post' });
@@ -370,8 +396,21 @@ test('tags group a post\'s alerts, and a reaction replaces its own', () => {
   assert.notEqual(P.presentationTag(like), P.presentationTag(comment),
     'two interactions on one post are two alerts');
 
-  const react = { type: 'dmReaction', conversationId: 'a_b', messageId: 'm9', actorUid: 'u2' };
-  assert.equal(P.presentationTag(react), `dmr|${P.subjectTagKey('a_b')}|m9`);
+  // A reaction's tag ends in the RECORD's id, not the message's: two people
+  // reacting to one message are two interactions, and reading one must cancel
+  // only its own alert. It also lets the app turn a delivered tag back into
+  // the record it is about.
+  const react = {
+    type: 'dmReaction', conversationId: 'a_b', messageId: 'm9', actorUid: 'u2', activityId: 'dr_x',
+  };
+  assert.equal(P.presentationTag(react), `dmr|${P.subjectTagKey('a_b')}|dr_x`);
+  assert.notEqual(
+    P.presentationTag(react),
+    P.presentationTag({
+      type: 'dmReaction', conversationId: 'a_b', messageId: 'm9', actorUid: 'u4', activityId: 'dr_y',
+    }),
+    'two reactions to one message are two alerts',
+  );
   assert.notEqual(P.presentationTag(react),
     P.presentationTag({ type: 'directMessage', conversationId: 'a_b', messageId: 'm9' }),
     'a reaction alert is not the message alert');
@@ -407,6 +446,7 @@ test('the push module is wired into index.js and changes nothing else', () => {
   assert.deepEqual(pushExports.sort(), [
     'pushOnDirectMessageWritten',
     'pushOnPostCommentWritten',
+    'pushOnPostDeleted',
     'pushOnPostGoodLiftWritten',
     'pushOnPostLikeWritten',
     'pushOutboxOnCreated',

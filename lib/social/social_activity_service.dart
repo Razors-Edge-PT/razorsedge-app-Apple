@@ -60,6 +60,7 @@ class SocialActivity {
     this.preview,
     this.tag,
     this.createdAt,
+    this.invalidated = false,
   });
 
   final String id;
@@ -91,6 +92,12 @@ class SocialActivity {
 
   final DateTime? createdAt;
 
+  /// The interaction was withdrawn or its content deleted (the comment
+  /// removed, the like taken back, the post deleted). The record survives —
+  /// its id is what stops the same interaction alerting twice — but it counts
+  /// for nothing and is not shown. Only the server sets this.
+  final bool invalidated;
+
   PushKind? get kind => switch (type) {
         'postComment' => PushKind.postComment,
         'postLike' => PushKind.postLike,
@@ -101,8 +108,10 @@ class SocialActivity {
 
   bool get isPostInteraction => kind?.isPostInteraction ?? false;
 
-  /// True for a record this build knows how to show and open.
+  /// True for a record this build knows how to show and open. A withdrawn
+  /// interaction is not shown: the thing it points at is gone.
   bool get isRenderable => kind != null &&
+      !invalidated &&
       (isPostInteraction ? postId != null : convId != null);
 
   static SocialActivity? fromDoc(String id, Map<String, dynamic>? data) {
@@ -130,6 +139,7 @@ class SocialActivity {
       preview: s('preview'),
       tag: s('tag'),
       createdAt: created is Timestamp ? created.toDate() : null,
+      invalidated: data['invalidated'] == true,
     );
   }
 }
@@ -230,8 +240,16 @@ class SocialActivityService {
   /// says "more than this many"; nothing is lost, and the query stays cheap.
   static const int kWatchLimit = 50;
 
-  /// How many records the Activity list shows.
+  /// How many records the Activity list shows per page.
   static const int kListLimit = 50;
+
+  /// How many unread records are fetched for one post or conversation when a
+  /// screen presents it. Bounds the work for a very busy post.
+  static const int kSubjectLimit = 50;
+
+  /// How many delivered alerts are checked against their records during
+  /// reconciliation. More than anybody has in a tray.
+  static const int kReconcileLimit = 40;
 
   // Resolved lazily: constructing this must not require a live Firebase app,
   // so anything holding a reference stays testable without one.
@@ -275,9 +293,35 @@ class SocialActivityService {
 
   /// Unread activity for the signed-in account. Shared: every listener gets the
   /// same underlying subscription and the latest value immediately.
+  ///
+  /// The replay matters. A badge built after the first snapshot — a second
+  /// Home header, the Buddy Hub opening, a rebuild — subscribes to a broadcast
+  /// stream that has already fired, so without this it would sit at zero until
+  /// something else happened. It replays only state belonging to the account
+  /// asking, so a subscriber that appears mid account-switch never sees the
+  /// previous account's count, and it adds no Firestore subscription.
   Stream<SocialActivitySnapshot> watch() {
     _ensureSubscribed();
-    return _out.stream;
+    final SocialActivitySnapshot current = _last;
+    if (!current.loaded || current.uid == null || current.uid != _uidOrNull()) {
+      return _out.stream;
+    }
+    // Deliberately not an `async*` generator over the broadcast stream: the
+    // events never end, so cancelling a subscription to such a generator waits
+    // for a return that cannot come, and a badge being disposed would hang on
+    // its own cancel.
+    return Stream<SocialActivitySnapshot>.multi(
+      (MultiStreamController<SocialActivitySnapshot> out) {
+        out.add(current);
+        final StreamSubscription<SocialActivitySnapshot> sub = _out.stream.listen(
+          out.add,
+          onError: out.addError,
+          onDone: out.close,
+        );
+        out.onCancel = sub.cancel;
+      },
+      isBroadcast: true,
+    );
   }
 
   /// Sign-in, restore or account switch. Drops the other account's state so a
@@ -322,8 +366,9 @@ class SocialActivityService {
     for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
       final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
       // Something acknowledged here but not yet confirmed by the server is
-      // already read as far as this session is concerned.
-      if (a != null && !_acked.contains(a.id)) unread.add(a);
+      // already read as far as this session is concerned. A withdrawn
+      // interaction counts for nothing even while its record survives.
+      if (a != null && !a.invalidated && !_acked.contains(a.id)) unread.add(a);
     }
     _last = SocialActivitySnapshot(uid: uid, unread: unread, loaded: true);
     if (!_out.isClosed) _out.add(_last);
@@ -332,6 +377,72 @@ class SocialActivityService {
   /// The unread interactions for one post or conversation.
   List<SocialActivity> unreadForSubject(String subject) =>
       _last.unreadForSubject(subject);
+
+  /// Every unread interaction for one subject, asked of the server.
+  ///
+  /// The live subscription tracks only the newest [kWatchLimit] unread
+  /// records, so an older one — a comment from last week under fifty newer
+  /// interactions — is not in it. A screen showing that comment must still be
+  /// able to read it, and its alert must still be cancellable, so the subject
+  /// is queried directly. Two equality filters and a bound: no composite
+  /// index, no full scan.
+  ///
+  /// Falls back to the local view when the query cannot be made (offline).
+  Future<List<SocialActivity>> unreadForSubjectFromServer(
+    String subject, {
+    int limit = kSubjectLimit,
+  }) async {
+    final String? uid = _uidOrNull();
+    if (uid == null) return const <SocialActivity>[];
+    try {
+      final QuerySnapshot<Map<String, dynamic>> q = await _collection(uid)
+          .where('subject', isEqualTo: subject)
+          .where('read', isEqualTo: false)
+          .limit(limit)
+          .get();
+      final List<SocialActivity> out = <SocialActivity>[];
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
+        final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
+        if (a == null || a.invalidated || _acked.contains(a.id)) continue;
+        out.add(a);
+      }
+      return out;
+    } catch (e) {
+      debugPrint('[activity] subject lookup failed for $subject: $e');
+      return unreadForSubject(subject);
+    }
+  }
+
+  /// Older records, for the Activity list's "load more". One page at a time,
+  /// starting after [after]; empty when there is nothing older.
+  Future<List<SocialActivity>> loadMore({
+    required SocialActivity after,
+    int limit = kListLimit,
+  }) async {
+    final String? uid = _uidOrNull();
+    final DateTime? cursor = after.createdAt;
+    if (uid == null || cursor == null) return const <SocialActivity>[];
+    try {
+      // A range on the ordered field rather than a cursor: one field, one
+      // index, and the same answer from any Firestore client. (An interaction
+      // sharing the cursor's exact timestamp is on the page that produced the
+      // cursor, so excluding it here loses nothing.)
+      final QuerySnapshot<Map<String, dynamic>> q = await _collection(uid)
+          .where('createdAt', isLessThan: Timestamp.fromDate(cursor))
+          .orderBy('createdAt', descending: true)
+          .limit(limit)
+          .get();
+      final List<SocialActivity> out = <SocialActivity>[];
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
+        final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
+        if (a != null) out.add(_withSessionRead(a));
+      }
+      return out;
+    } catch (e) {
+      debugPrint('[activity] could not load older activity: $e');
+      return const <SocialActivity>[];
+    }
+  }
 
   /// True when THIS session has already acknowledged [activityId].
   ///
@@ -394,8 +505,8 @@ class SocialActivityService {
       // A record written before the tag was stored: rebuild it from the ids.
       if (a.isPostInteraction && a.postId != null) {
         tags.add(postActivityTag(postId: a.postId!, activityId: a.id));
-      } else if (a.convId != null && a.messageId != null) {
-        tags.add(dmReactionTag(convId: a.convId!, messageId: a.messageId!));
+      } else if (a.convId != null) {
+        tags.add(dmReactionTag(convId: a.convId!, activityId: a.id));
       }
     }
     if (tags.isEmpty) return Future<void>.value();
@@ -406,30 +517,65 @@ class SocialActivityService {
   /// unread â€” read here earlier, or on another device, or in a session that
   /// ended before it could cancel them.
   ///
-  /// A one-shot read rather than a subscription: it answers a question that
-  /// only matters when the app starts or comes back.
+  /// Driven by what is actually IN THE TRAY, not by a window of records. The
+  /// old version read the newest fifty records and cancelled the read ones
+  /// among them, so an alert whose record had since been pushed past fifty was
+  /// never reconsidered and stayed in the tray for good. Each delivered alert
+  /// names its own record in its tag, so the tray is the right list to work
+  /// from: one document read per alert, capped, and independent of how many
+  /// newer interactions have arrived since.
+  ///
+  /// Falls back to the record sweep when the platform cannot list the tray (an
+  /// older native build, or a platform without the call).
   Future<void> reconcileDeliveredAlerts() async {
     final String? uid = _uidOrNull();
     if (uid == null) return;
     try {
-      final QuerySnapshot<Map<String, dynamic>> recent = await _collection(uid)
-          .orderBy('createdAt', descending: true)
-          .limit(kListLimit)
-          .get();
-      final List<String> tags = <String>[];
-      for (final QueryDocumentSnapshot<Map<String, dynamic>> d in recent.docs) {
-        final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
-        if (a == null) continue;
-        if (a.read || _acked.contains(a.id)) {
-          final String? tag = a.tag;
-          if (tag != null && tag.isNotEmpty) tags.add(tag);
-        }
+      final List<String> delivered = await _notifications.deliveredTags();
+      if (delivered.isEmpty) {
+        await _reconcileFromRecentRecords(uid);
+        return;
       }
-      if (tags.isEmpty) return;
-      await _notifications.clearNotifications(tags: tags);
+      final List<String> stale = <String>[];
+      int reads = 0;
+      for (final String tag in delivered) {
+        final String? activityId = activityIdFromTag(tag);
+        if (activityId == null) continue; // not one of ours
+        if (_acked.contains(activityId)) {
+          stale.add(tag);
+          continue;
+        }
+        if (reads >= kReconcileLimit) break;
+        reads++;
+        final DocumentSnapshot<Map<String, dynamic>> doc =
+            await _collection(uid).doc(activityId).get();
+        final SocialActivity? a = SocialActivity.fromDoc(activityId, doc.data());
+        // Gone, already read, or withdrawn: nothing stands behind the alert.
+        if (a == null || a.read || a.invalidated) stale.add(tag);
+      }
+      if (stale.isEmpty) return;
+      await _notifications.clearNotifications(tags: stale);
     } catch (e) {
       debugPrint('[activity] alert reconciliation skipped: $e');
     }
+  }
+
+  Future<void> _reconcileFromRecentRecords(String uid) async {
+    final QuerySnapshot<Map<String, dynamic>> recent = await _collection(uid)
+        .orderBy('createdAt', descending: true)
+        .limit(kListLimit)
+        .get();
+    final List<String> tags = <String>[];
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> d in recent.docs) {
+      final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
+      if (a == null) continue;
+      if (a.read || a.invalidated || _acked.contains(a.id)) {
+        final String? tag = a.tag;
+        if (tag != null && tag.isNotEmpty) tags.add(tag);
+      }
+    }
+    if (tags.isEmpty) return;
+    await _notifications.clearNotifications(tags: tags);
   }
 
   /// The Activity list: recent interactions, read and unread, newest first.
@@ -445,27 +591,32 @@ class SocialActivityService {
       for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
         final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
         if (a == null) continue;
-        // Reflect this session's acknowledgements even before they land.
-        out.add(_acked.contains(a.id) && !a.read
-            ? SocialActivity(
-                id: a.id,
-                type: a.type,
-                actorUid: a.actorUid,
-                subject: a.subject,
-                read: true,
-                postId: a.postId,
-                commentId: a.commentId,
-                convId: a.convId,
-                messageId: a.messageId,
-                emoji: a.emoji,
-                preview: a.preview,
-                tag: a.tag,
-                createdAt: a.createdAt,
-              )
-            : a);
+        out.add(_withSessionRead(a));
       }
       return out;
     });
+  }
+
+  /// Reflects this session's acknowledgements on a record the server has not
+  /// caught up with yet, so a row cannot flicker back to unread.
+  SocialActivity _withSessionRead(SocialActivity a) {
+    if (a.read || !_acked.contains(a.id)) return a;
+    return SocialActivity(
+      id: a.id,
+      type: a.type,
+      actorUid: a.actorUid,
+      subject: a.subject,
+      read: true,
+      postId: a.postId,
+      commentId: a.commentId,
+      convId: a.convId,
+      messageId: a.messageId,
+      emoji: a.emoji,
+      preview: a.preview,
+      tag: a.tag,
+      createdAt: a.createdAt,
+      invalidated: a.invalidated,
+    );
   }
 
   @visibleForTesting

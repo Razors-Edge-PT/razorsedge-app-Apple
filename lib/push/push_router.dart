@@ -41,6 +41,7 @@ import '../social/buddy_hub_screen.dart';
 import '../social/open_feed_post.dart';
 import '../user_context.dart';
 import 'foreground_conversation.dart';
+import 'foreground_focus.dart';
 import 'foreground_post.dart';
 import 'push_intent.dart';
 
@@ -137,7 +138,10 @@ class PushRouter {
 
   static String _destinationKey(PushIntent i) => switch (i.kind) {
         PushKind.friendRequest || PushKind.friendAccepted => 'buddyHub',
-        PushKind.directMessage || PushKind.dmReaction => 'dm:${i.convId}',
+        PushKind.directMessage => 'dm:${i.convId}',
+        // Per reacted-to MESSAGE: two reactions in one thread point at
+        // different messages, so the second is not a duplicate of the first.
+        PushKind.dmReaction => 'dm:${i.convId}:${i.messageId ?? ''}',
         // Per post AND per comment: two interactions with one post are one
         // destination, but a tap that reveals a different comment is not a
         // duplicate of the one before it.
@@ -232,7 +236,14 @@ class PushDestinations {
 
   /// Opens the post detail page, revealing a comment when the tap is about
   /// one. Returns true when a screen was opened. Injectable for tests.
-  final Future<bool> Function(BuildContext context, PushIntent intent) openPost;
+  ///
+  /// [stillValid] is carried INTO the fetch so the account, the generation and
+  /// the context are all re-checked after it, immediately before navigating.
+  final Future<bool> Function(
+    BuildContext context,
+    PushIntent intent,
+    bool Function() stillValid,
+  ) openPost;
 
   final void Function(String message) notice;
 
@@ -261,21 +272,43 @@ class PushDestinations {
       case PushKind.postComment:
       case PushKind.postLike:
       case PushKind.postGoodLift:
-        // Already looking at this post: the interaction is on screen, and the
-        // scope there has marked it read. Opening a second copy would only
-        // bury the one being read.
-        if (ForegroundPost.visiblePostId == intent.postId) return false;
         if (!stillValid()) return false;
+        // Already looking at this post. A second copy of the page would only
+        // bury the one being read — but the tap still means something when it
+        // points at a DIFFERENT comment, so the open page is asked to reveal
+        // that one instead. (Dropping it, as this used to, left the person
+        // staring at an unchanged screen.) A like or Good Lift has nothing to
+        // reveal: the post is already showing it.
+        if (ForegroundPost.visiblePostId == intent.postId) {
+          final String? commentId = intent.commentId;
+          if (commentId == null) return false;
+          ForegroundFocus.request(
+            subjectId: intent.postId!,
+            targetId: commentId,
+          );
+          return true;
+        }
         // The post is fetched first: a deleted post, or one whose owner is no
         // longer a friend, says so instead of opening an empty screen. The
-        // lookup takes time, so everything is re-checked after it.
-        return openPost(context, intent);
+        // lookup takes time, so everything is re-checked after it — including
+        // the account, which openPost re-checks through stillValid.
+        return openPost(context, intent, stillValid);
 
       case PushKind.dmReaction:
       case PushKind.directMessage:
         final String convId = intent.convId!;
-        // Already the thread in front of the person: nothing to open.
-        if (ForegroundConversation.visibleConvId == convId) return false;
+        // Already the thread in front of the person. A reaction alert still
+        // has somewhere to go — the message it is about, which may be far up
+        // the thread — so ask the open page to scroll there. A plain message
+        // alert for the thread on screen has nothing to add.
+        if (ForegroundConversation.visibleConvId == convId) {
+          final String? messageId = intent.messageId;
+          if (intent.kind != PushKind.dmReaction || messageId == null) {
+            return false;
+          }
+          ForegroundFocus.request(subjectId: convId, targetId: messageId);
+          return true;
+        }
         final bool? accessible = await conversationAccessible(convId);
         // The lookup took time: the account may have logged out or switched,
         // the scope may be gone, or the thread may have been opened meanwhile.
@@ -311,12 +344,17 @@ Widget _defaultConversation(PushIntent intent) => ConversationPage(
     );
 
 /// Fetches the post and opens it, revealing the comment when there is one.
-Future<bool> _defaultOpenPost(BuildContext context, PushIntent intent) =>
+Future<bool> _defaultOpenPost(
+  BuildContext context,
+  PushIntent intent,
+  bool Function() stillValid,
+) =>
     openPostById(
       context,
       intent.postId!,
       viewerUid: intent.recipientUid,
       focusCommentId: intent.commentId,
+      stillValid: stillValid,
     );
 
 Widget _defaultConversationList() => const DirectMessages();

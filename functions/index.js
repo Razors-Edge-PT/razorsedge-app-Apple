@@ -909,4 +909,5 @@ exports.pushOnDirectMessageWritten = pushTriggers.pushOnDirectMessageWritten;
 exports.pushOnPostCommentWritten = pushTriggers.pushOnPostCommentWritten;
 exports.pushOnPostLikeWritten = pushTriggers.pushOnPostLikeWritten;
 exports.pushOnPostGoodLiftWritten = pushTriggers.pushOnPostGoodLiftWritten;
+exports.pushOnPostDeleted = pushTriggers.pushOnPostDeleted;
 exports.pushOutboxOnCreated = pushTriggers.pushOutboxOnCreated;

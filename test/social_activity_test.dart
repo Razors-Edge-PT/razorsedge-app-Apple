@@ -27,6 +27,14 @@ class RecordingPlatform extends NotificationPlatform {
   final List<Map<String, Object?>> calls = <Map<String, Object?>>[];
   int cleared = 0;
 
+  /// What the OS reports as still in the tray. The real call is a method
+  /// channel: in a widget test its reply is only delivered while the binding
+  /// is pumping, so a test that awaits it directly would wait for ever.
+  List<String> tray = const <String>[];
+
+  @override
+  Future<List<String>> deliveredTags() async => tray;
+
   @override
   Future<int> clearNotifications({
     List<String> tagPrefixes = const <String>[],
@@ -68,7 +76,7 @@ Future<String> seedActivity(
   final String subject = postId != null ? 'post:$postId' : 'dm:$convId';
   final String tag = postId != null
       ? postActivityTag(postId: postId, activityId: id)
-      : dmReactionTag(convId: convId!, messageId: messageId!);
+      : dmReactionTag(convId: convId!, activityId: id);
   await db
       .collection('users')
       .doc(owner)
@@ -333,9 +341,9 @@ void main() {
       await settle(t);
 
       expect(platform.cancelledTags,
-          contains(dmReactionTag(convId: convId, messageId: 'm1')));
+          contains(dmReactionTag(convId: convId, activityId: 'r1')));
       expect(platform.cancelledTags,
-          isNot(contains(dmReactionTag(convId: convId, messageId: 'm2'))));
+          isNot(contains(dmReactionTag(convId: convId, activityId: 'r2'))));
       expect(service.unreadCount, 1);
     });
 
@@ -343,6 +351,11 @@ void main() {
         (WidgetTester t) async {
       await seedActivity(db, id: 'a1', type: 'postLike', postId: 'A', read: true);
       await seedActivity(db, id: 'a2', type: 'postLike', postId: 'B');
+      // Both alerts are still in the tray from before this session.
+      platform.tray = <String>[
+        postActivityTag(postId: 'A', activityId: 'a1'),
+        postActivityTag(postId: 'B', activityId: 'a2'),
+      ];
       service.watch();
       await settle(t);
 
@@ -353,6 +366,22 @@ void main() {
       expect(platform.cancelledTags,
           isNot(contains(postActivityTag(postId: 'B', activityId: 'a2'))),
           reason: 'an unread interaction keeps its alert');
+    });
+
+    testWidgets('a tray the platform cannot list falls back to the records',
+        (WidgetTester t) async {
+      await seedActivity(db, id: 'a1', type: 'postLike', postId: 'A', read: true);
+      await seedActivity(db, id: 'a2', type: 'postLike', postId: 'B');
+      platform.tray = const <String>[]; // older native build, or desktop
+      service.watch();
+      await settle(t);
+
+      await service.reconcileDeliveredAlerts();
+      await settle(t);
+      expect(platform.cancelledTags,
+          contains(postActivityTag(postId: 'A', activityId: 'a1')));
+      expect(platform.cancelledTags,
+          isNot(contains(postActivityTag(postId: 'B', activityId: 'a2'))));
     });
   });
 

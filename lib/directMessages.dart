@@ -18,6 +18,11 @@ import 'social/social_activity_service.dart';
 import 'social/ui/user_row.dart' show LiveBuddyAvatar;
 import 'main.dart' show routeObserver;
 import 'push/foreground_conversation.dart';
+import 'push/foreground_focus.dart';
+
+/// How much of a message row must be on screen for a reaction to it to count
+/// as seen.
+const double kMessageSeenFraction = 0.5;
 
 /// Deterministic conversation id for a pair of users.
 /// Ensures both users always open the same thread, no query needed.
@@ -373,9 +378,34 @@ class _ConversationPageState extends State<ConversationPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ForegroundFocus.requests.removeListener(_onFocusRequest);
     routeObserver.unsubscribe(this);
     ForegroundConversation.hidden(widget.convId);
     super.dispose();
+  }
+
+  /// The message a newer alert points at, once this thread is already open.
+  String? _requestedFocusId;
+
+  void _onFocusRequest() {
+    final FocusRequest? req = ForegroundFocus.requests.value;
+    if (req == null || !req.isFor(widget.convId) || !mounted) return;
+    if (req.targetId == _requestedFocusId) return;
+    _requestedFocusId = req.targetId;
+    _scrollToMessage(req.targetId);
+  }
+
+  /// Scrolls a message into view by id, if it is in the loaded thread.
+  void _scrollToMessage(String messageId) {
+    final int index = _displayed.indexWhere(
+        (QueryDocumentSnapshot<Object?> d) => d.id == messageId);
+    if (index < 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _jumpToIndex(index, alignment: 0.3);
+      // Being scrolled to is what reads the reaction on it.
+      _acknowledgeDisplayedReactions();
+    });
   }
 
   // 👇 avoid duplicate .snapshots() listeners per message doc
@@ -415,22 +445,88 @@ class _ConversationPageState extends State<ConversationPage>
   SocialActivityService get _activity =>
       widget.activityService ?? SocialActivityService.instance;
 
-  /// Reactions to messages this account SENT, for the messages on screen.
+  /// The messages actually in the viewport, by id.
+  ///
+  /// `_displayed` is the whole loaded thread — hundreds of messages, of which
+  /// a handful are on screen. Reading a reaction means having seen the message
+  /// it is about, so the scroll positions decide, not the list contents.
+  Set<String> visibleMessageIds() {
+    final Set<String> ids = <String>{};
+    for (final ItemPosition p in _itemPositionsListener.itemPositions.value) {
+      if (p.index < 0 || p.index >= _displayed.length) continue; // tail spacer
+      final double extent = p.itemTrailingEdge - p.itemLeadingEdge;
+      if (extent <= 0) continue;
+      final double onScreen =
+          p.itemTrailingEdge.clamp(0.0, 1.0) - p.itemLeadingEdge.clamp(0.0, 1.0);
+      // Either enough of the row is showing, or the row is taller than the
+      // viewport and fills it.
+      final bool seen = onScreen / extent >= kMessageSeenFraction ||
+          (p.itemLeadingEdge <= 0 && p.itemTrailingEdge >= 1);
+      if (seen) ids.add(_displayed[p.index].id);
+    }
+    return ids;
+  }
+
+  /// Reactions to messages this account SENT, for the messages ON SCREEN.
   ///
   /// Kept apart from the message ledger above on purpose: a reaction is not an
   /// incoming message, so acknowledging one can never move the unread-message
   /// count, and reading messages can never silently swallow a reaction that is
   /// still off screen.
   void _acknowledgeDisplayedReactions() {
+    final Set<String> visible = visibleMessageIds();
+    // What is on screen also decides whether a reaction's banner would be
+    // telling the person something they can already see.
+    ForegroundConversation.reportVisibleMessages(widget.convId, visible);
+    if (visible.isEmpty) return;
+    final Map<String, SocialActivity> known = <String, SocialActivity>{
+      for (final SocialActivity a in _activity.snapshot.unread) a.id: a,
+      for (final SocialActivity a in _subjectActivity) a.id: a,
+    };
     final List<SocialActivity> presented = presentedInConversation(
-      unread: _activity.snapshot.unread,
+      unread: known.values.toList(growable: false),
       convId: widget.convId,
-      displayedMessageIds: <String>{
-        for (final QueryDocumentSnapshot<Object?> d in _displayed) d.id,
-      },
+      displayedMessageIds: visible,
     );
-    if (presented.isEmpty) return;
-    unawaited(_activity.acknowledge(presented));
+    if (presented.isNotEmpty) unawaited(_activity.acknowledge(presented));
+
+    // A reaction older than the tracked window is not in the live view, so a
+    // message on screen that nothing explains means asking this conversation
+    // directly — once.
+    final Set<String> explained = <String>{
+      for (final SocialActivity a in known.values)
+        if (a.messageId != null) a.messageId!,
+      ..._askedAboutMessages,
+    };
+    if (!_fetchingSubjectActivity &&
+        visible.any((String id) => !explained.contains(id))) {
+      unawaited(_refreshSubjectActivity(visible));
+    }
+  }
+
+  /// Unread reaction records for THIS conversation, from the server.
+  List<SocialActivity> _subjectActivity = const <SocialActivity>[];
+  bool _fetchingSubjectActivity = false;
+  final Set<String> _askedAboutMessages = <String>{};
+
+  Future<void> _refreshSubjectActivity(Set<String> asked) async {
+    if (_fetchingSubjectActivity) return;
+    _fetchingSubjectActivity = true;
+    try {
+      final List<SocialActivity> found = await _activity
+          .unreadForSubjectFromServer(dmSubject(widget.convId));
+      if (!mounted) return;
+      _askedAboutMessages.addAll(asked);
+      final bool changed = found.isNotEmpty &&
+          found.any((SocialActivity a) =>
+              !_subjectActivity.any((SocialActivity b) => b.id == a.id));
+      _subjectActivity = found;
+      if (changed) _acknowledgeDisplayedReactions();
+    } catch (_) {
+      // Offline: the live view still covers everything recent.
+    } finally {
+      _fetchingSubjectActivity = false;
+    }
   }
 
   void _acknowledgeDisplayed() {
@@ -802,10 +898,23 @@ class _ConversationPageState extends State<ConversationPage>
       if (_isAtBottom != atBottomNow) {
         _isAtBottom = atBottomNow;
       }
-      // Scrolling no longer writes read state: the old "last visible item"
-      // fallback treated any scroll as reaching the bottom, and reading is
-      // now about what was displayed, not where the list sits.
+      // Scrolling never writes MESSAGE read state: the old "last visible item"
+      // fallback treated any scroll as reaching the bottom.
+      //
+      // It does decide REACTIONS, though — a reaction is read once the message
+      // it is about has actually been scrolled to — so each settle re-checks
+      // what is on screen. Acknowledging is idempotent and skips anything
+      // already recorded, so this stays cheap.
+      if (_routeVisible &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        _acknowledgeDisplayedReactions();
+      }
     });
+
+    // A second reaction alert for this same conversation, pointing at another
+    // message: the page is already open, so reveal that message rather than
+    // opening a second copy of the thread.
+    ForegroundFocus.requests.addListener(_onFocusRequest);
 
     // 👇 One-time fetch of my lastReadAt from the conversation doc
     final uid = FirebaseAuth.instance.currentUser!.uid;

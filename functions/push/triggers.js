@@ -10,6 +10,8 @@
 //   pushOnPostLikeWritten       posts/{postId}/likes/{actorUid}
 //   pushOnPostGoodLiftWritten   posts/{postId}/goodLifts/{actorUid}
 //                               → the post owner's activity record + job
+//   pushOnPostDeleted           posts/{postId} (deleted)
+//                               → retires every activity record for the post
 //   pushOutboxOnCreated         pushOutbox/{jobId}
 //                               → delivers one job through FCM
 //
@@ -30,7 +32,11 @@
 
 'use strict';
 
-const { onDocumentWritten, onDocumentCreated } = require('firebase-functions/v2/firestore');
+const {
+  onDocumentWritten,
+  onDocumentCreated,
+  onDocumentDeleted,
+} = require('firebase-functions/v2/firestore');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
@@ -148,6 +154,29 @@ const pushOnPostGoodLiftWritten = onDocumentWritten(
   },
 );
 
+/**
+ * A deleted post: its comments, likes and Good Lifts stop counting.
+ *
+ * Deleting a post does not fire the subcollection triggers, so without this
+ * the owner keeps a badge and an Activity list pointing at something that
+ * cannot be opened. Records are retired, never deleted, so the ids still
+ * suppress a replay.
+ */
+const pushOnPostDeleted = onDocumentDeleted(
+  { document: 'posts/{postId}', retry: true },
+  async (event) => {
+    const { postId } = event.params;
+    const before = event.data;
+    const result = await O.retirePostActivity(admin.firestore(), {
+      postId,
+      beforeData: before && before.exists ? before.data() : null,
+    });
+    if (result.retired > 0) {
+      logger.info('[push] post %s deleted: %d activity records retired', postId, result.retired);
+    }
+  },
+);
+
 const pushOutboxOnCreated = onDocumentCreated(
   { document: `${O.COL_OUTBOX}/{jobId}`, retry: true, memory: '256MiB', timeoutSeconds: 60 },
   async (event) => {
@@ -172,5 +201,6 @@ module.exports = {
   pushOnPostCommentWritten,
   pushOnPostLikeWritten,
   pushOnPostGoodLiftWritten,
+  pushOnPostDeleted,
   pushOutboxOnCreated,
 };

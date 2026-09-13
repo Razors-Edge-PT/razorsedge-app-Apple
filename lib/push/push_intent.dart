@@ -121,8 +121,24 @@ String postActivityTag({required String postId, required String activityId}) =>
 String dmReactionTagPrefix(String convId) => 'dmr|${subjectTagKey(convId)}|';
 
 /// The tag the alert for a reaction to one message carries.
-String dmReactionTag({required String convId, required String messageId}) =>
-    '${dmReactionTagPrefix(convId)}$messageId';
+String dmReactionTag({required String convId, required String activityId}) =>
+    '${dmReactionTagPrefix(convId)}$activityId';
+
+/// The activity record a delivered alert is about, read back out of its tag.
+///
+/// Reconciliation starts from the alerts sitting in the tray — many of them
+/// posted by the OS while Dart was not running — so the tag is the only thing
+/// tying an alert to the record that says whether it still means anything.
+/// Both interaction tags end with the record id: `post|<post>|<activity>` and
+/// `dmr|<conversation>|<activity>`. Anything else (a message or friend alert,
+/// or a tag from another build) returns null and is left alone.
+String? activityIdFromTag(String tag) {
+  final List<String> parts = tag.split('|');
+  if (parts.length != 3) return null;
+  if (parts[0] != 'post' && parts[0] != 'dmr') return null;
+  final String id = parts[2].trim();
+  return id.isEmpty ? null : id;
+}
 
 /// Every alert for one conversation starts with this.
 String dmConversationTagPrefix(String convId) =>
@@ -282,25 +298,43 @@ PushDispatch decideDispatch({
 /// person is actually looking at — "actually" meaning the app is resumed and
 /// that conversation is the visible route, not merely mounted underneath
 /// something else.
+/// [targetOnScreen] answers the only question that matters for an interaction
+/// with a specific target: is THAT comment, or THAT reacted-to message,
+/// actually in the viewport? Having the post or the chat open is not the same
+/// thing — an older comment may be far up the thread, or not even loaded — and
+/// suppressing on the open screen alone silently swallowed news the person had
+/// no way of seeing. [alreadyAcknowledged] covers the other honest case: the
+/// interaction was positively read a moment ago.
 bool shouldShowForegroundBanner({
   required PushIntent intent,
   required String? currentUid,
   required String? visibleConvId,
   required bool appResumed,
   String? visiblePostId,
+  bool targetOnScreen = false,
+  bool alreadyAcknowledged = false,
 }) {
   if (currentUid == null || currentUid != intent.recipientUid) return false;
+  if (alreadyAcknowledged) return false;
   if (!appResumed) return true;
-  // The conversation in front of the person: a message or a reaction in it is
-  // already on screen.
-  if ((intent.kind == PushKind.directMessage ||
-          intent.kind == PushKind.dmReaction) &&
+  // A new MESSAGE lands at the bottom of the thread in front of the person:
+  // opening that thread does show it.
+  if (intent.kind == PushKind.directMessage &&
       visibleConvId != null &&
       visibleConvId == intent.convId) {
     return false;
   }
-  // The post in front of the person. Suppressed only for THIS post — an
-  // interaction on another post is still news, even while a post is open.
+  // A REACTION is about one particular message: only its being on screen
+  // counts.
+  if (intent.kind == PushKind.dmReaction) {
+    return !(visibleConvId == intent.convId && targetOnScreen);
+  }
+  // A COMMENT is about one particular comment, likewise.
+  if (intent.kind == PushKind.postComment) {
+    return !(visiblePostId == intent.postId && targetOnScreen);
+  }
+  // A like or a Good Lift is presented by the post itself — its counts are on
+  // screen — so the open post does suppress it, and only for THIS post.
   if (intent.kind.isPostInteraction &&
       visiblePostId != null &&
       visiblePostId == intent.postId) {

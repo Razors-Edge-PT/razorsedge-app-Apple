@@ -34,11 +34,34 @@ class ForegroundConversation {
   /// The conversation on top, regardless of app lifecycle.
   static String? get visibleConvId => _visible.isEmpty ? null : _visible.last;
 
+  /// The messages the open thread ACTUALLY has on screen, by conversation.
+  ///
+  /// A reaction is about one message, which may be hundreds of messages up the
+  /// thread. Having the conversation open is not seeing it, so the page
+  /// reports its viewport and the banner rule asks about that message.
+  static final Map<String, Set<String>> _visibleMessages =
+      <String, Set<String>>{};
+
+  static void reportVisibleMessages(String convId, Set<String> messageIds) {
+    if (messageIds.isEmpty) {
+      _visibleMessages.remove(convId);
+    } else {
+      _visibleMessages[convId] = <String>{...messageIds};
+    }
+  }
+
+  static bool isMessageVisible(String convId, String messageId) =>
+      visibleConvId == convId &&
+      (_visibleMessages[convId]?.contains(messageId) ?? false);
+
   /// True only while the app is resumed AND [convId] is the visible route.
   static bool isForeground(String convId) =>
       visibleConvId == convId &&
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
 
   @visibleForTesting
-  static void reset() => _visible.clear();
+  static void reset() {
+    _visible.clear();
+    _visibleMessages.clear();
+  }
 }

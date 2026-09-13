@@ -33,11 +33,36 @@ class ForegroundPost {
   /// The post on top, regardless of app lifecycle.
   static String? get visiblePostId => _visible.isEmpty ? null : _visible.last;
 
+  /// The comments the open post has ACTUALLY on screen, by post id.
+  ///
+  /// Having a post open says nothing about an older comment further up the
+  /// thread: it may be loaded, or not loaded at all. Suppressing that
+  /// comment's banner because "the post is open" hid news the person could
+  /// not see, so the page reports what is genuinely in the viewport and the
+  /// banner rule asks about the specific comment.
+  static final Map<String, Set<String>> _visibleComments =
+      <String, Set<String>>{};
+
+  static void reportVisibleComments(String postId, Set<String> commentIds) {
+    if (commentIds.isEmpty) {
+      _visibleComments.remove(postId);
+    } else {
+      _visibleComments[postId] = <String>{...commentIds};
+    }
+  }
+
+  static bool isCommentVisible(String postId, String commentId) =>
+      visiblePostId == postId &&
+      (_visibleComments[postId]?.contains(commentId) ?? false);
+
   /// True only while the app is resumed AND [postId] is the visible route.
   static bool isForeground(String postId) =>
       visiblePostId == postId &&
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
 
   @visibleForTesting
-  static void reset() => _visible.clear();
+  static void reset() {
+    _visible.clear();
+    _visibleComments.clear();
+  }
 }

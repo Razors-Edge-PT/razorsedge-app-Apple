@@ -445,6 +445,11 @@ service cloud.firestore {
       // monotonic, and neither a replayed offline write nor another device can
       // return something to unread. Create and delete are denied to every
       // client, so nothing can be fabricated, retargeted or quietly hidden.
+      //
+      // `invalidated` — set by the server when the interaction is withdrawn or
+      // its post deleted — is covered by the same hasOnly(): no client can
+      // mark another person's interaction as never having happened, and no
+      // client can un-invalidate one either.
       match /socialActivity/{activityId} {
         allow read: if isSelf(userId) || isSuperAdmin();
 

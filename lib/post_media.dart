@@ -22,6 +22,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 
 // Media / cache
 import 'package:video_player/video_player.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 // Project-local
 import 'profile/core/media_identity.dart';
@@ -33,6 +34,7 @@ import 'profile/data/media_video_source.dart';
 import 'profile/ui/cached_network_image.dart';
 import 'profile/ui/live_identity.dart';
 import 'profile/ui/media_detail_page.dart';
+import 'push/foreground_focus.dart';
 import 'social/ui/post_activity_scope.dart';
 
 // Local storage / utils
@@ -78,7 +80,7 @@ class LiftVideo {
       );
 }
 
-class PostDetailPage extends StatelessWidget {
+class PostDetailPage extends StatefulWidget {
   final Post post;
   final Future<void> Function(Post) onToggleLike;
   final Future<void> Function(Post) onToggleGoodLift;
@@ -100,6 +102,51 @@ class PostDetailPage extends StatelessWidget {
     required this.canDelete,
     this.focusCommentId,
   });
+
+  @override
+  State<PostDetailPage> createState() => _PostDetailPageState();
+}
+
+class _PostDetailPageState extends State<PostDetailPage> {
+  Post get post => widget.post;
+  bool get canDelete => widget.canDelete;
+  Future<void> Function(Post) get onToggleLike => widget.onToggleLike;
+  Future<void> Function(Post) get onToggleGoodLift => widget.onToggleGoodLift;
+  Future<void> Function(Post, String) get onAddComment => widget.onAddComment;
+
+  /// The comment being revealed. Starts as the one this page was opened for
+  /// and moves when another alert about this same post points elsewhere.
+  String? _focusCommentId;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusCommentId = widget.focusCommentId;
+    ForegroundFocus.requests.addListener(_onFocusRequest);
+  }
+
+  @override
+  void didUpdateWidget(covariant PostDetailPage old) {
+    super.didUpdateWidget(old);
+    if (old.focusCommentId != widget.focusCommentId &&
+        widget.focusCommentId != null) {
+      _focusCommentId = widget.focusCommentId;
+    }
+  }
+
+  @override
+  void dispose() {
+    ForegroundFocus.requests.removeListener(_onFocusRequest);
+    super.dispose();
+  }
+
+  /// A second notification about this post, pointing at another comment.
+  void _onFocusRequest() {
+    final FocusRequest? req = ForegroundFocus.requests.value;
+    if (req == null || !req.isFor(post.id)) return;
+    if (!mounted || req.targetId == _focusCommentId) return;
+    setState(() => _focusCommentId = req.targetId);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -265,7 +312,7 @@ class PostDetailPage extends StatelessWidget {
             height: 160,
             child: _CommentsList(
               postId: post.id,
-              focusCommentId: focusCommentId,
+              focusCommentId: _focusCommentId,
             ),
           ),
         ],
@@ -728,6 +775,9 @@ class _PostActionsBarState extends State<_PostActionsBar> {
   }
 }
 
+/// How much of a comment must be on screen before it counts as seen.
+const double kCommentSeenFraction = 0.5;
+
 class _CommentsList extends StatefulWidget {
   final String postId;
 
@@ -753,6 +803,25 @@ class _CommentsListState extends State<_CommentsList> {
   bool _pinnedMissing = false;
   bool _pinnedRequested = false;
 
+  /// The row for the comment being revealed, so it can be scrolled to.
+  final GlobalKey _focusedRowKey = GlobalKey();
+
+  /// The focus already scrolled to, so a rebuild does not fight the person's
+  /// own scrolling. Reset when a new notification points somewhere else.
+  String? _revealedFocus;
+
+  @override
+  void didUpdateWidget(covariant _CommentsList old) {
+    super.didUpdateWidget(old);
+    if (old.focusCommentId != widget.focusCommentId) {
+      // A second alert about the same post, pointing at a different comment.
+      _revealedFocus = null;
+      _pinnedRequested = false;
+      _pinnedData = null;
+      _pinnedMissing = false;
+    }
+  }
+
   Future<void> _loadPinned() async {
     final String? id = widget.focusCommentId;
     if (id == null || _pinnedRequested) return;
@@ -777,14 +846,36 @@ class _CommentsListState extends State<_CommentsList> {
     }
   }
 
-  /// Tells the surrounding scope which comments are actually on screen, so
-  /// that exactly those count as read.
-  void _reportDisplayed(Iterable<String> ids) {
+  /// Comments currently in the viewport, by id.
+  ///
+  /// Loading is not seeing. The list fetches a page of twenty; on a phone
+  /// perhaps three of them are on screen. Reporting all twenty marked
+  /// comments read that the person never laid eyes on — including the ones a
+  /// notification was about — so this reports only what a
+  /// [VisibilityDetector] says is genuinely visible.
+  void _reportVisible(String commentId, VisibilityInfo info) {
+    if (!mounted) return;
+    if (info.visibleFraction < kCommentSeenFraction) return;
     final PostActivityScopeState? scope = PostActivityScope.of(context);
     if (scope == null) return;
-    // After the frame: this runs from build, and acknowledging writes state.
+    scope.reportDisplayedComments(<String>[commentId]);
+  }
+
+  /// Brings the comment a notification pointed at into view when it IS in the
+  /// loaded page — being loaded is not the same as being on screen, and the
+  /// person tapped the alert to see that comment.
+  void _revealFocusedIfNeeded(String focusId, bool inPage) {
+    if (!inPage || _revealedFocus == focusId) return;
+    _revealedFocus = focusId;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) scope.reportDisplayedComments(ids);
+      final BuildContext? target = _focusedRowKey.currentContext;
+      if (!mounted || target == null) return;
+      unawaited(Scrollable.ensureVisible(
+        target,
+        alignment: 0.3,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      ));
     });
   }
 
@@ -820,10 +911,7 @@ class _CommentsListState extends State<_CommentsList> {
         final Map<String, dynamic>? pinned = _pinnedData;
         final bool showPinned = focusId != null && !focusInPage && pinned != null;
 
-        _reportDisplayed(<String>[
-          for (final d in docs) d.id,
-          if (showPinned) focusId,
-        ]);
+        if (focusId != null) _revealFocusedIfNeeded(focusId, focusInPage);
 
         if (docs.isEmpty && !showPinned) {
           return Center(
@@ -905,15 +993,24 @@ class _CommentsListState extends State<_CommentsList> {
                 ),
               ],
             );
-            if (!isFocused) return row;
-            // A quiet marker on the comment the person came here to see.
+            // Only what is genuinely on screen counts as read.
+            final Widget seen = VisibilityDetector(
+              key: Key('comment-vis-${widget.postId}-$cid'),
+              onVisibilityChanged: (VisibilityInfo info) =>
+                  _reportVisible(cid, info),
+              child: row,
+            );
+            if (!isFocused) return seen;
+            // A quiet marker on the comment the person came here to see, and
+            // the anchor used to scroll it into view.
             return Container(
+              key: _focusedRowKey,
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               decoration: BoxDecoration(
                 color: Colors.white10,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: row,
+              child: seen,
             );
           },
         );

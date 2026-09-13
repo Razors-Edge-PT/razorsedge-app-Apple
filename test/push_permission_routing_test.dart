@@ -25,6 +25,7 @@ import 'package:localtest222/push/notification_platform.dart';
 import 'package:localtest222/push/notification_settings_screen.dart';
 import 'package:localtest222/push/push_intent.dart';
 import 'package:localtest222/push/push_notification_service.dart';
+import 'package:localtest222/push/foreground_focus.dart';
 import 'package:localtest222/push/push_router.dart';
 
 const String alice = 'aliceUidaliceUidaliceUid0001';
@@ -467,9 +468,11 @@ void main() {
             final Completer<bool?>? gate = lookups[convId];
             return gate == null ? Future<bool?>.value(true) : gate.future;
           },
-          openPost: (BuildContext c, PushIntent i) async {
+          openPost: (BuildContext c, PushIntent i, bool Function() valid) async {
             // Stands in for the real fetch-then-open: a post that is gone
-            // reports itself and opens nothing.
+            // reports itself and opens nothing, and one whose account went
+            // away opens nothing either.
+            if (!valid()) return false;
             if (missingPosts.contains(i.postId)) {
               notices.add('That post is no longer available.');
               return false;
@@ -617,6 +620,78 @@ void main() {
       router.submit(postIntent(type: 'postLike', postId: 'p2'));
       await tester.pumpAndSettle();
       expect(find.text('POST p2 comment=-'), findsOneWidget);
+    });
+
+    testWidgets('a tap about a DIFFERENT comment on the post in front reveals '
+        'that comment instead of opening nothing',
+        (WidgetTester tester) async {
+      final PushRouter router = await restoredWorkout(tester);
+      ForegroundPost.shown('p1');
+      ForegroundFocus.reset();
+      addTearDown(ForegroundPost.reset);
+      addTearDown(ForegroundFocus.reset);
+      final List<FocusRequest> asked = <FocusRequest>[];
+      void listener() {
+        final FocusRequest? r = ForegroundFocus.requests.value;
+        if (r != null) asked.add(r);
+      }
+
+      ForegroundFocus.requests.addListener(listener);
+      addTearDown(() => ForegroundFocus.requests.removeListener(listener));
+
+      router.submit(postIntent(type: 'postComment', postId: 'p1', commentId: 'c7'));
+      await tester.pumpAndSettle();
+      expect(observer.pushes, 0, reason: 'no second copy of a page already open');
+      expect(asked.single.targetId, 'c7',
+          reason: 'the open page is told to move to the comment');
+      expect(asked.single.isFor('p1'), isTrue);
+
+      // And a second tap about yet another comment is not swallowed as a
+      // duplicate just because it shares the post.
+      now = now.add(const Duration(milliseconds: 300));
+      router.submit(postIntent(type: 'postComment', postId: 'p1', commentId: 'c9'));
+      await tester.pumpAndSettle();
+      expect(asked.length, 2);
+      expect(asked.last.targetId, 'c9');
+    });
+
+    testWidgets('a reaction tap for the conversation in front reveals its '
+        'message, while a plain message there opens nothing',
+        (WidgetTester tester) async {
+      final PushRouter router = await restoredWorkout(tester);
+      final String convId = conversationIdFor(alice, carol);
+      ForegroundConversation.shown(convId);
+      ForegroundFocus.reset();
+      addTearDown(ForegroundConversation.reset);
+      addTearDown(ForegroundFocus.reset);
+      final List<FocusRequest> asked = <FocusRequest>[];
+      void listener() {
+        final FocusRequest? r = ForegroundFocus.requests.value;
+        if (r != null) asked.add(r);
+      }
+
+      ForegroundFocus.requests.addListener(listener);
+      addTearDown(() => ForegroundFocus.requests.removeListener(listener));
+
+      // A reaction is about ONE message, which may be far up the thread.
+      router.submit(PushIntent.fromData(<String, dynamic>{
+        'type': 'dmReaction',
+        'recipientUid': alice,
+        'actorUid': carol,
+        'convId': convId,
+        'msgId': 'm-old',
+        'activityId': 'dr_1',
+      }, now: now)!);
+      await tester.pumpAndSettle();
+      expect(observer.pushes, 0);
+      expect(asked.single.targetId, 'm-old');
+
+      // A new message in the thread you are reading needs neither.
+      now = now.add(const Duration(seconds: 5));
+      router.submit(dm(carol));
+      await tester.pumpAndSettle();
+      expect(observer.pushes, 0);
+      expect(asked.length, 1);
     });
 
     testWidgets('a tap about a deleted post says so and opens nothing',

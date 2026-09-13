@@ -74,6 +74,74 @@ test('a long comment is truncated before it is stored', () => {
   assert.ok(record.preview.endsWith('…'));
 });
 
+test('a record says outright that it is valid', () => {
+  const record = A.activityRecord({
+    type: P.PushType.POST_LIKE, actorUid: 'u2', occurrence: 'o', postId: 'p1', now: 1,
+  });
+  // Written rather than absent, so a withdrawal is a field CHANGING and the
+  // field can be queried on.
+  assert.equal(record.invalidated, false);
+});
+
+test('a withdrawn interaction is invalidated, never deleted and never re-read',
+  async () => {
+    const writes = [];
+    const db = {
+      collection: () => ({
+        doc: () => ({
+          collection: () => ({
+            doc: () => ({
+              async update(patch) { writes.push(patch); },
+            }),
+          }),
+        }),
+      }),
+    };
+    assert.equal(await A.retireActivity(db, OWNER, 'pl_x', 'reaction-withdrawn'), true);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].invalidated, true);
+    assert.equal(writes[0].invalidReason, 'reaction-withdrawn');
+    // `read` is left exactly as it was: an interaction that comes back comes
+    // back as it was, not as freshly unread and not as silently read.
+    assert.ok(!('read' in writes[0]), 'read state is not touched');
+    assert.ok(!('readAt' in writes[0]));
+  });
+
+test('retiring what was never recorded is a no-op, not a failure', async () => {
+  const notFound = Object.assign(new Error('NOT_FOUND'), { code: 5 });
+  const db = {
+    collection: () => ({
+      doc: () => ({
+        collection: () => ({
+          doc: () => ({ async update() { throw notFound; } }),
+        }),
+      }),
+    }),
+  };
+  assert.equal(await A.retireActivity(db, OWNER, 'pl_missing', 'x'), false);
+  assert.equal(await A.refreshActivity(db, OWNER, 'pl_missing', { emoji: '🔥' }), false);
+});
+
+test('a refresh writes only the wording that changed', async () => {
+  const writes = [];
+  const db = {
+    collection: () => ({
+      doc: () => ({
+        collection: () => ({
+          doc: () => ({ async update(patch) { writes.push(patch); } }),
+        }),
+      }),
+    }),
+  };
+  await A.refreshActivity(db, OWNER, 'pc_x', { preview: '  fixed   typo ' });
+  assert.deepEqual(writes[0], { preview: 'fixed typo' });
+  await A.refreshActivity(db, OWNER, 'dr_x', { emoji: '❤️' });
+  assert.deepEqual(writes[1], { emoji: '❤️' });
+  // Nothing to say: nothing written, and no claim that anything was.
+  assert.equal(await A.refreshActivity(db, OWNER, 'dr_x', {}), false);
+  assert.equal(writes.length, 2);
+});
+
 test('empty optional fields are left out rather than stored as blanks', () => {
   const record = A.activityRecord({
     type: P.PushType.POST_LIKE, actorUid: 'u2', occurrence: 'o', postId: 'p1', now: 1,

@@ -528,22 +528,34 @@ class PushNotificationService with WidgetsBindingObserver {
       ));
       return;
     }
-    // An interaction this session has already acknowledged: the alert is
-    // stale, so it neither shows nor stays in the tray. Only a POSITIVE
-    // acknowledgement counts — a push normally arrives before Firestore
-    // delivers the record it is about.
-    if (intent.kind.hasActivityRecord &&
-        _activity.isAcknowledged(intent.activityId)) {
-      return;
-    }
+    // An interaction this session has already acknowledged is stale, and so is
+    // one whose target is on screen. Only a POSITIVE acknowledgement counts —
+    // a push normally arrives before Firestore delivers the record it is
+    // about — and only the target being visible, not its post or chat.
+    final bool acknowledged = intent.kind.hasActivityRecord &&
+        _activity.isAcknowledged(intent.activityId);
     final bool resumed =
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    // Is the exact comment / reacted-to message on screen? The open post or
+    // chat alone does not answer that.
+    final bool targetOnScreen = switch (intent.kind) {
+      PushKind.postComment => intent.postId != null &&
+          intent.commentId != null &&
+          ForegroundPost.isCommentVisible(intent.postId!, intent.commentId!),
+      PushKind.dmReaction => intent.convId != null &&
+          intent.messageId != null &&
+          ForegroundConversation.isMessageVisible(
+              intent.convId!, intent.messageId!),
+      _ => false,
+    };
     if (!shouldShowForegroundBanner(
       intent: intent,
       currentUid: _currentUid(),
       visibleConvId: ForegroundConversation.visibleConvId,
       visiblePostId: ForegroundPost.visiblePostId,
       appResumed: resumed,
+      targetOnScreen: targetOnScreen,
+      alreadyAcknowledged: acknowledged,
     )) {
       return;
     }

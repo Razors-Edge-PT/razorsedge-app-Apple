@@ -61,6 +61,17 @@ class PostActivityScopeState extends State<PostActivityScope>
   bool _routeVisible = true;
   ModalRoute<dynamic>? _route;
 
+  /// Unread interactions for THIS post as the server has them.
+  ///
+  /// The live subscription only tracks the newest unread records overall, so a
+  /// notification about a comment with fifty newer interactions behind it
+  /// would not be in it — and would then never be read or have its alert
+  /// cancelled, however plainly it is on screen. This is that post's own
+  /// unread list, fetched when the page presents something the local view does
+  /// not cover.
+  List<SocialActivity> _subjectUnread = const <SocialActivity>[];
+  bool _fetchingSubject = false;
+
   @override
   void initState() {
     super.initState();
@@ -120,12 +131,27 @@ class PostActivityScopeState extends State<PostActivityScope>
     if (state == AppLifecycleState.resumed) _maybeAcknowledge();
   }
 
-  /// The comments list says which comments it is showing. Called as the list
-  /// builds, so it must stay cheap and must not set state.
+  /// The comments list says which comments are ON SCREEN right now — not
+  /// which ones it loaded. Called from a visibility callback, so it must stay
+  /// cheap and must not set state.
   void reportDisplayedComments(Iterable<String> commentIds) {
     final int before = _displayedComments.length;
     _displayedComments.addAll(commentIds);
-    if (_displayedComments.length != before) _maybeAcknowledge();
+    if (_displayedComments.length == before) return;
+    // A banner for a comment already on screen would be noise; one for a
+    // comment further up the thread is not.
+    ForegroundPost.reportVisibleComments(widget.postId, _displayedComments);
+    _maybeAcknowledge();
+  }
+
+  /// The unread interactions for this post, from both the live view and this
+  /// post's own list, without duplicates.
+  List<SocialActivity> _knownUnread() {
+    final Map<String, SocialActivity> byId = <String, SocialActivity>{
+      for (final SocialActivity a in _service.snapshot.unread) a.id: a,
+      for (final SocialActivity a in _subjectUnread) a.id: a,
+    };
+    return byId.values.toList(growable: false);
   }
 
   void _maybeAcknowledge() {
@@ -140,12 +166,53 @@ class PostActivityScopeState extends State<PostActivityScope>
       return;
     }
     final List<SocialActivity> presented = presentedOnPost(
-      unread: _service.snapshot.unread,
+      unread: _knownUnread(),
       postId: widget.postId,
       displayedCommentIds: _displayedComments,
     );
-    if (presented.isEmpty) return;
-    unawaited(_service.acknowledge(presented));
+    if (presented.isNotEmpty) unawaited(_service.acknowledge(presented));
+    // Something on screen that the live window does not explain is the sign of
+    // an older interaction: ask this post directly, once at a time.
+    if (_needsSubjectLookup(presented)) unawaited(_refreshSubjectUnread());
+  }
+
+  /// True when a comment is on screen that nothing known accounts for.
+  bool _needsSubjectLookup(List<SocialActivity> presented) {
+    if (_fetchingSubject || _displayedComments.isEmpty) return false;
+    final Set<String> explained = <String>{
+      for (final SocialActivity a in _knownUnread())
+        if (a.commentId != null) a.commentId!,
+      for (final SocialActivity a in presented)
+        if (a.commentId != null) a.commentId!,
+      // Already asked about: most comments have no unread interaction behind
+      // them at all, and scrolling past them must not re-query the post.
+      ..._askedAbout,
+    };
+    return _displayedComments.any((String id) => !explained.contains(id));
+  }
+
+  /// Comments a subject lookup has already covered.
+  final Set<String> _askedAbout = <String>{};
+
+  Future<void> _refreshSubjectUnread() async {
+    if (_fetchingSubject) return;
+    _fetchingSubject = true;
+    final Set<String> asked = <String>{..._displayedComments};
+    try {
+      final List<SocialActivity> found = await _service
+          .unreadForSubjectFromServer(postSubject(widget.postId));
+      if (!mounted) return;
+      _askedAbout.addAll(asked);
+      final bool changed = found.length != _subjectUnread.length ||
+          found.any((SocialActivity a) =>
+              !_subjectUnread.any((SocialActivity b) => b.id == a.id));
+      _subjectUnread = found;
+      if (changed && found.isNotEmpty) _maybeAcknowledge();
+    } catch (_) {
+      // Offline: the live view still covers everything recent.
+    } finally {
+      _fetchingSubject = false;
+    }
   }
 
   @override

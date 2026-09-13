@@ -1,30 +1,30 @@
 /// ACTIVITY — what people did to your posts and your messages.
 ///
-/// ── What marks a row read ───────────────────────────────────────────────────
-/// Being SEEN. Not opening the tab, not opening Home, not having the list
-/// mounted under another screen: a row is acknowledged when it is actually on
-/// screen, while this tab is the selected one, its route is visible and the app
-/// is in front. Rows further down the list — the ones that would need
-/// scrolling to reach — stay unread, along with their phone alerts, until they
-/// are scrolled to.
+/// ── What marks a row read: nothing here ─────────────────────────────────────
+/// This list is a set of POINTERS, not the content. Seeing the line "Sam
+/// commented on your post" is not reading Sam's comment, so scrolling a row
+/// into view no longer acknowledges anything — an earlier version did that,
+/// and it cleared badges and cancelled alerts for comments and reactions the
+/// person had still not seen.
 ///
-/// That is deliberately stricter than "you opened the list". Someone glancing
-/// at a badge and backing out has not read anything, and an interaction that
-/// arrives while they are looking is not in the set that was on screen, so it
-/// stays unread too.
+/// A row is read when its CONTENT is opened and presented: the post with that
+/// comment actually on screen (PostActivityScope plus the comments list's own
+/// visibility), or the conversation scrolled to the reacted-to message. Tapping
+/// a row is what takes you there.
 ///
-/// Tapping a row opens the thing it is about — the post, with the comment
-/// revealed, or the conversation with the reacted-to message — which is also
-/// where the rest of that post's interactions get read.
+/// So opening ACTIVITY, glancing at it and backing out changes nothing, and an
+/// interaction that arrives while the list is open stays unread until it too
+/// is opened.
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../directMessages.dart' show ConversationPage;
-import '../../main.dart' show routeObserver;
+import '../../push/foreground_conversation.dart';
+import '../../push/foreground_focus.dart';
+import '../../push/foreground_post.dart';
 import '../../profile/ui/profile_theme.dart';
 import '../open_feed_post.dart';
 import '../social_activity_service.dart';
@@ -32,9 +32,6 @@ import '../user_search_repository.dart';
 import '../user_search_result.dart';
 import 'feed_card.dart' show formatRelativeTime;
 import 'user_row.dart';
-
-/// How much of a row must be on screen before it counts as seen.
-const double kActivitySeenFraction = 0.6;
 
 class ActivityView extends StatefulWidget {
   const ActivityView({
@@ -65,101 +62,42 @@ class ActivityView extends StatefulWidget {
   State<ActivityView> createState() => _ActivityViewState();
 }
 
-class _ActivityViewState extends State<ActivityView>
-    with WidgetsBindingObserver, RouteAware {
+class _ActivityViewState extends State<ActivityView> {
   SocialActivityService get _service =>
       widget.service ?? SocialActivityService.instance;
   late final UserSearchRepository _search;
 
   Map<String, UserSearchResult> _people = const <String, UserSearchResult>{};
   final Set<String> _lookedUp = <String>{};
-  final Set<String> _onScreen = <String>{};
-  bool _routeVisible = true;
-  ModalRoute<dynamic>? _route;
+
+  /// Pages fetched beyond the live one, oldest-first append order.
+  final List<SocialActivity> _older = <SocialActivity>[];
+  bool _loadingOlder = false;
+  bool _noMoreOlder = false;
+
+  Future<void> _loadOlder(SocialActivity after) async {
+    if (_loadingOlder || _noMoreOlder) return;
+    setState(() => _loadingOlder = true);
+    try {
+      final List<SocialActivity> page = await _service.loadMore(after: after);
+      if (!mounted) return;
+      setState(() {
+        _older.addAll(page);
+        if (page.isEmpty) _noMoreOlder = true;
+      });
+    } finally {
+      if (mounted) setState(() => _loadingOlder = false);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _search = widget.search ?? UserSearchRepository();
-    WidgetsBinding.instance.addObserver(this);
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final ModalRoute<dynamic>? route = ModalRoute.of(context);
-    if (route != null && route != _route) {
-      if (_route != null) routeObserver.unsubscribe(this);
-      _route = route;
-      routeObserver.subscribe(this, route);
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant ActivityView old) {
-    super.didUpdateWidget(old);
-    // Switching TO this tab presents whatever is already on screen.
-    if (widget.active && !old.active) _acknowledgeVisible();
-  }
-
-  @override
-  void dispose() {
-    if (_route != null) routeObserver.unsubscribe(this);
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didPush() => _setVisible(true);
-
-  @override
-  void didPopNext() => _setVisible(true);
-
-  @override
-  void didPushNext() => _setVisible(false);
-
-  @override
-  void didPop() => _setVisible(false);
-
-  void _setVisible(bool visible) {
-    _routeVisible = visible;
-    if (visible) _acknowledgeVisible();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _acknowledgeVisible();
-  }
-
-  bool get _presenting =>
-      widget.active &&
-      shouldAcknowledgeActivity(
-        routeVisible: _routeVisible,
-        appResumed:
-            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
-        signedIn: _service.snapshot.uid != null,
-      );
-
-  void _onRowVisibility(SocialActivity item, VisibilityInfo info) {
-    final bool seen = info.visibleFraction >= kActivitySeenFraction;
-    if (seen) {
-      _onScreen.add(item.id);
-    } else {
-      _onScreen.remove(item.id);
-      return;
-    }
-    if (!_presenting) return;
-    _acknowledgeVisible();
-  }
-
-  void _acknowledgeVisible() {
-    if (!mounted || !_presenting) return;
-    final List<SocialActivity> presented = _service.snapshot.unread
-        .where((SocialActivity a) => _onScreen.contains(a.id))
-        .toList(growable: false);
-    if (presented.isEmpty) return;
-    unawaited(_service.acknowledge(presented));
-  }
+  // No route or lifecycle observers here any more: this list acknowledges
+  // nothing, so it has no reason to care whether it is on screen.
 
   /// One batched identity lookup per page of rows, memoised by the repository —
   /// never one read per row, and a rename or a new avatar appears at once.
@@ -184,16 +122,43 @@ class _ActivityViewState extends State<ActivityView>
   }
 
   Future<void> _open(SocialActivity item) async {
+    // The account that owns this row, captured before any await: a post fetch
+    // takes time, and a logout or account switch during it must not land the
+    // previous account's content on the new one's screen.
+    final String? owner = _service.snapshot.uid ?? widget.viewerUid;
+    bool stillValid() =>
+        mounted && _service.snapshot.uid == owner && owner != null;
+
     if (item.isPostInteraction && item.postId != null) {
+      // Already looking at that post: move it to this comment instead of
+      // stacking another copy.
+      if (ForegroundPost.visiblePostId == item.postId &&
+          item.commentId != null) {
+        ForegroundFocus.request(
+          subjectId: item.postId!,
+          targetId: item.commentId!,
+        );
+        return;
+      }
       await openPostById(
         context,
         item.postId!,
         viewerUid: widget.viewerUid,
         focusCommentId: item.commentId,
+        stillValid: stillValid,
       );
       return;
     }
     if (item.convId != null && item.actorUid.isNotEmpty) {
+      if (ForegroundConversation.visibleConvId == item.convId &&
+          item.messageId != null) {
+        ForegroundFocus.request(
+          subjectId: item.convId!,
+          targetId: item.messageId!,
+        );
+        return;
+      }
+      if (!stillValid()) return;
       // The conversation, with the reacted-to message revealed.
       await Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => ConversationPage(
@@ -215,32 +180,64 @@ class _ActivityViewState extends State<ActivityView>
             child: CircularProgressIndicator(color: ProfilePalette.action),
           );
         }
-        final List<SocialActivity> items = (snap.data ?? const <SocialActivity>[])
+        // The live page, then anything older this visit has asked for. A
+        // record cannot appear twice, and an older one that has since been
+        // read shows its current state.
+        final Map<String, SocialActivity> merged = <String, SocialActivity>{
+          for (final SocialActivity a in snap.data ?? const <SocialActivity>[])
+            a.id: a,
+        };
+        for (final SocialActivity a in _older) {
+          merged.putIfAbsent(a.id, () => a);
+        }
+        final List<SocialActivity> items = merged.values
             .where((SocialActivity a) => a.isRenderable)
-            .toList(growable: false);
+            .toList(growable: false)
+          ..sort((SocialActivity a, SocialActivity b) =>
+              (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
         if (items.isEmpty) {
           return _ActivityEmpty(failed: snap.hasError);
         }
         _resolvePeople(items);
 
+        final bool canLoadMore = !_noMoreOlder && items.isNotEmpty;
         return ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: ProfileSpacing.sm),
-          itemCount: items.length,
+          itemCount: items.length + (canLoadMore ? 1 : 0),
           itemBuilder: (BuildContext context, int i) {
+            if (i == items.length) {
+              // Older activity is a tap away rather than lost behind the
+              // newest page — an unread interaction from last month is still
+              // reachable, and still readable.
+              return Padding(
+                padding: const EdgeInsets.symmetric(
+                    vertical: ProfileSpacing.md, horizontal: ProfileSpacing.lg),
+                child: Center(
+                  child: _loadingOlder
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: ProfilePalette.action),
+                        )
+                      : TextButton(
+                          key: const ValueKey<String>('activity-load-older'),
+                          onPressed: () => _loadOlder(items.last),
+                          child: const Text('Show older activity'),
+                        ),
+                ),
+              );
+            }
             final SocialActivity item = items[i];
-            return VisibilityDetector(
+            return _ActivityRow(
               key: Key('activity-${item.id}'),
-              onVisibilityChanged: (VisibilityInfo info) =>
-                  _onRowVisibility(item, info),
-              child: _ActivityRow(
-                item: item,
-                person: _people[item.actorUid],
-                now: widget.now,
-                onTap: () => _open(item),
-                onOpenProfile: widget.onOpenProfile == null
-                    ? null
-                    : () => widget.onOpenProfile!(item.actorUid),
-              ),
+              item: item,
+              person: _people[item.actorUid],
+              now: widget.now,
+              onTap: () => _open(item),
+              onOpenProfile: widget.onOpenProfile == null
+                  ? null
+                  : () => widget.onOpenProfile!(item.actorUid),
             );
           },
         );
@@ -251,6 +248,7 @@ class _ActivityViewState extends State<ActivityView>
 
 class _ActivityRow extends StatelessWidget {
   const _ActivityRow({
+    super.key,
     required this.item,
     required this.onTap,
     this.person,

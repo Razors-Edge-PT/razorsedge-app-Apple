@@ -59,6 +59,29 @@ class NotificationPlatform {
     return removed is int ? removed : 0;
   }
 
+  /// The tags/identifiers of THIS app's alerts currently in the tray.
+  ///
+  /// Reconciliation needs to start from what is actually delivered: most of
+  /// those alerts were posted by the system from FCM while Dart was not
+  /// running, so the app has no record of them, and their tag is the only
+  /// thing naming the interaction each one is about. Empty when the platform
+  /// cannot answer (older native build, desktop, tests) — callers fall back.
+  Future<List<String>> deliveredTags() async {
+    // Bounded on purpose. This runs on startup and on resume, before the
+    // badge and the tray agree, and the answer comes from the OS: on iOS
+    // through a completion handler, on Android through a system service that
+    // can refuse. A call that never comes back would leave reconciliation —
+    // and anything waiting on it — hanging for the life of the session, so a
+    // slow platform is treated exactly like one that cannot answer.
+    final Object? tags = await _invokeWithResult('deliveredTags', null)
+        .timeout(const Duration(seconds: 3), onTimeout: () => null);
+    if (tags is! List) return const <String>[];
+    return <String>[
+      for (final Object? t in tags)
+        if (t is String && t.isNotEmpty) t,
+    ];
+  }
+
   Future<void> _invoke(String method) async {
     await _invokeWithResult(method, null);
   }

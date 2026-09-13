@@ -32,6 +32,9 @@ class MainActivity : FlutterActivity() {
                         NotificationManagerCompat.from(this).cancelAll()
                         result.success(null)
                     }
+                    "deliveredTags" -> {
+                        result.success(deliveredTags())
+                    }
                     "clearNotifications" -> {
                         val prefixes = call.argument<List<String>>("tagPrefixes") ?: emptyList()
                         val tags = call.argument<List<String>>("tags") ?: emptyList()
@@ -52,6 +55,20 @@ class MainActivity : FlutterActivity() {
      * running — which is the whole point, since Dart never saw those. It needs
      * no special permission and cannot see other apps' notifications.
      */
+    /**
+     * The tags of this app's currently delivered notifications, including the
+     * ones the system posted from FCM while the app was not running.
+     * getActiveNotifications() is scoped to this app and needs no permission.
+     */
+    private fun deliveredTags(): List<String> {
+        val manager = getSystemService(NotificationManager::class.java) ?: return emptyList()
+        return try {
+            manager.activeNotifications.mapNotNull { it.tag }
+        } catch (e: SecurityException) {
+            emptyList()
+        }
+    }
+
     private fun cancelMatching(prefixes: List<String>, tags: List<String>): Int {
         val manager = getSystemService(NotificationManager::class.java) ?: return 0
         var cancelled = 0
