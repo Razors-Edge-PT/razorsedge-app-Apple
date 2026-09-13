@@ -204,47 +204,116 @@ async function retireSubject(db, recipientUid, subject, reason) {
 }
 
 /**
- * The interaction is back — a like taken away and given again, the same
- * occurrence exactly. The record returns to counting with the read state it
- * had, and no job is enqueued: one interaction, one alert, however many times
- * somebody changes their mind.
+ * Bring one record into line with the interaction it is about — as that
+ * interaction is RIGHT NOW, not as some event said it was.
  *
- * Returns true only if it actually had to be revived.
+ * ── Why current state, and not the event ────────────────────────────────────
+ * Firestore events are at-least-once and are NOT ordered. A creation can be
+ * redelivered after the like it announced has been taken back; a deletion can
+ * arrive before the creation it undoes; an edit can arrive after a later edit.
+ * Deciding from event payloads produced exactly the wrong answers: a replayed
+ * creation revived a record for a like that was gone, a late creation made
+ * fresh unread activity for a comment nobody could open, and a stale edit put
+ * yesterday's words back on the row.
+ *
+ * So every write goes through here, and here reads the authoritative document
+ * inside the transaction:
+ *
+ *   * the interaction is gone      → the record is retired (never deleted, so
+ *                                    the occurrence still cannot re-alert);
+ *   * the interaction is there     → the record counts again, with the read
+ *                                    state it always had and no new job;
+ *   * its wording has changed      → preview/emoji are taken FROM THE LIVE
+ *                                    DOCUMENT, so no older value can win.
+ *
+ * Order of events stops mattering: whichever arrives last, the answer is what
+ * is true now, and the same event arriving twice changes nothing the second
+ * time.
+ *
+ * [canonical] is `{ ref, state }` where `state(snapshot)` returns
+ * `{ present, preview?, emoji? }` for the live interaction document.
+ *
+ * Returns 'no-record' | 'retired' | 'revived' | 'refreshed' | 'unchanged'.
  */
-async function reviveActivity(db, recipientUid, activityId) {
-  if (!recipientUid || !activityId) return false;
+async function settleActivity(db, { recipientUid, activityId, canonical, reason }) {
+  if (!recipientUid || !activityId || !canonical) return 'no-record';
   const ref = activityRef(db, recipientUid, activityId);
-  const snap = await ref.get();
-  if (!snap.exists || snap.get('invalidated') !== true) return false;
-  await ref.update({
-    invalidated: false,
-    invalidatedAt: admin.firestore.FieldValue.delete(),
-    invalidReason: admin.firestore.FieldValue.delete(),
+  return db.runTransaction(async (tx) => {
+    const record = await tx.get(ref);
+    if (!record.exists) return 'no-record';
+    const liveSnap = await tx.get(canonical.ref);
+    const live = canonical.state(liveSnap) || { present: false };
+    const wasInvalid = record.get('invalidated') === true;
+
+    if (!live.present) {
+      if (wasInvalid) return 'unchanged';
+      tx.update(ref, {
+        invalidated: true,
+        invalidatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        ...(reason ? { invalidReason: String(reason).slice(0, 40) } : {}),
+      });
+      return 'retired';
+    }
+
+    const patch = {};
+    if (wasInvalid) {
+      patch.invalidated = false;
+      patch.invalidatedAt = admin.firestore.FieldValue.delete();
+      patch.invalidReason = admin.firestore.FieldValue.delete();
+    }
+    if (live.preview !== undefined) {
+      const preview = truncatePreview(live.preview);
+      if (preview !== (record.get('preview') || '')) patch.preview = preview;
+    }
+    if (live.emoji !== undefined) {
+      const emoji = String(live.emoji).slice(0, 8);
+      if (emoji !== record.get('emoji')) patch.emoji = emoji;
+    }
+    if (Object.keys(patch).length === 0) return 'unchanged';
+    tx.update(ref, patch);
+    // `read` is never touched here, in either direction: an interaction that
+    // comes back comes back as it was, and none of this is a second alert.
+    return wasInvalid ? 'revived' : 'refreshed';
   });
-  return true;
 }
 
 /**
- * Keep an existing record's wording true — an edited comment, a swapped
- * reaction emoji. Never creates a record and never enqueues a job: the person
- * has already been told about this interaction, and telling them again because
- * the other person fixed a typo would be noise.
+ * Canonical-state descriptors. Each says where the authoritative document
+ * lives and how to read the interaction out of it.
  */
-async function refreshActivity(db, recipientUid, activityId, { preview, emoji }) {
-  if (!recipientUid || !activityId) return false;
-  const patch = {
-    ...(preview === undefined ? {} : { preview: truncatePreview(preview) }),
-    ...(emoji === undefined ? {} : { emoji: String(emoji).slice(0, 8) }),
-  };
-  if (Object.keys(patch).length === 0) return false;
-  try {
-    await activityRef(db, recipientUid, activityId).update(patch);
-    return true;
-  } catch (err) {
-    if (err && (err.code === 5 || err.code === 'not-found')) return false;
-    throw err;
-  }
-}
+const canonicalComment = (db, postId, commentId, actorUid) => ({
+  ref: db.collection('posts').doc(postId).collection('comments').doc(commentId),
+  state: (snap) => {
+    if (!snap.exists) return { present: false };
+    const data = snap.data() || {};
+    // Re-authored under somebody else's name is not the same interaction.
+    if (actorUid && data.uid && data.uid !== actorUid) return { present: false };
+    return { present: true, preview: typeof data.text === 'string' ? data.text : '' };
+  },
+});
+
+const canonicalPostReaction = (db, postId, kind, actorUid) => ({
+  ref: db
+    .collection('posts')
+    .doc(postId)
+    .collection(kind === 'goodLift' ? 'goodLifts' : 'likes')
+    .doc(actorUid),
+  state: (snap) => ({ present: snap.exists }),
+});
+
+const canonicalDmReaction = (db, convId, messageId, actorUid) => ({
+  ref: db.collection('conversations').doc(convId).collection('messages').doc(messageId),
+  state: (snap) => {
+    if (!snap.exists) return { present: false };
+    const data = snap.data() || {};
+    const reactions = data.reactions && typeof data.reactions === 'object'
+      ? data.reactions
+      : {};
+    const emoji = reactions[actorUid];
+    if (typeof emoji !== 'string' || !emoji) return { present: false };
+    return { present: true, emoji };
+  },
+});
 
 module.exports = {
   SUB_ACTIVITY,
@@ -257,6 +326,8 @@ module.exports = {
   truncatePreview,
   retireActivity,
   retireSubject,
-  reviveActivity,
-  refreshActivity,
+  settleActivity,
+  canonicalComment,
+  canonicalPostReaction,
+  canonicalDmReaction,
 };

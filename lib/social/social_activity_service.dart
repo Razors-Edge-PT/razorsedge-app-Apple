@@ -291,6 +291,20 @@ class SocialActivityService {
   CollectionReference<Map<String, dynamic>> _collection(String uid) =>
       _db.collection('users').doc(uid).collection('socialActivity');
 
+  /// Records that still stand, filtered by the SERVER.
+  ///
+  /// Withdrawn interactions keep `read: false` on purpose, so that one coming
+  /// back comes back as it was. Filtering them out in Dart therefore meant a
+  /// bounded query could return fifty retired records and nothing else: the
+  /// badge showed zero while real unread activity sat just below the window,
+  /// and the Activity list showed an empty state it could not page past. The
+  /// condition belongs in the query, where the limit is applied after it.
+  ///
+  /// Every record the server writes carries `invalidated` explicitly, so no
+  /// document is excluded for want of the field.
+  Query<Map<String, dynamic>> _live(String uid) =>
+      _collection(uid).where('invalidated', isEqualTo: false);
+
   /// Unread activity for the signed-in account. Shared: every listener gets the
   /// same underlying subscription and the latest value immediately.
   ///
@@ -347,7 +361,7 @@ class SocialActivityService {
       _acked.clear();
       _last = SocialActivitySnapshot.empty;
     }
-    _sub = _collection(uid)
+    _sub = _live(uid)
         .where('read', isEqualTo: false)
         .orderBy('createdAt', descending: true)
         .limit(kWatchLimit)
@@ -395,7 +409,7 @@ class SocialActivityService {
     final String? uid = _uidOrNull();
     if (uid == null) return const <SocialActivity>[];
     try {
-      final QuerySnapshot<Map<String, dynamic>> q = await _collection(uid)
+      final QuerySnapshot<Map<String, dynamic>> q = await _live(uid)
           .where('subject', isEqualTo: subject)
           .where('read', isEqualTo: false)
           .limit(limit)
@@ -413,35 +427,98 @@ class SocialActivityService {
     }
   }
 
-  /// Older records, for the Activity list's "load more". One page at a time,
-  /// starting after [after]; empty when there is nothing older.
-  Future<List<SocialActivity>> loadMore({
-    required SocialActivity after,
-    int limit = kListLimit,
-  }) async {
+  /// One interaction, by id.
+  ///
+  /// The one lookup that no window can hide: a notification and an Activity
+  /// row both name the exact record they are about, so the thing the person
+  /// tapped can always be read, acknowledged and have its alert cancelled —
+  /// however many newer interactions sit in front of it.
+  Future<SocialActivity?> activityById(String activityId) async {
     final String? uid = _uidOrNull();
-    final DateTime? cursor = after.createdAt;
-    if (uid == null || cursor == null) return const <SocialActivity>[];
+    if (uid == null || activityId.isEmpty) return null;
     try {
-      // A range on the ordered field rather than a cursor: one field, one
-      // index, and the same answer from any Firestore client. (An interaction
-      // sharing the cursor's exact timestamp is on the page that produced the
-      // cursor, so excluding it here loses nothing.)
-      final QuerySnapshot<Map<String, dynamic>> q = await _collection(uid)
-          .where('createdAt', isLessThan: Timestamp.fromDate(cursor))
-          .orderBy('createdAt', descending: true)
-          .limit(limit)
-          .get();
-      final List<SocialActivity> out = <SocialActivity>[];
-      for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
-        final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
-        if (a != null) out.add(_withSessionRead(a));
-      }
-      return out;
+      final DocumentSnapshot<Map<String, dynamic>> doc =
+          await _collection(uid).doc(activityId).get();
+      final SocialActivity? a = SocialActivity.fromDoc(activityId, doc.data());
+      if (a == null || a.invalidated) return null;
+      return _withSessionRead(a);
     } catch (e) {
-      debugPrint('[activity] could not load older activity: $e');
-      return const <SocialActivity>[];
+      debugPrint('[activity] could not read $activityId: $e');
+      return null;
     }
+  }
+
+  /// Everything older than [anchor], newest first, as a LIVE query.
+  ///
+  /// Anchored on the anchor's own document rather than on a timestamp, so
+  /// records sharing a timestamp to the millisecond are neither dropped nor
+  /// repeated at the boundary — document order breaks the tie, exactly as it
+  /// does inside the page above. Anchored on a FIXED document rather than on
+  /// "the fiftieth newest", so new arrivals at the top cannot shift the
+  /// boundary underneath the person.
+  ///
+  /// It stays a subscription because these rows are not a snapshot of the
+  /// past: one of them being read here, or withdrawn by its author, has to
+  /// show, and a cached copy would go on claiming otherwise.
+  /// Deliberately not an `async*` generator: cancelling a subscription to one
+  /// that is suspended in `yield*` over a stream that never ends does not
+  /// complete, and a list disposing its older pages would hang on it.
+  Stream<List<SocialActivity>> watchOlderThan({
+    required SocialActivity anchor,
+    int limit = kListLimit,
+  }) {
+    final String? uid = _uidOrNull();
+    if (uid == null) {
+      return Stream<List<SocialActivity>>.value(const <SocialActivity>[]);
+    }
+    late final StreamController<List<SocialActivity>> out;
+    StreamSubscription<List<SocialActivity>>? sub;
+
+    Future<void> start() async {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> cursor =
+            await _collection(uid).doc(anchor.id).get();
+        Query<Map<String, dynamic>> q =
+            _live(uid).orderBy('createdAt', descending: true);
+        if (cursor.exists) {
+          q = q.startAfterDocument(cursor);
+        } else {
+          // The anchor has gone: its timestamp is all that is left to position
+          // by, and anything sharing that instant is on the page above.
+          final DateTime? at = anchor.createdAt;
+          if (at == null) {
+            out.add(const <SocialActivity>[]);
+            return;
+          }
+          q = q.where('createdAt', isLessThan: Timestamp.fromDate(at));
+        }
+        if (out.isClosed) return;
+        sub = q.limit(limit).snapshots().map(_mapDocs).listen(
+              out.add,
+              onError: out.addError,
+              onDone: out.close,
+            );
+      } catch (e) {
+        debugPrint('[activity] could not load older activity: $e');
+        if (!out.isClosed) out.add(const <SocialActivity>[]);
+      }
+    }
+
+    out = StreamController<List<SocialActivity>>(
+      onListen: () => unawaited(start()),
+      onCancel: () async => sub?.cancel(),
+    );
+    return out.stream;
+  }
+
+  List<SocialActivity> _mapDocs(QuerySnapshot<Map<String, dynamic>> q) {
+    final List<SocialActivity> out = <SocialActivity>[];
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
+      final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
+      if (a == null || a.invalidated) continue;
+      out.add(_withSessionRead(a));
+    }
+    return out;
   }
 
   /// True when THIS session has already acknowledged [activityId].
@@ -582,19 +659,11 @@ class SocialActivityService {
   Stream<List<SocialActivity>> watchRecent() {
     final String? uid = _uidOrNull();
     if (uid == null) return Stream<List<SocialActivity>>.value(const <SocialActivity>[]);
-    return _collection(uid)
+    return _live(uid)
         .orderBy('createdAt', descending: true)
         .limit(kListLimit)
         .snapshots()
-        .map((QuerySnapshot<Map<String, dynamic>> q) {
-      final List<SocialActivity> out = <SocialActivity>[];
-      for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
-        final SocialActivity? a = SocialActivity.fromDoc(d.id, d.data());
-        if (a == null) continue;
-        out.add(_withSessionRead(a));
-      }
-      return out;
-    });
+        .map(_mapDocs);
   }
 
   /// Reflects this session's acknowledgements on a record the server has not

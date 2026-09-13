@@ -168,14 +168,165 @@ test('an edit and a deletion are not new comments', async () => {
   await post(owner, 'p3');
   const first = { uid: friend, text: 'nice' };
   const edited = { uid: friend, text: 'nice!!' };
-  assert.equal((await O.enqueuePostComment(db(), {
-    postId: 'p3', commentId: 'c1', beforeData: first, afterData: edited, eventId: 'e2',
-  })).reason, 'not-a-new-comment');
-  assert.equal((await O.enqueuePostComment(db(), {
-    postId: 'p3', commentId: 'c1', beforeData: first, afterData: null, eventId: 'e3',
-  })).reason, 'no-such-activity', 'nothing was ever recorded, so nothing to retire');
+  for (const after of [edited, null]) {
+    assert.equal((await O.enqueuePostComment(db(), {
+      postId: 'p3', commentId: 'c1', beforeData: first, afterData: after, eventId: 'e2',
+    })).reason, 'no-such-activity', 'nothing was ever recorded to change');
+  }
   assert.deepEqual(await activityList(owner), []);
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+// Replays and events out of order
+//
+// Firestore events are at-least-once and unordered. Each of these is a real
+// sequence that used to leave the owner with activity contradicting the post.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('a creation event replayed after the like was taken back does not revive it',
+  async () => {
+    const { owner, friend } = people('owner', 'friend');
+    await Promise.all([befriend(owner, friend), register(owner, 'tok-rp')]);
+    await post(owner, 'pr1');
+    const like = { createdAt: Timestamp().fromMillis(Date.now()) };
+    await db().doc(`posts/pr1/likes/${friend}`).set(like);
+
+    const first = await O.enqueuePostReaction(db(), {
+      kind: 'like', postId: 'pr1', actorUid: friend, beforeData: null, afterData: like, eventId: 'e1',
+    });
+    assert.equal(first.enqueued, true);
+
+    // The like is taken back, and the withdrawal is processed.
+    await db().doc(`posts/pr1/likes/${friend}`).delete();
+    assert.equal((await O.enqueuePostReaction(db(), {
+      kind: 'like', postId: 'pr1', actorUid: friend, beforeData: like, afterData: null, eventId: 'e2',
+    })).reason, 'reaction-retired');
+
+    // Now the ORIGINAL creation event is delivered again.
+    const replay = await O.enqueuePostReaction(db(), {
+      kind: 'like', postId: 'pr1', actorUid: friend, beforeData: null, afterData: like, eventId: 'e1',
+    });
+    assert.equal(replay.enqueued, false);
+    assert.match(replay.reason, /^interaction-gone/);
+    const record = await activityOf(owner, first.activityId);
+    assert.equal(record.invalidated, true,
+      'the like is not there, so neither is the activity');
+  });
+
+test('a deletion processed before the creation leaves no active activity',
+  async () => {
+    const { owner, friend } = people('owner', 'friend');
+    await Promise.all([befriend(owner, friend), register(owner, 'tok-oo')]);
+    await post(owner, 'pr2');
+    const like = { createdAt: Timestamp().fromMillis(Date.now()) };
+    // The like existed and is already gone; only the events are in flight.
+    const deletion = await O.enqueuePostReaction(db(), {
+      kind: 'like', postId: 'pr2', actorUid: friend, beforeData: like, afterData: null, eventId: 'e2',
+    });
+    assert.equal(deletion.reason, 'no-such-activity');
+
+    // The creation event arrives late.
+    const late = await O.enqueuePostReaction(db(), {
+      kind: 'like', postId: 'pr2', actorUid: friend, beforeData: null, afterData: like, eventId: 'e1',
+    });
+    assert.equal(late.enqueued, false);
+    assert.equal(late.reason, 'interaction-gone');
+    assert.deepEqual(await activityList(owner), [],
+      'no unread activity for a like nobody can see');
+    const jobs = await db().collection('pushOutbox')
+      .where('recipientUid', '==', owner).get();
+    assert.equal(jobs.size, 0, 'and no alert to deliver');
+  });
+
+test('a deletion event arriving after a genuine re-add leaves the record counting',
+  async () => {
+    const { owner, friend } = people('owner', 'friend');
+    await Promise.all([befriend(owner, friend), register(owner, 'tok-ra')]);
+    await post(owner, 'pr3');
+    const like = { createdAt: Timestamp().fromMillis(Date.now()) };
+    await db().doc(`posts/pr3/likes/${friend}`).set(like);
+    const first = await O.enqueuePostReaction(db(), {
+      kind: 'like', postId: 'pr3', actorUid: friend, beforeData: null, afterData: like, eventId: 'e1',
+    });
+
+    // Taken back and given again before the withdrawal event is processed.
+    await db().doc(`posts/pr3/likes/${friend}`).delete();
+    await db().doc(`posts/pr3/likes/${friend}`).set(like);
+
+    const late = await O.enqueuePostReaction(db(), {
+      kind: 'like', postId: 'pr3', actorUid: friend, beforeData: like, afterData: null, eventId: 'e2',
+    });
+    assert.equal(late.reason, 'not-a-new-reaction',
+      'the like is there: nothing to retire');
+    const record = await activityOf(owner, first.activityId);
+    assert.equal(record.invalidated, false, 'still counts, because it is real');
+    assert.equal(record.read, false);
+  });
+
+test('an edit event out of order never restores older words', async () => {
+  const { owner, friend } = people('owner', 'friend');
+  await Promise.all([befriend(owner, friend), register(owner, 'tok-ed2')]);
+  await post(owner, 'pr4');
+  const v1 = await comment('pr4', 'c1', friend, 'first words');
+  const created = await O.enqueuePostComment(db(), {
+    postId: 'pr4', commentId: 'c1', beforeData: null, afterData: v1, eventId: 'e1',
+  });
+  assert.equal(created.enqueued, true);
+
+  // The comment is edited twice; only the second is in the store.
+  const v2 = { ...v1, text: 'second words' };
+  const v3 = { ...v1, text: 'final words' };
+  await db().doc('posts/pr4/comments/c1').set(v3);
+
+  // The FIRST edit's event arrives last, carrying stale text.
+  const stale = await O.enqueuePostComment(db(), {
+    postId: 'pr4', commentId: 'c1', beforeData: v1, afterData: v2, eventId: 'e2',
+  });
+  assert.equal(stale.enqueued, false);
+  assert.equal((await activityOf(owner, created.activityId)).preview, 'final words',
+    'the row says what the comment says, not what an old event carried');
+  assert.equal(stale.reason, 'comment-refreshed');
+});
+
+test('a message deletion event after the message came back keeps the reaction',
+  async () => {
+    const { sender, other } = people('sender', 'other');
+    const convId = convIdFor(sender, other);
+    await Promise.all([befriend(sender, other), register(sender, 'tok-mb')]);
+    await db().doc(`conversations/${convId}`).set({
+      participants: { [sender]: true, [other]: true },
+    });
+    const base = { senderId: sender, text: 'hi' };
+    const withClap = { ...base, reactions: { [other]: '👏' } };
+    await db().doc(`conversations/${convId}/messages/m1`).set(withClap);
+    const res = await O.enqueueDmReactions(db(), {
+      convId, messageId: 'm1', beforeData: base, afterData: withClap, eventId: 'e1',
+    });
+    const activityId = res.results[0].activityId;
+
+    // A stale deletion event, while the message and its reaction are there.
+    await O.enqueueDmReactions(db(), {
+      convId, messageId: 'm1', beforeData: withClap, afterData: null, eventId: 'e2',
+    });
+    assert.equal((await activityOf(sender, activityId)).invalidated, false,
+      'the reaction is on the message right now');
+  });
+
+test('a post-deletion event delivered after the post is back retires nothing',
+  async () => {
+    const { owner, friend } = people('owner', 'friend');
+    await befriend(owner, friend);
+    await post(owner, 'pr5');
+    const c = await comment('pr5', 'c1', friend, 'still here');
+    const made = await O.enqueuePostComment(db(), {
+      postId: 'pr5', commentId: 'c1', beforeData: null, afterData: c, eventId: 'e1',
+    });
+    const postData = (await db().doc('posts/pr5').get()).data();
+
+    const out = await O.retirePostActivity(db(), { postId: 'pr5', beforeData: postData });
+    assert.equal(out.reason, 'post-present');
+    assert.equal((await activityOf(owner, made.activityId)).invalidated, false);
+  });
 
 test('a deleted comment stops counting but is not forgotten', async () => {
   const { owner, friend } = people('owner', 'friend');
@@ -223,6 +374,7 @@ test('an edited comment corrects its Activity row without alerting again', async
   assert.equal(res.enqueued, true);
 
   const edited = { ...first, text: 'great set' };
+  await db().doc('posts/pe1/comments/c1').set(edited);
   const after = await O.enqueuePostComment(db(), {
     postId: 'pe1', commentId: 'c1', beforeData: first, afterData: edited, eventId: 'e2',
   });
@@ -246,8 +398,10 @@ test('deleting the post retires everything on it', async () => {
   const commented = await O.enqueuePostComment(db(), {
     postId: 'pk1', commentId: 'c1', beforeData: null, afterData: c, eventId: 'e1',
   });
+  const likeData = { createdAt: Timestamp().fromMillis(Date.now()) };
+  await db().doc(`posts/pk1/likes/${other}`).set(likeData);
   const liked = await O.enqueuePostReaction(db(), {
-    kind: 'like', postId: 'pk1', actorUid: other, beforeData: null, afterData: {}, eventId: 'e2',
+    kind: 'like', postId: 'pk1', actorUid: other, beforeData: null, afterData: likeData, eventId: 'e2',
   });
   assert.equal(commented.enqueued, true);
   assert.equal(liked.enqueued, true);
@@ -385,6 +539,7 @@ test('a like tells the owner once, however often it is taken back and given agai
     assert.equal(fcm.calls[0].notification.body, 'Sam liked your post');
 
     // Un-like: no new alert, and the like stops counting.
+    await db().doc(`posts/p9/likes/${friend}`).delete();
     const removed = await O.enqueuePostReaction(db(), {
       kind: 'like', postId: 'p9', actorUid: friend, beforeData: like, afterData: null, eventId: 'e2',
     });
@@ -550,6 +705,7 @@ test('changing the emoji, and removing it, do not alert again', async () => {
 
   const activityId = first.results[0].activityId;
 
+  await db().doc(`conversations/${convId}/messages/m1`).set(withHeart);
   const changed = await O.enqueueDmReactions(db(), {
     convId, messageId: 'm1', beforeData: withFire, afterData: withHeart, eventId: 'e2',
   });
@@ -558,6 +714,7 @@ test('changing the emoji, and removing it, do not alert again', async () => {
   // The list must not go on showing the emoji they changed their mind about.
   assert.equal((await activityOf(sender, activityId)).emoji, '❤️');
 
+  await db().doc(`conversations/${convId}/messages/m1`).set(base);
   const removed = await O.enqueueDmReactions(db(), {
     convId, messageId: 'm1', beforeData: withHeart, afterData: base, eventId: 'e3',
   });

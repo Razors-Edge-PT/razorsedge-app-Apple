@@ -62,6 +62,7 @@ Future<bool> openPostById(
   String postId, {
   required String? viewerUid,
   String? focusCommentId,
+  String? focusActivityId,
   FirebaseFirestore? firestore,
   bool Function()? stillValid,
 }) async {
@@ -90,6 +91,7 @@ Future<bool> openPostById(
       builder: (_) => PostDetailPage(
         post: post,
         focusCommentId: focusCommentId,
+        focusActivityId: focusActivityId,
         onToggleLike: (Post p) => PostService.instance.toggleLike(p.id),
         onToggleGoodLift: (Post p) => PostService.instance
             .toggleGoodLift(p.id, isVideo: p.mediaType == 'video'),

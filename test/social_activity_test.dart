@@ -87,6 +87,9 @@ Future<String> seedActivity(
     'actorUid': actor,
     'subject': subject,
     'read': read,
+    // Written by the server on every record, so the client can filter
+    // withdrawn interactions in the QUERY rather than after the limit.
+    'invalidated': false,
     if (postId != null) 'postId': postId,
     if (commentId != null) 'commentId': commentId,
     if (convId != null) 'conversationId': convId,

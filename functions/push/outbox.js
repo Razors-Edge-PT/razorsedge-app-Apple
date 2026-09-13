@@ -262,12 +262,35 @@ async function enqueueInteraction(db, {
   messageId,
   emoji,
   preview,
+  canonical,
 }) {
   if (!recipientUid || !actorUid) return { enqueued: false, reason: 'missing-party' };
   // Never tell somebody what they just did themselves.
   if (recipientUid === actorUid) return { enqueued: false, reason: 'self-action' };
 
   const activityId = A.activityIdFor(type, recipientUid, occurrence);
+
+  // Does the interaction still exist? The event says one happened; it does not
+  // say one is there now. A creation event redelivered after the like was
+  // taken back, or arriving after its own deletion event, must not produce
+  // unread activity pointing at nothing — and if a record is already there,
+  // current state decides whether it counts, not the fact of a replay.
+  if (canonical) {
+    const live = canonical.state(await canonical.ref.get());
+    if (!live || !live.present) {
+      const settled = await A.settleActivity(db, {
+        recipientUid,
+        activityId,
+        canonical,
+        reason: 'interaction-gone',
+      });
+      return {
+        enqueued: false,
+        reason: settled === 'no-record' ? 'interaction-gone' : `interaction-gone:${settled}`,
+        activityId,
+      };
+    }
+  }
   const job = newJob({
     type,
     recipientUid,
@@ -310,12 +333,16 @@ async function enqueueInteraction(db, {
     return { enqueued: true, reason: 'enqueued', jobId: job.id, activityId };
   } catch (err) {
     if (isAlreadyExists(err)) {
-      // The same occurrence again. If it had been withdrawn, it is back — the
-      // record returns to counting, with no second alert.
-      const revived = await A.reviveActivity(db, recipientUid, activityId);
+      // The same occurrence again. Whether that means anything depends on the
+      // interaction itself, which was just confirmed present: a record that
+      // had been withdrawn counts again, with no second alert; one that never
+      // stopped counting is simply a duplicate event.
+      const settled = canonical
+        ? await A.settleActivity(db, { recipientUid, activityId, canonical })
+        : 'unchanged';
       return {
         enqueued: false,
-        reason: revived ? 'revived' : 'duplicate',
+        reason: settled === 'revived' ? 'revived' : 'duplicate',
         jobId: job.id,
         activityId,
       };
@@ -350,49 +377,36 @@ async function postOwner(db, postId) {
  *
  * An edit or a deletion is never a new interaction — it tells the owner
  * nothing they have not been told — but it does change what is true about one
- * they already have: a deleted comment stops counting and loses its alert, and
- * an edited one has its Activity row corrected. Neither enqueues anything.
+ * they already have. Both are settled against the comment as it is now, so a
+ * deletion that arrives out of order cannot bury a comment that has since
+ * been written again, and a stale edit cannot restore older words.
  */
 async function enqueuePostComment(db, {
   postId, commentId, beforeData, afterData, eventId, eventTimeMs, nowMs,
 }) {
-  if (beforeData && !afterData) {
+  const actorOf = (d) => P.commentAuthor(d);
+
+  if (beforeData && !P.isNewComment(beforeData, afterData)) {
+    // A change to a comment that already existed: deleted, or edited.
     const ownerUid = await postOwner(db, postId);
     if (!ownerUid) return { enqueued: false, reason: 'post-gone' };
-    const retired = await A.retireActivity(
-      db,
-      ownerUid,
-      A.activityIdFor(
+    const actorUid = actorOf(afterData) || actorOf(beforeData);
+    const settled = await A.settleActivity(db, {
+      recipientUid: ownerUid,
+      activityId: A.activityIdFor(
         P.PushType.POST_COMMENT,
         ownerUid,
         P.postOccurrence({ kind: 'comment', postId, commentId }),
       ),
-      'comment-deleted',
-    );
-    return { enqueued: false, reason: retired ? 'comment-retired' : 'no-such-activity' };
-  }
-  if (beforeData && afterData) {
-    if (beforeData.text === afterData.text) {
-      return { enqueued: false, reason: 'not-a-new-comment' };
-    }
-    const ownerUid = await postOwner(db, postId);
-    if (!ownerUid) return { enqueued: false, reason: 'post-gone' };
-    const refreshed = await A.refreshActivity(
-      db,
-      ownerUid,
-      A.activityIdFor(
-        P.PushType.POST_COMMENT,
-        ownerUid,
-        P.postOccurrence({ kind: 'comment', postId, commentId }),
-      ),
-      { preview: typeof afterData.text === 'string' ? afterData.text : '' },
-    );
-    return { enqueued: false, reason: refreshed ? 'comment-refreshed' : 'not-a-new-comment' };
+      canonical: A.canonicalComment(db, postId, commentId, actorUid),
+      reason: 'comment-deleted',
+    });
+    return { enqueued: false, reason: settleReason('comment', settled) };
   }
   if (!P.isNewComment(beforeData, afterData)) {
     return { enqueued: false, reason: 'not-a-new-comment' };
   }
-  const actorUid = P.commentAuthor(afterData);
+  const actorUid = actorOf(afterData);
   if (!actorUid) return { enqueued: false, reason: 'no-author' };
   const audience = await postAudience(db, postId, actorUid);
   if (audience.reason) return { enqueued: false, reason: audience.reason };
@@ -408,7 +422,24 @@ async function enqueuePostComment(db, {
     postId,
     commentId,
     preview: typeof afterData.text === 'string' ? afterData.text : '',
+    canonical: A.canonicalComment(db, postId, commentId, actorUid),
   });
+}
+
+/** How a settle outcome reads in a log line and a test. */
+function settleReason(what, settled) {
+  switch (settled) {
+    case 'retired':
+      return `${what}-retired`;
+    case 'revived':
+      return `${what}-revived`;
+    case 'refreshed':
+      return `${what}-refreshed`;
+    case 'no-record':
+      return 'no-such-activity';
+    default:
+      return what === 'comment' ? 'not-a-new-comment' : 'not-a-new-reaction';
+  }
 }
 
 /**
@@ -418,23 +449,27 @@ async function enqueuePostComment(db, {
 async function enqueuePostReaction(db, {
   kind, postId, actorUid, beforeData, afterData, eventId, eventTimeMs, nowMs,
 }) {
+  const type = kind === 'goodLift' ? P.PushType.POST_GOOD_LIFT : P.PushType.POST_LIKE;
+  const canonical = A.canonicalPostReaction(db, postId, kind, actorUid);
+
   // Taken back. The record stays — so giving it again is still the same
   // occurrence and still cannot alert twice — but it stops counting and its
-  // alert is cancelled.
+  // alert is cancelled. Settled against the live reaction, so a deletion event
+  // that arrives after the person has liked the post again leaves it counting.
   if (beforeData && !afterData) {
     const ownerUid = await postOwner(db, postId);
     if (!ownerUid) return { enqueued: false, reason: 'post-gone' };
-    const retired = await A.retireActivity(
-      db,
-      ownerUid,
-      A.activityIdFor(
-        kind === 'goodLift' ? P.PushType.POST_GOOD_LIFT : P.PushType.POST_LIKE,
+    const settled = await A.settleActivity(db, {
+      recipientUid: ownerUid,
+      activityId: A.activityIdFor(
+        type,
         ownerUid,
         P.postOccurrence({ kind, postId, actorUid }),
       ),
-      'reaction-withdrawn',
-    );
-    return { enqueued: false, reason: retired ? 'reaction-retired' : 'no-such-activity' };
+      canonical,
+      reason: 'reaction-withdrawn',
+    });
+    return { enqueued: false, reason: settleReason('reaction', settled) };
   }
   if (!P.isNewReaction(beforeData, afterData)) {
     return { enqueued: false, reason: 'not-a-new-reaction' };
@@ -451,6 +486,7 @@ async function enqueuePostReaction(db, {
     eventTimeMs,
     nowMs,
     postId,
+    canonical,
   });
 }
 
@@ -472,18 +508,26 @@ async function settleDmReactionChanges(db, { convId, messageId, beforeData, afte
 
   let retired = 0;
   let refreshed = 0;
+  // Everyone the event says changed something, settled against the message as
+  // it stands: a reaction re-added before this event was processed keeps
+  // counting, and the emoji written is the live one, never the event's.
+  const touched = new Map();
   for (const { actorUid } of P.goneReactors(beforeData, afterData)) {
-    // eslint-disable-next-line no-await-in-loop
-    if (await A.retireActivity(db, senderUid, activityIdOf(actorUid),
-      afterData ? 'reaction-withdrawn' : 'message-deleted')) {
-      retired += 1;
-    }
+    touched.set(actorUid, afterData ? 'reaction-withdrawn' : 'message-deleted');
   }
-  for (const { actorUid, emoji } of P.changedReactors(beforeData, afterData)) {
+  for (const { actorUid } of P.changedReactors(beforeData, afterData)) {
+    touched.set(actorUid, 'reaction-withdrawn');
+  }
+  for (const [actorUid, reason] of touched) {
     // eslint-disable-next-line no-await-in-loop
-    if (await A.refreshActivity(db, senderUid, activityIdOf(actorUid), { emoji })) {
-      refreshed += 1;
-    }
+    const settled = await A.settleActivity(db, {
+      recipientUid: senderUid,
+      activityId: activityIdOf(actorUid),
+      canonical: A.canonicalDmReaction(db, convId, messageId, actorUid),
+      reason,
+    });
+    if (settled === 'retired') retired += 1;
+    if (settled === 'refreshed' || settled === 'revived') refreshed += 1;
   }
   if (retired > 0) return 'reaction-retired';
   if (refreshed > 0) return 'reaction-refreshed';
@@ -544,6 +588,7 @@ async function enqueueDmReactions(db, {
       conversationId: convId,
       messageId,
       emoji,
+      canonical: A.canonicalDmReaction(db, convId, messageId, actorUid),
     });
     results.push(result);
   }
@@ -565,6 +610,11 @@ async function retirePostActivity(db, { postId, beforeData }) {
   const ownerUid = beforeData && beforeData.ownerUid;
   if (typeof ownerUid !== 'string' || !ownerUid) {
     return { retired: 0, reason: 'post-has-no-owner' };
+  }
+  // Current state decides here too: a deletion event delivered late, after the
+  // post is back, must not empty the owner's Activity list.
+  if ((await db.collection('posts').doc(postId).get()).exists) {
+    return { retired: 0, reason: 'post-present' };
   }
   const retired = await A.retireSubject(
     db,

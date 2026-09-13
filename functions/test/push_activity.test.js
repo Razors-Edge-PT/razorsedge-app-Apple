@@ -119,27 +119,124 @@ test('retiring what was never recorded is a no-op, not a failure', async () => {
     }),
   };
   assert.equal(await A.retireActivity(db, OWNER, 'pl_missing', 'x'), false);
-  assert.equal(await A.refreshActivity(db, OWNER, 'pl_missing', { emoji: '🔥' }), false);
 });
 
-test('a refresh writes only the wording that changed', async () => {
+// ── Settling against current state ──────────────────────────────────────────
+// The stub is deliberately a real little store: these are the rules that stop
+// a redelivered or out-of-order event from lying about what exists.
+
+function stubDb({ record, live }) {
   const writes = [];
+  const snapOf = (data) => ({
+    exists: data != null,
+    data: () => data,
+    get: (k) => (data == null ? undefined : data[k]),
+  });
+  const recordRef = { __kind: 'record' };
+  const liveRef = { __kind: 'live' };
   const db = {
     collection: () => ({
-      doc: () => ({
-        collection: () => ({
-          doc: () => ({ async update(patch) { writes.push(patch); } }),
-        }),
-      }),
+      doc: () => ({ collection: () => ({ doc: () => recordRef }) }),
     }),
+    liveRef,
+    writes,
+    async runTransaction(fn) {
+      return fn({
+        async get(ref) {
+          return snapOf(ref === recordRef ? record : live);
+        },
+        update(ref, patch) {
+          writes.push(patch);
+          Object.assign(record, patch);
+        },
+      });
+    },
   };
-  await A.refreshActivity(db, OWNER, 'pc_x', { preview: '  fixed   typo ' });
-  assert.deepEqual(writes[0], { preview: 'fixed typo' });
-  await A.refreshActivity(db, OWNER, 'dr_x', { emoji: '❤️' });
-  assert.deepEqual(writes[1], { emoji: '❤️' });
-  // Nothing to say: nothing written, and no claim that anything was.
-  assert.equal(await A.refreshActivity(db, OWNER, 'dr_x', {}), false);
-  assert.equal(writes.length, 2);
+  return db;
+}
+
+test('an interaction that is gone retires its record, whatever the event said',
+  async () => {
+    const record = { read: false, invalidated: false, preview: 'nice' };
+    const db = stubDb({ record, live: null });
+    const out = await A.settleActivity(db, {
+      recipientUid: OWNER,
+      activityId: 'pc_x',
+      canonical: { ref: db.liveRef, state: (s) => ({ present: s.exists }) },
+      reason: 'comment-deleted',
+    });
+    assert.equal(out, 'retired');
+    assert.equal(record.invalidated, true);
+    // Read state is never touched: an interaction that comes back comes back
+    // as it was.
+    assert.equal(record.read, false);
+    assert.ok(!('readAt' in record));
+  });
+
+test('an interaction that is THERE revives its record and never re-alerts',
+  async () => {
+    const record = { read: true, invalidated: true, preview: 'nice' };
+    const db = stubDb({ record, live: { text: 'nice' } });
+    const out = await A.settleActivity(db, {
+      recipientUid: OWNER,
+      activityId: 'pc_x',
+      canonical: {
+        ref: db.liveRef,
+        state: (s) => ({ present: s.exists, preview: (s.data() || {}).text }),
+      },
+    });
+    assert.equal(out, 'revived');
+    assert.equal(record.invalidated, false);
+    assert.equal(record.read, true, 'still read — reviving is not re-announcing');
+  });
+
+test('wording comes from the live document, so a stale event cannot undo an edit',
+  async () => {
+    const record = { read: false, invalidated: false, preview: 'the new words' };
+    const db = stubDb({ record, live: { text: 'the new words' } });
+    // An OLD edit event is replayed. Nothing about it reaches the record: the
+    // only text considered is the one the comment currently has.
+    const out = await A.settleActivity(db, {
+      recipientUid: OWNER,
+      activityId: 'pc_x',
+      canonical: {
+        ref: db.liveRef,
+        state: (s) => ({ present: s.exists, preview: (s.data() || {}).text }),
+      },
+    });
+    assert.equal(out, 'unchanged');
+    assert.equal(record.preview, 'the new words');
+    assert.equal(db.writes.length, 0, 'nothing to say, nothing written');
+  });
+
+test('a changed emoji is refreshed in place', async () => {
+  const record = { read: false, invalidated: false, emoji: '🔥' };
+  const db = stubDb({ record, live: { reactions: { u2: '❤️' } } });
+  const out = await A.settleActivity(db, {
+    recipientUid: OWNER,
+    activityId: 'dr_x',
+    canonical: {
+      ref: db.liveRef,
+      state: (s) => {
+        const e = ((s.data() || {}).reactions || {}).u2;
+        return e ? { present: true, emoji: e } : { present: false };
+      },
+    },
+  });
+  assert.equal(out, 'refreshed');
+  assert.equal(record.emoji, '❤️');
+});
+
+test('a record that was never written is not invented by settling', async () => {
+  const db = stubDb({ record: null, live: null });
+  assert.equal(
+    await A.settleActivity(db, {
+      recipientUid: OWNER,
+      activityId: 'pl_missing',
+      canonical: { ref: db.liveRef, state: (s) => ({ present: s.exists }) },
+    }),
+    'no-record',
+  );
 });
 
 test('empty optional fields are left out rather than stored as blanks', () => {

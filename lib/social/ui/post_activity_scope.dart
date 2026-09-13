@@ -14,11 +14,18 @@
 ///   * this route is the visible one — a post underneath another screen, or
 ///     underneath the Activity list that opened it, presents nothing;
 ///   * the app is resumed — a page open behind a locked phone reads nothing;
-///   * somebody is signed in.
+///   * the same account is still signed in — including after an await.
 ///
 /// An interaction that arrives while all of that is true is acknowledged on
 /// the next update; one that arrives after the page is covered is not, and
 /// stays unread with its alert intact.
+///
+/// ── Two different sets ──────────────────────────────────────────────────────
+/// [_visibleComments] is what is on screen NOW: comments leave it when they
+/// scroll away, because that set also decides whether an incoming alert would
+/// be telling the person something they can already see. [_everShown] is the
+/// history, kept separately so that acknowledging never depends on a comment
+/// still happening to be in the viewport when a lookup returns.
 library;
 
 import 'dart:async';
@@ -34,11 +41,17 @@ class PostActivityScope extends StatefulWidget {
     super.key,
     required this.postId,
     required this.child,
+    this.focusActivityId,
     this.service,
   });
 
   final String postId;
   final Widget child;
+
+  /// The interaction this screen was opened FOR, when a notification or an
+  /// Activity row named it. Resolved by id, so it can be acknowledged however
+  /// far outside any query window its record sits.
+  final String? focusActivityId;
 
   /// Injectable for tests. Production uses the shared service.
   final SocialActivityService? service;
@@ -56,7 +69,12 @@ class PostActivityScopeState extends State<PostActivityScope>
   SocialActivityService get _service =>
       widget.service ?? SocialActivityService.instance;
 
-  final Set<String> _displayedComments = <String>{};
+  /// On screen right now.
+  final Set<String> _visibleComments = <String>{};
+
+  /// Shown at some point during this visit, whether or not still on screen.
+  final Set<String> _everShown = <String>{};
+
   StreamSubscription<SocialActivitySnapshot>? _sub;
   bool _routeVisible = true;
   ModalRoute<dynamic>? _route;
@@ -67,10 +85,15 @@ class PostActivityScopeState extends State<PostActivityScope>
   /// notification about a comment with fifty newer interactions behind it
   /// would not be in it — and would then never be read or have its alert
   /// cancelled, however plainly it is on screen. This is that post's own
-  /// unread list, fetched when the page presents something the local view does
-  /// not cover.
+  /// unread list, fetched when the page opens and again when it presents
+  /// something the local view does not cover.
   List<SocialActivity> _subjectUnread = const <SocialActivity>[];
   bool _fetchingSubject = false;
+  bool _askedOnOpen = false;
+
+  /// The record named by the notification, resolved by id.
+  SocialActivity? _focusRecord;
+  bool _focusResolved = false;
 
   @override
   void initState() {
@@ -94,8 +117,19 @@ class PostActivityScopeState extends State<PostActivityScope>
   }
 
   @override
+  void didUpdateWidget(covariant PostActivityScope old) {
+    super.didUpdateWidget(old);
+    if (old.focusActivityId != widget.focusActivityId) {
+      _focusResolved = false;
+      _focusRecord = null;
+      _maybeAcknowledge();
+    }
+  }
+
+  @override
   void dispose() {
     ForegroundPost.hidden(widget.postId);
+    ForegroundPost.reportVisibleComments(widget.postId, const <String>{});
     if (_route != null) routeObserver.unsubscribe(this);
     _sub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
@@ -131,54 +165,76 @@ class PostActivityScopeState extends State<PostActivityScope>
     if (state == AppLifecycleState.resumed) _maybeAcknowledge();
   }
 
-  /// The comments list says which comments are ON SCREEN right now — not
+  /// The comments list says whether a comment is ON SCREEN right now — not
   /// which ones it loaded. Called from a visibility callback, so it must stay
   /// cheap and must not set state.
-  void reportDisplayedComments(Iterable<String> commentIds) {
-    final int before = _displayedComments.length;
-    _displayedComments.addAll(commentIds);
-    if (_displayedComments.length == before) return;
-    // A banner for a comment already on screen would be noise; one for a
-    // comment further up the thread is not.
-    ForegroundPost.reportVisibleComments(widget.postId, _displayedComments);
+  void reportCommentVisibility(String commentId, bool visible) {
+    final bool changed =
+        visible ? _visibleComments.add(commentId) : _visibleComments.remove(commentId);
+    if (visible) _everShown.add(commentId);
+    if (!changed) return;
+    // A banner for a comment on screen would be noise; one for a comment
+    // scrolled away, or never reached, is not.
+    ForegroundPost.reportVisibleComments(widget.postId, _visibleComments);
     _maybeAcknowledge();
   }
 
-  /// The unread interactions for this post, from both the live view and this
-  /// post's own list, without duplicates.
+  /// Kept for callers that report a batch of comments as displayed.
+  void reportDisplayedComments(Iterable<String> commentIds) {
+    for (final String id in commentIds) {
+      reportCommentVisibility(id, true);
+    }
+  }
+
+  /// Everything unread known for this post, without duplicates: the live
+  /// window, this post's own list, and the record the alert named.
   List<SocialActivity> _knownUnread() {
     final Map<String, SocialActivity> byId = <String, SocialActivity>{
       for (final SocialActivity a in _service.snapshot.unread) a.id: a,
       for (final SocialActivity a in _subjectUnread) a.id: a,
+      if (_focusRecord != null) _focusRecord!.id: _focusRecord!,
     };
     return byId.values.toList(growable: false);
   }
 
+  /// The account this scope is acknowledging for, captured before any await.
+  String? get _owner => _service.snapshot.uid;
+
+  bool _canAcknowledge() =>
+      mounted &&
+      shouldAcknowledgeActivity(
+        routeVisible: _routeVisible,
+        appResumed:
+            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+        signedIn: _service.snapshot.uid != null,
+      );
+
   void _maybeAcknowledge() {
-    if (!mounted) return;
-    final bool resumed =
-        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
-    if (!shouldAcknowledgeActivity(
-      routeVisible: _routeVisible,
-      appResumed: resumed,
-      signedIn: _service.snapshot.uid != null,
-    )) {
-      return;
-    }
+    if (!_canAcknowledge()) return;
     final List<SocialActivity> presented = presentedOnPost(
       unread: _knownUnread(),
       postId: widget.postId,
-      displayedCommentIds: _displayedComments,
+      // History, not the current viewport: a comment seen a moment ago has
+      // been read, even if the reply box has since scrolled it off.
+      displayedCommentIds: _everShown,
     );
     if (presented.isNotEmpty) unawaited(_service.acknowledge(presented));
-    // Something on screen that the live window does not explain is the sign of
-    // an older interaction: ask this post directly, once at a time.
-    if (_needsSubjectLookup(presented)) unawaited(_refreshSubjectUnread());
+
+    // The post itself presents its likes and Good Lifts, so opening it is
+    // enough to have to ask about them — a like older than the live window on
+    // a post with no comments at all would otherwise stay unread for ever.
+    if (!_askedOnOpen) {
+      _askedOnOpen = true;
+      unawaited(_refreshSubjectUnread());
+    } else if (_needsSubjectLookup(presented)) {
+      unawaited(_refreshSubjectUnread());
+    }
+    if (!_focusResolved) unawaited(_resolveFocus());
   }
 
   /// True when a comment is on screen that nothing known accounts for.
   bool _needsSubjectLookup(List<SocialActivity> presented) {
-    if (_fetchingSubject || _displayedComments.isEmpty) return false;
+    if (_fetchingSubject || _everShown.isEmpty) return false;
     final Set<String> explained = <String>{
       for (final SocialActivity a in _knownUnread())
         if (a.commentId != null) a.commentId!,
@@ -188,7 +244,7 @@ class PostActivityScopeState extends State<PostActivityScope>
       // them at all, and scrolling past them must not re-query the post.
       ..._askedAbout,
     };
-    return _displayedComments.any((String id) => !explained.contains(id));
+    return _everShown.any((String id) => !explained.contains(id));
   }
 
   /// Comments a subject lookup has already covered.
@@ -197,11 +253,15 @@ class PostActivityScopeState extends State<PostActivityScope>
   Future<void> _refreshSubjectUnread() async {
     if (_fetchingSubject) return;
     _fetchingSubject = true;
-    final Set<String> asked = <String>{..._displayedComments};
+    final String? owner = _owner;
+    final Set<String> asked = <String>{..._everShown};
     try {
       final List<SocialActivity> found = await _service
           .unreadForSubjectFromServer(postSubject(widget.postId));
-      if (!mounted) return;
+      // The route may have been covered, the app backgrounded or the account
+      // switched while that was in flight. Any of those means this page is no
+      // longer presenting anything, and none of it may be acknowledged.
+      if (!mounted || _service.snapshot.uid != owner) return;
       _askedAbout.addAll(asked);
       final bool changed = found.length != _subjectUnread.length ||
           found.any((SocialActivity a) =>
@@ -212,6 +272,30 @@ class PostActivityScopeState extends State<PostActivityScope>
       // Offline: the live view still covers everything recent.
     } finally {
       _fetchingSubject = false;
+    }
+  }
+
+  /// The interaction the alert named, read by id.
+  ///
+  /// Independent of every window: neither the newest-fifty unread view nor the
+  /// per-post list has to contain it for the thing the person tapped to be
+  /// acknowledgeable.
+  Future<void> _resolveFocus() async {
+    final String? id = widget.focusActivityId;
+    if (id == null || _focusResolved) {
+      _focusResolved = true;
+      return;
+    }
+    _focusResolved = true;
+    final String? owner = _owner;
+    try {
+      final SocialActivity? found = await _service.activityById(id);
+      if (!mounted || found == null || _service.snapshot.uid != owner) return;
+      if (found.subject != postSubject(widget.postId)) return;
+      _focusRecord = found;
+      _maybeAcknowledge();
+    } catch (_) {
+      // Offline: the ordinary paths still cover anything recent.
     }
   }
 

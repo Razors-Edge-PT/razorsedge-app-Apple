@@ -307,6 +307,10 @@ class ConversationPage extends StatefulWidget {
   /// A message to reveal — the one a reaction notification is about.
   final String? focusMessageId;
 
+  /// The activity record that alert or row was about, so it can be read by id
+  /// rather than found in a window that may not contain it.
+  final String? focusActivityId;
+
   /// Injectable for tests; production uses the shared instances.
   final DmUnreadService? unreadService;
   final SocialActivityService? activityService;
@@ -316,6 +320,7 @@ class ConversationPage extends StatefulWidget {
     required this.convId,
     required this.otherUid,
     this.focusMessageId,
+    this.focusActivityId,
     this.unreadService,
     this.activityService,
   });
@@ -473,15 +478,34 @@ class _ConversationPageState extends State<ConversationPage>
   /// incoming message, so acknowledging one can never move the unread-message
   /// count, and reading messages can never silently swallow a reaction that is
   /// still off screen.
+  /// Whether this page may acknowledge anything at all right now.
+  ///
+  /// Checked on every entry to the reaction path, not only on the route
+  /// callbacks: the path is also reached from a scroll callback and from an
+  /// await returning, and either can land after the page has been covered,
+  /// the app backgrounded or the account switched.
+  bool _mayAcknowledgeNow() =>
+      mounted &&
+      shouldAcknowledgeRead(
+        routeVisible: _routeVisible,
+        appResumed:
+            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
+        signedIn: FirebaseAuth.instance.currentUser?.uid != null,
+      );
+
   void _acknowledgeDisplayedReactions() {
     final Set<String> visible = visibleMessageIds();
     // What is on screen also decides whether a reaction's banner would be
-    // telling the person something they can already see.
+    // telling the person something they can already see. Reported whatever
+    // the acknowledgement rules say, because it is a statement about the
+    // viewport rather than about reading.
     ForegroundConversation.reportVisibleMessages(widget.convId, visible);
+    if (!_mayAcknowledgeNow()) return;
     if (visible.isEmpty) return;
     final Map<String, SocialActivity> known = <String, SocialActivity>{
       for (final SocialActivity a in _activity.snapshot.unread) a.id: a,
       for (final SocialActivity a in _subjectActivity) a.id: a,
+      if (_focusRecord != null) _focusRecord!.id: _focusRecord!,
     };
     final List<SocialActivity> presented = presentedInConversation(
       unread: known.values.toList(growable: false),
@@ -509,13 +533,38 @@ class _ConversationPageState extends State<ConversationPage>
   bool _fetchingSubjectActivity = false;
   final Set<String> _askedAboutMessages = <String>{};
 
+  /// The reaction record this page was opened for, read by id.
+  SocialActivity? _focusRecord;
+  bool _focusResolved = false;
+
+  Future<void> _resolveFocusActivity() async {
+    final String? id = widget.focusActivityId;
+    if (id == null || _focusResolved) return;
+    _focusResolved = true;
+    final String? owner = _activity.snapshot.uid;
+    try {
+      final SocialActivity? found = await _activity.activityById(id);
+      if (!mounted || found == null) return;
+      if (_activity.snapshot.uid != owner) return;
+      if (found.convId != widget.convId) return;
+      _focusRecord = found;
+      _acknowledgeDisplayedReactions();
+    } catch (_) {
+      // Offline: the live view still covers everything recent.
+    }
+  }
+
   Future<void> _refreshSubjectActivity(Set<String> asked) async {
     if (_fetchingSubjectActivity) return;
     _fetchingSubjectActivity = true;
+    final String? owner = _activity.snapshot.uid;
     try {
       final List<SocialActivity> found = await _activity
           .unreadForSubjectFromServer(dmSubject(widget.convId));
-      if (!mounted) return;
+      // A lookup outlives the conditions it started under: the thread may have
+      // been covered, the app backgrounded or the account switched while it
+      // was in flight, and none of those may acknowledge anything.
+      if (!mounted || _activity.snapshot.uid != owner) return;
       _askedAboutMessages.addAll(asked);
       final bool changed = found.isNotEmpty &&
           found.any((SocialActivity a) =>
@@ -905,16 +954,16 @@ class _ConversationPageState extends State<ConversationPage>
       // it is about has actually been scrolled to — so each settle re-checks
       // what is on screen. Acknowledging is idempotent and skips anything
       // already recorded, so this stays cheap.
-      if (_routeVisible &&
-          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
-        _acknowledgeDisplayedReactions();
-      }
+      _acknowledgeDisplayedReactions();
     });
 
     // A second reaction alert for this same conversation, pointing at another
     // message: the page is already open, so reveal that message rather than
     // opening a second copy of the thread.
     ForegroundFocus.requests.addListener(_onFocusRequest);
+
+    // The reaction this page was opened for, whatever window its record is in.
+    unawaited(_resolveFocusActivity());
 
     // 👇 One-time fetch of my lastReadAt from the conversation doc
     final uid = FirebaseAuth.instance.currentUser!.uid;

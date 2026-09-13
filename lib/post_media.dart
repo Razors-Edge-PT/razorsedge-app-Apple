@@ -30,11 +30,13 @@ import 'profile/core/media_timeouts.dart';
 import 'profile/core/media_models.dart';
 import 'profile/data/media_cache_sweeper.dart';
 import 'profile/data/media_deletion.dart';
+import 'profile/data/identity_repository.dart';
 import 'profile/data/media_video_source.dart';
 import 'profile/ui/cached_network_image.dart';
 import 'profile/ui/live_identity.dart';
 import 'profile/ui/media_detail_page.dart';
 import 'push/foreground_focus.dart';
+import 'social/social_activity_service.dart';
 import 'social/ui/post_activity_scope.dart';
 
 // Local storage / utils
@@ -93,6 +95,16 @@ class PostDetailPage extends StatefulWidget {
   /// lead anywhere.
   final String? focusCommentId;
 
+  /// The activity record this page was opened for, named by the notification
+  /// or the Activity row. Acknowledged by id, so it does not depend on being
+  /// inside any query window.
+  final String? focusActivityId;
+
+  /// Injectable for tests; production uses the shared instances.
+  final FirebaseFirestore? firestore;
+  final IdentityRepository? identity;
+  final SocialActivityService? activityService;
+
   const PostDetailPage({
     super.key,
     required this.post,
@@ -101,6 +113,10 @@ class PostDetailPage extends StatefulWidget {
     required this.onAddComment,
     required this.canDelete,
     this.focusCommentId,
+    this.focusActivityId,
+    this.firestore,
+    this.identity,
+    this.activityService,
   });
 
   @override
@@ -118,6 +134,11 @@ class _PostDetailPageState extends State<PostDetailPage> {
   /// and moves when another alert about this same post points elsewhere.
   String? _focusCommentId;
 
+  /// Bumped for EVERY focus request, including a repeat of the one already
+  /// showing. Tapping the same alert again after scrolling away has to bring
+  /// that comment back; comparing ids alone made the second tap do nothing.
+  int _focusSerial = 0;
+
   @override
   void initState() {
     super.initState();
@@ -131,6 +152,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
     if (old.focusCommentId != widget.focusCommentId &&
         widget.focusCommentId != null) {
       _focusCommentId = widget.focusCommentId;
+      _focusSerial++;
     }
   }
 
@@ -140,12 +162,15 @@ class _PostDetailPageState extends State<PostDetailPage> {
     super.dispose();
   }
 
-  /// A second notification about this post, pointing at another comment.
+  /// A second notification about this post, pointing at another comment — or
+  /// at the same one again.
   void _onFocusRequest() {
     final FocusRequest? req = ForegroundFocus.requests.value;
-    if (req == null || !req.isFor(post.id)) return;
-    if (!mounted || req.targetId == _focusCommentId) return;
-    setState(() => _focusCommentId = req.targetId);
+    if (req == null || !req.isFor(post.id) || !mounted) return;
+    setState(() {
+      _focusCommentId = req.targetId;
+      _focusSerial++;
+    });
   }
 
   @override
@@ -154,6 +179,8 @@ class _PostDetailPageState extends State<PostDetailPage> {
     // see PostActivityScope. Opening the page is not by itself reading.
     return PostActivityScope(
       postId: post.id,
+      focusActivityId: widget.focusActivityId,
+      service: widget.activityService,
       child: _build(context),
     );
   }
@@ -313,6 +340,9 @@ class _PostDetailPageState extends State<PostDetailPage> {
             child: _CommentsList(
               postId: post.id,
               focusCommentId: _focusCommentId,
+              focusSerial: _focusSerial,
+              firestore: widget.firestore,
+              identity: widget.identity,
             ),
           ),
         ],
@@ -331,6 +361,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
                 onToggleLike: onToggleLike,
                 onToggleGoodLift: onToggleGoodLift,
                 onAddComment: onAddComment,
+                firestore: widget.firestore,
               ),
             ),
           ],
@@ -624,11 +655,14 @@ class _PostActionsBar extends StatefulWidget {
   final Future<void> Function(Post) onToggleGoodLift;
   final Future<void> Function(Post, String) onAddComment;
 
+  final FirebaseFirestore? firestore;
+
   const _PostActionsBar({
     required this.post,
     required this.onToggleLike,
     required this.onToggleGoodLift,
     required this.onAddComment,
+    this.firestore,
   });
 
   @override
@@ -686,7 +720,7 @@ class _PostActionsBarState extends State<_PostActionsBar> {
   @override
   Widget build(BuildContext context) {
     // Live counts from the post doc
-    final postStream = FirebaseFirestore.instance
+    final postStream = (widget.firestore ?? FirebaseFirestore.instance)
         .collection('posts')
         .doc(widget.post.id)
         .snapshots();
@@ -785,7 +819,20 @@ class _CommentsList extends StatefulWidget {
   /// this list loads.
   final String? focusCommentId;
 
-  const _CommentsList({required this.postId, this.focusCommentId});
+  /// Changes on every focus REQUEST, so asking again for the comment already
+  /// being shown still brings it back after the person has scrolled away.
+  final int focusSerial;
+
+  final FirebaseFirestore? firestore;
+  final IdentityRepository? identity;
+
+  const _CommentsList({
+    required this.postId,
+    this.focusCommentId,
+    this.focusSerial = 0,
+    this.firestore,
+    this.identity,
+  });
 
   @override
   State<_CommentsList> createState() => _CommentsListState();
@@ -803,22 +850,40 @@ class _CommentsListState extends State<_CommentsList> {
   bool _pinnedMissing = false;
   bool _pinnedRequested = false;
 
-  /// The row for the comment being revealed, so it can be scrolled to.
-  final GlobalKey _focusedRowKey = GlobalKey();
+  /// The focus request that has actually been PRESENTED — set from the
+  /// visibility callback, never from having asked for a scroll.
+  ///
+  /// An earlier version set this before scrolling, and scrolled by looking up
+  /// a GlobalKey's context. A target near the bottom of twenty long comments
+  /// has no context at all: `ListView` has not built that row, so the scroll
+  /// silently did nothing while the target counted as revealed. The row is now
+  /// pinned to the top of the list instead, which is a position that always
+  /// exists, and only the visibility detector can call it revealed.
+  int? _revealedSerial;
 
-  /// The focus already scrolled to, so a rebuild does not fight the person's
-  /// own scrolling. Reset when a new notification points somewhere else.
-  String? _revealedFocus;
+  /// The request this list is still trying to satisfy.
+  int? _pendingSerial;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.focusCommentId != null) _pendingSerial = widget.focusSerial;
+  }
 
   @override
   void didUpdateWidget(covariant _CommentsList old) {
     super.didUpdateWidget(old);
-    if (old.focusCommentId != widget.focusCommentId) {
+    final bool newTarget = old.focusCommentId != widget.focusCommentId;
+    final bool newRequest = old.focusSerial != widget.focusSerial;
+    if (newTarget) {
       // A second alert about the same post, pointing at a different comment.
-      _revealedFocus = null;
       _pinnedRequested = false;
       _pinnedData = null;
       _pinnedMissing = false;
+    }
+    if (newTarget || newRequest) {
+      _revealedSerial = null;
+      _pendingSerial = widget.focusCommentId == null ? null : widget.focusSerial;
     }
   }
 
@@ -828,7 +893,7 @@ class _CommentsListState extends State<_CommentsList> {
     _pinnedRequested = true;
     try {
       final DocumentSnapshot<Map<String, dynamic>> snap =
-          await FirebaseFirestore.instance
+          await (widget.firestore ?? FirebaseFirestore.instance)
               .collection('posts')
               .doc(widget.postId)
               .collection('comments')
@@ -855,24 +920,34 @@ class _CommentsListState extends State<_CommentsList> {
   /// [VisibilityDetector] says is genuinely visible.
   void _reportVisible(String commentId, VisibilityInfo info) {
     if (!mounted) return;
-    if (info.visibleFraction < kCommentSeenFraction) return;
-    final PostActivityScopeState? scope = PostActivityScope.of(context);
-    if (scope == null) return;
-    scope.reportDisplayedComments(<String>[commentId]);
+    final bool visible = info.visibleFraction >= kCommentSeenFraction;
+    // Leaving the viewport is reported too. Only what is on screen NOW may
+    // suppress that comment's banner, so a set that only ever grew was a set
+    // that silently swallowed later alerts about a comment scrolled past.
+    PostActivityScope.of(context)?.reportCommentVisibility(commentId, visible);
+    if (visible && commentId == widget.focusCommentId) {
+      // The target is genuinely in front of the person: this request is done.
+      _revealedSerial = widget.focusSerial;
+      _pendingSerial = null;
+    }
   }
 
-  /// Brings the comment a notification pointed at into view when it IS in the
-  /// loaded page — being loaded is not the same as being on screen, and the
-  /// person tapped the alert to see that comment.
-  void _revealFocusedIfNeeded(String focusId, bool inPage) {
-    if (!inPage || _revealedFocus == focusId) return;
-    _revealedFocus = focusId;
+  /// Brings the list back to the pinned target.
+  ///
+  /// The target always sits at index 0 while a request is outstanding, so
+  /// there is nothing to search for and nothing that can fail to have been
+  /// built: scrolling to the top of the list IS scrolling to the target.
+  void _revealFocusedIfNeeded() {
+    if (_pendingSerial == null || _pendingSerial == _revealedSerial) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final BuildContext? target = _focusedRowKey.currentContext;
-      if (!mounted || target == null) return;
-      unawaited(Scrollable.ensureVisible(
-        target,
-        alignment: 0.3,
+      if (!mounted || _pendingSerial == null) return;
+      if (!_ctrl.hasClients) return;
+      if (_ctrl.offset <= _ctrl.position.minScrollExtent) {
+        // Already there — the visibility detector settles the rest.
+        return;
+      }
+      unawaited(_ctrl.animateTo(
+        _ctrl.position.minScrollExtent,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOut,
       ));
@@ -881,7 +956,7 @@ class _CommentsListState extends State<_CommentsList> {
 
   @override
   Widget build(BuildContext context) {
-    final stream = FirebaseFirestore.instance
+    final stream = (widget.firestore ?? FirebaseFirestore.instance)
         .collection('posts')
         .doc(widget.postId)
         .collection('comments')
@@ -902,16 +977,17 @@ class _CommentsListState extends State<_CommentsList> {
         }
         final docs = snap.data?.docs ?? const [];
         final String? focusId = widget.focusCommentId;
-        final bool focusInPage =
-            focusId != null && docs.any((d) => d.id == focusId);
-        if (focusId != null && !focusInPage) {
+        QueryDocumentSnapshot<Map<String, dynamic>>? inPage;
+        for (final d in docs) {
+          if (d.id == focusId) inPage = d;
+        }
+        if (focusId != null && inPage == null) {
           // Not in the loaded window: fetch that one comment.
           unawaited(_loadPinned());
         }
-        final Map<String, dynamic>? pinned = _pinnedData;
-        final bool showPinned = focusId != null && !focusInPage && pinned != null;
-
-        if (focusId != null) _revealFocusedIfNeeded(focusId, focusInPage);
+        final Map<String, dynamic>? focusData =
+            inPage?.data() ?? (focusId == null ? null : _pinnedData);
+        final bool showPinned = focusId != null && focusData != null;
 
         if (docs.isEmpty && !showPinned) {
           return Center(
@@ -923,14 +999,21 @@ class _CommentsListState extends State<_CommentsList> {
           );
         }
 
-        // The comment being revealed goes first when it is not in the loaded
-        // page, so a notification about an older comment lands on something.
+        // The comment being revealed goes FIRST, whether or not the page
+        // happens to contain it, and is left out of the thread below so it is
+        // not shown twice. Index 0 is the one position a list is guaranteed to
+        // have built, which is what makes the reveal reliable rather than
+        // dependent on how far the viewport's build cache happens to reach.
         final List<MapEntry<String, Map<String, dynamic>>> rows =
             <MapEntry<String, Map<String, dynamic>>>[
-          if (showPinned) MapEntry<String, Map<String, dynamic>>(focusId, pinned),
+          if (showPinned)
+            MapEntry<String, Map<String, dynamic>>(focusId, focusData),
           for (final d in docs)
-            MapEntry<String, Map<String, dynamic>>(d.id, d.data()),
+            if (!(showPinned && d.id == focusId))
+              MapEntry<String, Map<String, dynamic>>(d.id, d.data()),
         ];
+
+        if (showPinned) _revealFocusedIfNeeded();
 
         return ListView.separated(
           key: PageStorageKey('comments-${widget.postId}'),
@@ -987,6 +1070,7 @@ class _CommentsListState extends State<_CommentsList> {
                 Expanded(
                   child: LiveUserName(
                     uid: uid,
+                    identity: widget.identity,
                     fallback: storedName,
                     builder: (_, String display) => nameAndText(display),
                   ),
@@ -1001,10 +1085,9 @@ class _CommentsListState extends State<_CommentsList> {
               child: row,
             );
             if (!isFocused) return seen;
-            // A quiet marker on the comment the person came here to see, and
-            // the anchor used to scroll it into view.
+            // A quiet marker on the comment the person came here to see.
             return Container(
-              key: _focusedRowKey,
+              key: const Key('comment-focused-row'),
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               decoration: BoxDecoration(
                 color: Colors.white10,

@@ -338,9 +338,12 @@ Widget _defaultBuddyHub(PushIntent intent, bool actingAsOtherAccount) =>
 Widget _defaultConversation(PushIntent intent) => ConversationPage(
       convId: intent.convId!,
       otherUid: intent.actorUid,
-      // A reaction alert points at the message that was reacted to.
+      // A reaction alert points at the message that was reacted to, and names
+      // the record it is about.
       focusMessageId:
           intent.kind == PushKind.dmReaction ? intent.messageId : null,
+      focusActivityId:
+          intent.kind == PushKind.dmReaction ? intent.activityId : null,
     );
 
 /// Fetches the post and opens it, revealing the comment when there is one.
@@ -354,6 +357,9 @@ Future<bool> _defaultOpenPost(
       intent.postId!,
       viewerUid: intent.recipientUid,
       focusCommentId: intent.commentId,
+      // The alert names its own record: that is what makes an interaction
+      // older than any query window still readable when it is opened.
+      focusActivityId: intent.activityId,
       stillValid: stillValid,
     );
 

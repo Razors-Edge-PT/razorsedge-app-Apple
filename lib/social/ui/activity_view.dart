@@ -70,30 +70,52 @@ class _ActivityViewState extends State<ActivityView> {
   Map<String, UserSearchResult> _people = const <String, UserSearchResult>{};
   final Set<String> _lookedUp = <String>{};
 
-  /// Pages fetched beyond the live one, oldest-first append order.
-  final List<SocialActivity> _older = <SocialActivity>[];
+  /// Everything below the live page, as a LIVE query anchored on one fixed
+  /// record. Growing [_olderLimit] asks for more of the same query rather than
+  /// stitching pages together, so there is exactly one boundary in the list
+  /// and it cannot drift: no record can fall between two pages, and none can
+  /// appear in both. Rows here are current — read one and it shows as read;
+  /// its author withdraws it and it leaves the list.
+  SocialActivity? _olderAnchor;
+  int _olderLimit = 0;
   bool _loadingOlder = false;
   bool _noMoreOlder = false;
+  List<SocialActivity> _older = const <SocialActivity>[];
+  StreamSubscription<List<SocialActivity>>? _olderSub;
 
-  Future<void> _loadOlder(SocialActivity after) async {
+  void _loadOlder(SocialActivity after) {
     if (_loadingOlder || _noMoreOlder) return;
-    setState(() => _loadingOlder = true);
-    try {
-      final List<SocialActivity> page = await _service.loadMore(after: after);
+    setState(() {
+      _olderAnchor ??= after;
+      _olderLimit += SocialActivityService.kListLimit;
+      _loadingOlder = true;
+    });
+    _olderSub?.cancel();
+    _olderSub = _service
+        .watchOlderThan(anchor: _olderAnchor!, limit: _olderLimit)
+        .listen((List<SocialActivity> page) {
       if (!mounted) return;
       setState(() {
-        _older.addAll(page);
-        if (page.isEmpty) _noMoreOlder = true;
+        _older = page;
+        _loadingOlder = false;
+        // Short of what was asked for: this is the end of the list.
+        _noMoreOlder = page.length < _olderLimit;
       });
-    } finally {
+    }, onError: (Object _) {
       if (mounted) setState(() => _loadingOlder = false);
-    }
+    });
   }
 
   @override
   void initState() {
     super.initState();
     _search = widget.search ?? UserSearchRepository();
+  }
+
+  @override
+  void dispose() {
+    _olderSub?.cancel();
+    super.dispose();
   }
 
   // No route or lifecycle observers here any more: this list acknowledges
@@ -145,6 +167,9 @@ class _ActivityViewState extends State<ActivityView> {
         item.postId!,
         viewerUid: widget.viewerUid,
         focusCommentId: item.commentId,
+        // The row names its own record, so opening it can acknowledge exactly
+        // that interaction however old it is.
+        focusActivityId: item.id,
         stillValid: stillValid,
       );
       return;
@@ -165,6 +190,7 @@ class _ActivityViewState extends State<ActivityView> {
           convId: item.convId!,
           otherUid: item.actorUid,
           focusMessageId: item.messageId,
+          focusActivityId: item.id,
         ),
       ));
     }
@@ -180,12 +206,13 @@ class _ActivityViewState extends State<ActivityView> {
             child: CircularProgressIndicator(color: ProfilePalette.action),
           );
         }
-        // The live page, then anything older this visit has asked for. A
-        // record cannot appear twice, and an older one that has since been
-        // read shows its current state.
+        // The live page, then everything older. A record cannot appear twice,
+        // and both halves are live, so a row read or withdrawn since it was
+        // fetched shows its current state rather than a stale copy.
+        final List<SocialActivity> live =
+            snap.data ?? const <SocialActivity>[];
         final Map<String, SocialActivity> merged = <String, SocialActivity>{
-          for (final SocialActivity a in snap.data ?? const <SocialActivity>[])
-            a.id: a,
+          for (final SocialActivity a in live) a.id: a,
         };
         for (final SocialActivity a in _older) {
           merged.putIfAbsent(a.id, () => a);
@@ -195,12 +222,17 @@ class _ActivityViewState extends State<ActivityView> {
             .toList(growable: false)
           ..sort((SocialActivity a, SocialActivity b) =>
               (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
-        if (items.isEmpty) {
+        // An anchor for "older" even when nothing on this page can be drawn —
+        // a page of records this build does not know how to render must not
+        // become a dead end with real activity stranded behind it.
+        final SocialActivity? anchor =
+            items.isNotEmpty ? items.last : (live.isNotEmpty ? live.last : null);
+        if (items.isEmpty && (anchor == null || _noMoreOlder)) {
           return _ActivityEmpty(failed: snap.hasError);
         }
         _resolvePeople(items);
 
-        final bool canLoadMore = !_noMoreOlder && items.isNotEmpty;
+        final bool canLoadMore = !_noMoreOlder && anchor != null;
         return ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: ProfileSpacing.sm),
           itemCount: items.length + (canLoadMore ? 1 : 0),
@@ -222,7 +254,7 @@ class _ActivityViewState extends State<ActivityView> {
                         )
                       : TextButton(
                           key: const ValueKey<String>('activity-load-older'),
-                          onPressed: () => _loadOlder(items.last),
+                          onPressed: () => _loadOlder(anchor!),
                           child: const Text('Show older activity'),
                         ),
                 ),
