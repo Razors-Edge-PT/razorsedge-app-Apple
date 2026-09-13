@@ -21,9 +21,9 @@ if (localPropertiesFile.exists()) {
 }
 
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
-    ?: (project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "87")
+    ?: (project.hasProperty('flutter.versionCode') ? project.getProperty('flutter.versionCode') : "89")
 def flutterVersionName = localProperties.getProperty('flutter.versionName')
-    ?: (project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.7.17")
+    ?: (project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.7.19")
 
 android {
     namespace = "com.goodlift.razorsedge"

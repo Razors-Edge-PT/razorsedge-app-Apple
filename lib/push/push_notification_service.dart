@@ -318,8 +318,11 @@ class PushNotificationService with WidgetsBindingObserver {
       WidgetsBinding.instance.addObserver(this);
     }
 
-    // A tap that launched the app from killed. Read once per process; the
-    // router holds it until auth and the membership gate are ready.
+    // A tap that launched the app from killed — either FCM's own
+    // background/killed notification, or one this app posted itself while it
+    // was last in the foreground (see _postForegroundSystemNotification).
+    // Read once per process; the router holds it until auth and the
+    // membership gate are ready.
     if (!_initialConsumed) {
       _initialConsumed = true;
       try {
@@ -327,6 +330,12 @@ class PushNotificationService with WidgetsBindingObserver {
         if (m != null) _onOpened(m);
       } catch (e) {
         debugPrint('[push] initial message unavailable: $e');
+      }
+      try {
+        final Map<String, String>? tap = await _platform.takePendingTap();
+        if (tap != null) _onOpened(PushMessage(data: tap));
+      } catch (e) {
+        debugPrint('[push] pending tap unavailable: $e');
       }
     }
     if (gen != _gen) return;
@@ -376,11 +385,18 @@ class PushNotificationService with WidgetsBindingObserver {
       }, onError: (Object _) {}));
       _subs.add(_messaging.onForegroundMessage.listen((PushMessage m) {
         if (gen != _gen) return;
-        _onForeground(m);
+        _onForeground(m, gen);
       }, onError: (Object _) {}));
       _subs.add(_messaging.onOpenedApp.listen((PushMessage m) {
         if (gen != _gen) return;
         _onOpened(m);
+      }, onError: (Object _) {}));
+      // A tap on a notification THIS app posted while running (foreground
+      // path) — the counterpart to onOpenedApp, which only ever fires for
+      // FCM's own background/killed notifications.
+      _subs.add(_platform.onNotificationTapped.listen((Map<String, String> data) {
+        if (gen != _gen) return;
+        _onOpened(PushMessage(data: data));
       }, onError: (Object _) {}));
     } catch (e) {
       debugPrint('[push] listeners unavailable: $e');
@@ -514,7 +530,7 @@ class PushNotificationService with WidgetsBindingObserver {
     _router.submit(intent);
   }
 
-  void _onForeground(PushMessage m) {
+  void _onForeground(PushMessage m, int gen) {
     final PushIntent? intent = PushIntent.fromData(m.data, now: _clock());
     if (intent == null) return;
     // Already read in the app (here or on another device): the alert is
@@ -562,6 +578,49 @@ class PushNotificationService with WidgetsBindingObserver {
     final void Function(PushIntent, PushMessage) show =
         _showBannerOverride ?? _showBanner;
     show(intent, m);
+    unawaited(_postForegroundSystemNotification(intent, m, gen));
+  }
+
+  /// The system-notification counterpart to the in-app banner, for the
+  /// launcher badge: an interaction that is worth a banner while GoodLift is
+  /// open is, for the same reason, worth a real notification once the person
+  /// leaves for the home screen. Gated by the SAME predicate as the banner
+  /// (called just above with the SAME intent), so content genuinely being
+  /// read never gets one, and it never runs for another account.
+  ///
+  /// Uses the SAME tag and channel a background/killed delivery of this exact
+  /// interaction would have used, so existing cancellation
+  /// (deliveredTags/clearNotifications, read-acknowledgement) and tap routing
+  /// treat it identically either way, and a burst of real messages still
+  /// produces one alert per message rather than one that keeps replacing
+  /// itself. Title/body are exactly what the server sent — never
+  /// reconstructed — so a preview the recipient turned off, or the server
+  /// deliberately omitted, cannot leak in here either.
+  Future<void> _postForegroundSystemNotification(
+      PushIntent intent, PushMessage m, int gen) async {
+    if (!_supported) return;
+    final String? tag = notificationTagFor(intent);
+    if (tag == null) return;
+    try {
+      if ((await _platformInfo()).platform != PushOsPlatform.android) return;
+      if (!(await permissionStatus()).allowsDelivery) return;
+      // Re-checked after the awaits above: a logout or account switch while
+      // permission/platform were being resolved must not post for an account
+      // that is no longer the one signed in here.
+      if (gen != _gen || _currentUid() != intent.recipientUid) return;
+      await _platform.postNotification(
+        tag: tag,
+        channelId: androidChannelFor(intent.kind),
+        title: m.title ?? '',
+        body: m.body ?? '',
+        data: <String, String>{
+          for (final MapEntry<String, dynamic> e in m.data.entries)
+            e.key: e.value?.toString() ?? '',
+        },
+      );
+    } catch (e) {
+      debugPrint('[push] foreground notification not posted: $e');
+    }
   }
 
   /// One compact, tappable banner. Replaces any banner already showing so

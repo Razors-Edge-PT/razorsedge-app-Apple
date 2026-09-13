@@ -155,6 +155,19 @@ class SettingsOpener extends NotificationPlatform {
   Future<void> openSystemSettings() async => opened++;
   @override
   Future<void> clearDelivered() async {}
+  @override
+  Future<Map<String, String>?> takePendingTap() async => null;
+  @override
+  Stream<Map<String, String>> get onNotificationTapped => const Stream<Map<String, String>>.empty();
+  @override
+  Future<bool> postNotification({
+    required String tag,
+    required String channelId,
+    required String title,
+    required String body,
+    required Map<String, String> data,
+  }) async =>
+      false;
 }
 
 const PushPlatformInfo android14 = PushPlatformInfo.android(34);

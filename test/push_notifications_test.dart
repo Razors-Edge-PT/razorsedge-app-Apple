@@ -154,10 +154,43 @@ class FakeLocal implements PushLocalState {
 class FakePlatform extends NotificationPlatform {
   int cleared = 0;
   int opened = 0;
+  final List<Map<String, Object?>> posted = <Map<String, Object?>>[];
+  Map<String, String>? pendingTap;
+  final StreamController<Map<String, String>> taps =
+      StreamController<Map<String, String>>.broadcast();
+
   @override
   Future<void> clearDelivered() async => cleared++;
   @override
   Future<void> openSystemSettings() async => opened++;
+
+  @override
+  Future<bool> postNotification({
+    required String tag,
+    required String channelId,
+    required String title,
+    required String body,
+    required Map<String, String> data,
+  }) async {
+    posted.add(<String, Object?>{
+      'tag': tag,
+      'channelId': channelId,
+      'title': title,
+      'body': body,
+      'data': data,
+    });
+    return true;
+  }
+
+  @override
+  Future<Map<String, String>?> takePendingTap() async {
+    final Map<String, String>? tap = pendingTap;
+    pendingTap = null;
+    return tap;
+  }
+
+  @override
+  Stream<Map<String, String>> get onNotificationTapped => taps.stream;
 }
 
 class Harness {
@@ -539,6 +572,108 @@ void main() {
       h.messaging.foreground.add(PushMessage(data: dmData()));
       await tester.pump();
       expect(h.banners.length, 2);
+    });
+
+    testWidgets(
+        'foreground DM on an unrelated screen also posts a system notification, '
+        'with the exact tag/channel a background delivery would have used',
+        (WidgetTester tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final Harness h = Harness();
+      await tester.runAsync(() => h.service.onSignedIn(alice));
+
+      await tester.runAsync(() async {
+        h.messaging.foreground.add(PushMessage(
+          data: <String, dynamic>{...dmData(), 'msgId': 'm9', 'seq': '9'},
+          title: 'Bob',
+          body: 'hey',
+        ));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      });
+      expect(h.platform.posted, hasLength(1));
+      final Map<String, Object?> post = h.platform.posted.single;
+      expect(post['tag'], dmMessageTag(convId: conversationIdFor(alice, bob), messageId: 'm9'));
+      expect(post['channelId'], 'goodlift_direct_messages');
+      expect(post['title'], 'Bob');
+      expect(post['body'], 'hey');
+      expect((post['data']! as Map<String, String>)['msgId'], 'm9');
+    });
+
+    testWidgets(
+        'a conversation actually on screen gets neither a banner nor a system notification',
+        (WidgetTester tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final Harness h = Harness();
+      await tester.runAsync(() => h.service.onSignedIn(alice));
+
+      ForegroundConversation.shown(conversationIdFor(alice, bob));
+      await tester.runAsync(() async {
+        h.messaging.foreground.add(PushMessage(data: dmData()));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      });
+      expect(h.banners, isEmpty);
+      expect(h.platform.posted, isEmpty,
+          reason: 'content genuinely being read must not also badge the launcher');
+    });
+
+    testWidgets('a friend request posts to the friend-request channel with the actor tag',
+        (WidgetTester tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final Harness h = Harness();
+      await tester.runAsync(() => h.service.onSignedIn(alice));
+
+      await tester.runAsync(() async {
+        h.messaging.foreground.add(PushMessage(data: requestData(), title: 'Friend request'));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      });
+      expect(h.platform.posted.single['tag'], friendRequestTag(bob));
+      expect(h.platform.posted.single['channelId'], 'goodlift_friend_requests');
+    });
+
+    testWidgets('no system notification when the OS permission is not actually granted',
+        (WidgetTester tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final Harness h = Harness();
+      h.messaging.status = AuthorizationStatus.denied;
+      h.local.requested = true; // a real, recorded denial
+      await tester.runAsync(() => h.service.onSignedIn(alice));
+
+      await tester.runAsync(() async {
+        h.messaging.foreground.add(PushMessage(data: dmData()));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      });
+      expect(h.platform.posted, isEmpty);
+    });
+
+    testWidgets('tapping a self-posted notification while running routes exactly like an FCM tap',
+        (WidgetTester tester) async {
+      final Harness h = Harness();
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      final BuildContext ctx = tester.element(find.byType(SizedBox));
+      h.router.attachScope(() => ctx);
+      await tester.runAsync(() async {
+        await h.service.onSignedIn(alice);
+        h.platform.taps.add(dmData().map((String k, dynamic v) => MapEntry(k, v.toString())));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      });
+      await tester.pump();
+      expect(h.navigated.single.kind, PushKind.directMessage);
+    });
+
+    testWidgets('a cold start from a self-posted notification opens once auth and the gate are ready',
+        (WidgetTester tester) async {
+      final Harness h = Harness(uid: null);
+      h.platform.pendingTap =
+          dmData().map((String k, dynamic v) => MapEntry(k, v.toString()));
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      final BuildContext ctx = tester.element(find.byType(SizedBox));
+
+      h.authUid = alice;
+      await tester.runAsync(() => h.service.onSignedIn(alice));
+      await tester.pump();
+      h.router.attachScope(() => ctx);
+      await tester.pump();
+      expect(h.navigated.single.kind, PushKind.directMessage);
     });
   });
 

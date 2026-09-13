@@ -7,7 +7,10 @@
 // The server half (counting, idempotency, skipping a push for an already-read
 // message) is functions/test-emulator/dm_unread.spec.js.
 
-import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart'
+    show DocumentReference, DocumentSnapshot, Timestamp;
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,10 +29,15 @@ const String carol = 'carolUidcarolUidcarolUid0003';
 final String convBob = conversationIdFor(me, bob);
 final String convCarol = conversationIdFor(me, carol);
 
-/// Records what the app asks the platform to cancel.
+/// Records what the app asks the platform to cancel, and fakes what the OS
+/// reports as currently delivered (for reconciliation tests).
 class RecordingPlatform extends NotificationPlatform {
   final List<Map<String, Object?>> calls = <Map<String, Object?>>[];
   int cleared = 0;
+
+  /// What `deliveredTags()` answers — set by a test to simulate the tray.
+  List<String> delivered = <String>[];
+  Object? deliveredTagsError;
 
   @override
   Future<int> clearNotifications({
@@ -48,15 +56,30 @@ class RecordingPlatform extends NotificationPlatform {
   @override
   Future<void> clearDelivered() async => cleared++;
 
-  bool cancelledConversation(String convId) => calls.any((Map<String, Object?> c) =>
-      (c['tagPrefixes']! as List<String>).contains(dmConversationTagPrefix(convId)));
+  @override
+  Future<List<String>> deliveredTags() async {
+    if (deliveredTagsError != null) throw deliveredTagsError!;
+    return delivered;
+  }
 
-  List<String> get allPrefixes => <String>[
-        for (final Map<String, Object?> c in calls) ...c['tagPrefixes']! as List<String>,
+  /// Every tag this platform was ever asked to cancel individually (never a
+  /// prefix/convId blanket — the whole point of the redesign).
+  List<String> get allCancelledTags => <String>[
+        for (final Map<String, Object?> c in calls) ...c['tags']! as List<String>,
       ];
+
+  bool cancelledTag(String tag) => allCancelledTags.contains(tag);
+
+  /// True if any call used a blanket tagPrefix/convId clear — the old,
+  /// unsafe behaviour this suite guards against ever coming back.
+  bool get everClearedByPrefixOrConvId => calls.any((Map<String, Object?> c) =>
+      (c['tagPrefixes']! as List<String>).isNotEmpty || (c['convIds']! as List<String>).isNotEmpty);
 }
 
-/// Seeds a conversation with a server ledger position and my acknowledgement.
+/// Seeds a conversation with a server ledger position, and marks [other] as
+/// one of `me`'s confirmed friends in `socialGraph/me` (merging with any
+/// friend already seeded) — the projection DmUnreadService now reads instead
+/// of listing `conversations` directly.
 Future<void> seedConversation(
   FakeFirebaseFirestore db, {
   required String convId,
@@ -64,6 +87,7 @@ Future<void> seedConversation(
   int incoming = 0,
   int readIncoming = 0,
   int legacyUnread = 0,
+  bool friend = true,
 }) async {
   await db.collection('conversations').doc(convId).set(<String, Object?>{
     'participants': <String, Object?>{me: true, other: true},
@@ -78,6 +102,47 @@ Future<void> seedConversation(
     'lastMessage': <String, Object?>{'text': 'hello', 'senderId': other},
     'updatedAt': Timestamp.now(),
   });
+  if (friend) await addFriend(db, other);
+}
+
+/// Seeds one message document with the ledger position a reconciliation
+/// lookup would read.
+Future<void> seedMessage(
+  FakeFirebaseFirestore db, {
+  required String convId,
+  required String msgId,
+  required int incomingSeq,
+  String senderId = bob,
+}) {
+  return db
+      .collection('conversations')
+      .doc(convId)
+      .collection('messages')
+      .doc(msgId)
+      .set(<String, Object?>{'senderId': senderId, 'text': 'hi', 'incomingSeq': incomingSeq});
+}
+
+/// Adds [other] to `me`'s confirmed-friend projection, merging with whoever
+/// is already there.
+Future<void> addFriend(FakeFirebaseFirestore db, String other) async {
+  final DocumentReference<Map<String, dynamic>> ref = db.collection('socialGraph').doc(me);
+  final DocumentSnapshot<Map<String, dynamic>> cur = await ref.get();
+  final Set<String> friends = <String>{
+    ...((cur.data()?['friends'] as List?) ?? const <Object?>[]).whereType<String>(),
+    other,
+  };
+  await ref.set(<String, Object?>{'uid': me, 'friends': friends.toList()..sort()});
+}
+
+/// Removes [other] from `me`'s confirmed-friend projection — an unfriend, as
+/// the server-side projection would apply it.
+Future<void> removeFriend(FakeFirebaseFirestore db, String other) async {
+  final DocumentReference<Map<String, dynamic>> ref = db.collection('socialGraph').doc(me);
+  final DocumentSnapshot<Map<String, dynamic>> cur = await ref.get();
+  final Set<String> friends = <String>{
+    ...((cur.data()?['friends'] as List?) ?? const <Object?>[]).whereType<String>(),
+  }..remove(other);
+  await ref.set(<String, Object?>{'uid': me, 'friends': friends.toList()..sort()});
 }
 
 Future<int> readIncomingOf(FakeFirebaseFirestore db, String convId) async {
@@ -136,16 +201,17 @@ void main() {
       expect(snap.unreadFor(convCarol), 2);
       expect(await readIncomingOf(db, convBob), 3);
 
-      // Only Bob's alerts were cancelled.
-      expect(platform.cancelledConversation(convBob), isTrue);
-      expect(platform.cancelledConversation(convCarol), isFalse);
+      // Only Bob's alerts were cancelled — by exact message tag, not a
+      // conversation-wide prefix/convId clear.
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'b1')), isTrue);
+      expect(platform.everClearedByPrefixOrConvId, isFalse);
       expect(platform.cleared, 0, reason: 'clear-all is for logout only');
 
       // Then Carol's.
-      await service.acknowledge(convId: convCarol, upToSeq: 2);
+      await service.acknowledge(convId: convCarol, upToSeq: 2, messageIds: <String>['c1', 'c2']);
       snap = await service.watch().firstWhere((DmUnreadSnapshot s) => s.total == 0);
       expect(snap.unreadFor(convCarol), 0);
-      expect(platform.cancelledConversation(convCarol), isTrue);
+      expect(platform.cancelledTag(dmMessageTag(convId: convCarol, messageId: 'c1')), isTrue);
     });
 
     test('a message arriving during the acknowledgement stays unread', () async {
@@ -197,7 +263,7 @@ void main() {
       expect(snap.total, 3);
       // Reading it clears the legacy counter too, for older devices.
       await service.acknowledge(convId: convBob, upToSeq: 0, messageIds: <String>['m1']);
-      expect(platform.cancelledConversation(convBob), isTrue,
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'm1')), isTrue,
           reason: 'alerts still go even with no ledger position');
     });
 
@@ -234,14 +300,160 @@ void main() {
       expect(service.isAcknowledged('other', 1), isFalse);
     });
 
-    test('reconciliation cancels alerts only for conversations that are read', () async {
-      await seedConversation(db, convId: convBob, other: bob, incoming: 2, readIncoming: 2);
-      await seedConversation(db, convId: convCarol, other: carol, incoming: 2);
+    test('reconciliation cancels a delivered alert only when its OWN message is covered', () async {
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1, readIncoming: 1);
+      await seedMessage(db, convId: convBob, msgId: 'read1', incomingSeq: 1);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 1, readIncoming: 0);
+      await seedMessage(db, convId: convCarol, msgId: 'unread1', incomingSeq: 1);
       await firstLoaded(service);
 
+      platform.delivered = <String>[
+        dmMessageTag(convId: convBob, messageId: 'read1'),
+        dmMessageTag(convId: convCarol, messageId: 'unread1'),
+      ];
       await service.reconcileDeliveredAlerts();
-      expect(platform.allPrefixes, contains(dmConversationTagPrefix(convBob)));
-      expect(platform.allPrefixes, isNot(contains(dmConversationTagPrefix(convCarol))));
+
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'read1')), isTrue);
+      expect(platform.cancelledTag(dmMessageTag(convId: convCarol, messageId: 'unread1')), isFalse);
+      expect(platform.everClearedByPrefixOrConvId, isFalse,
+          reason: 'never a blind conversation-wide clear');
+    });
+  });
+
+  // ── Defect: premature cancellation of a newly delivered alert ─────────────
+  group('reconciliation never speculatively cancels', () {
+    late FakeFirebaseFirestore db;
+    late RecordingPlatform platform;
+    late DmUnreadService service;
+
+    setUp(() async {
+      db = FakeFirebaseFirestore();
+      platform = RecordingPlatform();
+      service = DmUnreadService(firestore: db, currentUid: () => me, notifications: platform);
+    });
+
+    tearDown(() => service.dispose());
+
+    test('a cached zero followed by a fresh unread server value protects the new alert', () async {
+      // The service's own snapshot still says zero unread (the "cached
+      // zero") when a new message arrives and its notification is posted —
+      // the write did not go through the service's listener at all, exactly
+      // as a push racing ahead of Firestore's own snapshot delivery would.
+      await seedConversation(db, convId: convBob, other: bob, incoming: 0, readIncoming: 0);
+      await firstLoaded(service);
+      expect(service.snapshot.unreadFor(convBob), 0, reason: 'the stale/cached zero');
+
+      await db.collection('conversations').doc(convBob).update(<String, Object?>{
+        'participantState.$me.incoming': 1,
+      });
+      await seedMessage(db, convId: convBob, msgId: 'new1', incomingSeq: 1);
+      platform.delivered = <String>[dmMessageTag(convId: convBob, messageId: 'new1')];
+
+      // Reconciliation runs against whatever `_last` currently holds — which
+      // may still be the cached zero above — but must not trust it.
+      await service.reconcileDeliveredAlerts();
+      expect(platform.calls, isEmpty,
+          reason: 'a cached zero must never establish that a new message was read');
+    });
+
+    test('a loaded zero followed by a brand-new notification protects only the new one', () async {
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1, readIncoming: 1);
+      await seedMessage(db, convId: convBob, msgId: 'old1', incomingSeq: 1);
+      await firstLoaded(service);
+
+      // A new message lands immediately before resume runs reconciliation.
+      await db.collection('conversations').doc(convBob).update(<String, Object?>{
+        'participantState.$me.incoming': 2,
+      });
+      await seedMessage(db, convId: convBob, msgId: 'new2', incomingSeq: 2);
+      platform.delivered = <String>[
+        dmMessageTag(convId: convBob, messageId: 'old1'),
+        dmMessageTag(convId: convBob, messageId: 'new2'),
+      ];
+
+      await service.reconcileDeliveredAlerts();
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'old1')), isTrue,
+          reason: 'genuinely already read');
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'new2')), isFalse,
+          reason: 'arrived after the read boundary — must survive');
+    });
+
+    test('a permission/platform failure with stale counts cached triggers no cancellation', () async {
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1, readIncoming: 1);
+      await firstLoaded(service);
+      platform.deliveredTagsError = Exception('permission-denied');
+
+      await service.reconcileDeliveredAlerts();
+      expect(platform.calls, isEmpty,
+          reason: 'unknown/failed reads must never trigger speculative cancellation');
+    });
+
+    test('an unreadable conversation at reconciliation time is skipped, not treated as read', () async {
+      // Stands in for a permission failure on the per-conversation read
+      // itself: fromDoc/_serverReadBoundary sees no data and returns null,
+      // the same branch a denied read would hit.
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1, readIncoming: 1);
+      await seedMessage(db, convId: convBob, msgId: 'm1', incomingSeq: 1);
+      await firstLoaded(service);
+
+      await db.collection('conversations').doc(convBob).delete();
+      platform.delivered = <String>[dmMessageTag(convId: convBob, messageId: 'm1')];
+
+      await service.reconcileDeliveredAlerts();
+      expect(platform.calls, isEmpty);
+    });
+
+    test('explicit acknowledgement clears exactly what was displayed, protecting a message that '
+        'arrives during cleanup', () async {
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1, readIncoming: 0);
+      await firstLoaded(service);
+
+      // The chat computed its boundary over ONE displayed message; a second
+      // real message is written to the SAME conversation right as the
+      // cancellation call goes out. It must never be swept up.
+      await seedMessage(db, convId: convBob, msgId: 'shown1', incomingSeq: 1);
+      await seedMessage(db, convId: convBob, msgId: 'brandNew2', incomingSeq: 2);
+
+      await service.acknowledge(convId: convBob, upToSeq: 1, messageIds: <String>['shown1']);
+
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'shown1')), isTrue);
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'brandNew2')), isFalse);
+      expect(platform.everClearedByPrefixOrConvId, isFalse);
+    });
+
+    test('an offline acknowledgement still protects its own messages before the server catches up',
+        () async {
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1, readIncoming: 0);
+      await seedMessage(db, convId: convBob, msgId: 'm1', incomingSeq: 1);
+      await firstLoaded(service);
+
+      // acknowledge() records `_acked` locally and fires the server write
+      // unawaited — reconciliation must trust the local acknowledgement
+      // immediately, not wait for the write to land.
+      unawaited(service.acknowledge(convId: convBob, upToSeq: 1, messageIds: <String>['m1']));
+      platform.delivered = <String>[dmMessageTag(convId: convBob, messageId: 'm1')];
+      await service.reconcileDeliveredAlerts();
+
+      expect(platform.cancelledTag(dmMessageTag(convId: convBob, messageId: 'm1')), isTrue);
+    });
+
+    test('switching accounts drops the previous account\'s state before reconciliation ever runs',
+        () async {
+      String uid = me;
+      final DmUnreadService switching =
+          DmUnreadService(firestore: db, currentUid: () => uid, notifications: platform);
+      addTearDown(switching.dispose);
+
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1, readIncoming: 1);
+      await switching.watch().firstWhere((DmUnreadSnapshot s) => s.loaded);
+      expect(switching.snapshot.uid, me);
+
+      uid = 'someoneElseUid0000000000000';
+      switching.onAccountChanged(uid);
+      platform.delivered = <String>[dmMessageTag(convId: convBob, messageId: 'anything')];
+      await switching.reconcileDeliveredAlerts();
+      expect(platform.calls, isEmpty,
+          reason: 'the new account has no loaded state yet — nothing to reconcile against');
     });
   });
 
@@ -422,8 +634,6 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: DirectMessages(
           unreadService: service,
-          firestore: db,
-          uid: me,
           identity: IdentityRepository(firestore: db),
         ),
       ));

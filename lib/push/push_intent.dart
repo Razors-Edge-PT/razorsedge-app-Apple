@@ -156,6 +156,60 @@ String friendRequestTag(String actorUid) => 'fr_$actorUid';
 
 String friendAcceptedTag(String actorUid) => 'fa_$actorUid';
 
+/// Android notification channel per kind. Mirrors ANDROID_CHANNEL in
+/// functions/push/push_model.js and the channels MainActivity.kt creates —
+/// a foreground-posted alert MUST land in the same channel a background one
+/// would have, so the person's per-category settings (sound, importance,
+/// or the category being switched off entirely) apply identically either
+/// way.
+String androidChannelFor(PushKind kind) {
+  switch (kind) {
+    case PushKind.friendRequest:
+      return 'goodlift_friend_requests';
+    case PushKind.friendAccepted:
+      return 'goodlift_friend_accepted';
+    case PushKind.directMessage:
+      return 'goodlift_direct_messages';
+    case PushKind.dmReaction:
+      return 'goodlift_message_reactions';
+    case PushKind.postComment:
+      return 'goodlift_post_comments';
+    case PushKind.postLike:
+    case PushKind.postGoodLift:
+      return 'goodlift_post_reactions';
+  }
+}
+
+/// The tag a notification for [intent] carries — identical to what the
+/// server would have used (presentationTag in functions/push/push_model.js)
+/// — so a foreground-posted alert and existing cancellation/tap handling
+/// agree on identity regardless of which path posted it. Null when the
+/// intent lacks what its tag needs (an older or malformed payload); callers
+/// must not post a system notification in that case, since it could never be
+/// found again to cancel.
+String? notificationTagFor(PushIntent intent) {
+  switch (intent.kind) {
+    case PushKind.friendRequest:
+      return friendRequestTag(intent.actorUid);
+    case PushKind.friendAccepted:
+      return friendAcceptedTag(intent.actorUid);
+    case PushKind.directMessage:
+      return (intent.convId != null && intent.messageId != null)
+          ? dmMessageTag(convId: intent.convId!, messageId: intent.messageId!)
+          : null;
+    case PushKind.dmReaction:
+      return (intent.convId != null && intent.activityId != null)
+          ? dmReactionTag(convId: intent.convId!, activityId: intent.activityId!)
+          : null;
+    case PushKind.postComment:
+    case PushKind.postLike:
+    case PushKind.postGoodLift:
+      return (intent.postId != null && intent.activityId != null)
+          ? postActivityTag(postId: intent.postId!, activityId: intent.activityId!)
+          : null;
+  }
+}
+
 /// What a tapped (or foreground-received) notification asks the app to open.
 class PushIntent {
   const PushIntent({

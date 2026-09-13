@@ -25,6 +25,8 @@
 /// no-op.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -33,6 +35,42 @@ class NotificationPlatform {
       : _channel = channel ?? const MethodChannel('goodlift/notifications');
 
   final MethodChannel _channel;
+
+  // Keyed by channel NAME rather than instance: production constructs one
+  // NotificationPlatform per owner (the push service, DmUnreadService), all
+  // wrapping the same platform channel, and the native side has exactly one
+  // handler either way. Keying by name means whichever instance first asks
+  // for taps wires the single underlying method-call handler, and every
+  // instance sharing that channel gets the same broadcast stream.
+  static final Map<String, StreamController<Map<String, String>>>
+      _tapControllers = <String, StreamController<Map<String, String>>>{};
+
+  /// A tap on a notification GoodLift posted itself while the app was
+  /// running — see [postNotification]. Fires only while this process is
+  /// alive; a cold start reads [takePendingTap] instead. FCM's own
+  /// background/killed notifications are unaffected: those still arrive
+  /// through firebase_messaging's onMessageOpenedApp / getInitialMessage.
+  Stream<Map<String, String>> get onNotificationTapped {
+    final StreamController<Map<String, String>> controller =
+        _tapControllers.putIfAbsent(_channel.name, () {
+      final StreamController<Map<String, String>> c =
+          StreamController<Map<String, String>>.broadcast();
+      _channel.setMethodCallHandler((MethodCall call) async {
+        if (call.method == 'notificationTapped') {
+          final Object? args = call.arguments;
+          if (args is Map) {
+            c.add(<String, String>{
+              for (final MapEntry<Object?, Object?> e in args.entries)
+                e.key.toString(): e.value?.toString() ?? '',
+            });
+          }
+        }
+        return null;
+      });
+      return c;
+    });
+    return controller.stream;
+  }
 
   Future<void> openSystemSettings() => _invoke('openSettings');
 
@@ -80,6 +118,45 @@ class NotificationPlatform {
       for (final Object? t in tags)
         if (t is String && t.isNotEmpty) t,
     ];
+  }
+
+  /// Posts a system notification for an interaction received while the app is
+  /// in the foreground — the counterpart to what FCM posts itself in the
+  /// background or killed. [tag]/[channelId] MUST be the same values the
+  /// server would have used (see push_intent.dart's tag builders and
+  /// androidChannelFor), so a background alert and a foreground one for the
+  /// same interaction collapse to one, and existing cancellation still finds
+  /// it. [data] is the same routing payload a tap would carry from the tray.
+  ///
+  /// Best effort: false when unsupported (desktop, tests) or refused by the
+  /// OS (permission not actually granted despite the app's own state).
+  Future<bool> postNotification({
+    required String tag,
+    required String channelId,
+    required String title,
+    required String body,
+    required Map<String, String> data,
+  }) async {
+    final Object? ok = await _invokeWithResult('postNotification', <String, Object?>{
+      'tag': tag,
+      'channelId': channelId,
+      'title': title,
+      'body': body,
+      'data': data,
+    });
+    return ok == true;
+  }
+
+  /// A tap on a self-posted notification (see [postNotification]) that
+  /// launched this process fresh. Consumed once; null when this launch was
+  /// not one, or the platform cannot answer.
+  Future<Map<String, String>?> takePendingTap() async {
+    final Object? data = await _invokeWithResult('takePendingTap', null);
+    if (data is! Map) return null;
+    return <String, String>{
+      for (final MapEntry<Object?, Object?> e in data.entries)
+        e.key.toString(): e.value?.toString() ?? '',
+    };
   }
 
   Future<void> _invoke(String method) async {

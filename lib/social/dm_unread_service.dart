@@ -56,10 +56,15 @@ class DmConversationUnread {
     required this.readIncoming,
     required this.legacyUnread,
     this.updatedAt,
+    this.lastMessageText = '',
   });
 
   final String convId;
   final String otherUid;
+
+  /// The conversation row's preview text. Never message CONTENT beyond what
+  /// the sender's own device already wrote to `lastMessage` for this purpose.
+  final String lastMessageText;
 
   /// Server ledger: messages sent to me in this conversation.
   final int incoming;
@@ -94,6 +99,8 @@ class DmConversationUnread {
         Map<String, dynamic>.from(state[uid] as Map? ?? const <String, dynamic>{});
     int intOf(Object? v) => v is int ? v : 0;
     final Object? updated = data['updatedAt'];
+    final Object? lastMessage = data['lastMessage'];
+    final Object? text = lastMessage is Map ? lastMessage['text'] : null;
     return DmConversationUnread(
       convId: convId,
       otherUid: otherUid,
@@ -101,6 +108,7 @@ class DmConversationUnread {
       readIncoming: intOf(mine['readIncoming']),
       legacyUnread: intOf(mine['unreadCount']),
       updatedAt: updated is Timestamp ? updated.toDate() : null,
+      lastMessageText: text is String ? text : '',
     );
   }
 }
@@ -111,17 +119,30 @@ class DmUnreadSnapshot {
     required this.uid,
     required this.conversations,
     required this.loaded,
+    this.error = false,
   });
 
-  static const DmUnreadSnapshot empty =
-      DmUnreadSnapshot(uid: null, conversations: <String, DmConversationUnread>{}, loaded: false);
+  static const DmUnreadSnapshot empty = DmUnreadSnapshot(
+    uid: null,
+    conversations: <String, DmConversationUnread>{},
+    loaded: false,
+  );
 
   final String? uid;
   final Map<String, DmConversationUnread> conversations;
 
-  /// False until the first snapshot for this account has arrived. A loading
-  /// or failing stream must not be rendered as "nothing unread".
+  /// False until every conversation for this account's currently-confirmed
+  /// friends has reported at least once. A loading or failing stream must not
+  /// be rendered as "nothing unread" — see [error] for the failing case.
   final bool loaded;
+
+  /// True when the underlying subscription is currently failing (e.g. a
+  /// permission error) AND nothing has loaded yet this account-session, so a
+  /// caller can show a genuine error state instead of an empty inbox. Once
+  /// [loaded] has been true at all, later transient errors keep the last
+  /// known data instead of flipping this on — a brief reconnect blip should
+  /// not replace a working list with an error screen.
+  final bool error;
 
   int get total =>
       conversations.values.fold(0, (int sum, DmConversationUnread c) => sum + c.unread);
@@ -196,8 +217,44 @@ class DmUnreadService {
 
   final StreamController<DmUnreadSnapshot> _out =
       StreamController<DmUnreadSnapshot>.broadcast();
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
+
+  // ── Subscription shape ───────────────────────────────────────────────────
+  // `conversations` has no query this account can safely LIST: its read rule
+  // requires a confirmed friendship, checked with get()/exists() against
+  // buddyAssignments, and Firestore will not evaluate that safely for a
+  // collection query — a query is denied wholesale if the rule cannot be
+  // proven from the query's own filters, and get()/exists() calls make that
+  // impossible regardless of what they would actually return. A single
+  // document read/listen is unaffected; only `.where(...)` list queries are.
+  // See firestore.rules `isConvFriend()` and functions/test-rules for the
+  // conversations collection.
+  //
+  // So instead of listing, this reads `socialGraph/{uid}.friends` — the
+  // existing, server-maintained, owner-readable projection of confirmed
+  // friendships (see functions/social/feed.js) — and holds one individual
+  // document listener per derived conversation id. A friend gained or lost
+  // adds or drops exactly that one listener; every other conversation is
+  // unaffected, so a lapsed friendship can never poison the rest of the
+  // inbox the way the old collection query could.
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _friendsSub;
+  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+      _convSubs = <String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>{};
+  final Map<String, DmConversationUnread> _conversations =
+      <String, DmConversationUnread>{};
+
+  /// Conversation ids attached but not yet reporting their first snapshot.
+  /// [loaded] withholds itself until this is empty, so a friend's
+  /// conversation that has not answered yet cannot look like zero unread.
+  final Set<String> _pendingFirst = <String>{};
+
   String? _subscribedUid;
+  bool _friendsLoaded = false;
+  bool _hadError = false;
+
+  /// Sticky once true for this account-session: a friend added later, whose
+  /// conversation has not reported yet, must not make an already-working
+  /// inbox look unloaded again.
+  bool _everLoaded = false;
 
   DmUnreadSnapshot _last = DmUnreadSnapshot.empty;
 
@@ -234,64 +291,124 @@ class DmUnreadService {
   /// stale count can never be shown to the new one.
   void onAccountChanged(String? uid) {
     if (uid == _subscribedUid && uid != null) return;
-    _sub?.cancel();
-    _sub = null;
-    _subscribedUid = null;
+    _teardown();
     _acked.clear();
     _last = DmUnreadSnapshot.empty;
     if (!_out.isClosed) _out.add(_last);
     if (uid != null && _out.hasListener) _ensureSubscribed();
   }
 
+  void _teardown() {
+    _friendsSub?.cancel();
+    _friendsSub = null;
+    for (final StreamSubscription<Object?> s in _convSubs.values) {
+      s.cancel();
+    }
+    _convSubs.clear();
+    _conversations.clear();
+    _pendingFirst.clear();
+    _subscribedUid = null;
+    _friendsLoaded = false;
+    _hadError = false;
+    _everLoaded = false;
+  }
+
   void _ensureSubscribed() {
     final String? uid = _currentUid();
     if (uid == null) return;
-    if (_sub != null && _subscribedUid == uid) return;
-    _sub?.cancel();
+    if (_subscribedUid == uid) return;
+    _teardown();
     _subscribedUid = uid;
     if (_last.uid != uid) {
       _acked.clear();
       _last = DmUnreadSnapshot.empty;
     }
-    _sub = _db
-        .collection('conversations')
-        .where('participants.$uid', isEqualTo: true)
-        .snapshots()
-        .listen(
-      (QuerySnapshot<Map<String, dynamic>> q) => _onSnapshot(uid, q),
-      // Keep the last known counts on a transient failure rather than
-      // flashing an empty badge.
-      onError: (Object e) => debugPrint('[dm] unread stream error: $e'),
+    _friendsSub = _db.collection('socialGraph').doc(uid).snapshots().listen(
+      (DocumentSnapshot<Map<String, dynamic>> snap) => _onFriendsSnapshot(uid, snap),
+      onError: (Object e) {
+        debugPrint('[dm] friend list unavailable: $e');
+        if (_subscribedUid != uid) return;
+        _hadError = true;
+        _emit(uid);
+      },
     );
   }
 
-  void _onSnapshot(String uid, QuerySnapshot<Map<String, dynamic>> q) {
-    if (_currentUid() != uid) return; // account changed mid-flight
-    final Map<String, DmConversationUnread> next = <String, DmConversationUnread>{};
-    for (final QueryDocumentSnapshot<Map<String, dynamic>> d in q.docs) {
-      final DmConversationUnread? c =
-          DmConversationUnread.fromDoc(uid, d.id, d.data());
-      if (c != null) next[d.id] = c;
+  void _onFriendsSnapshot(String uid, DocumentSnapshot<Map<String, dynamic>> snap) {
+    if (_currentUid() != uid || _subscribedUid != uid) return;
+    _friendsLoaded = true;
+    _hadError = false;
+    final Map<String, dynamic>? data = snap.data();
+    final Object? rawFriends = data?['friends'];
+    final Set<String> friends = <String>{
+      if (rawFriends is List)
+        for (final Object? f in rawFriends)
+          if (f is String && f.isNotEmpty) f,
+    };
+    final Map<String, String> desired = <String, String>{
+      for (final String f in friends) conversationIdFor(uid, f): f,
+    };
+
+    for (final String convId in _convSubs.keys.where((String c) => !desired.containsKey(c)).toList()) {
+      _convSubs.remove(convId)?.cancel();
+      _conversations.remove(convId);
+      _pendingFirst.remove(convId);
     }
-    _last = DmUnreadSnapshot(uid: uid, conversations: next, loaded: true);
-    if (!_out.isClosed) _out.add(_last);
+    for (final String convId in desired.keys) {
+      if (_convSubs.containsKey(convId)) continue;
+      _pendingFirst.add(convId);
+      _convSubs[convId] = _db.collection('conversations').doc(convId).snapshots().listen(
+        (DocumentSnapshot<Map<String, dynamic>> doc) => _onConversationSnapshot(uid, convId, doc),
+        onError: (Object e) {
+          debugPrint('[dm] conversation $convId unavailable: $e');
+          if (_currentUid() != uid || _subscribedUid != uid) return;
+          _pendingFirst.remove(convId); // do not block loading forever
+          _emit(uid);
+        },
+      );
+    }
+    _emit(uid);
+  }
+
+  void _onConversationSnapshot(
+      String uid, String convId, DocumentSnapshot<Map<String, dynamic>> doc) {
+    if (_currentUid() != uid || _subscribedUid != uid) return;
+    _pendingFirst.remove(convId);
+    final Map<String, dynamic>? data = doc.data();
+    final DmConversationUnread? c =
+        data == null ? null : DmConversationUnread.fromDoc(uid, convId, data);
+    if (c == null) {
+      _conversations.remove(convId);
+    } else {
+      _conversations[convId] = c;
+    }
+    _emit(uid);
 
     // A server value behind what this session already acknowledged means an
     // earlier write has not landed (offline, or overwritten by another
     // device). Re-assert it rather than letting a read message come back.
-    for (final MapEntry<String, int> e in _acked.entries) {
-      final DmConversationUnread? c = next[e.key];
-      if (c != null && c.readIncoming < e.value) {
-        _writeAcknowledgement(uid, e.key, e.value);
-      }
+    final int? acked = _acked[convId];
+    if (acked != null && c != null && c.readIncoming < acked) {
+      _writeAcknowledgement(uid, convId, acked);
     }
   }
 
+  void _emit(String uid) {
+    if (_friendsLoaded && _pendingFirst.isEmpty) _everLoaded = true;
+    _last = DmUnreadSnapshot(
+      uid: uid,
+      conversations: Map<String, DmConversationUnread>.of(_conversations),
+      loaded: _everLoaded,
+      error: _hadError && !_everLoaded,
+    );
+    if (!_out.isClosed) _out.add(_last);
+  }
+
   /// Records that everything up to [upToSeq] has been displayed in [convId],
-  /// and cancels that conversation's delivered phone alerts.
-  ///
-  /// [messageIds] are the incoming messages on screen; they let alerts from
-  /// builds before the conversation-scoped tag be cancelled too.
+  /// and cancels the delivered alerts for exactly [messageIds] — the incoming
+  /// messages actually displayed. A message that arrives after this chat
+  /// computed that list (and so is not in it) is never cancelled here, even
+  /// though it shares the conversation: it was not what was read.
   Future<void> acknowledge({
     required String convId,
     required int upToSeq,
@@ -300,8 +417,6 @@ class DmUnreadService {
     final String? uid = _currentUid();
     if (uid == null) return;
 
-    // Always clear this thread's alerts: they may be left over from an
-    // earlier session even when nothing new needs recording.
     unawaited(clearConversationAlerts(convId, messageIds: messageIds));
 
     final int serverRead = _last.conversations[convId]?.readIncoming ?? 0;
@@ -327,44 +442,128 @@ class DmUnreadService {
     }));
   }
 
-  /// Cancels the delivered alerts for one conversation — and only those.
+  /// Cancels the delivered alerts for exactly [messageIds] in [convId] — the
+  /// messages an explicit read acknowledgement actually covers. Deliberately
+  /// NOT a prefix/conversation-wide clear: a message posted between this
+  /// chat computing [messageIds] and this call reaching the platform shares
+  /// the conversation but is not in the list, and must stay delivered.
   Future<void> clearConversationAlerts(
     String convId, {
     Iterable<String> messageIds = const <String>[],
   }) {
+    final List<String> ids = messageIds.toList(growable: false);
+    if (ids.isEmpty) return Future<void>.value();
     return _notifications.clearNotifications(
-      tagPrefixes: <String>[dmConversationTagPrefix(convId)],
-      // Alerts sent before the tag carried the conversation.
-      tags: messageIds.map(dmLegacyMessageTag).toList(growable: false),
-      convIds: <String>[convId],
+      tags: <String>[
+        for (final String id in ids) dmMessageTag(convId: convId, messageId: id),
+        // Alerts sent before the tag carried the conversation.
+        for (final String id in ids) dmLegacyMessageTag(id),
+      ],
     );
   }
 
-  /// Startup/resume: drop alerts for conversations that are no longer unread
-  /// (read here earlier, or on another device). Alerts for conversations that
-  /// still have unread messages are left alone.
+  /// Startup/resume: drops delivered alerts that a CONFIRMED read already
+  /// covers, and nothing else. Never trusts a conversation's cached/last-known
+  /// unread bucket for this: it asks the OS which alerts are actually still in
+  /// the tray, then verifies each one's own message and this account's own
+  /// read boundary directly against the server before cancelling it — so a
+  /// stale cached zero, a permission failure, or a message that arrived a
+  /// moment ago can never cause a speculative cancellation. Unknown or
+  /// unverifiable alerts are left exactly as they are.
   Future<void> reconcileDeliveredAlerts() async {
-    final DmUnreadSnapshot state = _last;
-    if (!state.loaded) return;
-    final List<String> prefixes = <String>[];
-    final List<String> convIds = <String>[];
-    for (final DmConversationUnread c in state.conversations.values) {
-      if (c.unread == 0) {
-        prefixes.add(dmConversationTagPrefix(c.convId));
-        convIds.add(c.convId);
+    final String? uid = _currentUid();
+    if (uid == null) return;
+    if (_last.uid != uid || !_last.loaded) return;
+    final List<String> convIds = _last.conversations.keys.toList(growable: false);
+    if (convIds.isEmpty) return;
+
+    List<String> tags;
+    try {
+      tags = await _notifications.deliveredTags();
+    } catch (_) {
+      return;
+    }
+    if (tags.isEmpty) return;
+
+    final Map<String, List<String>> byConv = <String, List<String>>{};
+    for (final String convId in convIds) {
+      final String prefix = dmConversationTagPrefix(convId);
+      for (final String tag in tags) {
+        if (tag.startsWith(prefix)) {
+          byConv.putIfAbsent(convId, () => <String>[]).add(tag);
+        }
       }
     }
-    if (prefixes.isEmpty) return;
-    await _notifications.clearNotifications(
-      tagPrefixes: prefixes,
-      convIds: convIds,
-    );
+    if (byConv.isEmpty) return;
+
+    final List<String> toCancel = <String>[];
+    for (final MapEntry<String, List<String>> entry in byConv.entries) {
+      if (_currentUid() != uid) return; // account changed mid-flight
+      final String convId = entry.key;
+      final int? boundary = await _serverReadBoundary(uid, convId);
+      if (boundary == null) continue; // unknown/failed: never speculative
+      final String prefix = dmConversationTagPrefix(convId);
+      for (final String tag in entry.value) {
+        final String msgId = tag.substring(prefix.length);
+        if (msgId.isEmpty) continue;
+        final int? seq = await _serverMessageSeq(convId, msgId);
+        if (seq != null && seq <= boundary) toCancel.add(tag);
+      }
+    }
+    if (_currentUid() != uid || toCancel.isEmpty) return;
+    await _notifications.clearNotifications(tags: toCancel);
+  }
+
+  /// This account's read boundary for [convId], fetched fresh from the
+  /// server (never cache) and combined with anything acknowledged locally
+  /// this session. Null when it cannot be established right now — offline, a
+  /// permission failure, or an unexpectedly missing document — so the caller
+  /// treats it as unknown rather than as zero.
+  Future<int?> _serverReadBoundary(String uid, String convId) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await _db
+          .collection('conversations')
+          .doc(convId)
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 5));
+      final Map<String, dynamic>? data = snap.data();
+      if (data == null) return null;
+      final DmConversationUnread? c = DmConversationUnread.fromDoc(uid, convId, data);
+      if (c == null) return null;
+      return math.max(c.readIncoming, _acked[convId] ?? 0);
+    } catch (e) {
+      debugPrint('[dm] read boundary unavailable for reconciliation: $e');
+      return null;
+    }
+  }
+
+  /// [msgId]'s ledger position in [convId], fetched fresh from the server.
+  /// Null when unknown, so the caller never guesses.
+  Future<int?> _serverMessageSeq(String convId, String msgId) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snap = await _db
+          .collection('conversations')
+          .doc(convId)
+          .collection('messages')
+          .doc(msgId)
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 5));
+      final Object? seq = snap.data()?['incomingSeq'];
+      return seq is int ? seq : null;
+    } catch (e) {
+      debugPrint('[dm] message seq unavailable for reconciliation: $e');
+      return null;
+    }
   }
 
   @visibleForTesting
   Future<void> dispose() async {
-    await _sub?.cancel();
-    _sub = null;
+    await _friendsSub?.cancel();
+    for (final StreamSubscription<Object?> s in _convSubs.values) {
+      await s.cancel();
+    }
+    _friendsSub = null;
+    _convSubs.clear();
     _subscribedUid = null;
   }
 }

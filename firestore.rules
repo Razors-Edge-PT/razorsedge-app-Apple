@@ -129,18 +129,22 @@ service cloud.firestore {
     // not-friends. functions/scripts/symmetrise_buddy_assignments.js repairs
     // exactly those pairs and MUST be run (with --apply) BEFORE these rules
     // are deployed. No data is deleted by it; it only adds the missing side.
+    // Bracket map-indexing (`athletes[uid]`) THROWS a rules evaluation error
+    // when the key is absent — the ordinary case for a non-friend, since
+    // nobody's `athletes` map lists everyone. A single get() absorbs that as
+    // a denial, but a LIST query (e.g. the conversations inbox) fails the
+    // WHOLE request if evaluating the rule for even one matched document
+    // throws. `.get(key, default)` returns the default instead of throwing,
+    // so a missing entry reads as false rather than poisoning an unrelated
+    // query. Same access decision either way — mutual 'accepted' required.
     function isBuddyOf(ownerUid) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
-          .data.athletes[ownerUid] != null &&
-        get(/databases/$(database)/documents/buddyAssignments/$(request.auth.uid))
-          .data.athletes[ownerUid].status == 'accepted' &&
+          .data.get('athletes', {}).get(ownerUid, {}).get('status', '') == 'accepted' &&
         exists(/databases/$(database)/documents/buddyAssignments/$(ownerUid)) &&
         get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
-          .data.athletes[request.auth.uid] != null &&
-        get(/databases/$(database)/documents/buddyAssignments/$(ownerUid))
-          .data.athletes[request.auth.uid].status == 'accepted';
+          .data.get('athletes', {}).get(request.auth.uid, {}).get('status', '') == 'accepted';
     }
 
     // Social visibility gate: self, confirmed friend, or super admin.

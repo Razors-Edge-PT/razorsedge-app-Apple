@@ -420,6 +420,89 @@ test('a message\'s ledger position cannot be set or changed by a client', async 
   }));
 });
 
+// ── The inbox read path (Messages permission-denied regression) ────────────
+//
+// `conversations` has no query DirectMessages/DmUnreadService can safely run:
+// a LIST request against a collection whose read rule needs get()/exists()
+// (isConvFriend() → isBuddyOf(), reading buddyAssignments) cannot be proven
+// safe from the query's own filters, so Firestore denies the WHOLE request —
+// this is what produced the reported "[cloud_firestore/permission-denied]"
+// on the Messages screen for an ordinary user with any conversation at all,
+// regardless of which one. The fix (lib/social/dm_unread_service.dart) reads
+// `socialGraph/{uid}.friends` — already owner-readable, already maintained by
+// functions/social/feed.js — and opens one individual document
+// listen/get per confirmed friend's conversation instead of listing the
+// collection. These tests are the doc-level contract that design depends on.
+//
+// isBuddyOf() was also fixed to use `.get(key, default)` instead of bracket
+// map-indexing (`athletes[uid]`), which THROWS when the key is absent — the
+// ordinary case for a non-friend, since nobody's `athletes` map lists
+// everyone. A thrown evaluation error and a clean `false` both deny a single
+// get() identically, but only the exception could have poisoned a list
+// query — assertFails below cannot tell the two apart directly, but a
+// permission-denied here without setup mistakes confirms the access
+// decision itself, which is what the client-side redesign now depends on
+// exclusively (see functions/test-emulator or dm_unread_test.dart for the
+// premature-cancellation regressions this shares a root cause with).
+test('a confirmed friend reads their own conversation by direct document access', async () => {
+  await assertSucceeds(as(ALICE).doc(`conversations/${AB}`).get());
+  await assertSucceeds(as(BOB).doc(`conversations/${AB}`).get());
+});
+
+test('a non-friend cannot read a conversation naming them, even after it exists', async () => {
+  const AD_direct = convIdFor(ALICE, DAVE);
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc(`conversations/${AD_direct}`).set({
+      participants: { [ALICE]: true, [DAVE]: true },
+      participantState: { [ALICE]: { unreadCount: 0 }, [DAVE]: { unreadCount: 0 } },
+    });
+  });
+  await assertFails(as(ALICE).doc(`conversations/${AD_direct}`).get());
+  await assertFails(as(DAVE).doc(`conversations/${AD_direct}`).get());
+});
+
+test('an unfriended pair loses read access to their own past conversation, others unaffected', async () => {
+  // BOB and CAROL are not friends of each other; seed a conversation that
+  // once existed between confirmed friends and then unfriend them, mirroring
+  // "a removed friendship does not make other permitted conversations
+  // unusable" — ALICE's own conversations with BOB and CAROL must stay fine.
+  const BC = convIdFor(BOB, CAROL);
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.doc(`buddyAssignments/${BOB}`).set(
+      { athletes: { [ALICE]: { status: 'accepted' }, [CAROL]: { status: 'accepted' } } },
+    );
+    await db.doc(`buddyAssignments/${CAROL}`).set(
+      { athletes: { [ALICE]: { status: 'accepted' }, [BOB]: { status: 'accepted' } } },
+    );
+    await db.doc(`conversations/${BC}`).set({
+      participants: { [BOB]: true, [CAROL]: true },
+      participantState: { [BOB]: { unreadCount: 0 }, [CAROL]: { unreadCount: 0 } },
+    });
+  });
+  await assertSucceeds(as(BOB).doc(`conversations/${BC}`).get());
+
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    // BOB removes CAROL — one-sided, as an unfriend actually writes.
+    await ctx.firestore().doc(`buddyAssignments/${BOB}`).set(
+      { athletes: { [ALICE]: { status: 'accepted' } } },
+    );
+  });
+  await assertFails(as(BOB).doc(`conversations/${BC}`).get());
+  await assertFails(as(CAROL).doc(`conversations/${BC}`).get());
+  // ALICE's own, unrelated conversation with BOB is untouched.
+  await assertSucceeds(as(ALICE).doc(`conversations/${AB}`).get());
+  await assertSucceeds(as(BOB).doc(`conversations/${AB}`).get());
+
+  // Restore both assignment docs so later tests see the original fixture.
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.doc(`buddyAssignments/${BOB}`).set({ athletes: { [ALICE]: { status: 'accepted' } } });
+    await db.doc(`buddyAssignments/${CAROL}`).set({ athletes: { [ALICE]: { status: 'accepted' } } });
+    await db.doc(`conversations/${BC}`).delete();
+  });
+});
+
 test('a coach cannot read or post in an athlete\'s conversations', async () => {
   await assertFails(as(COACH).doc(`conversations/${AB}`).get());
   await assertFails(as(COACH).doc(`conversations/${AB}/messages/c1`).set({

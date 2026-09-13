@@ -135,24 +135,17 @@ class DirectMessages extends StatelessWidget {
   const DirectMessages({
     super.key,
     this.unreadService,
-    this.firestore,
-    this.uid,
     this.identity,
   });
 
-  /// Injectable for tests; production uses the shared instances and the
-  /// signed-in account.
+  /// Injectable for tests; production uses the shared instances. The list
+  /// itself always comes from [unreadService] (or [DmUnreadService.instance]),
+  /// which already resolves the signed-in account — see its build() comment.
   final DmUnreadService? unreadService;
-  final FirebaseFirestore? firestore;
-  final String? uid;
   final IdentityRepository? identity;
 
   @override
   Widget build(BuildContext context) {
-    // The SIGNED-IN account's conversations — a coach reviewing an athlete
-    // still sees their own messages.
-    final String uid = this.uid ?? FirebaseAuth.instance.currentUser!.uid;
-    final FirebaseFirestore db = firestore ?? FirebaseFirestore.instance;
     final DmUnreadService unread = unreadService ?? DmUnreadService.instance;
 
     return Scaffold(
@@ -170,52 +163,42 @@ class DirectMessages extends StatelessWidget {
           ),
         ],
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        // NO orderBy here → avoids composite index requirement.
-        stream: db
-            .collection('conversations')
-            .where('participants.$uid', isEqualTo: true)
-            .snapshots(),
+      // The list comes from DmUnreadService, not a direct query: `conversations`
+      // has no query this account can safely LIST (its read rule needs a
+      // confirmed-friend check Firestore cannot prove from a `.where()` filter
+      // alone, so any such query is denied wholesale — see dm_unread_service.dart).
+      // DmUnreadService instead holds one listener per confirmed friend's
+      // conversation, which is what the badge already used; sharing it here
+      // means opening this screen adds no second subscription.
+      body: StreamBuilder<DmUnreadSnapshot>(
+        stream: unread.watch(),
+        initialData: unread.snapshot,
         builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(child: Text('Error: ${snapshot.error}'));
+          final DmUnreadSnapshot state = snapshot.data ?? DmUnreadSnapshot.empty;
+          if (state.error && !state.loaded) {
+            return const Center(
+              child: Text("Couldn't load your messages. Pull down or reopen to retry."),
+            );
           }
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (!state.loaded) {
             return const Center(child: CircularProgressIndicator());
           }
-          final docs = snapshot.data?.docs ?? [];
-          if (docs.isEmpty) {
+          final List<DmConversationUnread> rows = state.conversations.values.toList()
+            ..sort((a, b) {
+              final int at = a.updatedAt?.millisecondsSinceEpoch ?? 0;
+              final int bt = b.updatedAt?.millisecondsSinceEpoch ?? 0;
+              return bt.compareTo(at);
+            });
+          if (rows.isEmpty) {
             return const Center(child: Text("No conversations yet"));
           }
 
-          // Sort client-side by updatedAt desc
-          docs.sort((a, b) {
-            final ad =
-                (a.data() as Map<String, dynamic>)['updatedAt'] as Timestamp?;
-            final bd =
-                (b.data() as Map<String, dynamic>)['updatedAt'] as Timestamp?;
-            final at = ad?.toDate().millisecondsSinceEpoch ?? 0;
-            final bt = bd?.toDate().millisecondsSinceEpoch ?? 0;
-            return bt.compareTo(at);
-          });
-
           return ListView.builder(
-            itemCount: docs.length,
+            itemCount: rows.length,
             itemBuilder: (context, i) {
-              final data = docs[i].data() as Map<String, dynamic>;
-              final convId = docs[i].id;
-
-              final participants =
-                  Map<String, dynamic>.from(data['participants'] ?? {});
-              final otherUid = participants.keys
-                  .firstWhere((k) => k != uid, orElse: () => uid);
-
-              final lastMsg = (data['lastMessage']?['text'] ?? '') as String;
-              final updatedAt = (data['updatedAt'] as Timestamp?)?.toDate();
-              // The same count the message icon's badge adds up: the server's
-              // ledger minus what this account has acknowledged reading.
-              final unreadCount =
-                  DmConversationUnread.fromDoc(uid, convId, data)?.unread ?? 0;
+              final DmConversationUnread row = rows[i];
+              final int unreadCount = row.unread;
+              final DateTime? updatedAt = row.updatedAt;
 
               // A one-shot users_public read used to name this row, so a rename
               // made while the list was open never appeared, and the raw uid
@@ -227,18 +210,18 @@ class DirectMessages extends StatelessWidget {
                     // The OTHER participant's picture, resolved from the
                     // conversation's participants against the signed-in uid.
                     leading: LiveBuddyAvatar(
-                      uid: otherUid,
+                      uid: row.otherUid,
                       size: 40,
                       identity: identity,
                     ),
                     title: LiveUserName(
-                      uid: otherUid,
+                      uid: row.otherUid,
                       identity: identity,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                     subtitle: Text(
-                      lastMsg,
+                      row.lastMessageText,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: unreadCount > 0
@@ -282,8 +265,8 @@ class DirectMessages extends StatelessWidget {
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => ConversationPage(
-                            convId: convId,
-                            otherUid: otherUid,
+                            convId: row.convId,
+                            otherUid: row.otherUid,
                             unreadService: unread,
                           ),
                         ),
