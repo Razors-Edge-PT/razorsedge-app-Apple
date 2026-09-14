@@ -184,7 +184,22 @@ class DirectMessages extends StatelessWidget {
           // does not retry anything without this explicit call.
           Future<void> retry() async => unread.retryFailed();
 
-          if (state.error && !state.loaded) {
+          final List<DmConversationUnread> rows = state.conversations.values.toList()
+            ..sort((a, b) {
+              final int at = a.updatedAt?.millisecondsSinceEpoch ?? 0;
+              final int bt = b.updatedAt?.millisecondsSinceEpoch ?? 0;
+              return bt.compareTo(at);
+            });
+
+          // Nothing usable to show, and something is currently failing to
+          // load: whether that is the friend projection itself (never
+          // loaded at all) or every desired conversation's listener having
+          // failed before reporting anything, there is nothing to show but
+          // the failure and a way to retry. Checked ahead of [state.loaded]
+          // so this never gets mistaken for (and hidden behind) a plain
+          // "still loading" spinner, and ahead of the empty-inbox screen so
+          // a total failure is never shown as "No conversations yet".
+          if (state.hasFailures && rows.isEmpty) {
             return RefreshIndicator(
               onRefresh: retry,
               child: ListView(
@@ -219,13 +234,12 @@ class DirectMessages extends StatelessWidget {
           if (!state.loaded) {
             return const Center(child: CircularProgressIndicator());
           }
-          final List<DmConversationUnread> rows = state.conversations.values.toList()
-            ..sort((a, b) {
-              final int at = a.updatedAt?.millisecondsSinceEpoch ?? 0;
-              final int bt = b.updatedAt?.millisecondsSinceEpoch ?? 0;
-              return bt.compareTo(at);
-            });
           if (rows.isEmpty) {
+            // Reached only with no current failures (the branch above would
+            // otherwise have caught it) — a genuinely empty inbox, which
+            // includes a confirmed friend whose conversation document does
+            // not exist yet (see dm_unread_service.dart): that is not a
+            // failure, so it belongs here, not in the error screen above.
             return RefreshIndicator(
               onRefresh: retry,
               child: ListView(
@@ -240,13 +254,22 @@ class DirectMessages extends StatelessWidget {
             );
           }
 
+          // Some rows loaded and at least one conversation is currently
+          // unreachable (or being retried): keep every usable row on screen
+          // — a failed read is never evidence anything was read — and add a
+          // compact banner rather than replacing the list, so recovering
+          // access never looks like a moment of "no conversations".
+          final int bannerCount = state.hasFailures ? 1 : 0;
           return RefreshIndicator(
             onRefresh: retry,
             child: ListView.builder(
             physics: const AlwaysScrollableScrollPhysics(),
-            itemCount: rows.length,
+            itemCount: rows.length + bannerCount,
             itemBuilder: (context, i) {
-              final DmConversationUnread row = rows[i];
+              if (state.hasFailures && i == 0) {
+                return _PartialInboxFailureBanner(onRetry: retry);
+              }
+              final DmConversationUnread row = rows[i - bannerCount];
               final int unreadCount = row.unread;
               final DateTime? updatedAt = row.updatedAt;
 
@@ -329,6 +352,38 @@ class DirectMessages extends StatelessWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Shown above otherwise-usable rows when some — but not all — of this
+/// account's conversation listeners are currently failing (or a retry has
+/// re-attached one but not yet resolved it). The rows themselves keep
+/// showing their last known state; this only says more may be missing.
+class _PartialInboxFailureBanner extends StatelessWidget {
+  const _PartialInboxFailureBanner({required this.onRetry});
+
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black26,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              "Some conversations may be missing or out of date.",
+              style: TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+          ),
+          TextButton(
+            onPressed: onRetry,
+            child: const Text('Retry'),
+          ),
+        ],
       ),
     );
   }

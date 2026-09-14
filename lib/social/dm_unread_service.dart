@@ -119,7 +119,7 @@ class DmUnreadSnapshot {
     required this.uid,
     required this.conversations,
     required this.loaded,
-    this.error = false,
+    this.hasFailures = false,
   });
 
   static const DmUnreadSnapshot empty = DmUnreadSnapshot(
@@ -132,17 +132,23 @@ class DmUnreadSnapshot {
   final Map<String, DmConversationUnread> conversations;
 
   /// False until every conversation for this account's currently-confirmed
-  /// friends has reported at least once. A loading or failing stream must not
-  /// be rendered as "nothing unread" — see [error] for the failing case.
+  /// friends has reported (successfully or not) at least once. A loading
+  /// stream must not be rendered as "nothing unread" — see [hasFailures] for
+  /// the failing case, which [loaded] does NOT rule out: a friend's
+  /// conversation that errored out is done reporting, not still loading.
   final bool loaded;
 
-  /// True when the underlying subscription is currently failing (e.g. a
-  /// permission error) AND nothing has loaded yet this account-session, so a
-  /// caller can show a genuine error state instead of an empty inbox. Once
-  /// [loaded] has been true at all, later transient errors keep the last
-  /// known data instead of flipping this on — a brief reconnect blip should
-  /// not replace a working list with an error screen.
-  final bool error;
+  /// True while ANY part of this account's inbox is currently failing to
+  /// load or reload — the friend projection itself, or one or more
+  /// conversation listeners that have terminated and not yet recovered
+  /// (including one a retry has re-attached but not yet resolved either
+  /// way). Deliberately NOT suppressed once [loaded] is true or data has
+  /// shown before: a failure that starts after some rows already loaded is
+  /// exactly as real as one that blocks the very first load, and a caller
+  /// must keep surfacing it — with whatever rows are still available beside
+  /// it — until the underlying listener actually recovers or its
+  /// conversation is no longer required (the friendship ended).
+  final bool hasFailures;
 
   int get total =>
       conversations.values.fold(0, (int sum, DmConversationUnread c) => sum + c.unread);
@@ -254,9 +260,19 @@ class DmUnreadService {
 
   /// Desired conversation ids whose listener has terminated (an error the
   /// Firestore SDK will not itself retry) and has not yet been re-attached.
-  /// Disjoint from [_convSubs]'s keys — a convId is in exactly one of the two
-  /// while desired, and in neither once its friendship ends.
+  /// Disjoint from [_convSubs]'s keys and from [_retryingConvIds] — a convId
+  /// is in exactly one of the three while desired, and in none once its
+  /// friendship ends.
   final Set<String> _deadConvIds = <String>{};
+
+  /// Dead conversation ids a retry has re-attached but which have not yet
+  /// reported success or failure. Kept separate from [_deadConvIds] (removed
+  /// from there the moment a retry starts, so a second tap on Retry before
+  /// this one resolves finds nothing left to re-attach and cannot open a
+  /// second listener for the same conversation) but still counted as a
+  /// failure by [DmUnreadSnapshot.hasFailures] — starting a retry is not the
+  /// same as it having worked.
+  final Set<String> _retryingConvIds = <String>{};
 
   final Map<String, DmConversationUnread> _conversations =
       <String, DmConversationUnread>{};
@@ -326,6 +342,7 @@ class DmUnreadService {
     _convSubs.clear();
     _desiredConvFriend.clear();
     _deadConvIds.clear();
+    _retryingConvIds.clear();
     _conversations.clear();
     _pendingFirst.clear();
     _subscribedUid = null;
@@ -382,6 +399,7 @@ class DmUnreadService {
       _desiredConvFriend.remove(convId);
       _convSubs.remove(convId)?.cancel();
       _deadConvIds.remove(convId);
+      _retryingConvIds.remove(convId);
       _conversations.remove(convId);
       _pendingFirst.remove(convId);
     }
@@ -414,6 +432,7 @@ class DmUnreadService {
         if (!identical(_convSubs[convId], sub)) return; // superseded already
         _pendingFirst.remove(convId); // do not block loading forever
         _convSubs.remove(convId);
+        _retryingConvIds.remove(convId);
         // Only worth retrying while still a desired (confirmed-friend)
         // conversation — onFriendsSnapshot already dropped it otherwise.
         if (_desiredConvFriend.containsKey(convId)) _deadConvIds.add(convId);
@@ -434,6 +453,9 @@ class DmUnreadService {
   /// reopening Messages): a listener that is currently healthy is left
   /// completely alone, so this never duplicates or disturbs live
   /// subscriptions, and never retries on its own schedule — only when asked.
+  /// A convId already mid-retry is likewise left alone (see
+  /// [_retryingConvIds]): a second tap before the first attempt resolves
+  /// cannot open a second listener for the same conversation.
   void retryFailed() {
     final String? uid = _currentUid();
     if (uid == null || _subscribedUid != uid) return;
@@ -442,7 +464,12 @@ class DmUnreadService {
     }
     if (_deadConvIds.isEmpty) return;
     for (final String convId in _deadConvIds.toList(growable: false)) {
+      // Moved to _retryingConvIds, not cleared outright: the retry has only
+      // just started, not succeeded, and a second tap before it resolves
+      // must find nothing left in _deadConvIds to re-attach — see
+      // [_retryingConvIds].
       _deadConvIds.remove(convId);
+      _retryingConvIds.add(convId);
       _attachConversationListener(uid, convId);
     }
     _emit(uid);
@@ -453,6 +480,11 @@ class DmUnreadService {
     if (_currentUid() != uid || _subscribedUid != uid) return;
     if (!identical(_convSubs[convId], sub)) return; // late callback, superseded
     _pendingFirst.remove(convId);
+    // A successful snapshot resolves whatever failure state this convId was
+    // in — including mid-retry, which is not yet reflected by _deadConvIds
+    // alone (see [_retryingConvIds]).
+    _deadConvIds.remove(convId);
+    _retryingConvIds.remove(convId);
     final Map<String, dynamic>? data = doc.data();
     final DmConversationUnread? c =
         data == null ? null : DmConversationUnread.fromDoc(uid, convId, data);
@@ -478,7 +510,8 @@ class DmUnreadService {
       uid: uid,
       conversations: Map<String, DmConversationUnread>.of(_conversations),
       loaded: _everLoaded,
-      error: _hadError && !_everLoaded,
+      hasFailures:
+          _hadError || _deadConvIds.isNotEmpty || _retryingConvIds.isNotEmpty,
     );
     if (!_out.isClosed) _out.add(_last);
   }

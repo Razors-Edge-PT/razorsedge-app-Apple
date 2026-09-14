@@ -114,8 +114,24 @@ class FlakyConvFirestore implements FirebaseFirestore {
   final FirebaseFirestore _inner;
   final Set<String> _broken = <String>{};
 
+  /// How many times `.snapshots()` was actually called (i.e. a NEW listener
+  /// opened) for each conversation id — a duplicated or needlessly-restarted
+  /// subscription is directly visible here, not just inferred from the UI.
+  final Map<String, int> snapshotCalls = <String, int>{};
+
+  final Map<String, Completer<void>> _gates = <String, Completer<void>>{};
+
   void breakConversation(String convId) => _broken.add(convId);
   void healConversation(String convId) => _broken.remove(convId);
+
+  /// Holds every subsequent event for [convId] (including the very next
+  /// resubscription's initial snapshot) until [releaseConversation] is
+  /// called — long enough for a test to tap Retry again and confirm it did
+  /// not open a second listener while the first is still in flight.
+  void gateConversation(String convId) =>
+      _gates[convId] = Completer<void>();
+  void releaseConversation(String convId) => _gates.remove(convId)?.complete();
+  Future<void>? gateFor(String convId) => _gates[convId]?.future;
 
   @override
   CollectionReference<Map<String, dynamic>> collection(String path) {
@@ -156,9 +172,12 @@ class _FlakyConvDoc implements DocumentReference<Map<String, dynamic>> {
     ListenSource source = ListenSource.defaultSource,
   }) {
     final String convId = id;
+    _parent.snapshotCalls.update(convId, (int n) => n + 1, ifAbsent: () => 1);
     return _inner
         .snapshots(includeMetadataChanges: includeMetadataChanges, source: source)
-        .map((DocumentSnapshot<Map<String, dynamic>> snap) {
+        .asyncMap((DocumentSnapshot<Map<String, dynamic>> snap) async {
+      final Future<void>? gate = _parent.gateFor(convId);
+      if (gate != null) await gate;
       if (_parent._broken.contains(convId)) {
         throw FirebaseException(
             plugin: 'cloud_firestore', code: 'permission-denied', message: 'simulated failure');
@@ -987,6 +1006,212 @@ void main() {
       await carolLoadedFuture;
       expect(service2.snapshot.total, 0);
       expect(service2.snapshot.conversations.containsKey(convBob), isFalse);
+    });
+  });
+
+  // ── Defect: a fully or partially failed inbox looked like an empty one ─────
+  //
+  // loaded flips true once every desired conversation has REPORTED, whether
+  // it reported data or an error — and hasFailures is never suppressed by
+  // loaded or by having shown data before. Without that, DirectMessages saw
+  // loaded: true, hasFailures: false and rendered "No conversations yet" for
+  // a totally or partially broken inbox. These tests drive the real
+  // DirectMessages widget end to end, including tapping its actual Retry
+  // control — never calling retryFailed() directly in its place.
+  group('Messages failure state', () {
+    testWidgets(
+        'all conversation listeners failing before any success shows a '
+        'failure and Retry, never "No conversations yet"', (WidgetTester tester) async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky = FlakyConvFirestore(db);
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 1);
+      flaky.breakConversation(convBob);
+      flaky.breakConversation(convCarol);
+      final DmUnreadService service = DmUnreadService(
+          firestore: flaky, currentUid: () => me, notifications: RecordingPlatform());
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(MaterialApp(
+        home: DirectMessages(unreadService: service, identity: IdentityRepository(firestore: db)),
+      ));
+      await settleImages(tester);
+
+      expect(find.text("Couldn't load your messages."), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      expect(find.text('No conversations yet'), findsNothing);
+    });
+
+    testWidgets(
+        'one listener failing while another succeeds keeps the healthy row '
+        'and its count, with a partial-failure indication', (WidgetTester tester) async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky = FlakyConvFirestore(db);
+      await seedConversation(db, convId: convBob, other: bob, incoming: 3);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 2);
+      flaky.breakConversation(convCarol);
+      final DmUnreadService service = DmUnreadService(
+          firestore: flaky, currentUid: () => me, notifications: RecordingPlatform());
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(MaterialApp(
+        home: DirectMessages(unreadService: service, identity: IdentityRepository(firestore: db)),
+      ));
+      await settleImages(tester);
+
+      expect(find.text('3'), findsOneWidget, reason: "Bob's healthy row and count stay visible");
+      expect(find.text('Some conversations may be missing or out of date.'), findsOneWidget);
+      expect(find.text("Couldn't load your messages."), findsNothing);
+      expect(find.text('No conversations yet'), findsNothing);
+    });
+
+    testWidgets(
+        'tapping the actual Retry control after access is restored brings '
+        'back the missing row and clears the failure indication', (WidgetTester tester) async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky = FlakyConvFirestore(db);
+      await seedConversation(db, convId: convBob, other: bob, incoming: 3);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 2);
+      flaky.breakConversation(convCarol);
+      final DmUnreadService service = DmUnreadService(
+          firestore: flaky, currentUid: () => me, notifications: RecordingPlatform());
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(MaterialApp(
+        home: DirectMessages(unreadService: service, identity: IdentityRepository(firestore: db)),
+      ));
+      await settleImages(tester);
+      expect(find.text('Some conversations may be missing or out of date.'), findsOneWidget);
+      expect(find.text('2'), findsNothing, reason: "Carol hasn't loaded yet");
+
+      flaky.healConversation(convCarol);
+      await tester.tap(find.text('Retry'));
+      await settleImages(tester);
+
+      expect(find.text('2'), findsOneWidget, reason: "Carol's row and count now appear");
+      expect(find.text('Some conversations may be missing or out of date.'), findsNothing);
+      expect(find.text("Couldn't load your messages."), findsNothing);
+    });
+
+    testWidgets(
+        'a retry that fails again leaves the failure indication in place, '
+        'with retry still possible', (WidgetTester tester) async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky = FlakyConvFirestore(db);
+      await seedConversation(db, convId: convBob, other: bob, incoming: 3);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 2);
+      flaky.breakConversation(convCarol);
+      final DmUnreadService service = DmUnreadService(
+          firestore: flaky, currentUid: () => me, notifications: RecordingPlatform());
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(MaterialApp(
+        home: DirectMessages(unreadService: service, identity: IdentityRepository(firestore: db)),
+      ));
+      await settleImages(tester);
+      expect(find.text('Some conversations may be missing or out of date.'), findsOneWidget);
+
+      // Retry — but Carol's conversation is still broken.
+      await tester.tap(find.text('Retry'));
+      await settleImages(tester);
+
+      expect(find.text('Some conversations may be missing or out of date.'), findsOneWidget,
+          reason: 'still failing after the retry');
+      expect(find.text('Retry'), findsOneWidget, reason: 'retry remains possible');
+      expect(find.text('2'), findsNothing);
+    });
+
+    testWidgets(
+        'a failure that starts after data has already loaded still becomes '
+        'visible, without discarding the healthy row', (WidgetTester tester) async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky = FlakyConvFirestore(db);
+      await seedConversation(db, convId: convBob, other: bob, incoming: 3);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 2);
+      final DmUnreadService service = DmUnreadService(
+          firestore: flaky, currentUid: () => me, notifications: RecordingPlatform());
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(MaterialApp(
+        home: DirectMessages(unreadService: service, identity: IdentityRepository(firestore: db)),
+      ));
+      await settleImages(tester);
+      expect(find.text('2'), findsOneWidget);
+      expect(find.text('Some conversations may be missing or out of date.'), findsNothing);
+
+      // Carol's listener fails well after the inbox already loaded.
+      flaky.breakConversation(convCarol);
+      await db.collection('conversations').doc(convCarol).update(<String, Object?>{
+        'participantState.$me.incoming': 9,
+      });
+      await settleImages(tester);
+
+      expect(find.text('3'), findsOneWidget, reason: "Bob's row survives the unrelated failure");
+      expect(find.text('Some conversations may be missing or out of date.'), findsOneWidget);
+    });
+
+    testWidgets('a genuinely empty, successfully loaded inbox keeps its normal empty state',
+        (WidgetTester tester) async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky = FlakyConvFirestore(db);
+      final DmUnreadService service = DmUnreadService(
+          firestore: flaky, currentUid: () => me, notifications: RecordingPlatform());
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(MaterialApp(
+        home: DirectMessages(unreadService: service, identity: IdentityRepository(firestore: db)),
+      ));
+      await settleImages(tester);
+
+      expect(find.text('No conversations yet'), findsOneWidget);
+      expect(find.text("Couldn't load your messages."), findsNothing);
+      expect(find.text('Some conversations may be missing or out of date.'), findsNothing);
+    });
+
+    testWidgets(
+        'retrying a failed conversation never duplicates or restarts a '
+        'healthy sibling, and a second tap before the first retry resolves '
+        'opens no second listener', (WidgetTester tester) async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky = FlakyConvFirestore(db);
+      await seedConversation(db, convId: convBob, other: bob, incoming: 3);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 2);
+      flaky.breakConversation(convCarol);
+      final DmUnreadService service = DmUnreadService(
+          firestore: flaky, currentUid: () => me, notifications: RecordingPlatform());
+      addTearDown(service.dispose);
+
+      await tester.pumpWidget(MaterialApp(
+        home: DirectMessages(unreadService: service, identity: IdentityRepository(firestore: db)),
+      ));
+      await settleImages(tester);
+      expect(flaky.snapshotCalls[convBob], 1);
+      expect(flaky.snapshotCalls[convCarol], 1, reason: 'the one, now-failed, initial attempt');
+
+      flaky.healConversation(convCarol);
+      flaky.gateConversation(convCarol);
+      await tester.tap(find.text('Retry'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(flaky.snapshotCalls[convCarol], 2, reason: 'the retry opened exactly one new listener');
+      expect(find.text('Some conversations may be missing or out of date.'), findsOneWidget,
+          reason: 'still showing the failure — the retry has not resolved yet');
+
+      // A second tap before the first retry resolves must not open another one.
+      await tester.tap(find.text('Retry'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(flaky.snapshotCalls[convCarol], 2, reason: 'no second listener from the repeated tap');
+      expect(flaky.snapshotCalls[convBob], 1, reason: 'the healthy sibling was never touched');
+
+      flaky.releaseConversation(convCarol);
+      await settleImages(tester);
+
+      expect(find.text('2'), findsOneWidget, reason: "Carol's row now appears");
+      expect(find.text('Some conversations may be missing or out of date.'), findsNothing);
+      expect(flaky.snapshotCalls[convCarol], 2, reason: 'still just the two attempts total');
+      expect(flaky.snapshotCalls[convBob], 1);
     });
   });
 
