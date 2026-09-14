@@ -198,3 +198,56 @@ test('staleness: <3 days ok, 3 days due, 4+ days overdue', () => {
   assert.equal(bw.weighInStatus('2026-08-10', '2026-08-14'), 'overdue'); // 4 days
   assert.equal(bw.weighInStatus(null, '2026-08-14'), 'overdue');
 });
+
+// ── Latest recorded weigh-in (date + its own weight) ───────────────────────
+
+// BodyWeightTracker stamps an entry at device-local NOON of its chosen day.
+const nzNoon = (dateKey) => Date.parse(`${dateKey}T00:00:00Z`); // 12:00 NZST
+const TZ = 'Pacific/Auckland';
+
+test('latest weigh-in: date and weight come from the same newest entry, not an average', () => {
+  const latest = bw.pickLatestWeighIn([
+    { id: 'a', weight: 74.0, unit: 'kg', tod: 'am', tsMillis: nzNoon('2026-09-08') },
+    { id: 'b', weight: 73.2, unit: 'kg', tod: 'am', tsMillis: nzNoon('2026-09-10') },
+    { id: 'c', weight: 73.9, unit: 'kg', tod: 'am', tsMillis: nzNoon('2026-09-09') },
+  ], TZ);
+  assert.deepEqual(latest, { dateKey: '2026-09-10', weight: 73.2, unit: 'kg', tod: 'am', entryId: 'b' });
+});
+
+test('latest weigh-in: same-day AM/PM entries share a timestamp — the tracker order decides', () => {
+  const ts = nzNoon('2026-09-10');
+  const entries = [
+    { id: 'Aaa', weight: 73.2, tod: 'am', tsMillis: ts },
+    { id: 'Zzz', weight: 73.9, tod: 'pm', tsMillis: ts },
+  ];
+  // Firestore orders equal timestamps by document id DESC under a desc order.
+  const latest = bw.pickLatestWeighIn(entries, TZ);
+  assert.equal(latest.entryId, 'Zzz');
+  assert.equal(latest.weight, 73.9);
+  assert.equal(latest.tod, 'pm');
+  assert.deepEqual(bw.pickLatestWeighIn([...entries].reverse(), TZ), latest);
+});
+
+test('latest weigh-in: an edited latest entry reports its edited value and date', () => {
+  const before = [{ id: 'x', weight: 80, tsMillis: nzNoon('2026-09-10') }];
+  const after = [{ id: 'x', weight: 79.4, tsMillis: nzNoon('2026-09-11') }];
+  assert.equal(bw.pickLatestWeighIn(before, TZ).weight, 80);
+  assert.deepEqual(bw.pickLatestWeighIn(after, TZ),
+    { dateKey: '2026-09-11', weight: 79.4, unit: 'kg', tod: 'am', entryId: 'x' });
+});
+
+test('latest weigh-in: deleting the latest falls back to the previous entry intact', () => {
+  const remaining = [{ id: 'old', weight: 81.25, tsMillis: nzNoon('2026-06-02') }];
+  const latest = bw.pickLatestWeighIn(remaining, TZ);
+  assert.deepEqual(latest, { dateKey: '2026-06-02', weight: 81.25, unit: 'kg', tod: 'am', entryId: 'old' });
+  // An old entry far outside every rolling-average window is still the latest.
+  assert.equal(bw.weighInStatus(latest.dateKey, '2026-09-15'), 'overdue');
+});
+
+test('latest weigh-in: no history is null; an unusable weight is null, never 0', () => {
+  assert.equal(bw.pickLatestWeighIn([], TZ), null);
+  assert.equal(bw.pickLatestWeighIn([{ id: 'n', weight: 70, tsMillis: Number.NaN }], TZ), null);
+  const bad = bw.pickLatestWeighIn([{ id: 'z', weight: 0, unit: 'LB', tsMillis: nzNoon('2026-09-10') }], TZ);
+  assert.equal(bad.weight, null);
+  assert.equal(bad.unit, 'lb');
+});

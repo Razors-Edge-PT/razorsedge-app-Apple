@@ -15,7 +15,8 @@ const assert = require('node:assert/strict');
 const { summarizeWorkoutDay, deriveExerciseEvents } = require('../coach/pb_engine');
 const { applyWorkoutDay, bulkRebuild } = require('../coach/analytics_store');
 const { isBodyweightExercise } = require('../coach/bodyweight_exercises');
-const { trainingParagraph } = require('../coach/message');
+const { trainingLines } = require('../coach/message');
+const { selectAchievements } = require('../coach/praise');
 const { pickBodyweightAsOf } = require('../showcase/bodyweight');
 const { memoryStore, snapshotOf } = require('../test-helpers/memory_store');
 
@@ -127,21 +128,25 @@ test('every other exercise is analysed exactly as before', async () => {
   assert.ok([...withBw.events.values()].every((e) => !('bodyweightKg' in e)));
 });
 
-test('praise reads a bodyweight exercise as the load added to bodyweight', async () => {
+test('achievement lines read a bodyweight exercise as the load added to bodyweight', async () => {
   const c = storeWith(WEIGH_INS);
   await bulkRebuild(c.store, HISTORY);
   const ev = [...c.events.values()].find((e) => e.type === 'maxWeightPB');
-  const text = trainingParagraph([{ kind: 'maxWeightPB', event: ev }], 1);
-  assert.match(text, /\+60kg for 3/);
+  const line = (events) => trainingLines(selectAchievements(events))[0];
+
+  const text = line({ maxWeightEvents: [ev] });
+  assert.match(text, /^\+60kg for 3 reps on the /);
   assert.doesNotMatch(text, /145kg/);
 
-  const bwOnly = trainingParagraph([{ kind: 'repPB', event: { ...ev, type: 'repPB', weightKg: 85 } }], 1);
-  assert.match(bwOnly, /bodyweight for 3/);
+  const bwOnly = line({ repEvents: [{ ...ev, type: 'repPB', weightKg: 85 }] });
+  assert.match(bwOnly, /^bodyweight for 3 reps on the /);
 
-  // Every other exercise reads exactly as before.
-  const benchText = trainingParagraph([{
-    kind: 'maxWeightPB',
-    event: { exerciseName: 'Bench Press, Barbell', weightKg: 102.5, reps: 5 },
-  }], 1);
-  assert.match(benchText, /102\.5kg for 5/);
+  // Every other exercise reads its stored load.
+  const benchText = line({
+    maxWeightEvents: [{
+      type: 'maxWeightPB', exerciseId: 'bench', dateKey: '2026-01-19',
+      exerciseName: 'Bench Press, Barbell', weightKg: 102.5, reps: 5,
+    }],
+  });
+  assert.equal(benchText, '102.5kg for 5 reps on the bench press, all-time heaviest');
 });

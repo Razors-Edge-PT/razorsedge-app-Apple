@@ -14,7 +14,7 @@ const {
   summarizeWorkoutDay, deriveExerciseEvents, applyDayToState, emptyState,
 } = require('../coach/pb_engine');
 const { bulkRebuild, applyWorkoutDay } = require('../coach/analytics_store');
-const { selectPraise } = require('../coach/praise');
+const { selectAchievements } = require('../coach/praise');
 const { memoryStore } = require('../test-helpers/memory_store');
 
 // ── fixture helpers ─────────────────────────────────────────────────────────
@@ -180,18 +180,18 @@ test('regression 4c: the coach custom-exercise filter survives folding', () => {
     reps: 15, weightKg: 30, prevWeightKg: 28, pctImprovement: 0.07,
   };
   // The coach picked the catalog id in its original casing.
-  const picked = selectPraise({
+  const picked = selectAchievements({
     maxWeightEvents: [], repEvents: [ev], e1rmEvents: [], rirMatchEvents: [],
-    completion: null, allowedExerciseIds: ['eeEXnmSXv90q0rUgGECq'],
+    allowedExerciseIds: ['eeEXnmSXv90q0rUgGECq'],
   });
-  assert.equal(picked.praises.length, 1);
+  assert.equal(picked.length, 1);
 
   // An unrelated selection still excludes it.
-  const excluded = selectPraise({
+  const excluded = selectAchievements({
     maxWeightEvents: [], repEvents: [ev], e1rmEvents: [], rirMatchEvents: [],
-    completion: null, allowedExerciseIds: ['someOtherExerciseId'],
+    allowedExerciseIds: ['someOtherExerciseId'],
   });
-  assert.equal(excluded.praises.length, 0);
+  assert.equal(excluded.length, 0);
 });
 
 // ── 5. RIR direction: HIGHER at the same weight and reps is the improvement ─
@@ -313,22 +313,22 @@ test('regression 7b: it ranks first and does not also appear as a rep-PB item', 
   // The engine records both facts (180 also beats every prior set at >= 1 rep)…
   assert.equal(events.filter((e) => e.type === 'repPB').length, 1);
 
-  // …but the athlete is told once, as the top-ranked all-time-heaviest item.
-  const { praises } = selectPraise({
+  // …but the athlete is told once, as the top-ranked all-time-heaviest line.
+  const items = selectAchievements({
     maxWeightEvents: events.filter((e) => e.type === 'maxWeightPB'),
     repEvents: events.filter((e) => e.type === 'repPB'),
     e1rmEvents: events.filter((e) => e.type === 'e1rmPB'),
     rirMatchEvents: [],
-    completion: null,
     allowedExerciseIds: null,
   });
-  assert.equal(praises.length, 1);
-  assert.equal(praises[0].kind, 'maxWeightPB');
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, 'maxWeightPB');
+  assert.ok(items[0].rep, 'the rep-target fact is merged into the same line');
 });
 
-// ── 8. More than three achievements → deterministic top three ───────────────
+// ── 8. More than three achievements → every one listed, deterministically ───
 
-test('regression 8: the top three praise items are selected deterministically', () => {
+test('regression 8: all qualifying achievements are listed in deterministic priority order', () => {
   const mk = (type, exerciseId, extra) => ({
     type, exerciseId, dateKey: '2026-02-05', exerciseName: exerciseId, reps: 5, ...extra,
   });
@@ -338,23 +338,21 @@ test('regression 8: the top three praise items are selected deterministically', 
       mk('repPB', 'ex_b', { weightKg: 110, pctImprovement: 0.10 }),
       mk('repPB', 'ex_c', { weightKg: 105, pctImprovement: 0.02 }),
     ],
-    e1rmEvents: [mk('e1rmPB', 'ex_d', { e1rmKg: 130, pctImprovement: 0.20 })],
-    rirMatchEvents: [mk('rirMatchPB', 'ex_e', { weightKg: 100, rir: 0, prevRir: 3 })],
-    completion: { completedAll: true, count: 4, planned: 4, weekAlreadyPraised: false },
+    e1rmEvents: [mk('e1rmPB', 'ex_d', { e1rmKg: 130, weightKg: 115, pctImprovement: 0.20 })],
+    rirMatchEvents: [mk('rirMatchPB', 'ex_e', { weightKg: 100, rir: 3, prevRir: 1 })],
     allowedExerciseIds: null,
   };
 
-  const { praises } = selectPraise(input);
-  assert.equal(praises.length, 3);
-  // Category order wins over pct improvement: all-time heaviest, then the two
-  // rep PBs (ranked by improvement) — the bigger E1RM gain does not jump the
-  // queue, and completion never displaces a PB.
-  assert.deepEqual(praises.map((p) => `${p.kind}:${p.event.exerciseId}`), [
-    'maxWeightPB:ex_a', 'repPB:ex_b', 'repPB:ex_c',
+  const items = selectAchievements(input);
+  // No three-slot cap: all five distinct performances are listed. Category
+  // order wins over pct improvement: all-time heaviest, the two rep PBs (by
+  // improvement), the E1RM PB, then the RIR match.
+  assert.deepEqual(items.map((p) => `${p.kind}:${p.exerciseId}`), [
+    'maxWeightPB:ex_a', 'repPB:ex_b', 'repPB:ex_c', 'e1rmPB:ex_d', 'rirMatchPB:ex_e',
   ]);
 
-  // Deterministic: repeated selection is byte-identical.
-  assert.deepEqual(selectPraise(input).praises, praises);
+  // Deterministic: repeated selection is identical.
+  assert.deepEqual(selectAchievements(input), items);
 });
 
 test('regression 8b: ties break deterministically, not by input order', () => {
@@ -362,16 +360,16 @@ test('regression 8b: ties break deterministically, not by input order', () => {
     type: 'repPB', exerciseId, dateKey: '2026-02-05', exerciseName: exerciseId,
     reps: 5, weightKg: 100, pctImprovement: 0.05,
   });
-  const forward = selectPraise({
+  const forward = selectAchievements({
     maxWeightEvents: [], repEvents: [mk('ex_c'), mk('ex_a'), mk('ex_b')],
-    e1rmEvents: [], rirMatchEvents: [], completion: null, allowedExerciseIds: null,
+    e1rmEvents: [], rirMatchEvents: [], allowedExerciseIds: null,
   });
-  const reversed = selectPraise({
+  const reversed = selectAchievements({
     maxWeightEvents: [], repEvents: [mk('ex_b'), mk('ex_a'), mk('ex_c')],
-    e1rmEvents: [], rirMatchEvents: [], completion: null, allowedExerciseIds: null,
+    e1rmEvents: [], rirMatchEvents: [], allowedExerciseIds: null,
   });
-  assert.deepEqual(forward.praises.map((p) => p.event.exerciseId), ['ex_a', 'ex_b', 'ex_c']);
-  assert.deepEqual(forward.praises, reversed.praises);
+  assert.deepEqual(forward.map((p) => p.exerciseId), ['ex_a', 'ex_b', 'ex_c']);
+  assert.deepEqual(forward, reversed);
 });
 
 // ── 9. Bootstrap and incremental processing agree ───────────────────────────

@@ -16,7 +16,7 @@
 
 'use strict';
 
-const { addDaysKey } = require('./coverage');
+const { addDaysKey, localDateKey } = require('./coverage');
 
 const GOALS = ['cut', 'bulk', 'maintain'];
 const MAINTAIN_BAND = 0.01;        // ±1 % of previous average counts as stable
@@ -211,6 +211,50 @@ function prunePraisedMilestones(praisedMilestones, goalPhase) {
   return out;
 }
 
+// ── Latest recorded weigh-in ────────────────────────────────────────────────
+
+/** How many newest weigh-in documents are examined for the latest entry. */
+const LATEST_WEIGH_IN_SCAN = 5;
+
+/**
+ * The latest recorded weigh-in as ONE entry, so its date and its weight can
+ * never come from two different documents.
+ *
+ * Mirrors BodyWeightTracker's "Latest Weight": the first document of
+ * weights ordered by `timestamp` descending. Firestore breaks equal
+ * timestamps (the tracker stamps AM and PM entries of one day at the same
+ * local noon) by document id descending, and so does this: latest timestamp,
+ * then the greater document id. Entries without a usable timestamp are
+ * ignored. The weight is the recorded value, never an average; a recorded
+ * weight that is not a positive number is reported as null rather than 0.
+ *
+ * @param {Array<{id, weight, unit, tod, tsMillis}>} entries  (weightEntryOfDoc)
+ * @param {string} timeZone  calendar used for the entry's date (coach tz)
+ * @returns {{dateKey, weight, unit, tod, entryId}|null}
+ */
+function pickLatestWeighIn(entries, timeZone) {
+  let best = null;
+  for (const e of entries || []) {
+    if (!e || typeof e.tsMillis !== 'number' || !Number.isFinite(e.tsMillis)) continue;
+    const id = typeof e.id === 'string' ? e.id : '';
+    if (!best || e.tsMillis > best.tsMillis || (e.tsMillis === best.tsMillis && id > best.id)) {
+      best = { ...e, id };
+    }
+  }
+  if (!best) return null;
+  const w = typeof best.weight === 'number' ? best.weight : Number(best.weight);
+  const unit = typeof best.unit === 'string' && best.unit.trim()
+    ? best.unit.trim().toLowerCase()
+    : 'kg';
+  return {
+    dateKey: localDateKey(new Date(best.tsMillis), timeZone),
+    weight: Number.isFinite(w) && w > 0 ? Math.round(w * 100) / 100 : null,
+    unit,
+    tod: typeof best.tod === 'string' && best.tod.trim().toLowerCase() === 'pm' ? 'pm' : 'am',
+    entryId: best.id || null,
+  };
+}
+
 /**
  * Weigh-in staleness from the most recent valid weigh-in date.
  * @returns {'ok'|'due'|'overdue'}  due at 3 calendar days, overdue at 4+.
@@ -246,6 +290,8 @@ module.exports = {
   prunePraisedWeeks,
   prunePraisedMilestones,
   PRAISED_WEEKS_RETENTION_DAYS,
+  LATEST_WEIGH_IN_SCAN,
+  pickLatestWeighIn,
   weighInStatus,
   daysBetween,
 };

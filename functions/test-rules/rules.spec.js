@@ -244,6 +244,70 @@ test('rules: invalid setting values are rejected', async () => {
   await assertFails(doc.update({ customExerciseIds: 'bench' }));
 });
 
+// ── Coaching service tier ───────────────────────────────────────────────────
+
+test('rules: each of the four coaching service tiers can be saved; nothing else can', async () => {
+  const doc = as('coachSeeded').doc('coachCheckIns/coachSeeded/athletes/ath1');
+  for (const tier of ['inPerson', 'fullOnline', 'eightWeek', 'prospective']) {
+    await assertSucceeds(doc.set({ coachingService: tier, updatedAt: 1 }, { merge: true }));
+  }
+  for (const bad of ['unassigned', 'Prospective', 'in_person', '', 3, null, true, ['inPerson']]) {
+    await assertFails(doc.set({ coachingService: bad }, { merge: true }));
+  }
+});
+
+test('rules: saving a tier is a partial update that preserves every other field', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('coachCheckIns/coachSeeded/athletes/ath1').set({
+      reportingEnabled: true, goal: 'cut', goalSetAt: 1000,
+      messageExerciseMode: 'custom', customExerciseIds: ['a'],
+      praisedWeeks: { '2026-08-03': 'r1' },
+      lastFinalizedCoverageEnd: '2026-08-10',
+    });
+  });
+  const doc = as('coachSeeded').doc('coachCheckIns/coachSeeded/athletes/ath1');
+  await assertSucceeds(doc.set({ coachingService: 'eightWeek', displayName: 'Ath One', updatedAt: 2 }, { merge: true }));
+  let data;
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    data = (await ctx.firestore().doc('coachCheckIns/coachSeeded/athletes/ath1').get()).data();
+  });
+  assert.equal(data.coachingService, 'eightWeek');
+  assert.equal(data.reportingEnabled, true);
+  assert.equal(data.goal, 'cut');
+  assert.equal(data.goalSetAt, 1000);
+  assert.equal(data.lastFinalizedCoverageEnd, '2026-08-10');
+  assert.deepEqual(data.praisedWeeks, { '2026-08-03': 'r1' });
+  assert.equal(data.messageExerciseMode, 'custom');
+  assert.deepEqual(data.customExerciseIds, ['a']);
+  // A tier write cannot smuggle server-owned fields.
+  await assertFails(doc.set({ coachingService: 'inPerson', goalSetAt: 5 }, { merge: true }));
+  await assertFails(doc.set({ coachingService: 'inPerson', praisedWeeks: {} }, { merge: true }));
+});
+
+test('rules: legacy settings with no tier keep working for older app writes', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('coachCheckIns/coachSeeded/athletes/ath1')
+      .set({ reportingEnabled: true, goal: 'cut', goalSetAt: 1000 });
+  });
+  const doc = as('coachSeeded').doc('coachCheckIns/coachSeeded/athletes/ath1');
+  // Exactly what the pre-tier app writes.
+  await assertSucceeds(doc.set({ goal: 'bulk', displayName: 'Ath One', updatedAt: 3 }, { merge: true }));
+  await assertSucceeds(doc.set({ messageExerciseMode: 'automatic', updatedAt: 4 }, { merge: true }));
+});
+
+test('rules: coaching service is isolated per coach and per assignment', async () => {
+  // Another coach cannot set (or read) this coach's tier for the athlete.
+  await assertFails(as('coachOk').doc('coachCheckIns/coachSeeded/athletes/ath1')
+    .set({ coachingService: 'prospective' }, { merge: true }));
+  // A coach cannot assign a tier to an athlete they are not authorised for —
+  // Prospective is not a way to reach a new person's data.
+  await assertFails(as('coachSeeded').doc('coachCheckIns/coachSeeded/athletes/ath2')
+    .set({ coachingService: 'prospective' }));
+  // The athlete cannot set it either.
+  await assertFails(as('ath1').doc('coachCheckIns/coachSeeded/athletes/ath1')
+    .set({ coachingService: 'inPerson' }, { merge: true }));
+});
+
 test('rules: coach cannot create settings for an unassigned athlete', async () => {
   await assertFails(as('coachSeeded').doc('coachCheckIns/coachSeeded/athletes/ath2')
     .set({ reportingEnabled: true }));

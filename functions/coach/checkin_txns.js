@@ -22,7 +22,8 @@
 
 const cov = require('./coverage');
 const bwx = require('./bodyweight');
-const { buildDraftText, computePraisedWeekKey } = require('./draft');
+const { COMPOSITION_VERSION, buildDraftText, computePraisedWeekKey } = require('./draft');
+const { bodyweightLines, milestoneSentence } = require('./message');
 
 class TxnError extends Error {
   constructor(codeName, message) {
@@ -156,9 +157,7 @@ async function copyTransaction(db, {
 
     const text = buildDraftText({
       events: report.events || [],
-      completion: report.completion || null,
       settings,
-      identity: { gender: report.gender, firstName: report.firstName },
       bodyweight: finalBodyweight,
       coverageStart: coverage.start,
       coverageEnd: coverage.end,
@@ -167,7 +166,11 @@ async function copyTransaction(db, {
     });
 
     const praisedWeekKey = computePraisedWeekKey(report, settings, coverage);
-    const milestonePraise = newMilestoneId
+    // A milestone is consumed only when its line is actually in the text.
+    const milestoneLine = newMilestoneId ? milestoneSentence(goal, newMilestoneId) : null;
+    const milestoneEmitted = !!milestoneLine
+      && bodyweightLines(finalBodyweight, report.variantSeed).includes(milestoneLine);
+    const milestonePraise = milestoneEmitted
       ? bwx.milestonePraiseKey(newMilestoneId, settings.goalSetAt)
       : null;
 
@@ -255,9 +258,50 @@ async function undoTransaction(db, { coachUid, athleteUid, checkpointKey, todayK
       prevLastFinalizedCoverageEnd: null,
     });
     if (Object.keys(settingsUpdate).length > 0) {
-      tx.set(r.settings, settingsUpdate, { merge: true });
+      // update() replaces each named map wholesale; set(merge) would deep-merge
+      // it and could never remove this report's key from a map that still has
+      // other entries.
+      if (settingsSnap.exists) tx.update(r.settings, settingsUpdate);
+      else tx.set(r.settings, settingsUpdate, { merge: true });
     }
     return { ok: true };
+  }));
+}
+
+/**
+ * Refresh: writes a recomposed presentation [patch] (draft previews,
+ * attendance payload) onto an existing report — only while it is still an
+ * outdated DRAFT. The status and version are re-read inside the transaction,
+ * so a refresh racing Copy/Skip/Undo either lands before them (Copy then
+ * retries and composes its own text from the report's events, untouched here)
+ * or observes the finalised status and writes nothing. Never touches
+ * finalText, coverage, bookkeeping, events or settings.
+ *
+ * @returns {'refreshed'|'current'|'finalized'|'missing'}
+ */
+async function refreshDraftTransaction(db, {
+  coachUid, athleteUid, checkpointKey, patch, compositionVersion = COMPOSITION_VERSION,
+}) {
+  const r = refs(db, coachUid, athleteUid);
+  const allowed = new Set([
+    'draftIfPrevCopied', 'draftIfPrevNotCopied', 'currentWeekAdherence', 'completion',
+  ]);
+  const safePatch = {};
+  for (const [k, v] of Object.entries(patch || {})) {
+    if (allowed.has(k)) safePatch[k] = v;
+  }
+  return withTxnRetry(() => db.runTransaction(async (tx) => {
+    const snap = await tx.get(r.report(checkpointKey));
+    if (!snap.exists) return 'missing';
+    const report = snap.data();
+    if (report.status !== 'draft') return 'finalized';
+    if ((Number(report.compositionVersion) || 1) >= compositionVersion) return 'current';
+    tx.update(snap.ref, {
+      ...safePatch,
+      compositionVersion,
+      refreshedAtMs: Date.now(),
+    });
+    return 'refreshed';
   }));
 }
 
@@ -281,6 +325,7 @@ module.exports = {
   copyTransaction,
   undoTransaction,
   skipTransaction,
+  refreshDraftTransaction,
   newerCheckpointKeys,
   isTransientTxnError,
   withTxnRetry,

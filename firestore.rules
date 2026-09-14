@@ -1159,10 +1159,17 @@ service cloud.firestore {
           && request.resource.data.diff(resource == null ? {} : resource.data)
                .affectedKeys().hasOnly([
                  'reportingEnabled', 'goal', 'messageExerciseMode',
-                 'customExerciseIds', 'displayName', 'updatedAt', 'enabledAt'
+                 'customExerciseIds', 'displayName', 'updatedAt', 'enabledAt',
+                 'coachingService'
                ])
           && (!('reportingEnabled' in request.resource.data)
               || request.resource.data.reportingEnabled is bool)
+          // Coaching service tier of this coach⇄athlete relationship. Absent
+          // (legacy / not yet assigned) is valid and reads as "Unassigned";
+          // a present value must be one of the four stable tier ids.
+          && (!('coachingService' in request.resource.data)
+              || request.resource.data.coachingService in
+                   ['inPerson', 'fullOnline', 'eightWeek', 'prospective'])
           && (!('goal' in request.resource.data)
               || request.resource.data.goal in ['cut', 'bulk', 'maintain'])
           && (!('messageExerciseMode' in request.resource.data)

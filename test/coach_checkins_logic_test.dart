@@ -226,41 +226,66 @@ void main() {
               ],
         };
 
-    test('Thursday line separates coverage count from the current week', () {
-      // 3 workouts in the rolling check-in window, 1 training day since Monday.
+    test('Thursday: the check-in window and the training week are labelled separately', () {
+      // 3 training days in the rolling check-in window (Thu→Thu), 1 training
+      // day in the current week counted through the Thursday cutoff.
       expect(
-        CoachCheckinsLogic.adherenceFactLabel(
-          workoutsInCoverage: 3,
-          adherence: adherence(completedCount: 1),
-        ),
-        '3 done · week 1/4 planned',
+        CoachCheckinsLogic.coverageWindowLabel(
+            (start: '2026-09-10', end: '2026-09-17'), 3),
+        'Check-in window: 10–16 Sep · 3 training days',
       );
+      expect(
+        CoachCheckinsLogic.attendanceLabel({
+          ...adherence(completedCount: 1),
+          'weekStart': '2026-09-14',
+          'weekEnd': '2026-09-21',
+          'period': 'currentWeek',
+          'cutoffKey': '2026-09-17',
+        }),
+        'Training week: 14–20 Sep · 1/4 training days completed so far',
+      );
+    });
+
+    test('Monday: the preceding week is labelled with explicit dates', () {
+      expect(
+        CoachCheckinsLogic.attendanceLabel({
+          ...adherence(completedCount: 3),
+          'period': 'previousWeek',
+        }),
+        'Training week: 7–13 Sep · 3/4 training days completed',
+      );
+      expect(
+        CoachCheckinsLogic.attendanceLabel({
+          ...adherence(completedCount: 2),
+          'weekStart': '2026-09-28',
+          'weekEnd': '2026-10-05',
+        }),
+        'Training week: 28 Sep – 4 Oct · 2/4 training days completed',
+      );
+      expect(CoachCheckinsLogic.dayRangeLabel('2026-12-28', '2027-01-03'),
+          '28 Dec 2026 – 3 Jan 2027');
     });
 
     test('unknown target never renders as a 0 planned target', () {
       expect(
-        CoachCheckinsLogic.adherenceFactLabel(
-          workoutsInCoverage: 3,
-          adherence: adherence(
-              completedCount: 2, plannedCount: null, plannedKnown: false),
-        ),
-        '3 done · 2 this week · no weekly target',
+        CoachCheckinsLogic.attendanceLabel(adherence(
+            completedCount: 2, plannedCount: null, plannedKnown: false)),
+        'Training week: 7–13 Sep · 2 training days completed · target unknown',
+      );
+      expect(
+        CoachCheckinsLogic.attendanceLabel(adherence(
+            completedCount: 2, plannedCount: 0, plannedKnown: false)),
+        'Training week: 7–13 Sep · 2 training days completed · target unknown',
       );
     });
 
     test('historical report without the adherence payload still renders', () {
-      // Copied/older reports carry only the legacy completion map…
+      expect(CoachCheckinsLogic.attendanceLabel(null), isNull);
+      expect(CoachCheckinsLogic.attendanceLabel(const {'completedCount': 2}), isNull);
       expect(
-        CoachCheckinsLogic.adherenceFactLabel(
-          workoutsInCoverage: 3,
-          legacyCompletion: {'completedCount': 2, 'plannedCount': 3},
-        ),
-        '3 done · week 2/3 planned',
-      );
-      // …and a report with neither degrades to the plain count.
-      expect(
-        CoachCheckinsLogic.adherenceFactLabel(workoutsInCoverage: 3),
-        '3 workouts',
+        CoachCheckinsLogic.coverageWindowLabel(
+            (start: '2026-09-14', end: '2026-09-14'), 0),
+        'Check-in window: no days · 0 training days',
       );
       expect(CoachCheckinsLogic.weekStripRows(null), isEmpty);
       expect(CoachCheckinsLogic.weekStripRows(const {}), isEmpty);
@@ -330,11 +355,99 @@ void main() {
         ],
       );
       expect(
-        CoachCheckinsLogic.adherenceFactLabel(
-            workoutsInCoverage: 3, adherence: adh),
-        '3 done · week 2/4 planned',
+        CoachCheckinsLogic.attendanceLabel(adh),
+        'Training week: 7–13 Sep · 2/4 training days completed',
       );
       expect(CoachCheckinsLogic.weekStripCells(adh)[2], 'Wed ✓7');
+    });
+
+    test('Thursday days after the cutoff read as upcoming, not as missed', () {
+      final rows = CoachCheckinsLogic.weekStripRows({
+        ...adherence(completedCount: 1),
+        'days': [
+          {...day('Mon', '2026-09-14', trained: true, exerciseCount: 4), 'counted': true},
+          {...day('Tue', '2026-09-15'), 'counted': true},
+          {...day('Wed', '2026-09-16'), 'counted': true},
+          {...day('Thu', '2026-09-17'), 'counted': false},
+          {...day('Fri', '2026-09-18'), 'counted': false},
+          {...day('Sat', '2026-09-19'), 'counted': false},
+          {...day('Sun', '2026-09-20'), 'counted': false},
+        ],
+      });
+      expect(rows, ['Mon ✓4 · Tue — · Wed — · Thu …', 'Fri … · Sat … · Sun …']);
+    });
+
+    test('the 14 Sep screenshot week renders its real trained days', () {
+      final rows = CoachCheckinsLogic.weekStripRows(adherence(
+        completedCount: 3,
+        days: [
+          day('Mon', '2026-09-07'),
+          day('Tue', '2026-09-08', trained: true, exerciseCount: 5),
+          day('Wed', '2026-09-09'),
+          day('Thu', '2026-09-10', trained: true, exerciseCount: 4),
+          day('Fri', '2026-09-11'),
+          day('Sat', '2026-09-12'),
+          day('Sun', '2026-09-13', trained: true, exerciseCount: 3),
+        ],
+      ));
+      expect(rows, ['Mon — · Tue ✓5 · Wed — · Thu ✓4', 'Fri — · Sat — · Sun ✓3']);
+    });
+  });
+
+  group('latest weigh-in detail', () {
+    test('date and the entry\'s own recorded weight', () {
+      expect(
+        CoachCheckinsLogic.weighInDetailLabel(
+          entry: {'dateKey': '2026-09-10', 'weight': 73.2, 'unit': 'kg'},
+          lastWeighInKey: '2026-09-10',
+          historyKnown: true,
+        ),
+        'Last: 10 Sep 2026 · 73.2kg',
+      );
+      expect(
+        CoachCheckinsLogic.weighInDetailLabel(
+          entry: {'dateKey': '2026-06-02', 'weight': 81, 'unit': 'LB'},
+          lastWeighInKey: '2026-06-02',
+          historyKnown: true,
+        ),
+        'Last: 2 Jun 2026 · 81lb',
+      );
+    });
+
+    test('no history reads "No weigh-ins recorded"; an unknown load never does', () {
+      expect(
+        CoachCheckinsLogic.weighInDetailLabel(
+            entry: null, lastWeighInKey: null, historyKnown: true),
+        'No weigh-ins recorded',
+      );
+      expect(
+        CoachCheckinsLogic.weighInDetailLabel(
+            entry: null, lastWeighInKey: null, historyKnown: false),
+        'Last weigh-in unavailable',
+      );
+    });
+
+    test('an unusable recorded weight shows the date only — never 0kg', () {
+      for (final w in [0, -1, null, 'abc', double.nan]) {
+        final label = CoachCheckinsLogic.weighInDetailLabel(
+          entry: {'dateKey': '2026-09-10', 'weight': w},
+          lastWeighInKey: '2026-09-10',
+          historyKnown: true,
+        );
+        expect(label, 'Last: 10 Sep 2026');
+      }
+      // Legacy report snapshot: date key only.
+      expect(
+        CoachCheckinsLogic.weighInDetailLabel(
+            entry: null, lastWeighInKey: '2026-09-10', historyKnown: true),
+        'Last: 10 Sep 2026',
+      );
+    });
+
+    test('status pill labels', () {
+      expect(CoachCheckinsLogic.weighInStatusLabel('overdue'), 'Weigh-in overdue');
+      expect(CoachCheckinsLogic.weighInStatusLabel('due'), 'Weigh-in due');
+      expect(CoachCheckinsLogic.weighInStatusLabel('ok'), 'Weigh-in up to date');
     });
   });
 

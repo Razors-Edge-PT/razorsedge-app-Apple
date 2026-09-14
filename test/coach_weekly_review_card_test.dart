@@ -40,6 +40,9 @@ AthleteReview _review({
     'workoutDates': const ['2026-09-01', '2026-09-03'],
     'events': const [],
     'currentWeekAdherence': {
+      'weekStart': '2026-08-31',
+      'weekEnd': '2026-09-07',
+      'period': 'previousWeek',
       'completedCount': 2,
       'plannedCount': 4,
       'plannedKnown': true,
@@ -212,16 +215,21 @@ void main() {
       expect(find.text('Copy Message'), findsNothing);
       expect(find.text('Undo / Mark Not Sent'), findsOneWidget);
       // Coverage comes from the frozen pair the server returned.
-      expect(find.text('Coverage 2026-08-31 → $_currentKey'), findsOneWidget);
+      expect(find.text('Check-in window: 31 Aug – 6 Sep · 2 training days'),
+          findsOneWidget);
     });
 
-    testWidgets('the Monday–Sunday strip and adherence fact are unchanged',
+    testWidgets('the strip, the training week and the check-in window are labelled',
         (tester) async {
       await tester.pumpWidget(_wrapCard(_review()));
 
       expect(find.text('Mon ✓5 · Tue — · Wed ✓4 · Thu —'), findsOneWidget);
       expect(find.text('Fri — · Sat — · Sun —'), findsOneWidget);
-      expect(find.text('2 done · week 2/4 planned'), findsOneWidget);
+      expect(find.text('Training week: 31 Aug – 6 Sep · 2/4 training days completed'),
+          findsOneWidget);
+      // The rolling window is its own, differently-labelled period.
+      expect(find.byKey(const ValueKey('checkInWindowLabel')), findsOneWidget);
+      expect(find.textContaining('done · week'), findsNothing);
     });
 
     testWidgets('skipped and undone states still render as before',
@@ -260,6 +268,105 @@ void main() {
       );
       expect(tester.getSize(find.byType(CircularProgressIndicator)),
           const Size(14, 14));
+    });
+  });
+
+  // ── Weigh-in status + latest entry ───────────────────────────────────────
+
+  group('weigh-in pill and latest entry', () {
+    AthleteReview withLive(String status, Map<String, dynamic>? entry) {
+      final r = _review();
+      r.liveWeighInStatus = status;
+      r.liveLastWeighInKey = entry?['dateKey'] as String?;
+      r.liveLastWeighIn = entry;
+      return r;
+    }
+
+    const entry = {'dateKey': '2026-09-10', 'weight': 73.2, 'unit': 'kg', 'tod': 'am'};
+
+    // flutter_test renders every glyph a full em wide (12px text → 12px per
+    // character), roughly double real Roboto, so "fits on a phone" is
+    // measured at the width this test font needs rather than 390dp.
+    Widget line(double width, {double scale = 1}) => MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+            child: Scaffold(
+              body: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: width,
+                  child: const WeighInStatusLine(
+                      status: 'overdue', detail: 'Last: 10 Sep 2026 · 73.2kg'),
+                ),
+              ),
+            ),
+          ),
+        );
+
+    testWidgets('the card shows the pill and "Last: date · weight" together',
+        (tester) async {
+      await tester.pumpWidget(_wrapCard(withLive('overdue', entry)));
+      expect(find.text('Weigh-in overdue'), findsOneWidget);
+      expect(find.text('Last: 10 Sep 2026 · 73.2kg'), findsOneWidget);
+      expect(
+        find.descendant(
+            of: find.byKey(const ValueKey('weighInRow')),
+            matching: find.text('Last: 10 Sep 2026 · 73.2kg')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('pill and detail share one line where they fit', (tester) async {
+      await tester.pumpWidget(line(600));
+      final pill = tester.getCenter(find.text('Weigh-in overdue')).dy;
+      final detail = tester.getCenter(find.text('Last: 10 Sep 2026 · 73.2kg')).dy;
+      expect((pill - detail).abs(), lessThan(2), reason: 'same line');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('narrow width and large text wrap the detail without overflow',
+        (tester) async {
+      for (final (width, scale) in [(300.0, 1.0), (240.0, 2.0), (180.0, 1.5)]) {
+        await tester.pumpWidget(line(width, scale: scale));
+        expect(tester.takeException(), isNull,
+            reason: 'no overflow at ${width}dp x$scale');
+        final pillRect = tester.getRect(find.text('Weigh-in overdue'));
+        final detailRect = tester.getRect(find.text('Last: 10 Sep 2026 · 73.2kg'));
+        expect(detailRect.top, greaterThanOrEqualTo(pillRect.bottom - 1),
+            reason: 'wrapped below the pill at ${width}dp x$scale');
+        expect(detailRect.right, lessThanOrEqualTo(width + 0.5),
+            reason: 'not clipped past the line width');
+      }
+    });
+
+    testWidgets('no history reads "No weigh-ins recorded", never 0kg', (tester) async {
+      await tester.pumpWidget(_wrapCard(withLive('overdue', null)));
+      expect(find.text('No weigh-ins recorded'), findsOneWidget);
+      expect(find.textContaining('0kg'), findsNothing);
+    });
+
+    testWidgets('a failed live read falls back to the report, never to "none"',
+        (tester) async {
+      final noSnapshot = _review(); // no live status, no report bodyweight
+      await tester.pumpWidget(_wrapCard(noSnapshot));
+      expect(find.text('Last weigh-in unavailable'), findsOneWidget);
+      expect(find.text('No weigh-ins recorded'), findsNothing);
+
+      final snap = _review();
+      snap.report!['bodyweight'] = {
+        'weighInStatus': 'due',
+        'lastWeighInKey': '2026-09-04',
+        'lastWeighIn': {'dateKey': '2026-09-04', 'weight': 80.5, 'unit': 'kg'},
+      };
+      await tester.pumpWidget(_wrapCard(snap));
+      expect(find.text('Weigh-in due'), findsOneWidget);
+      expect(find.text('Last: 4 Sep 2026 · 80.5kg'), findsOneWidget);
+    });
+
+    testWidgets('an up-to-date athlete still shows the latest entry', (tester) async {
+      await tester.pumpWidget(_wrapCard(withLive('ok', entry)));
+      expect(find.text('Weigh-in up to date'), findsOneWidget);
+      expect(find.text('Last: 10 Sep 2026 · 73.2kg'), findsOneWidget);
     });
   });
 

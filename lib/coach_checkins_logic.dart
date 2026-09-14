@@ -141,42 +141,131 @@ class CoachCheckinsLogic {
     'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
   ];
 
-  /// The `N done · week X/Y planned` fact line.
+  static const List<String> _months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+
+  static bool isDateKey(Object? v) => v is String && _dateKeyRe.hasMatch(v);
+
+  /// `10 Sep 2026`.
+  static String shortDate(String dateKey) {
+    final d = parseKey(dateKey);
+    return '${d.day} ${_months[d.month - 1]} ${d.year}';
+  }
+
+  /// An INCLUSIVE day range, compact: `7–13 Sep`, `28 Sep – 4 Oct`,
+  /// `29 Dec 2026 – 4 Jan 2027`.
+  static String dayRangeLabel(String firstKey, String lastKey) {
+    final a = parseKey(firstKey);
+    final b = parseKey(lastKey);
+    if (a.year != b.year) return '${shortDate(firstKey)} – ${shortDate(lastKey)}';
+    if (a.month != b.month) {
+      return '${a.day} ${_months[a.month - 1]} – ${b.day} ${_months[b.month - 1]}';
+    }
+    if (a.day == b.day) return '${a.day} ${_months[a.month - 1]}';
+    return '${a.day}–${b.day} ${_months[a.month - 1]}';
+  }
+
+  /// The attendance line for the report's training week:
+  /// `Training week: 7–13 Sep · 3/4 training days completed`.
   ///
-  /// [workoutsInCoverage] is the rolling CHECK-IN coverage count and
-  /// [adherence] the fixed Monday→Sunday week — they intentionally describe
-  /// different date ranges. [legacyCompletion] is the pre-adherence
-  /// `completion` map, used only when the new payload is missing.
-  static String adherenceFactLabel({
-    required int workoutsInCoverage,
-    Map<String, dynamic>? adherence,
-    Map<String, dynamic>? legacyCompletion,
+  /// The numerator is DISTINCT calendar days with a completed workout (two
+  /// sessions on one date count once), so it says "training days". A
+  /// Thursday report's week is only counted through its cutoff and says
+  /// "so far". An unknown target is stated, never shown as 0.
+  /// Returns null when the report has no usable payload.
+  static String? attendanceLabel(Map<String, dynamic>? adherence) {
+    if (adherence == null || !isDateKey(adherence['weekStart'])) return null;
+    final start = adherence['weekStart'] as String;
+    final range = dayRangeLabel(start, addDaysKey(start, 6));
+    final completed = _asInt(adherence['completedCount']) ?? 0;
+    final planned = (adherence['plannedKnown'] == true)
+        ? _asInt(adherence['plannedCount'])
+        : null;
+    final soFar = adherence['period'] == 'currentWeek' ? ' so far' : '';
+    final days = completed == 1 && planned == null ? 'day' : 'days';
+    if (planned == null) {
+      return 'Training week: $range · $completed training $days completed$soFar'
+          ' · target unknown';
+    }
+    return 'Training week: $range · $completed/$planned training days completed$soFar';
+  }
+
+  /// The rolling CHECK-IN window line — a different period from the training
+  /// week: `Check-in window: 31 Aug – 6 Sep · 2 training days`. [coverage]
+  /// is `[start, end)`.
+  static String coverageWindowLabel(
+      ({String start, String end}) coverage, int trainingDays) {
+    final days = '$trainingDays training day${trainingDays == 1 ? '' : 's'}';
+    if (diffDaysKey(coverage.start, coverage.end) <= 0) {
+      return 'Check-in window: no days · $days';
+    }
+    final range =
+        dayRangeLabel(coverage.start, addDaysKey(coverage.end, -1));
+    return 'Check-in window: $range · $days';
+  }
+
+  // ── Weigh-in status + latest entry ───────────────────────────────────────
+
+  static String weighInStatusLabel(String status) {
+    switch (status) {
+      case 'due':
+        return 'Weigh-in due';
+      case 'overdue':
+        return 'Weigh-in overdue';
+      default:
+        return 'Weigh-in up to date';
+    }
+  }
+
+  /// `73.2kg`, `73kg`, `160lb`, or null when the recorded weight is unusable
+  /// (never `0kg`).
+  static String? recordedWeightLabel(Map<String, dynamic>? entry) {
+    final w = entry?['weight'];
+    if (w is! num || !w.isFinite || w <= 0) return null;
+    final unitRaw = entry?['unit'];
+    final unit = unitRaw is String && unitRaw.trim().isNotEmpty
+        ? unitRaw.trim().toLowerCase()
+        : 'kg';
+    final r = (w * 100).round() / 100;
+    final text = r == r.roundToDouble()
+        ? r.toStringAsFixed(0)
+        : r.toString();
+    return '$text$unit';
+  }
+
+  /// The detail beside the weigh-in pill, from ONE latest recorded entry:
+  /// `Last: 10 Sep 2026 · 73.2kg`.
+  ///
+  /// [entry] is the server's latest-entry map (`dateKey`, `weight`, `unit`)
+  /// or null; [historyKnown] says whether that answer is authoritative (a
+  /// successful live read, or a report snapshot that recorded it). Only an
+  /// authoritative null reads "No weigh-ins recorded" — a load error never
+  /// does.
+  static String weighInDetailLabel({
+    required Map<String, dynamic>? entry,
+    required String? lastWeighInKey,
+    required bool historyKnown,
   }) {
-    final done = '$workoutsInCoverage done';
-    if (adherence != null) {
-      final completed = _asInt(adherence['completedCount']) ?? 0;
-      final planned = (adherence['plannedKnown'] == true)
-          ? _asInt(adherence['plannedCount'])
-          : null;
-      if (planned == null) {
-        return '$done · $completed this week · no weekly target';
-      }
-      return '$done · week $completed/$planned planned';
+    final key = isDateKey(entry?['dateKey'])
+        ? entry!['dateKey'] as String
+        : (isDateKey(lastWeighInKey) ? lastWeighInKey : null);
+    if (key == null) {
+      return historyKnown ? 'No weigh-ins recorded' : 'Last weigh-in unavailable';
     }
-    if (legacyCompletion != null) {
-      final completed = _asInt(legacyCompletion['completedCount']) ?? 0;
-      final planned = _asInt(legacyCompletion['plannedCount']);
-      if (planned != null) return '$done · week $completed/$planned planned';
-      return '$done · week $completed';
-    }
-    return '$workoutsInCoverage workouts';
+    final weight = recordedWeightLabel(entry);
+    return weight == null
+        ? 'Last: ${shortDate(key)}'
+        : 'Last: ${shortDate(key)} · $weight';
   }
 
   /// The compact Monday–Sunday strip, as two rows (`Mon — · Tue — · Wed — ·
   /// Thu ✓5` / `Fri — · Sat — · Sun —`).
   ///
   /// `✓N` is N distinct exercises with at least one valid completed set that
-  /// calendar day; `—` is no valid training. Returns an empty list when the
+  /// calendar day; `—` is no valid training; `…` is a day after the report's
+  /// cutoff (not yet counted). Returns an empty list when the
   /// report carries no adherence payload, so the card simply omits the strip.
   static List<String> weekStripRows(Map<String, dynamic>? adherence) {
     final cells = weekStripCells(adherence);
@@ -208,6 +297,8 @@ class CoachCheckinsLogic {
   }
 
   static String _dayMark(Map<String, dynamic>? day) {
+    // After a Thursday report's cutoff: not yet happened, never a miss.
+    if (day != null && day['counted'] == false) return '…';
     if (day == null || day['trained'] != true) return '—';
     final n = _asInt(day['exerciseCount']) ?? 0;
     return '✓$n';
@@ -235,5 +326,100 @@ class CoachCheckinsLogic {
       draftIfPrevCopied: draftIfPrevCopied,
       draftIfPrevNotCopied: draftIfPrevNotCopied,
     );
+  }
+}
+
+/// Per coach⇄athlete coaching service tier, stored as `coachingService` on
+/// coachCheckIns/{coachUid}/athletes/{athleteUid}. The stable ids below are
+/// the ONLY values firestore.rules accepts. A missing or unknown value is the
+/// "Unassigned" compatibility state — it is not a selectable tier.
+///
+/// Every tier gets the same metrics, cards, schedule and actions; the tier
+/// only groups the recap. It grants no access.
+class CoachingService {
+  CoachingService._();
+
+  static const String field = 'coachingService';
+
+  static const String inPerson = 'inPerson';
+  static const String fullOnline = 'fullOnline';
+  static const String eightWeek = 'eightWeek';
+  static const String prospective = 'prospective';
+
+  /// Selectable tiers, in recap order.
+  static const List<String> ordered = [inPerson, fullOnline, eightWeek, prospective];
+
+  static const String unassignedLabel = 'Unassigned';
+
+  static String label(String id) {
+    switch (id) {
+      case inPerson:
+        return 'In-Person';
+      case fullOnline:
+        return 'Full online service';
+      case eightWeek:
+        return '8-week program';
+      case prospective:
+        return 'Prospective';
+    }
+    return unassignedLabel;
+  }
+
+  /// The stored tier, or null (Unassigned) for missing/legacy/unknown values.
+  static String? normalize(Object? raw) =>
+      raw is String && ordered.contains(raw) ? raw : null;
+
+  /// The settings patch for selecting [id]. Throws for anything that is not a
+  /// selectable tier, so the client can never write a value the rules reject.
+  static Map<String, dynamic> patchFor(String id) {
+    if (!ordered.contains(id)) {
+      throw ArgumentError.value(id, 'coachingService', 'not a coaching service tier');
+    }
+    return {field: id};
+  }
+}
+
+/// One visible group of the recap list.
+class RecapGroup<T> {
+  const RecapGroup({required this.service, required this.label, required this.items});
+
+  /// The tier id, or null for the Unassigned group.
+  final String? service;
+  final String label;
+  final List<T> items;
+}
+
+class CoachRecapOrdering {
+  CoachRecapOrdering._();
+
+  /// Groups [items] by coaching service in the fixed tier order, then an
+  /// "Unassigned" group last; alphabetical (case-insensitive) by [nameOf]
+  /// inside each group, with the uid as a deterministic tie-break. Empty
+  /// groups are omitted. Pure: call it on the already-filtered list.
+  static List<RecapGroup<T>> group<T>(
+    Iterable<T> items, {
+    required String Function(T) nameOf,
+    required String Function(T) uidOf,
+    required Object? Function(T) serviceOf,
+  }) {
+    final buckets = <String?, List<T>>{};
+    for (final item in items) {
+      buckets.putIfAbsent(CoachingService.normalize(serviceOf(item)), () => []).add(item);
+    }
+    int compare(T a, T b) {
+      final byName = nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase());
+      if (byName != 0) return byName;
+      return uidOf(a).compareTo(uidOf(b));
+    }
+
+    return [
+      for (final id in [...CoachingService.ordered, null])
+        if (buckets[id] != null && buckets[id]!.isNotEmpty)
+          RecapGroup<T>(
+            service: id,
+            label: id == null ? CoachingService.unassignedLabel : CoachingService.label(id),
+            items: buckets[id]!..sort(compare),
+          ),
+    ];
   }
 }

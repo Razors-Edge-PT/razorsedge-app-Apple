@@ -21,7 +21,7 @@ const { E1RM_FORMULA_VERSION } = require('./e1rm');
 const cov = require('./coverage');
 const adh = require('./adherence');
 const bwx = require('./bodyweight');
-const { buildDraftText } = require('./draft');
+const { COMPOSITION_VERSION, buildDraftText } = require('./draft');
 const enrollment = require('./enrollment');
 const authz = require('./authz');
 const {
@@ -32,7 +32,7 @@ const {
   bodyweightCutoffMillis, pickBodyweightAsOf, weightEntryOfDoc, weighInSinceDateKey,
 } = require('../showcase/bodyweight');
 const {
-  TxnError, copyTransaction, undoTransaction, skipTransaction,
+  TxnError, copyTransaction, undoTransaction, skipTransaction, refreshDraftTransaction,
 } = require('./checkin_txns');
 
 try { admin.initializeApp(); } catch (_) {}
@@ -146,17 +146,28 @@ async function loadWeightEntries(athleteUid, sinceKey, tz) {
   return entries;
 }
 
-/** Latest weigh-in dateKey (any age). One indexed read. */
-async function latestWeighInKey(athleteUid, tz) {
+/**
+ * The latest recorded weigh-in (any age) as ONE entry — its date AND its own
+ * recorded weight/unit — or null when the athlete has no weigh-in history.
+ * The same query BodyWeightTracker's "Latest Weight" uses (timestamp desc);
+ * the few top documents are read so same-timestamp AM/PM entries resolve
+ * explicitly (bwx.pickLatestWeighIn) rather than by chance. Status and the
+ * displayed detail both come from this one result. Read failures THROW — a
+ * load error is never reported as "no weigh-ins".
+ */
+async function latestWeighIn(athleteUid, tz) {
   const snap = await db.collection('users').doc(athleteUid)
     .collection('weights')
     .orderBy('timestamp', 'desc')
-    .limit(1)
+    .limit(bwx.LATEST_WEIGH_IN_SCAN)
     .get();
-  if (snap.empty) return null;
-  const ts = snap.docs[0].data().timestamp;
-  if (!ts || typeof ts.toDate !== 'function') return null;
-  return cov.localDateKey(ts.toDate(), safeTz(tz));
+  return bwx.pickLatestWeighIn(snap.docs.map(weightEntryOfDoc), safeTz(tz));
+}
+
+/** Latest weigh-in dateKey (any age), from latestWeighIn. */
+async function latestWeighInKey(athleteUid, tz) {
+  const latest = await latestWeighIn(athleteUid, tz);
+  return latest ? latest.dateKey : null;
 }
 
 /** Live bodyweight numbers as of coach-local today (goal/milestone are
@@ -711,23 +722,7 @@ const coachOnCoachAssignmentsWritten = onDocumentWritten(
 
 // ── Checkpoint report generation ────────────────────────────────────────────
 
-/** Completed-workout day detection identical to HomeV2CalendarService. */
-function hasCompletedSets(data) {
-  const exercises = data && data.exercises;
-  if (!Array.isArray(exercises)) return false;
-  for (const ex of exercises) {
-    if (!ex || typeof ex !== 'object') continue;
-    const sets = ex.sets;
-    if (!Array.isArray(sets)) continue;
-    for (const s of sets) {
-      if (!s || typeof s !== 'object') continue;
-      const w = Number(s.weight != null ? s.weight : s.actualWeight) || 0;
-      const r = Number(s.reps != null ? s.reps : s.actualReps) || 0;
-      if (w > 0 && r > 0) return true;
-    }
-  }
-  return false;
-}
+const { hasCompletedSets } = adh;
 
 /**
  * Per-day training facts for a bounded list of date keys. ONE source of
@@ -790,31 +785,75 @@ async function activeBlock(athleteUid, tz) {
   };
 }
 
+/** Every planned block's dates ({blockId, name, startKey, endKey}). Bounded
+ *  by the athlete's block count; read only when the active block started
+ *  after the attendance week began. */
+async function plannedBlocks(athleteUid, tz) {
+  const snap = await db.collection('users').doc(athleteUid)
+    .collection('planned_blocks').get();
+  return snap.docs.map((doc) => {
+    const d = doc.data() || {};
+    const start = d.startDate && typeof d.startDate.toDate === 'function' ? d.startDate.toDate() : null;
+    const end = d.endDate && typeof d.endDate.toDate === 'function' ? d.endDate.toDate() : null;
+    return {
+      blockId: doc.id,
+      name: typeof d.name === 'string' ? d.name : null,
+      startKey: start ? cov.localDateKey(start, safeTz(tz)) : null,
+      endKey: end ? cov.localDateKey(end, safeTz(tz)) : null,
+    };
+  });
+}
+
+async function templateAssignments(athleteUid) {
+  const snap = await db.collection('users').doc(athleteUid)
+    .collection('templates').get();
+  return snap.docs.map((doc) => {
+    const t = doc.data() || {};
+    return { id: doc.id, blockId: t.blockId, blockAssignment: t.blockAssignment };
+  });
+}
+
 /**
- * The athlete's weekly training TARGET: how many workout templates are
- * assigned to their currently-active block — the same set the Workout
- * Planner lists under that block (association rules in adherence.js, mirrored
- * from lib/templates.dart).
+ * The weekly training TARGET for an attendance week: how many workout
+ * templates are assigned to the block that governed that week — normally the
+ * active block, the same set the Workout Planner lists under it (association
+ * rules in adherence.js, mirrored from lib/templates.dart). A block that
+ * became active after the week began never lends it its target
+ * (adh.resolveWeekBlock).
  *
- * Never collapses an unknown target to 0: no active block or a failed read
- * yields count=null/known=false, so it can never be mistaken for
- * "completed every planned workout".
+ * Never collapses an unknown target to 0: no governing block or a failed read
+ * yields count=null/known=false.
+ *
+ * @returns {{planned: Object, block: Object|null}}
  */
-async function plannedTargetForBlock(athleteUid, block) {
-  if (!block) return adh.plannedTarget(null, adh.PLANNED_SOURCE.noActiveBlock);
+async function plannedTargetForWeek(athleteUid, tz, period) {
+  const active = await activeBlock(athleteUid, tz);
+  let blocks = [];
+  if (active && active.startKey && active.startKey > period.weekStart) {
+    try {
+      blocks = await plannedBlocks(athleteUid, tz);
+    } catch (err) {
+      logger.error('planned block read failed; weekly target left unknown', { athleteUid, error: err });
+      return { planned: adh.plannedTarget(null, adh.PLANNED_SOURCE.unavailable), block: null };
+    }
+  }
+  const resolution = adh.resolveWeekBlock({
+    activeBlock: active, blocks, weekStart: period.weekStart, weekEnd: period.weekEnd,
+  });
+  if (!resolution.block) {
+    return { planned: adh.plannedForWeek(resolution, []), block: null };
+  }
   try {
-    const snap = await db.collection('users').doc(athleteUid)
-      .collection('templates').get();
-    const templates = snap.docs.map((doc) => {
-      const t = doc.data() || {};
-      return { id: doc.id, blockId: t.blockId, blockAssignment: t.blockAssignment };
-    });
-    return adh.plannedFromTemplates(templates, block);
+    const templates = await templateAssignments(athleteUid);
+    return { planned: adh.plannedForWeek(resolution, templates), block: resolution.block };
   } catch (err) {
     logger.error('template read failed; weekly target left unknown', {
-      athleteUid, blockId: block.blockId, error: err,
+      athleteUid, blockId: resolution.block.blockId, error: err,
     });
-    return adh.plannedTarget(null, adh.PLANNED_SOURCE.unavailable);
+    return {
+      planned: adh.plannedTarget(null, adh.PLANNED_SOURCE.unavailable),
+      block: resolution.block,
+    };
   }
 }
 
@@ -825,60 +864,32 @@ function rangeKeys(startKey, endKeyExclusive) {
 }
 
 /**
- * Current calendar-week adherence (Monday inclusive → following Monday
- * exclusive) for the checkpoint's own week. NOT anchored to the block start
- * and NOT the check-in coverage window — see adherence.js for why the two
- * numbers may legitimately disagree on a Thursday.
+ * The attendance week a checkpoint report describes (adh.attendancePeriod):
+ * Monday → the preceding Monday–Sunday; Thursday → the current Monday–Sunday
+ * counted through the checkpoint cutoff. Days are read with the shared
+ * completed-set rule; only days before the cutoff are read. NOT the check-in
+ * coverage window — see adherence.js. Workout read failures THROW (no report
+ * is built from missing data).
+ *
+ * @returns {{week: Object, block: Object|null}} week = the
+ *          currentWeekAdherence payload.
  */
-async function currentWeekAdherence(athleteUid, block, planned, checkpointKey) {
-  const week = adh.calendarWeekOf(checkpointKey);
-  const dayStats = await workoutDayStats(athleteUid, adh.weekDateKeys(week.weekStart));
-  return adh.buildWeekAdherence({
-    weekStart: week.weekStart,
+async function attendanceFor(athleteUid, checkpointKey, tz) {
+  const period = adh.attendancePeriod(checkpointKey);
+  const [{ planned, block }, dayStats] = await Promise.all([
+    plannedTargetForWeek(athleteUid, tz, period),
+    workoutDayStats(athleteUid, adh.countedDateKeys(period.weekStart, period.cutoffKey)),
+  ]);
+  const week = adh.buildWeekAdherence({
+    weekStart: period.weekStart,
     planned,
     dayStats,
     blockId: block ? block.blockId : null,
     blockName: block ? block.name : null,
+    cutoffKey: period.cutoffKey,
+    period: period.period,
   });
-}
-
-/**
- * Weekly-completion candidate for praise, on CALENDAR weeks against the
- * active block's template target.
- *
- * The two-candidate shape (this week, previous week) is unchanged from the
- * block-anchored version it replaces: a week that finishes between two
- * checkpoints is still praised at the first checkpoint after it is known, and
- * settings.praisedWeeks (keyed by the Monday) still prevents praising it
- * twice. Only the WEEK BOUNDARIES and the TARGET have changed.
- *
- * The previous week is scored against the current template target — the
- * per-week planned documents that used to supply a historic target are
- * exactly the source this change removes.
- */
-async function completionCandidate(athleteUid, block, planned, currentWeek) {
-  if (!block) return null;
-
-  const candidates = [adh.completionFromWeek(currentWeek)];
-
-  const prevStart = cov.addDaysKey(currentWeek.weekStart, -7);
-  const prevStats = await workoutDayStats(athleteUid, adh.weekDateKeys(prevStart));
-  candidates.push(adh.completionFromWeek(adh.buildWeekAdherence({
-    weekStart: prevStart,
-    planned,
-    dayStats: prevStats,
-    blockId: block.blockId,
-    blockName: block.name,
-  })));
-
-  const qualifies = (c) => c.completedAll || c.completedCount >= 3;
-  const qualifying = candidates.filter(qualifies).sort((a, b) => {
-    if (a.completedAll !== b.completedAll) return a.completedAll ? -1 : 1;
-    return a.weekStart < b.weekStart ? 1 : -1; // newer first
-  });
-  if (qualifying.length > 0) return qualifying[0];
-  const withActivity = candidates.find((c) => c.completedCount > 0);
-  return withActivity || null;
+  return { week, block };
 }
 
 /** Most recent trained week (for the no-training coach fallback label).
@@ -942,10 +953,9 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
   const workoutDates = await completedWorkoutDays(
     athleteUid, rangeKeys(maxStartKey, checkpointKey));
 
-  const block = await activeBlock(athleteUid, tz);
-  const planned = await plannedTargetForBlock(athleteUid, block);
-  const weekAdherence = await currentWeekAdherence(athleteUid, block, planned, checkpointKey);
-  const completion = await completionCandidate(athleteUid, block, planned, weekAdherence);
+  const { week: weekAdherence, block } = await attendanceFor(athleteUid, checkpointKey, tz);
+  // Kept for readers of the legacy field; it no longer drives any message.
+  const completion = block ? adh.completionFromWeek(weekAdherence) : null;
   const fallbackWeek = workoutDates.length === 0
     ? await lastTrainedWeek(athleteUid, checkpointKey)
     : null;
@@ -957,7 +967,8 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
   const trend = bwx.classifyTrend(goal, rolling.currentAvg, rolling.previousAvg);
   const awarded = bwx.awardedForPhase(settings.praisedMilestones, settings.goalSetAt);
   const newMilestoneId = bwx.detectMilestone(goal, rolling.previousAvg, rolling.currentAvg, awarded);
-  const lastWeighKey = await latestWeighInKey(athleteUid, tz);
+  const lastWeighIn = await latestWeighIn(athleteUid, tz);
+  const lastWeighKey = lastWeighIn ? lastWeighIn.dateKey : null;
   const weighInStatus = bwx.weighInStatus(lastWeighKey, todayKeyIn(tz));
 
   const identity = await resolveAthleteIdentity(athleteUid);
@@ -972,11 +983,12 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     trend,
     newMilestoneId: newMilestoneId || null,
     lastWeighInKey: lastWeighKey,
+    lastWeighIn,
     weighInStatus,
   };
 
   const draftFor = (startKey) => buildDraftText({
-    events, completion, settings, identity, bodyweight,
+    events, settings, bodyweight,
     coverageStart: startKey, coverageEnd: checkpointKey, variantSeed,
     e1rmPraiseFloorKey,
   });
@@ -1003,10 +1015,70 @@ async function generateReport(coachUid, athleteUid, checkpointKey, tz) {
     e1rmPraiseFloorKey,
     draftIfPrevCopied: draftFor(prevKey),
     draftIfPrevNotCopied: draftFor(maxStartKey),
+    compositionVersion: COMPOSITION_VERSION,
     analyticsVersion: ANALYTICS_VERSION,
     e1rmFormulaVersion: E1RM_FORMULA_VERSION,
   });
   return true;
+}
+
+/**
+ * Brings ONE existing draft report up to the current COMPOSITION_VERSION: the
+ * two draft previews are recomposed from the report's own frozen inputs
+ * (events, bodyweight, variantSeed, E1RM floor) with the current settings, and
+ * the attendance payload is rebuilt for the report's checkpoint. Bounded: one
+ * report, its settings, at most seven workout days, the athlete's blocks and
+ * templates — no history scan, no analytics change.
+ *
+ * Only an outdated 'draft' is touched, and the write is a transaction that
+ * re-checks that (refreshDraftTransaction), so copied/skipped/expired history,
+ * finalText, coverage watermarks and undo bookkeeping are never modified.
+ *
+ * @returns {'refreshed'|'current'|'finalized'|'missing'}
+ */
+async function refreshDraftReport(coachUid, athleteUid, checkpointKey, tz) {
+  const snap = await reportRef(coachUid, athleteUid, checkpointKey).get();
+  if (!snap.exists) return 'missing';
+  const report = snap.data();
+  if (report.status !== 'draft') return 'finalized';
+  if ((Number(report.compositionVersion) || 1) >= COMPOSITION_VERSION) return 'current';
+
+  const settingsSnap = await athleteSettingsRef(coachUid, athleteUid).get();
+  const settings = settingsSnap.exists ? settingsSnap.data() : {};
+  const { week, block } = await attendanceFor(athleteUid, checkpointKey, tz);
+
+  const draftFor = (startKey) => buildDraftText({
+    events: report.events || [],
+    settings,
+    bodyweight: report.bodyweight || null,
+    coverageStart: startKey,
+    coverageEnd: checkpointKey,
+    variantSeed: report.variantSeed,
+    e1rmPraiseFloorKey: report.e1rmPraiseFloorKey || null,
+  });
+  return refreshDraftTransaction(db, {
+    coachUid,
+    athleteUid,
+    checkpointKey,
+    patch: {
+      draftIfPrevCopied: draftFor(report.prevCheckpointKey || cov.previousCheckpointKey(checkpointKey)),
+      draftIfPrevNotCopied: draftFor(report.maxStartKey || cov.previousSameWeekdayKey(checkpointKey)),
+      currentWeekAdherence: week,
+      completion: block ? adh.completionFromWeek(week) : null,
+    },
+  });
+}
+
+/** Runs fn over items with at most `limit` in flight. */
+async function mapLimited(items, limit, fn) {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
 }
 
 /** Deterministic 32-bit seed from a string. */
@@ -1153,10 +1225,10 @@ function mapTxnError(err) {
 // rather than 403 (infrastructure block).
 const CALLABLE_OPTS = { invoker: 'public' };
 
-const coachReviewContext = onCall(CALLABLE_OPTS, async (request) => {
+const coachReviewContext = onCall({ ...CALLABLE_OPTS, timeoutSeconds: 120 }, async (request) => {
   const coachUid = requireAuth(request);
   const athleteUids = Array.isArray(request.data && request.data.athleteUids)
-    ? request.data.athleteUids.filter((u) => typeof u === 'string').slice(0, 100)
+    ? [...new Set(request.data.athleteUids.filter((u) => typeof u === 'string'))].slice(0, 100)
     : [];
 
   const tz = await coachTimezone(coachUid);
@@ -1165,17 +1237,47 @@ const coachReviewContext = onCall(CALLABLE_OPTS, async (request) => {
   const prevCheckpointKey = cov.previousCheckpointKey(currentCheckpointKey);
 
   const athletes = {};
-  await Promise.all(athleteUids.map(async (athleteUid) => {
+  await mapLimited(athleteUids, 10, async (athleteUid) => {
     if (!(await isCoachFor(coachUid, athleteUid))) return; // silently omit
-    const lastWeighInKey = await latestWeighInKey(athleteUid, tz);
-    athletes[athleteUid] = {
-      lastWeighInKey,
-      weighInStatus: bwx.weighInStatus(lastWeighInKey, todayKey),
-    };
-  }));
+    athletes[athleteUid] = await reviewContextForAthlete(
+      coachUid, athleteUid, tz, todayKey, currentCheckpointKey);
+  });
 
   return { timezone: tz, todayKey, currentCheckpointKey, prevCheckpointKey, athletes };
 });
+
+/**
+ * One authorised athlete's live review context. Each part fails on its own:
+ *   – weigh-in: the latest recorded entry (date + its own weight) and the
+ *     staleness derived from that same entry; on a read failure the fields
+ *     are omitted and weighInError is set, so the card never reads a load
+ *     error as "no weigh-ins recorded";
+ *   – draft refresh: brings the current checkpoint's outdated draft up to the
+ *     current composition (refreshDraftReport) BEFORE the client reads the
+ *     report, so an upgrade shows the new wording and attendance on the next
+ *     screen load/refresh.
+ */
+async function reviewContextForAthlete(coachUid, athleteUid, tz, todayKey, checkpointKey) {
+  const info = {};
+  try {
+    const latest = await latestWeighIn(athleteUid, tz);
+    info.lastWeighInKey = latest ? latest.dateKey : null;
+    info.lastWeighIn = latest;
+    info.weighInStatus = bwx.weighInStatus(info.lastWeighInKey, todayKey);
+  } catch (err) {
+    logger.warn('latest weigh-in read failed', { coachUid, athleteUid, error: err });
+    info.weighInError = true;
+  }
+  try {
+    info.draftRefresh = await refreshDraftReport(coachUid, athleteUid, checkpointKey, tz);
+  } catch (err) {
+    logger.error('draft refresh failed; report left unchanged', {
+      coachUid, athleteUid, checkpointKey, error: err,
+    });
+    info.draftRefresh = 'failed';
+  }
+  return info;
+}
 
 /** Copy: live bodyweight recheck + atomic freeze; returns the exact frozen
  *  finalText the client must display and put on the clipboard. */
@@ -1250,6 +1352,10 @@ module.exports = {
     runBootstrap,
     bootstrapIfNeeded,
     generateReport,
+    refreshDraftReport,
+    reviewContextForAthlete,
+    attendanceFor,
+    latestWeighIn,
     reevaluateEnrollment,
     liveBodyweightBase,
     loadWeightEntries,

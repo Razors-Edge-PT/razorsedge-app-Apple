@@ -1,65 +1,75 @@
 // Deterministic client-message composition. Pure module. NO LLM.
 //
-// Greetings, exercise aliases and phrase variants are fixed template tables.
-// Random choices (male greeting, bench alias) are made once per report via a
-// persisted `variantSeed`, so rebuilding a screen or regenerating the text
-// for the same report never flips wording.
+// The draft gives the coach facts to write their own comments around:
+//
+//   • one short line per achievement (see praise.js selectAchievements), e.g.
+//       150kg for 8 reps on the bench press
+//       150kg for 8 reps on the bench press, New E1RM PB of 172.5kg
+//       125kg for 4 reps on the Larsen bench press
+//   • then, separately, the bodyweight lines (trend / milestone / reminder).
+//
+// No greetings, names, emojis, filler, closings or workout congratulations.
+// Bodyweight phrase variants are fixed template tables chosen once per report
+// via the persisted `variantSeed`, so regenerating the text for the same
+// report never flips wording.
 
 'use strict';
 
-// Alias table keyed by the exercise's canonical stored display name. Workout
-// rows persist both exerciseId and the canonical name, and exercise-catalog
-// document ids are environment-generated, so the stable cross-environment key
-// is the canonical name string (resolved from the id at event time).
-const EXERCISE_ALIASES = {
-  'Bench Press, Barbell': ['bench', 'bench press'], // variant chosen by seed
-  'Back Squat, Barbell': ['squat'],
-  'Deadlift, Conventional': ['deadlift'],
-  'Romanian Deadlift': ['RDL'],
-  'Lat Pull Down, Supinated': ['supinated lat pull'],
-  'Butterfly Dumbbell Raise': ["Butterfly DB's"],
-  'Flat Bench Dumbbell Press': ['Flat Bench DB'],
-  'Bulgarian Split Squat': ['BG split squat'],
-};
+// Explicit aliases, keyed by the exercise's exact canonical stored display
+// name. An alias is listed only when it unambiguously names that one exercise;
+// every other exercise keeps its FULL stored name — qualifiers such as the
+// variant, grip, equipment or incline after a comma are identity, never noise.
+const EXERCISE_ALIASES = Object.freeze({
+  'Bench Press, Barbell': 'bench press',
+  'Bench Press, Larsen Press': 'Larsen bench press',
+  'Back Squat, Barbell': 'squat',
+  'Deadlift, Conventional': 'deadlift',
+  'Romanian Deadlift': 'RDL',
+  'Lat Pull Down, Supinated': 'supinated lat pull',
+  'Butterfly Dumbbell Raise': "Butterfly DB's",
+  'Flat Bench Dumbbell Press': 'Flat Bench DB',
+  'Bulgarian Split Squat': 'BG split squat',
+});
 
-/** Conservative cleanup for names not in the alias table: drop the comma
- *  qualifier ("Seated Row, Cable" → "Seated Row") and nothing cleverer. */
+const UNNAMED_EXERCISE = 'unnamed exercise';
+
+/** Full stored display name, trimmed. Never truncated. */
 function cleanExerciseName(name) {
-  if (!name) return 'that lift';
-  const base = String(name).split(',')[0].trim();
-  return base || String(name);
+  const s = typeof name === 'string' ? name.trim() : '';
+  return s || UNNAMED_EXERCISE;
 }
 
-/** Display alias for an exercise, stable under variantSeed. */
-function exerciseAlias(name, variantSeed) {
-  const aliases = EXERCISE_ALIASES[name];
-  if (aliases && aliases.length) {
-    return aliases[seededIndex(variantSeed, name, aliases.length)];
-  }
-  return cleanExerciseName(name);
+/** The label a line uses: the explicit alias, else the full stored name. */
+function exerciseLabel(name) {
+  const full = cleanExerciseName(name);
+  return Object.prototype.hasOwnProperty.call(EXERCISE_ALIASES, full)
+    ? EXERCISE_ALIASES[full]
+    : full;
 }
-
-const MALE_GREETINGS = ['Hey bro', 'Hey man'];
 
 /**
- * Greeting for the combined check-in.
- * gender: 'male' | 'female' | null/other.
+ * Labels for every exercise id in one message. If two DIFFERENT exercise ids
+ * would read identically through an alias (e.g. a custom exercise literally
+ * named "bench press" beside the barbell bench press), both fall back to
+ * their full stored names so the lines stay distinguishable.
  */
-function greeting(gender, firstName, variantSeed) {
-  if (gender === 'male') {
-    return MALE_GREETINGS[seededIndex(variantSeed, 'greeting', MALE_GREETINGS.length)];
+function labelsFor(achievements) {
+  const nameById = new Map();
+  for (const a of achievements || []) {
+    if (!nameById.has(a.exerciseId)) nameById.set(a.exerciseId, cleanExerciseName(a.exerciseName));
   }
-  if (gender === 'female' && firstName) return `Hi ${firstName}`;
-  return firstName ? `Hi ${firstName}` : 'Hi';
-}
-
-/** Weigh-in-prompt greeting ("Heya Sarah" style for female athletes). */
-function weighInGreeting(gender, firstName, variantSeed) {
-  if (gender === 'male') {
-    return MALE_GREETINGS[seededIndex(variantSeed, 'greeting', MALE_GREETINGS.length)];
+  const idsByLabel = new Map();
+  for (const [id, name] of nameById) {
+    const label = exerciseLabel(name).toLowerCase();
+    if (!idsByLabel.has(label)) idsByLabel.set(label, new Set());
+    idsByLabel.get(label).add(id);
   }
-  if (firstName) return `Heya ${firstName}`;
-  return 'Heya';
+  const out = new Map();
+  for (const [id, name] of nameById) {
+    const label = exerciseLabel(name);
+    out.set(id, idsByLabel.get(label.toLowerCase()).size > 1 ? name : label);
+  }
+  return out;
 }
 
 /** Deterministic small hash → index, stable per (seed, salt). */
@@ -71,190 +81,92 @@ function seededIndex(variantSeed, salt, n) {
 }
 
 function fmtKg(v) {
-  if (v == null) return '?';
-  const r = Math.round(v * 10) / 10;
-  return Number.isInteger(r) ? `${r}kg` : `${r}kg`;
+  if (v == null || !Number.isFinite(Number(v))) return '?';
+  return `${Math.round(Number(v) * 10) / 10}kg`;
 }
 
 /**
- * A load [v] from event [ev], as the athlete knows it. A bodyweight
- * exercise's event carries the bodyweight its totals were computed at, and is
- * shown as the load ADDED to it ("+60kg", or "bodyweight"); every other event
- * exactly as before.
+ * A load [v] as the athlete knows it. A bodyweight exercise's achievement
+ * carries the bodyweight its totals were computed at and is shown as the load
+ * ADDED to it ("+20kg", or "bodyweight"); every other load exactly as stored.
  */
-function fmtLoad(ev, v) {
-  const bw = ev && ev.bodyweightKg;
-  if (v == null || typeof bw !== 'number' || !(bw > 0)) return fmtKg(v);
-  const r = Math.round((v - bw) * 10) / 10;
+function fmtLoad(bodyweightKg, v) {
+  if (v == null || typeof bodyweightKg !== 'number' || !(bodyweightKg > 0)) return fmtKg(v);
+  const r = Math.round((v - bodyweightKg) * 10) / 10;
   if (r === 0) return 'bodyweight';
   return `${r > 0 ? '+' : '−'}${Math.abs(r)}kg`;
 }
 
-// ── Training sentences ──────────────────────────────────────────────────────
-
-function repPBSentence(praise, seed, { lead }) {
-  const ev = praise.event;
-  const alias = exerciseAlias(ev.exerciseName, seed);
-  let s;
-  if (lead) {
-    s = `nice work hitting ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} on the ${alias}, new ${ev.reps} rep target PB 💪`;
-  } else {
-    s = `${fmtLoad(ev, ev.weightKg)} for ${ev.reps} on the ${alias} also a new rep target PB`;
-  }
-  if (praise.alsoE1rm) {
-    s += lead
-      ? ` (that's a new E1RM PB too, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR)`
-      : ` — new E1RM PB as well, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR`;
-  }
-  return s;
+function repsText(reps) {
+  return `${reps} rep${reps === 1 ? '' : 's'}`;
 }
 
-/** All-time heaviest weight on the exercise — the top-ranked achievement.
- *  Deliberately factual: weight, reps, exercise, no inferred claim. */
-function maxWeightPBSentence(praise, seed, { lead }) {
-  const ev = praise.event;
-  const alias = exerciseAlias(ev.exerciseName, seed);
-  let s;
-  if (lead) {
-    s = `new all-time heaviest lift on the ${alias}: ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} — huge work 💪`;
-  } else {
-    s = `${fmtLoad(ev, ev.weightKg)} for ${ev.reps} on the ${alias} is a new all-time heaviest lift too`;
-  }
-  if (praise.alsoE1rm) {
-    s += lead
-      ? ` (that's a new E1RM PB too, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR)`
-      : ` — new E1RM PB as well, ${fmtLoad(praise.alsoE1rm, praise.alsoE1rm.e1rmKg)} excluding RIR`;
-  }
-  return s;
+function fmtRir(v) {
+  return String(Math.round(Number(v) * 10) / 10);
 }
 
-/** Matched an existing PB at a strictly HIGHER logged RIR — the same weight
- *  and reps with more left in reserve, i.e. the performance got easier. Framed
- *  as an easier matched performance, never as a new PB, because the weight and
- *  reps themselves did not improve. */
-function rirMatchPBSentence(praise, seed, { lead }) {
-  const ev = praise.event;
-  const alias = exerciseAlias(ev.exerciseName, seed);
-  if (lead) {
-    return `matched your ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} PB on the ${alias} with more reps in reserve — that is getting easier 💪`;
+// ── Training lines ──────────────────────────────────────────────────────────
+
+/** One achievement → one line (without the bullet). */
+function achievementLine(a, label) {
+  const name = label || exerciseLabel(a.exerciseName);
+  const e1 = a.e1rm;
+  const e1Bw = e1 && typeof e1.bodyweightKg === 'number' ? e1.bodyweightKg : a.bodyweightKg;
+  const e1Text = e1 ? `New E1RM PB of ${fmtLoad(e1Bw, e1.e1rmKg)}` : null;
+
+  if (a.weightKg == null || a.reps == null) {
+    // Legacy E1RM event without its contributing set.
+    return `${e1Text} on the ${name}`;
   }
-  return `matched your ${fmtLoad(ev, ev.weightKg)} for ${ev.reps} PB on the ${alias} with more in reserve too`;
+
+  const parts = [`${fmtLoad(a.bodyweightKg, a.weightKg)} for ${repsText(a.reps)} on the ${name}`];
+  if (a.maxWeight) parts.push('all-time heaviest');
+  if (a.rirMatch && !a.maxWeight && !a.rep) {
+    parts.push(`matched PB at RIR ${fmtRir(a.rirMatch.rir)} (previously RIR ${fmtRir(a.rirMatch.prevRir)})`);
+  }
+  if (e1Text) parts.push(e1Text);
+  return parts.join(', ');
 }
 
-function e1rmPBSentence(praise, seed, { lead }) {
-  const ev = praise.event;
-  const alias = exerciseAlias(ev.exerciseName, seed);
-  if (lead) {
-    return `saw you got a new E1RM PB on the ${alias}, nice work, ${fmtLoad(ev, ev.e1rmKg)} excluding RIR, that is huge 💪`;
-  }
-  return `new E1RM PB ${fmtLoad(ev, ev.e1rmKg)} excluding RIR on the ${alias} too, nice!`;
+/** Achievements → lines, in the order selectAchievements returned. */
+function trainingLines(achievements) {
+  const list = achievements || [];
+  const labels = labelsFor(list);
+  return list.map((a) => achievementLine(a, labels.get(a.exerciseId)));
 }
 
-/**
- * Composes the training paragraph from selected praises.
- * Wording deliberately avoids "last week" — windows vary.
- */
-function trainingParagraph(praises, seed) {
-  if (!praises || praises.length === 0) return null;
+// ── Bodyweight lines ────────────────────────────────────────────────────────
 
-  const SENTENCES = {
-    maxWeightPB: maxWeightPBSentence,
-    repPB: repPBSentence,
-    e1rmPB: e1rmPBSentence,
-    rirMatchPB: rirMatchPBSentence,
-  };
-  const pbPraises = praises.filter((p) => SENTENCES[p.kind]);
-  const completion = praises.find((p) => p.kind === 'completedAll' || p.kind === 'threePlus');
-
-  const parts = [];
-  pbPraises.forEach((p, i) => {
-    parts.push(SENTENCES[p.kind](p, seed, { lead: i === 0 }));
-  });
-
-  let text = '';
-  const closer = (last) => (last.endsWith('!') ? '' : ', great stuff 👌');
-  if (parts.length === 1) {
-    text = parts[0];
-  } else if (parts.length === 2) {
-    text = `${parts[0]} ${parts[1]}${closer(parts[1])}`;
-  } else if (parts.length >= 3) {
-    text = `${parts[0]} ${parts[1]}, and ${parts[2]}${closer(parts[2])}`;
-  }
-
-  if (completion) {
-    const compText = completion.kind === 'completedAll'
-      ? 'nice work getting all your workouts in 👍'
-      : `nice work getting in ${completion.count} workouts since the last check-in 👍`;
-    text = text ? `${text} Also ${compText}` : compText;
-  }
-
-  return text || null;
-}
-
-// ── Bodyweight sentences ────────────────────────────────────────────────────
+const WEIGH_IN_REMINDER = 'Can I get you to weigh in please?';
 
 const BW_LINES = {
-  cut_onTrack: ['Weigh in looking ok too, slowly coming down, keep it up 👍'],
+  cut_onTrack: ['Nice work on the diet, weight coming down'],
   cut_offTrack: [
     'Body weight not going down at the moment, how is the diet going?',
-    "Body weight hasn't really moved down — anywhere you're struggling with the diet?",
+    "Body weight hasn't really moved down, anywhere you're struggling with the diet?",
     'How are you going with the diet?',
   ],
-  bulk_onTrack: ['Weigh in looking good too, slowly going up, keep it up 👍'],
+  bulk_onTrack: ['Nice work on the diet, weight going up'],
   bulk_offTrack: [
     'Body weight not going up at the moment, how is the diet going?',
     'How are you going with the diet?',
   ],
-  maintain_stable: ['Body weight seems stable too 👍'],
+  maintain_stable: ['Body weight holding stable'],
   maintain_driftUp: [
-    'Body weight has been creeping up a little — how are you going with the diet?',
+    'Body weight has been creeping up a little, how are you going with the diet?',
   ],
   maintain_driftDown: [
-    'Body weight has been dipping a little — how are you going with the diet?',
+    'Body weight has been dipping a little, how are you going with the diet?',
   ],
 };
 
 function milestoneSentence(goal, milestoneId) {
   if (!milestoneId) return null;
-  const boundary = Number(milestoneId.split('_')[1]);
-  if (goal === 'cut') {
-    return `And you've cracked under ${boundary}kg — awesome milestone, keep it rolling 🎉`;
-  }
-  if (goal === 'bulk') {
-    return `And you've hit the ${boundary}kg mark — awesome milestone, keep it rolling 🎉`;
-  }
+  const boundary = Number(String(milestoneId).split('_')[1]);
+  if (!Number.isFinite(boundary)) return null;
+  if (goal === 'cut') return `Under ${boundary}kg now, great milestone`;
+  if (goal === 'bulk') return `Reached the ${boundary}kg mark, great milestone`;
   return null;
-}
-
-/**
- * Bodyweight paragraph.
- * @param {Object} bw { goal, trend, currentAvg, previousAvg, weighInStatus,
- *                      newMilestoneId }
- */
-function bodyweightParagraph(bw, gender, firstName, seed) {
-  if (!bw) return null;
-  const lines = [];
-
-  if (bw.trend && bw.trend !== 'insufficient') {
-    const key = trendLineKey(bw.goal, bw.trend);
-    if (key && BW_LINES[key]) {
-      const options = BW_LINES[key];
-      lines.push(options[seededIndex(seed, key, options.length)]);
-    }
-    const m = milestoneSentence(bw.goal, bw.newMilestoneId);
-    if (m) lines.push(m);
-  }
-
-  if (bw.weighInStatus === 'due' || bw.weighInStatus === 'overdue') {
-    if (lines.length === 0) {
-      // Standalone weigh-in prompt with its own greeting style.
-      const g = weighInGreeting(gender, firstName, seed);
-      return `${g}, could I get you to weigh in today please?`;
-    }
-    lines.push('Could I get you to weigh in today too please?');
-  }
-
-  return lines.length ? lines.join(' ') : null;
 }
 
 function trendLineKey(goal, trend) {
@@ -268,49 +180,60 @@ function trendLineKey(goal, trend) {
   return null;
 }
 
+/**
+ * Bodyweight lines: goal trend, a newly reached milestone, and at most ONE
+ * weigh-in reminder.
+ * @param {Object} bw { goal, trend, weighInStatus, newMilestoneId }
+ */
+function bodyweightLines(bw, seed) {
+  if (!bw) return [];
+  const lines = [];
+  if (bw.trend && bw.trend !== 'insufficient') {
+    const key = trendLineKey(bw.goal, bw.trend);
+    if (key && BW_LINES[key]) {
+      const options = BW_LINES[key];
+      lines.push(options[seededIndex(seed, key, options.length)]);
+    }
+    const m = milestoneSentence(bw.goal, bw.newMilestoneId);
+    if (m) lines.push(m);
+  }
+  if (bw.weighInStatus === 'due' || bw.weighInStatus === 'overdue') {
+    lines.push(WEIGH_IN_REMINDER);
+  }
+  return lines;
+}
+
+/** Bodyweight block as text, or null. */
+function bodyweightParagraph(bw, seed) {
+  const lines = bodyweightLines(bw, seed);
+  return lines.length ? lines.join('\n') : null;
+}
+
 // ── Full draft ──────────────────────────────────────────────────────────────
 
 /**
- * Combined client draft: greeting + training + bodyweight in one message.
- * Returns null when there is genuinely nothing to say (no praise, no
- * bodyweight comment, no weigh-in prompt).
+ * Achievement bullets, then (separately) the bodyweight lines. Returns null
+ * when there is genuinely nothing to say.
  */
-function composeDraft({ praises, bodyweight, gender, firstName, variantSeed }) {
-  const training = trainingParagraph(praises, variantSeed);
-  const bw = bodyweightParagraph(bodyweight, gender, firstName, variantSeed);
-
-  if (!training && !bw) return null;
-
-  if (!training && bw && (bodyweight.weighInStatus === 'due' || bodyweight.weighInStatus === 'overdue')
-      && (!bodyweight.trend || bodyweight.trend === 'insufficient')) {
-    // Pure weigh-in prompt already carries its own greeting.
-    return bw;
-  }
-
-  const g = greeting(gender, firstName, variantSeed);
-  const paragraphs = [];
-  if (training) paragraphs.push(`${g}, ${training}`);
-  if (bw) {
-    // The celebratory bodyweight lines say "too", which only reads right
-    // after a training paragraph; drop it when bodyweight opens the message.
-    const standalone = training ? bw : bw.replace(' too,', ',').replace(' too ', ' ');
-    paragraphs.push(training ? bw : `${g}, ${lowerFirst(standalone)}`);
-  }
-  return paragraphs.join('\n\n');
-}
-
-function lowerFirst(s) {
-  return s ? s[0].toLowerCase() + s.slice(1) : s;
+function composeDraft({ achievements, bodyweight, variantSeed }) {
+  const training = trainingLines(achievements);
+  const bw = bodyweightParagraph(bodyweight, variantSeed);
+  const blocks = [];
+  if (training.length) blocks.push(training.map((l) => `• ${l}`).join('\n'));
+  if (bw) blocks.push(bw);
+  return blocks.length ? blocks.join('\n\n') : null;
 }
 
 module.exports = {
   EXERCISE_ALIASES,
-  exerciseAlias,
+  WEIGH_IN_REMINDER,
+  exerciseLabel,
   cleanExerciseName,
-  greeting,
-  weighInGreeting,
+  labelsFor,
   seededIndex,
-  trainingParagraph,
+  achievementLine,
+  trainingLines,
+  bodyweightLines,
   bodyweightParagraph,
   composeDraft,
   milestoneSentence,

@@ -89,7 +89,10 @@ athlete identity, not the caller-supplied path).
 - `…/athletes/{athleteUid}` — coach-editable (whitelisted + value-validated
   in rules, live assignment required): `reportingEnabled` (bool), `goal`
   (`cut|bulk|maintain`), `messageExerciseMode` (`automatic|custom`),
-  `customExerciseIds[]` (≤100), `displayName`, `enabledAt`, `updatedAt`.
+  `customExerciseIds[]` (≤100), `coachingService`
+  (`inPerson|fullOnline|eightWeek|prospective`), `displayName`, `enabledAt`,
+  `updatedAt`. Every client write is a merge of only the changed keys
+  (`saveCoachAthleteSettings`), so saving one setting never overwrites another.
   Server-only (unreachable from clients, doc undeletable by coaches):
   `goalSetAt` (epoch ms — stamped by the settings trigger ONLY when the goal
   value genuinely changes), `praisedWeeks{weekStartKey→reportId}` (pruned to
@@ -102,62 +105,111 @@ athlete identity, not the caller-supplied path).
   `displayName`, `prevCheckpointKey`, `maxStartKey`, embedded `events[]`
   (max window), `workoutDates[]`, `completion`, `currentWeekAdherence`,
   `fallbackWeek`,
-  `blockStartKey`, `bodyweight`, `e1rmPraiseFloorKey`, `draftIfPrevCopied`,
-  `draftIfPrevNotCopied`, versions; after copy: `copiedAtMs`,
+  `blockStartKey`, `bodyweight` (incl. `lastWeighIn`), `e1rmPraiseFloorKey`,
+  `draftIfPrevCopied`, `draftIfPrevNotCopied`, `compositionVersion` (absent =
+  1), `refreshedAtMs`, versions; after copy: `copiedAtMs`,
   `coverageStart/End`, `finalText`, `liveBodyweight`, `praisedWeekKey`,
   `milestoneAwarded`, `prevLastFinalizedCoverageEnd` (undo support).
   `copiedAtMs` is the stand-in for a future `sentAt`.
 
-### Coverage window vs current-week adherence
+### Coaching service tiers (recap grouping)
 
-Two deliberately separate concepts; the numbers on a card may disagree and
-that is correct.
+`coachingService` classifies each coach⇄athlete relationship. The selector
+lives in Check-in Athletes (the monitoring settings); the four selectable
+tiers, in recap order, are **In-Person** (`inPerson`), **Full online
+service** (`fullOnline`), **8-week program** (`eightWeek`) and
+**Prospective** (`prospective`). The rules accept exactly these ids.
 
-- **Check-in coverage** (`coverage.js`) — rolling, checkpoint-anchored
+The Weekly Review groups cards under a header per tier in that order and
+sorts athletes alphabetically (case-insensitive, preferred display name:
+report → settings → roster) inside each group, uid as the tie-break. A
+missing, legacy or unknown value keeps the athlete visible in a trailing
+**Unassigned** group — a compatibility state, never a selectable tier, and
+nobody is bulk-assigned. Grouping is computed on every build
+(`CoachRecapList`), so it holds through filters, refresh, copy/skip and
+returning from settings; reassigning moves the card. Every tier gets the same
+metrics, cards, schedule and actions. A tier grants no access: Prospective is
+only a label on an already-authorised athlete, and the settings write still
+requires the live assignment. Older app versions never write the field and
+keep working.
+
+### Check-in window vs training (attendance) week
+
+Two deliberately separate periods; the card labels both explicitly.
+
+- **Check-in window** (`coverage.js`) — rolling, checkpoint-anchored
   (Mon↔Thu, widened to the same weekday 7 days back when the previous
   check-in was not copied, then clamped forward past the last finalised
-  copy). Governs PB events, the `"$n done"` count and the
+  copy). Governs PB events, the training-day count on the
+  `Check-in window: 31 Aug – 6 Sep · 2 training days` line and the
   copied/skipped/undo state machine. Unchanged.
-- **Current-week adherence** (`adherence.js`) — a FIXED calendar week,
-  Monday inclusive → the following Monday exclusive. Never anchored to the
-  block start date.
+- **Training week** (`adherence.attendancePeriod`) — a FIXED Monday–Sunday
+  week chosen by the report's checkpoint (a coach-timezone date key, so the
+  device timezone and the day the report is opened never move it; DST cannot
+  either):
+  - **Monday** report → the **preceding** Monday–Sunday (14 Sep 2026 →
+    7–13 Sep), every day counted.
+  - **Thursday** report → the **current** Monday–Sunday (17 Sep 2026 →
+    14–20 Sep), counted through the report cutoff (the checkpoint itself,
+    exclusive — the same boundary as the check-in window). Later days are
+    `counted:false` and render `…`, never as missed sessions.
 
-So a Thursday card can read `3 done · week 1/4 planned`: three training
-dates inside the rolling coverage window (which reaches back into last
-week), but only one calendar training day since Monday. That must not earn
-consistency praise off the coverage count.
+  Card line: `Training week: 7–13 Sep · 3/4 training days completed`
+  (`… so far` on a Thursday; `· target unknown` when unknown).
 
-`currentWeekAdherence` (server-computed, the UI is a pure renderer):
+Before 2026-09 the week was `calendarWeekOf(checkpoint)`: on a Monday that is
+the NEW week, which is how completed Tue 8 / Thu 10 / Sun 13 sessions sat
+beside an all-dash row and `week 0/4 planned` on the 14 Sep recap.
+
+`currentWeekAdherence` (server-computed, the UI is a pure renderer; field
+name kept for older app versions):
 
 ```
 { weekStart, weekEnd,            // 'YYYY-MM-DD', weekEnd EXCLUSIVE
+  period,                        // previousWeek | currentWeek (absent on v1 reports)
+  cutoffKey,                     // EXCLUSIVE; days >= cutoff are not counted
   plannedCount,                  // number | null — NEVER 0 when unknown
   plannedKnown,                  // false ⇒ no target may be inferred
-  plannedSource,                 // activeBlockTemplates | noActiveBlock | unavailable
-  blockId, blockName,
-  completedCount,                // unique calendar training DAYS
-  days: [ { dateKey, weekday, trained, exerciseCount } ] }  // 7, Mon first
+  plannedSource,                 // activeBlockTemplates | weekBlockTemplates |
+                                 // noActiveBlock | unavailable |
+                                 // blockChangedDuringWeek | historicalTargetUnavailable
+  blockId, blockName,            // the block that governed that week
+  completedCount,                // unique calendar training DAYS before the cutoff
+  days: [ { dateKey, weekday, trained, exerciseCount, counted } ] }  // 7, Mon first
 ```
 
 The weekly **target** is the number of workout templates assigned to the
-athlete's active block — `template.blockId == block id`, plus the legacy
-`template.blockAssignment == block.name` fallback still present in
+block that governed the reported week — `template.blockId == block id`, plus
+the legacy `template.blockAssignment == block.name` fallback still present in
 production data, deduplicated by template document id. It is NOT derived
 from `planned_blocks/{blockId}/weeks/week_N/days/day_M`, which many athletes
 never populate (that source is what produced `week 4/0 planned`).
 
+Which block governs the week (`resolveWeekBlock`): the active block when it
+started on/before the week's Monday (or has no start date — legacy); unknown
+when the active block started inside the week; when it started on/after the
+week's end (e.g. a new block from this Monday) the latest earlier block
+covering that Monday — and if that block no longer has templates pointing at
+it (templates are re-pointed between blocks), the target is unknown, never
+0 and never the new block's number.
+
 `completedCount` counts unique calendar DAYS with genuine completed work
-(`hasCompletedSets`, the HomeV2CalendarService rule) — two sessions on one
-date are one day. `exerciseCount` is the distinct exercises with ≥1 valid
+(`adherence.hasCompletedSets`, the HomeV2CalendarService rule: any logged set
+with weight > 0 and reps > 0, current `weight/reps` or legacy
+`actualWeight/actualReps`, numeric strings parsed) — two sessions on one
+date are one day. Planner data is never consulted: a completed workout on a
+"No exercises planned" day counts; a planned-only or empty placeholder
+workout does not. A workout read failure fails the generation/refresh (retry)
+rather than reading as "no training". `exerciseCount` is the distinct exercises with ≥1 valid
 completed set on that date, keyed on `pb_engine.canonicalExerciseId`, so
 repeated sets, repeated sessions and mixed id casings collapse to one.
 
 `plannedCount: null` (no active block, or a failed/malformed template read)
 and `plannedCount: 0` (an active block genuinely holding no templates) both
-fail closed: `completedAll` requires a KNOWN, POSITIVE target, so neither
-can be praised as "completed every planned workout". Reports generated
-before this field existed simply omit it; the client falls back to the
-legacy `completion` map and hides the week strip.
+fail closed: `completedAll` requires a KNOWN, POSITIVE target. Attendance is
+shown on the coach card only; it is never draft text. Reports generated
+before this field existed simply omit it; the card hides the training-week
+line and the strip.
 
 ## Analytics engine
 
@@ -239,6 +291,78 @@ The Flutter copy flow: callable returns `finalText` → the card re-renders
 that exact string → the same string goes to the clipboard (failures show a
 dialog with the selectable text and a retry — the UI never claims success on
 a failed clipboard write; copied cards also offer "copy again").
+
+Consistency (completed-workout) praise is no longer composed, so a copy
+records no `praisedWeeks` entry (`computePraisedWeekKey` → null); Undo still
+removes entries older copies recorded, replacing the maps with `update()` so
+a key is really deleted even when other entries remain. A milestone is
+recorded only when its line is actually in the copied text.
+
+## Client draft (compositionVersion 2)
+
+`draft.buildDraftText` is the single composition used by report generation,
+the existing-draft refresh and the copy transaction, so the preview and the
+copied text cannot diverge. The draft is facts for the coach to comment
+around — no greetings, names, emojis, filler, closings, "excluding RIR" prose
+or workout congratulations:
+
+```
+• 150kg for 8 reps on the bench press, New E1RM PB of 186.2kg
+• 125kg for 4 reps on the Larsen bench press
+• 25kg for 15 reps on the Machine Chest Press, matched PB at RIR 2 (previously RIR 1.5)
+
+Nice work on the diet, weight coming down
+Can I get you to weigh in please?
+```
+
+Achievements (`praise.selectAchievements`) — one line per distinct
+PERFORMANCE (exercise id + day + load + reps) in the effective window, custom
+exercise mode applied by (case-folded) id, E1RM floor applied. No cap.
+- Several PB kinds on one performance (all-time heaviest, rep target, E1RM)
+  → one line; `all-time heaviest` and `New E1RM PB of <engine value>` are
+  appended. The E1RM is attached ONLY when the E1RM event's contributing set
+  (`weightKg`/`reps`, recorded by the engine) is that same performance —
+  exercise/day matching alone never attaches it; otherwise the E1RM PB gets
+  its own line with its own set. A legacy E1RM event without its set reads
+  `New E1RM PB of Xkg on the …`.
+- In one exercise-day session, a rep-target/RIR-match performance dominated by
+  another listed performance (≥ load and ≥ reps) is not listed again.
+- Order: all-time heaviest, rep target, E1RM-only, RIR match; then improvement,
+  newer day, exercise id, reps.
+- Loads follow the existing conventions: bodyweight exercises show the added
+  load (`+20kg`, `bodyweight`); E1RM uses `coachE1rm` (no RIR).
+- Exercise names are the FULL stored name — qualifiers after a comma are
+  identity (`Seated Row, Cable` vs `Seated Row, Machine`). An explicit alias
+  (`Bench Press, Barbell` → `bench press`, `Bench Press, Larsen Press` →
+  `Larsen bench press`, …) is used only for that exact name, and if two
+  different exercise ids in one message would share a label both fall back to
+  their full names. (Pre-2026-09 `cleanExerciseName` cut everything after the
+  first comma, so `Bench Press, Larsen Press` read as `Bench Press`; identity,
+  dedupe and custom selection were already id-based.)
+
+Bodyweight lines follow, separated by a blank line: goal trend
+(`cut_onTrack` → `Nice work on the diet, weight coming down`; bulking gains →
+`Nice work on the diet, weight going up`; off-track/drift lines ask about the
+diet; maintain stable → `Body weight holding stable`), a newly reached
+milestone, and at most one reminder `Can I get you to weigh in please?` when
+due/overdue. Insufficient data adds no trend line. Nothing to say → empty.
+
+### Existing drafts after an upgrade
+
+`coachReviewContext` (called by every Weekly Review load/refresh, before the
+reports are read) runs `refreshDraftReport` for the CURRENT checkpoint's
+report of each authorised athlete: an outdated (`compositionVersion` < 2)
+`draft` has its two previews recomposed from its own frozen inputs (events,
+bodyweight snapshot, variantSeed, E1RM floor) and its attendance payload
+rebuilt. Bounded (one report, ≤7 workout days, blocks, templates), versioned
+and idempotent. The write is `refreshDraftTransaction`, which re-checks
+status and version inside the transaction and may only set the previews,
+`currentWeekAdherence`, `completion`, `compositionVersion` and
+`refreshedAtMs` — copied/skipped/expired history, `finalText`, coverage,
+watermarks, undo/praise bookkeeping, events and settings are never touched.
+Racing Copy/Skip either commits first (refresh then sees a finalised report
+and writes nothing) or retries after the refresh. A refresh failure leaves
+the report unchanged and is logged.
 
 ## PB semantics (analyticsVersion 3)
 
@@ -351,6 +475,18 @@ detected from rolling averages; praise suppression is per-coach and
 per-goal-phase (`goalSetAt`, server-stamped only on genuine goal changes),
 so oscillation can't repeat praise, coaches can't suppress each other, undo
 un-awards, and a later legitimate phase can praise the same boundary again.
+
+**Latest weigh-in.** `latestWeighIn` reads the tracker's own query
+(`timestamp` desc) and `pickLatestWeighIn` returns ONE entry — its coach-tz
+date and its own recorded weight/unit (never an average; equal timestamps,
+e.g. same-day AM/PM noon stamps, resolve by document id desc exactly as
+Firestore orders them for the tracker). Status and the card detail both come
+from that entry: `[Weigh-in overdue] Last: 10 Sep 2026 · 73.2kg` (a Wrap drops
+the detail under the pill only when it cannot fit). `coachReviewContext`
+returns it as `lastWeighIn` beside `lastWeighInKey`/`weighInStatus`; reports
+also store it in `bodyweight.lastWeighIn`. No history → `No weigh-ins
+recorded`; a read failure sets `weighInError` and the card falls back to the
+report snapshot or `Last weigh-in unavailable` — never "none", never `0kg`.
 
 ## Cost profile (bounded everywhere)
 

@@ -133,6 +133,10 @@ class AthleteReview {
   Map<String, dynamic>? prevReport;
   String? liveLastWeighInKey; // server-derived (coach timezone)
   String? liveWeighInStatus; // 'ok' | 'due' | 'overdue' (server-derived)
+  /// The latest recorded weigh-in entry ({dateKey, weight, unit, tod}) that
+  /// liveWeighInStatus was derived from; null with a live status means the
+  /// athlete has no weigh-in history.
+  Map<String, dynamic>? liveLastWeighIn;
   /// Set when this athlete's report documents could not be read. The card
   /// still renders (saying so) instead of the whole screen failing.
   String? reportLoadError;
@@ -208,6 +212,37 @@ class AthleteReview {
       liveWeighInStatus ??
       (report?['bodyweight']?['weighInStatus'] as String?) ??
       'ok';
+
+  /// The coaching service tier id, or null (Unassigned).
+  String? get coachingService =>
+      CoachingService.normalize(settings[CoachingService.field]);
+
+  /// `Last: 10 Sep 2026 · 73.2kg` — from the SAME entry the status came
+  /// from: the live server answer when present, else the report's snapshot.
+  /// Without either, the history is unknown and never reads as "none".
+  String get weighInDetail {
+    if (liveWeighInStatus != null) {
+      return CoachCheckinsLogic.weighInDetailLabel(
+        entry: liveLastWeighIn,
+        lastWeighInKey: liveLastWeighInKey,
+        historyKnown: true,
+      );
+    }
+    final bw = report?['bodyweight'];
+    if (bw is Map) {
+      final entry = bw['lastWeighIn'];
+      final key = bw['lastWeighInKey'];
+      if (entry is Map || CoachCheckinsLogic.isDateKey(key)) {
+        return CoachCheckinsLogic.weighInDetailLabel(
+          entry: entry is Map ? Map<String, dynamic>.from(entry) : null,
+          lastWeighInKey: key as String?,
+          historyKnown: true,
+        );
+      }
+    }
+    return CoachCheckinsLogic.weighInDetailLabel(
+        entry: null, lastWeighInKey: null, historyKnown: false);
+  }
 
   String get draftPreview {
     final r = report;
@@ -361,9 +396,14 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
             Map<String, dynamic>.from(ctx['athletes'] as Map? ?? {});
         for (final a in enabled) {
           final info = ctxAthletes[a.uid];
-          if (info is Map) {
+          // A weigh-in read failure omits the status (weighInError), so the
+          // card falls back to the report instead of claiming "no history".
+          if (info is Map && info['weighInError'] != true) {
             a.liveLastWeighInKey = info['lastWeighInKey'] as String?;
             a.liveWeighInStatus = info['weighInStatus'] as String?;
+            final entry = info['lastWeighIn'];
+            a.liveLastWeighIn =
+                entry is Map ? Map<String, dynamic>.from(entry) : null;
           }
         }
       } catch (e) {
@@ -401,8 +441,8 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
         }
       }));
 
-      enabled.sort((a, b) =>
-          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+      // Display order (tier groups, then name, then uid) is applied at build
+      // time by CoachRecapList, so it survives filters and per-card updates.
       if (!mounted) return;
       setState(() {
         _athletes = enabled;
@@ -883,14 +923,10 @@ class _CoachWeeklyReviewScreenState extends State<CoachWeeklyReviewScreen> {
                                 ),
                               ),
                             )
-                          : ListView.separated(
+                          : CoachRecapList(
                               controller: _listController,
-                              padding: const EdgeInsets.fromLTRB(8, 6, 8, 24),
-                              itemCount: filtered.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 6),
-                              itemBuilder: (context, i) =>
-                                  _athleteCard(filtered[i]),
+                              reviews: filtered,
+                              cardBuilder: (context, a) => _athleteCard(a),
                             ),
                     ),
                   ],
@@ -1006,7 +1042,7 @@ class CoachAthleteReviewCard extends StatelessWidget {
             !maxWeightKeys.contains('${e['exerciseId']}_${e['dateKey']}'))
         .toList();
     final workouts = a.workoutsInWindow(currentKey);
-    final completion = report?['completion'] as Map<String, dynamic>?;
+    final attendance = CoachCheckinsLogic.attendanceLabel(adherence);
     final weekStrip = CoachCheckinsLogic.weekStripRows(adherence);
     final bodyweight = report?['bodyweight'] as Map<String, dynamic>?;
     final fallbackWeek = report?['fallbackWeek'] as Map<String, dynamic>?;
@@ -1040,8 +1076,11 @@ class CoachAthleteReviewCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 4),
+            // The rolling check-in window (PB coverage) — its own period,
+            // labelled as such, distinct from the training week below.
             Text(
-              'Coverage ${coverage.start} → ${coverage.end}',
+              CoachCheckinsLogic.coverageWindowLabel(coverage, workouts),
+              key: const ValueKey('checkInWindowLabel'),
               style: const TextStyle(color: Colors.white54, fontSize: 12),
             ),
             const SizedBox(height: 6),
@@ -1059,14 +1098,6 @@ class CoachAthleteReviewCard extends StatelessWidget {
                 if (rirMatchPBs.isNotEmpty)
                   _fact(Icons.bolt,
                       '${rirMatchPBs.length} PB match, more in reserve'),
-                _fact(
-                  Icons.fitness_center,
-                  CoachCheckinsLogic.adherenceFactLabel(
-                    workoutsInCoverage: workouts,
-                    adherence: adherence,
-                    legacyCompletion: completion,
-                  ),
-                ),
                 if (bodyweight?['currentAvg'] != null)
                   _fact(Icons.monitor_weight,
                       '7d avg ${bodyweight!['currentAvg']} kg · ${_trendLabel(bodyweight)}'),
@@ -1076,12 +1107,31 @@ class CoachAthleteReviewCard extends StatelessWidget {
                   // show only the objective boundary part.
                   _fact(Icons.celebration,
                       'Milestone ${(report?['milestoneAwarded'] ?? bodyweight?['newMilestoneId']).toString().split('@').first}'),
-                if (weighStatus != 'ok')
-                  _warn(weighStatus == 'due'
-                      ? 'Weigh-in due'
-                      : 'Weigh-in overdue'),
               ],
             ),
+            const SizedBox(height: 6),
+            WeighInStatusLine(status: weighStatus, detail: a.weighInDetail),
+            if (attendance != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 1),
+                    child: Icon(Icons.fitness_center,
+                        size: 14, color: Colors.white54),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      attendance,
+                      key: const ValueKey('trainingWeekLabel'),
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (weekStrip.isNotEmpty) ...[
               const SizedBox(height: 6),
               for (final row in weekStrip)
@@ -1146,7 +1196,7 @@ class CoachAthleteReviewCard extends StatelessWidget {
               )
             else if (draft.isEmpty)
               const Text(
-                'No client message for this window (no praise-worthy training and '
+                'No client message for this window (no new achievements and '
                 'nothing to say about bodyweight).',
                 style: TextStyle(color: Colors.white38, fontSize: 12),
               )
@@ -1304,18 +1354,142 @@ class CoachAthleteReviewCard extends StatelessWidget {
     );
   }
 
-  Widget _warn(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: Colors.red.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.6)),
-      ),
-      child: Text(text,
-          style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+}
+
+/// The weigh-in status pill and the latest recorded entry
+/// (`[Weigh-in overdue] Last: 10 Sep 2026 · 73.2kg`) on one line. The Wrap
+/// moves the detail under the pill only when both cannot fit (narrow phones,
+/// large text sizes) — never clipped, never scrolling sideways.
+class WeighInStatusLine extends StatelessWidget {
+  const WeighInStatusLine({super.key, required this.status, required this.detail});
+
+  /// 'ok' | 'due' | 'overdue'
+  final String status;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final ok = status != 'due' && status != 'overdue';
+    final color = ok ? Colors.green : Colors.red;
+    return Wrap(
+      key: const ValueKey('weighInRow'),
+      spacing: 8,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: ok ? 0.14 : 0.18),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: (ok ? Colors.green : Colors.redAccent)
+                    .withValues(alpha: ok ? 0.5 : 0.6)),
+          ),
+          child: Text(
+            CoachCheckinsLogic.weighInStatusLabel(status),
+            style: TextStyle(
+                color: ok ? Colors.green[300] : Colors.redAccent, fontSize: 12),
+          ),
+        ),
+        Text(
+          detail,
+          key: const ValueKey('weighInDetail'),
+          softWrap: true,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
     );
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Recap list grouped by coaching service
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// The Weekly Review list: one visible group per coaching service tier (fixed
+/// order, then "Unassigned"), athletes alphabetical inside each group with a
+/// uid tie-break. Ordering is derived on every build from the reviews it is
+/// given, so it holds through filters, refresh, per-card copy/skip updates
+/// and a tier change made in settings. Firebase-free so it can be tested.
+class CoachRecapList extends StatelessWidget {
+  const CoachRecapList({
+    super.key,
+    required this.reviews,
+    required this.cardBuilder,
+    this.controller,
+  });
+
+  /// Already filtered.
+  final List<AthleteReview> reviews;
+  final Widget Function(BuildContext context, AthleteReview review) cardBuilder;
+  final ScrollController? controller;
+
+  static List<RecapGroup<AthleteReview>> groupsOf(Iterable<AthleteReview> reviews) =>
+      CoachRecapOrdering.group<AthleteReview>(
+        reviews,
+        nameOf: (a) => a.displayName,
+        uidOf: (a) => a.uid,
+        serviceOf: (a) => a.settings[CoachingService.field],
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = <Object>[];
+    for (final g in groupsOf(reviews)) {
+      entries
+        ..add(g)
+        ..addAll(g.items);
+    }
+    return ListView.builder(
+      controller: controller,
+      padding: const EdgeInsets.fromLTRB(8, 6, 8, 24),
+      itemCount: entries.length,
+      itemBuilder: (context, i) {
+        final e = entries[i];
+        if (e is RecapGroup<AthleteReview>) {
+          return Padding(
+            key: ValueKey('recapGroup_${e.service ?? 'unassigned'}'),
+            padding: EdgeInsets.fromLTRB(4, i == 0 ? 2 : 10, 4, 6),
+            child: Text(
+              '${e.label} · ${e.items.length}',
+              style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600),
+            ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: cardBuilder(context, e as AthleteReview),
+        );
+      },
+    );
+  }
+}
+
+/// Writes a partial coach⇄athlete settings [patch] to
+/// coachCheckIns/{coachUid}/athletes/{athleteUid}. A merge write of only the
+/// given keys (plus displayName/updatedAt), so saving one setting never
+/// overwrites the others or any server-owned bookkeeping.
+Future<void> saveCoachAthleteSettings(
+  FirebaseFirestore db, {
+  required String coachUid,
+  required String athleteUid,
+  required Map<String, dynamic> patch,
+  String? displayName,
+}) {
+  return db
+      .collection('coachCheckIns')
+      .doc(coachUid)
+      .collection('athletes')
+      .doc(athleteUid)
+      .set({
+    ...patch,
+    if (displayName != null && displayName.isNotEmpty) 'displayName': displayName,
+    'updatedAt': FieldValue.serverTimestamp(),
+  }, SetOptions(merge: true));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1396,16 +1570,13 @@ class _CoachCheckinAthletesScreenState
         .firstWhere((a) => a.uid == uid, orElse: () => CoachAthlete(uid: uid))
         .label;
     try {
-      await _db
-          .collection('coachCheckIns')
-          .doc(_coachUid)
-          .collection('athletes')
-          .doc(uid)
-          .set({
-        ...patch,
-        if (name.isNotEmpty) 'displayName': name,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await saveCoachAthleteSettings(
+        _db,
+        coachUid: _coachUid,
+        athleteUid: uid,
+        patch: patch,
+        displayName: name,
+      );
       setState(() {
         _settings[uid] = {...?_settings[uid], ...patch};
       });
@@ -1578,6 +1749,47 @@ class _CoachCheckinAthletesScreenState
                                           DateTime.now().toIso8601String(),
                                   }),
                                 ),
+                                if (enabled)
+                                  Row(
+                                    children: [
+                                      const Text('Coaching service',
+                                          style: TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 13)),
+                                      const SizedBox(width: 12),
+                                      Flexible(
+                                        child: DropdownButton<String>(
+                                          key: ValueKey('coachingService_$uid'),
+                                          isExpanded: true,
+                                          // null = legacy / not yet assigned:
+                                          // shown as a hint, never an option.
+                                          value: CoachingService.normalize(
+                                              s[CoachingService.field]),
+                                          hint: const Text(
+                                              CoachingService.unassignedLabel),
+                                          dropdownColor: Theme.of(context)
+                                              .colorScheme
+                                              .surface,
+                                          items: [
+                                            for (final id
+                                                in CoachingService.ordered)
+                                              DropdownMenuItem(
+                                                value: id,
+                                                child: Text(
+                                                    CoachingService.label(id)),
+                                              ),
+                                          ],
+                                          onChanged: (v) {
+                                            if (v == null ||
+                                                v == s[CoachingService.field]) {
+                                              return;
+                                            }
+                                            _save(uid, CoachingService.patchFor(v));
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 if (enabled)
                                   Row(
                                     children: [
