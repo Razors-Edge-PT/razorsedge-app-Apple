@@ -848,6 +848,17 @@ service cloud.firestore {
         return isSignedIn() && resource.data.participants[request.auth.uid] == true;
       }
 
+      // Participant per the PATH alone (the two uids convId names) — never
+      // touches `resource`, so it is exactly as valid before the document
+      // exists as after. Read access for a not-yet-created conversation (see
+      // below) has to be decided this way, since `resource`/`resource.data`
+      // is null for a missing document and dereferencing it throws rather
+      // than returning false.
+      function isPathParticipant() {
+        return isSignedIn() &&
+          (convId[0:28] == request.auth.uid || convId[29:57] == request.auth.uid);
+      }
+
       // convId = uid1_uid2 (UIDs sorted ascending, joined by "_", total 57 chars).
       // Exactly one of the two UIDs matches the caller; isBuddyOf(self) is always
       // false, so the OR resolves to the friendship check against the other person.
@@ -871,8 +882,28 @@ service cloud.firestore {
         return incomingOf(request.resource.data, uid) == incomingOf(resource.data, uid);
       }
 
-      // Read: participant + confirmed friend; super admin read-only for moderation.
-      allow read: if (isParticipant() && isConvFriend()) || isSuperAdmin();
+      // Read: participant + confirmed friend; super admin read-only for
+      // moderation.
+      //
+      // A conversation between two confirmed friends may not have been
+      // created yet — either party's inbox subscribes to it (by the
+      // deterministic id) as soon as the friendship is confirmed, before any
+      // message has ever been sent. `resource` is null for a document that
+      // does not exist, so `isParticipant()` (which reads `resource.data`)
+      // cannot be evaluated for it — dereferencing throws rather than
+      // returning false, which would otherwise deny the read outright and
+      // leave that listener permanently broken (Firestore does not revive a
+      // permission-denied listener when the document is later created). The
+      // path-based identity and friendship checks are exactly as valid
+      // before creation as after, so a MISSING conversation is readable
+      // (as "does not exist") under the same two conditions a real one
+      // requires; once it exists, its own `participants` map is also
+      // checked, so a doc that somehow named different accounts is still
+      // protected.
+      allow read: if isSuperAdmin() || (
+        isPathParticipant() && isConvFriend() &&
+        (resource == null || resource.data.participants[request.auth.uid] == true)
+      );
 
       // Create: caller must be a participant; exactly 2 participants;
       // and caller must be a confirmed friend of the other person.

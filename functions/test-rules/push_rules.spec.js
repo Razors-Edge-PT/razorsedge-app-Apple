@@ -20,6 +20,7 @@
 // Every DM write an INSTALLED build makes is replayed here and must still pass.
 
 const test = require('node:test');
+const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -447,6 +448,59 @@ test('a message\'s ledger position cannot be set or changed by a client', async 
 test('a confirmed friend reads their own conversation by direct document access', async () => {
   await assertSucceeds(as(ALICE).doc(`conversations/${AB}`).get());
   await assertSucceeds(as(BOB).doc(`conversations/${AB}`).get());
+});
+
+test('a confirmed friend can read their conversation before it is created, and again once it exists', async () => {
+  // The DmUnreadService inbox listener subscribes to a friend's conversation
+  // id as soon as the friendship is confirmed, before any message has ever
+  // been sent — the document may not exist yet. A fresh friend pair is used
+  // so no earlier test's conversation document interferes.
+  const FRESH = uid('freshFriendPush');
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.doc(`buddyAssignments/${ALICE}`).set({
+      athletes: { [BOB]: { status: 'accepted' }, [CAROL]: { status: 'accepted' }, [FRESH]: { status: 'accepted' } },
+    });
+    await db.doc(`buddyAssignments/${FRESH}`).set({ athletes: { [ALICE]: { status: 'accepted' } } });
+  });
+  const convId = convIdFor(ALICE, FRESH);
+
+  // Not created yet: readable as "does not exist", not denied outright —
+  // otherwise the listener errors and Firestore never revives it once the
+  // conversation is actually created.
+  const before = await as(ALICE).doc(`conversations/${convId}`).get();
+  assert.equal(before.exists, false);
+
+  // A stranger to this pair still cannot read it, missing or not.
+  await assertFails(as(DAVE).doc(`conversations/${convId}`).get());
+  await assertFails(as(COACH).doc(`conversations/${convId}`).get());
+
+  // Created by an authorised party (the real create rule, unchanged):
+  // now readable with its real data by both participants.
+  await assertSucceeds(as(ALICE).doc(`conversations/${convId}`).set({
+    participants: { [ALICE]: true, [FRESH]: true },
+    participantList: [ALICE, FRESH].sort(),
+    participantState: { [ALICE]: { unreadCount: 0 }, [FRESH]: { unreadCount: 0 } },
+    lastMessage: null,
+  }));
+  const after = await as(ALICE).doc(`conversations/${convId}`).get();
+  assert.equal(after.exists, true);
+  await assertSucceeds(as(FRESH).doc(`conversations/${convId}`).get());
+  await assertFails(as(DAVE).doc(`conversations/${convId}`).get());
+
+  // Restore the fixture for later tests.
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await db.doc(`buddyAssignments/${ALICE}`).set({ athletes: { [BOB]: { status: 'accepted' }, [CAROL]: { status: 'accepted' } } });
+    await db.doc(`buddyAssignments/${FRESH}`).delete();
+    await db.doc(`conversations/${convId}`).delete();
+  });
+});
+
+test('a non-friend cannot read a conversation naming them even when it does not exist', async () => {
+  const convId = convIdFor(ALICE, DAVE); // DAVE is nobody's friend
+  await assertFails(as(ALICE).doc(`conversations/${convId}`).get());
+  await assertFails(as(DAVE).doc(`conversations/${convId}`).get());
 });
 
 test('a non-friend cannot read a conversation naming them, even after it exists', async () => {

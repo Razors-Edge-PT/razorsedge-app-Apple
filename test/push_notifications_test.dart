@@ -17,6 +17,8 @@ import 'package:localtest222/push/notification_settings_screen.dart';
 import 'package:localtest222/push/push_intent.dart';
 import 'package:localtest222/push/push_notification_service.dart';
 import 'package:localtest222/push/push_router.dart';
+import 'package:localtest222/social/dm_unread_service.dart';
+import 'package:localtest222/social/social_activity_service.dart';
 
 const String alice = 'aliceUidaliceUidaliceUid0001';
 const String bob = 'bobUidbobUidbobUidbobUid0002';
@@ -155,9 +157,25 @@ class FakePlatform extends NotificationPlatform {
   int cleared = 0;
   int opened = 0;
   final List<Map<String, Object?>> posted = <Map<String, Object?>>[];
+  final List<List<String>> clearCalls = <List<String>>[];
   Map<String, String>? pendingTap;
+
+  // Now shared with the injected DmUnreadService/SocialActivityService (see
+  // Harness), whose own onSignedIn-triggered reconciliation calls this too:
+  // the base implementation hits the REAL platform channel with a genuine
+  // 3-second timeout, which a test never runs long enough to let expire,
+  // leaving a fake_async Timer "pending" at teardown. No test here exercises
+  // reconciliation's OWN behaviour — that lives in dm_unread_test.dart — so
+  // answering "nothing delivered" immediately is enough.
+  @override
+  Future<List<String>> deliveredTags() async => const <String>[];
   final StreamController<Map<String, String>> taps =
       StreamController<Map<String, String>>.broadcast();
+
+  /// Gates the NATIVE post call itself — set by a test to hold
+  /// `postNotification` open while it drives a race, then completed to let
+  /// it proceed. Null (the default) never blocks.
+  Completer<void>? postGate;
 
   @override
   Future<void> clearDelivered() async => cleared++;
@@ -172,6 +190,7 @@ class FakePlatform extends NotificationPlatform {
     required String body,
     required Map<String, String> data,
   }) async {
+    if (postGate != null) await postGate!.future;
     posted.add(<String, Object?>{
       'tag': tag,
       'channelId': channelId,
@@ -181,6 +200,23 @@ class FakePlatform extends NotificationPlatform {
     });
     return true;
   }
+
+  @override
+  Future<int> clearNotifications({
+    List<String> tagPrefixes = const <String>[],
+    List<String> tags = const <String>[],
+    List<String> convIds = const <String>[],
+  }) async {
+    clearCalls.add(tags);
+    // Cancelling a tag that was never posted, or posted then already
+    // cancelled, is a legitimate no-op — remove it from `posted` either way
+    // so a final-state check ("is it still there?") reads naturally.
+    posted.removeWhere((Map<String, Object?> p) => tags.contains(p['tag']));
+    return tags.length;
+  }
+
+  bool isStillPosted(String tag) =>
+      posted.any((Map<String, Object?> p) => p['tag'] == tag);
 
   @override
   Future<Map<String, String>?> takePendingTap() async {
@@ -196,6 +232,10 @@ class FakePlatform extends NotificationPlatform {
 class Harness {
   Harness({String? uid = alice, this.device = const PushPlatformInfo.android(34)})
       : authUid = uid {
+    unread = DmUnreadService(
+        firestore: FakeFirebaseFirestore(), currentUid: () => authUid, notifications: platform);
+    activity = SocialActivityService(
+        firestore: FakeFirebaseFirestore(), currentUid: () => authUid, notifications: platform);
     router = PushRouter(
       currentUid: () => authUid,
       navigate: (BuildContext _, PushIntent i, bool Function() valid) async {
@@ -217,7 +257,12 @@ class Harness {
       clock: () => now,
       showBanner: (PushIntent i, PushMessage m) => banners.add(i),
       supported: true,
-      platformInfo: () async => device,
+      platformInfo: () async {
+        if (platformInfoGate != null) await platformInfoGate!.future;
+        return device;
+      },
+      unread: unread,
+      activity: activity,
     );
   }
 
@@ -233,6 +278,13 @@ class Harness {
   final List<PushIntent> banners = <PushIntent>[];
   late final PushRouter router;
   late final PushNotificationService service;
+  late final DmUnreadService unread;
+  late final SocialActivityService activity;
+
+  /// Gates `platformInfo()` — set by a test to hold
+  /// `_postForegroundSystemNotification`'s FIRST await open, then completed
+  /// to let it proceed. Null (the default) never blocks.
+  Completer<void>? platformInfoGate;
 }
 
 Future<void> settle() => Future<void>.delayed(Duration.zero).then((_) => Future<void>.delayed(Duration.zero));
@@ -643,6 +695,165 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 10));
       });
       expect(h.platform.posted, isEmpty);
+    });
+
+    // ── Defect: posting after the content has already been read ────────────
+    //
+    // The listener that turns a foreground FCM message into
+    // _postForegroundSystemNotification is attached from inside
+    // onSignedIn(), which every test below runs via tester.runAsync — so the
+    // listener itself lives in the REAL async zone, not the fake one
+    // WidgetTester's plain pump() drains. Driving the message, the
+    // acknowledgement, and the gate release from OUTSIDE that same runAsync
+    // call left the production chain still suspended in its own zone when
+    // the test asserted — passing for the wrong reason regardless of the
+    // fix. Every step below stays inside ONE continuous runAsync call so
+    // production code and test both run in the same zone, matching the
+    // working pattern already used elsewhere in this file (e.g. "a
+    // background tap for another account is refused with a message").
+    group('a read racing the foreground-posting wait leaves no obsolete alert', () {
+      testWidgets(
+          'acknowledging the target while platform info is still resolving prevents the post',
+          (WidgetTester tester) async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        final Harness h = Harness();
+        final String convId = conversationIdFor(alice, bob);
+
+        await tester.runAsync(() async {
+          await h.service.onSignedIn(alice);
+          h.platformInfoGate = Completer<void>();
+
+          h.messaging.foreground.add(PushMessage(
+            data: <String, dynamic>{...dmData(), 'msgId': 'm1', 'seq': '1'},
+            title: 'Bob',
+            body: 'hey',
+          ));
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(h.banners, hasLength(1), reason: 'shown immediately, before the wait');
+          expect(h.platform.posted, isEmpty, reason: 'still waiting on platform info');
+
+          // The person opens and reads the thread while still waiting.
+          await h.unread.acknowledge(convId: convId, upToSeq: 1, messageIds: <String>['m1']);
+
+          h.platformInfoGate!.complete();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        });
+
+        expect(h.platform.posted, isEmpty,
+            reason: 'the read landed before the native call — must never post');
+      });
+
+      testWidgets(
+          'the target becoming genuinely visible while platform info is still resolving '
+          'prevents the post', (WidgetTester tester) async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        final Harness h = Harness();
+        final String convId = conversationIdFor(alice, bob);
+        addTearDown(ForegroundConversation.reset);
+
+        await tester.runAsync(() async {
+          await h.service.onSignedIn(alice);
+          h.platformInfoGate = Completer<void>();
+
+          h.messaging.foreground.add(PushMessage(
+            data: <String, dynamic>{...dmData(), 'msgId': 'm1', 'seq': '1'},
+          ));
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(h.banners, hasLength(1));
+
+          // The person navigates into this exact conversation while waiting.
+          ForegroundConversation.shown(convId);
+
+          h.platformInfoGate!.complete();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        });
+
+        expect(h.platform.posted, isEmpty,
+            reason: 'the target is now on screen — must never post');
+      });
+
+      testWidgets(
+          'a read racing the NATIVE post call itself is cleaned up rather than left obsolete',
+          (WidgetTester tester) async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        final Harness h = Harness();
+        final String convId = conversationIdFor(alice, bob);
+        final String tag = dmMessageTag(convId: convId, messageId: 'm1');
+
+        await tester.runAsync(() async {
+          await h.service.onSignedIn(alice);
+          h.platform.postGate = Completer<void>();
+
+          h.messaging.foreground.add(PushMessage(
+            data: <String, dynamic>{...dmData(), 'msgId': 'm1', 'seq': '1'},
+          ));
+          // A real delay lets platform info and permission resolve for real,
+          // so execution genuinely reaches — and, thanks to postGate,
+          // genuinely PAUSES inside — the native call, before this test's own
+          // acknowledge() ever runs.
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(h.banners, hasLength(1));
+          expect(h.platform.posted, isEmpty, reason: 'genuinely blocked on the native call');
+
+          // The read lands while the native call is already in flight — its
+          // own cancellation (clearCalls now has ONE entry, for the
+          // exact+legacy tags acknowledge() always asks for) finds nothing
+          // posted yet, since the notification itself has not been created.
+          await h.unread.acknowledge(convId: convId, upToSeq: 1, messageIds: <String>['m1']);
+          expect(h.platform.isStillPosted(tag), isFalse);
+
+          h.platform.postGate!.complete();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        });
+
+        expect(h.platform.isStillPosted(tag), isFalse,
+            reason: 'posted, found stale immediately after, and cleaned up');
+        expect(
+          h.platform.clearCalls.any((List<String> c) => c.length == 1 && c.single == tag),
+          isTrue,
+          reason: 'the exact tag just posted was cancelled by itself, once found stale',
+        );
+      });
+
+      testWidgets('a newer unread message in the same conversation still gets and keeps its own alert',
+          (WidgetTester tester) async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        final Harness h = Harness();
+        final String convId = conversationIdFor(alice, bob);
+
+        await tester.runAsync(() async {
+          await h.service.onSignedIn(alice);
+          h.messaging.foreground.add(PushMessage(
+            data: <String, dynamic>{...dmData(), 'msgId': 'm2', 'seq': '2'},
+          ));
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        });
+
+        expect(h.platform.isStillPosted(dmMessageTag(convId: convId, messageId: 'm2')), isTrue);
+      });
+
+      testWidgets('an account switch while platform info is still resolving cannot post for the '
+          'previous account', (WidgetTester tester) async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        final Harness h = Harness();
+
+        await tester.runAsync(() async {
+          await h.service.onSignedIn(alice);
+          h.platformInfoGate = Completer<void>();
+
+          h.messaging.foreground.add(PushMessage(data: dmData(to: alice, from: bob)));
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          expect(h.banners, hasLength(1));
+
+          h.authUid = bob; // another account signed in on this phone meanwhile
+
+          h.platformInfoGate!.complete();
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        });
+
+        expect(h.platform.posted, isEmpty,
+            reason: 'no longer the signed-in account this alert was for');
+      });
     });
 
     testWidgets('tapping a self-posted notification while running routes exactly like an FCM tap',

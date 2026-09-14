@@ -544,10 +544,31 @@ class PushNotificationService with WidgetsBindingObserver {
       ));
       return;
     }
-    // An interaction this session has already acknowledged is stale, and so is
-    // one whose target is on screen. Only a POSITIVE acknowledgement counts —
-    // a push normally arrives before Firestore delivers the record it is
-    // about — and only the target being visible, not its post or chat.
+    if (!_isEligibleForForegroundAlert(intent)) return;
+    final void Function(PushIntent, PushMessage) show =
+        _showBannerOverride ?? _showBanner;
+    show(intent, m);
+    unawaited(_postForegroundSystemNotification(intent, m, gen));
+  }
+
+  /// Whether [intent] is still worth alerting about RIGHT NOW: not for
+  /// another account, not something this session has positively acknowledged
+  /// (a push normally arrives before Firestore delivers the record it is
+  /// about, so only a POSITIVE acknowledgement counts), and not something
+  /// whose exact target — the comment, the reacted-to message, the
+  /// conversation itself — is actually on screen.
+  ///
+  /// Called twice around [_postForegroundSystemNotification]'s awaits, with
+  /// CURRENT state both times — never a value captured before an await —
+  /// so a read that lands while this device is still resolving platform
+  /// info, permission, or the native post itself is never missed.
+  bool _isEligibleForForegroundAlert(PushIntent intent) {
+    if (_currentUid() != intent.recipientUid) return false;
+    if (intent.kind == PushKind.directMessage &&
+        intent.convId != null &&
+        _unread.isAcknowledged(intent.convId!, intent.incomingSeq)) {
+      return false;
+    }
     final bool acknowledged = intent.kind.hasActivityRecord &&
         _activity.isAcknowledged(intent.activityId);
     final bool resumed =
@@ -564,7 +585,7 @@ class PushNotificationService with WidgetsBindingObserver {
               intent.convId!, intent.messageId!),
       _ => false,
     };
-    if (!shouldShowForegroundBanner(
+    return shouldShowForegroundBanner(
       intent: intent,
       currentUid: _currentUid(),
       visibleConvId: ForegroundConversation.visibleConvId,
@@ -572,13 +593,7 @@ class PushNotificationService with WidgetsBindingObserver {
       appResumed: resumed,
       targetOnScreen: targetOnScreen,
       alreadyAcknowledged: acknowledged,
-    )) {
-      return;
-    }
-    final void Function(PushIntent, PushMessage) show =
-        _showBannerOverride ?? _showBanner;
-    show(intent, m);
-    unawaited(_postForegroundSystemNotification(intent, m, gen));
+    );
   }
 
   /// The system-notification counterpart to the in-app banner, for the
@@ -596,6 +611,20 @@ class PushNotificationService with WidgetsBindingObserver {
   /// itself. Title/body are exactly what the server sent — never
   /// reconstructed — so a preview the recipient turned off, or the server
   /// deliberately omitted, cannot leak in here either.
+  ///
+  /// ── Two races, two re-checks ─────────────────────────────────────────────
+  /// Eligibility is re-evaluated with CURRENT state immediately before the
+  /// native call: `_platformInfo()`/`permissionStatus()` are real awaits, and
+  /// the person can open and read the target while either is in flight — the
+  /// read's own cancellation then runs against a tray that does not have this
+  /// alert yet, so it would be a no-op, and posting afterwards would create
+  /// an alert for content already read.
+  ///
+  /// That still leaves the native `postNotification` call itself: the read
+  /// can land while THAT is in flight, after the pre-post check already
+  /// passed. So eligibility is checked again immediately AFTER it returns,
+  /// and a since-obsolete alert is cancelled by the exact tag just posted —
+  /// never a broader clear — rather than left to sit in the tray.
   Future<void> _postForegroundSystemNotification(
       PushIntent intent, PushMessage m, int gen) async {
     if (!_supported) return;
@@ -606,8 +635,10 @@ class PushNotificationService with WidgetsBindingObserver {
       if (!(await permissionStatus()).allowsDelivery) return;
       // Re-checked after the awaits above: a logout or account switch while
       // permission/platform were being resolved must not post for an account
-      // that is no longer the one signed in here.
-      if (gen != _gen || _currentUid() != intent.recipientUid) return;
+      // that is no longer the one signed in here, and a read that landed in
+      // the meantime must not be posted for at all.
+      if (gen != _gen) return;
+      if (!_isEligibleForForegroundAlert(intent)) return;
       await _platform.postNotification(
         tag: tag,
         channelId: androidChannelFor(intent.kind),
@@ -618,6 +649,13 @@ class PushNotificationService with WidgetsBindingObserver {
             e.key: e.value?.toString() ?? '',
         },
       );
+      // The read can also land while THIS call itself was in flight — its own
+      // cancellation would have found nothing to cancel yet. One more check,
+      // and a tag that is now stale is removed rather than left behind.
+      if (gen != _gen) return;
+      if (!_isEligibleForForegroundAlert(intent)) {
+        await _platform.clearNotifications(tags: <String>[tag]);
+      }
     } catch (e) {
       debugPrint('[push] foreground notification not posted: $e');
     }

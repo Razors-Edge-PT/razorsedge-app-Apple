@@ -10,16 +10,25 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart'
-    show DocumentReference, DocumentSnapshot, Timestamp;
+    show
+        CollectionReference,
+        DocumentReference,
+        DocumentSnapshot,
+        FirebaseException,
+        FirebaseFirestore,
+        ListenSource,
+        Timestamp;
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/directMessages.dart';
+import 'package:localtest222/main.dart' show routeObserver;
 import 'package:localtest222/profile/data/identity_repository.dart';
 import 'package:localtest222/push/notification_platform.dart';
 import 'package:localtest222/push/push_intent.dart';
 import 'package:localtest222/social/dm_unread_service.dart';
+import 'package:localtest222/social/social_activity_service.dart';
 import 'package:localtest222/social/ui/dm_badge_button.dart';
 import 'package:localtest222/social/ui/user_row.dart';
 
@@ -39,6 +48,13 @@ class RecordingPlatform extends NotificationPlatform {
   List<String> delivered = <String>[];
   Object? deliveredTagsError;
 
+  /// A second, MUTABLE model of the tray: seed it with the tags currently
+  /// "posted", and a `clearNotifications` call actually removes any matching
+  /// ones — so a test can assert on final tray membership (still there / gone)
+  /// rather than only on the raw call arguments. Independent of [delivered]
+  /// (which existing reconciliation tests already use as a static answer).
+  final Set<String> trayTags = <String>{};
+
   @override
   Future<int> clearNotifications({
     List<String> tagPrefixes = const <String>[],
@@ -50,6 +66,8 @@ class RecordingPlatform extends NotificationPlatform {
       'tags': tags,
       'convIds': convIds,
     });
+    trayTags.removeWhere((String t) =>
+        tags.contains(t) || tagPrefixes.any((String p) => p.isNotEmpty && t.startsWith(p)));
     return tagPrefixes.length + tags.length;
   }
 
@@ -74,6 +92,86 @@ class RecordingPlatform extends NotificationPlatform {
   /// unsafe behaviour this suite guards against ever coming back.
   bool get everClearedByPrefixOrConvId => calls.any((Map<String, Object?> c) =>
       (c['tagPrefixes']! as List<String>).isNotEmpty || (c['convIds']! as List<String>).isNotEmpty);
+}
+
+/// Wraps a real (fake) [FirebaseFirestore] and makes the `conversations/<id>`
+/// listener for a "broken" id stream an error instead of data, until healed —
+/// standing in for a terminated listener (rules denial, a dropped
+/// connection, anything) without claiming to model *why* it terminated.
+///
+/// The rules guarantee itself — a confirmed friend may read a conversation
+/// before AND after it exists, and nobody else may, missing or not — is
+/// proved for real against the actual rules emulator with ordinary
+/// authenticated (non-admin) clients in
+/// functions/test-rules/push_rules.spec.js. FakeFirebaseFirestore has no
+/// permission model to substitute for that. This double is only ever used to
+/// exercise DmUnreadService's own reaction to a listener that has, for
+/// whatever reason, already failed — never to decide whether a read should
+/// have been allowed.
+// ignore: subtype_of_sealed_class
+class FlakyConvFirestore implements FirebaseFirestore {
+  FlakyConvFirestore(this._inner);
+  final FirebaseFirestore _inner;
+  final Set<String> _broken = <String>{};
+
+  void breakConversation(String convId) => _broken.add(convId);
+  void healConversation(String convId) => _broken.remove(convId);
+
+  @override
+  CollectionReference<Map<String, dynamic>> collection(String path) {
+    final CollectionReference<Map<String, dynamic>> real = _inner.collection(path);
+    return path == 'conversations' ? _FlakyConvCollection(real, this) : real;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => _inner.noSuchMethod(invocation);
+}
+
+// ignore: subtype_of_sealed_class
+class _FlakyConvCollection implements CollectionReference<Map<String, dynamic>> {
+  _FlakyConvCollection(this._inner, this._parent);
+  final CollectionReference<Map<String, dynamic>> _inner;
+  final FlakyConvFirestore _parent;
+
+  @override
+  DocumentReference<Map<String, dynamic>> doc([String? path]) =>
+      _FlakyConvDoc(_inner.doc(path), _parent);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => _inner.noSuchMethod(invocation);
+}
+
+// ignore: subtype_of_sealed_class
+class _FlakyConvDoc implements DocumentReference<Map<String, dynamic>> {
+  _FlakyConvDoc(this._inner, this._parent);
+  final DocumentReference<Map<String, dynamic>> _inner;
+  final FlakyConvFirestore _parent;
+
+  @override
+  String get id => _inner.id;
+
+  @override
+  Stream<DocumentSnapshot<Map<String, dynamic>>> snapshots({
+    bool includeMetadataChanges = false,
+    ListenSource source = ListenSource.defaultSource,
+  }) {
+    final String convId = id;
+    return _inner
+        .snapshots(includeMetadataChanges: includeMetadataChanges, source: source)
+        .map((DocumentSnapshot<Map<String, dynamic>> snap) {
+      if (_parent._broken.contains(convId)) {
+        throw FirebaseException(
+            plugin: 'cloud_firestore', code: 'permission-denied', message: 'simulated failure');
+      }
+      return snap;
+    });
+  }
+
+  @override
+  Future<void> update(Map<Object, Object?> data) => _inner.update(data);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => _inner.noSuchMethod(invocation);
 }
 
 /// Seeds a conversation with a server ledger position, and marks [other] as
@@ -645,6 +743,250 @@ void main() {
       expect(await readIncomingOf(db, convBob), 0);
       expect(await readIncomingOf(db, convCarol), 0);
       expect(platform.calls, isEmpty);
+    });
+  });
+
+  // ── Defect: the 50-message cancellation gap ───────────────────────────────
+  group('the chat read path acknowledges every displayed message, not just the last 50', () {
+    testWidgets(
+        'an older acknowledged message outside the former 50-slice is cancelled, '
+        'a newer unread message and another conversation are not',
+        (WidgetTester tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      final RecordingPlatform platform = RecordingPlatform();
+      final DmUnreadService unread =
+          DmUnreadService(firestore: db, currentUid: () => me, notifications: platform);
+      addTearDown(unread.dispose);
+
+      // 51 incoming messages from Bob: 'old1' (seq 1) is the one a 50-item
+      // slice of the NEWEST ids would have left out; 'recent51' (seq 51) is
+      // the newest of the 51 and would have survived that same slice.
+      final List<String> ids = <String>['old1', for (int i = 2; i <= 50; i++) 'm$i', 'recent51'];
+      expect(ids.length, 51);
+      await db.collection('conversations').doc(convBob).set(<String, Object?>{
+        'participants': <String, Object?>{me: true, bob: true},
+        'participantState': <String, Object?>{
+          me: <String, Object?>{'incoming': 51, 'readIncoming': 0},
+          bob: <String, Object?>{'incoming': 0, 'readIncoming': 0},
+        },
+        'lastMessage': <String, Object?>{'text': 'hi', 'senderId': bob},
+      });
+      for (int i = 0; i < ids.length; i++) {
+        await db
+            .collection('conversations')
+            .doc(convBob)
+            .collection('messages')
+            .doc(ids[i])
+            .set(<String, Object?>{
+          'senderId': bob,
+          'text': 'hi',
+          'incomingSeq': i + 1,
+          'sentAt': Timestamp.now(),
+        });
+      }
+      // An unrelated conversation, with its own unread message.
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 1);
+      await seedMessage(db, convId: convCarol, msgId: 'otherConvMsg', incomingSeq: 1);
+
+      // The realistic small set of alerts actually in the tray: the two
+      // about to be read, plus the two that must survive.
+      platform.trayTags.addAll(<String>[
+        dmMessageTag(convId: convBob, messageId: 'old1'),
+        dmMessageTag(convId: convBob, messageId: 'recent51'),
+        dmMessageTag(convId: convBob, messageId: 'newUnread52'),
+        dmMessageTag(convId: convCarol, messageId: 'otherConvMsg'),
+      ]);
+
+      await tester.pumpWidget(MaterialApp(
+        navigatorObservers: <NavigatorObserver>[routeObserver],
+        home: ConversationPage(
+          convId: convBob,
+          otherUid: bob,
+          unreadService: unread,
+          activityService: SocialActivityService(firestore: db, currentUid: () => me),
+          firestore: db,
+          currentUid: () => me,
+        ),
+      ));
+      // Enough pumps for the one-time lastReadAt fetch, the messages stream,
+      // and the post-frame read acknowledgement to all resolve.
+      await settleImages(tester);
+
+      // A 52nd message arrives AFTER this device already read/acknowledged
+      // the 51 above — deliberately not pumped further, so it is never part
+      // of what this page has displayed, and must not be touched.
+      await db
+          .collection('conversations')
+          .doc(convBob)
+          .collection('messages')
+          .doc('newUnread52')
+          .set(<String, Object?>{
+        'senderId': bob,
+        'text': 'new',
+        'incomingSeq': 52,
+        'sentAt': Timestamp.now(),
+      });
+
+      expect(
+        platform.trayTags,
+        isNot(contains(dmMessageTag(convId: convBob, messageId: 'old1'))),
+        reason: 'outside the former 50-id slice, but the boundary covers it',
+      );
+      expect(
+        platform.trayTags,
+        isNot(contains(dmMessageTag(convId: convBob, messageId: 'recent51'))),
+      );
+      expect(
+        platform.trayTags,
+        contains(dmMessageTag(convId: convBob, messageId: 'newUnread52')),
+        reason: 'arrived after this read — must keep its own alert',
+      );
+      expect(
+        platform.trayTags,
+        contains(dmMessageTag(convId: convCarol, messageId: 'otherConvMsg')),
+        reason: 'a different conversation — never touched by this acknowledgement',
+      );
+      expect(platform.everClearedByPrefixOrConvId, isFalse,
+          reason: 'exact message ids only — never a conversation-wide clear');
+      expect(await readIncomingOf(db, convBob), 51);
+    });
+  });
+
+  group('conversation listener lifecycle', () {
+    late FakeFirebaseFirestore db;
+    late FlakyConvFirestore flaky;
+    late RecordingPlatform platform;
+    late DmUnreadService service;
+
+    setUp(() {
+      db = FakeFirebaseFirestore();
+      flaky = FlakyConvFirestore(db);
+      platform = RecordingPlatform();
+      service = DmUnreadService(firestore: flaky, currentUid: () => me, notifications: platform);
+    });
+
+    tearDown(() => service.dispose());
+
+    test(
+        'a confirmed friend\'s first conversation appears and starts counting '
+        'once created after the inbox already subscribed', () async {
+      // Deliberately no seedConversation for Bob: the doc does not exist yet
+      // when the inbox subscribes, exactly the ordering
+      // functions/test-rules/push_rules.spec.js proves a confirmed friend may
+      // read (both before and after creation).
+      await addFriend(db, bob);
+
+      final DmUnreadSnapshot first = await firstLoaded(service);
+      expect(first.unreadFor(convBob), 0);
+      expect(first.conversations.containsKey(convBob), isFalse,
+          reason: 'nothing to show yet, but the inbox still finished loading');
+
+      // An authorised client (or the server) creates the conversation and
+      // delivers a message. The wait is set up BEFORE the write: `_out` is a
+      // broadcast stream with no replay, and FakeFirestore can deliver the
+      // resulting snapshot synchronously within the `set()` call, so a
+      // `.firstWhere()` started only after awaiting the write can miss it.
+      final Future<DmUnreadSnapshot> afterFuture =
+          service.watch().firstWhere((DmUnreadSnapshot s) => s.unreadFor(convBob) == 1);
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1);
+
+      expect((await afterFuture).total, 1);
+    });
+
+    test(
+        'a terminated conversation listener recovers via retryFailed() — the '
+        'pull-to-refresh/Retry action — without disturbing a healthy sibling',
+        () async {
+      await seedConversation(db, convId: convBob, other: bob, incoming: 1);
+      await seedConversation(db, convId: convCarol, other: carol, incoming: 1);
+      flaky.breakConversation(convCarol);
+
+      final DmUnreadSnapshot first = await firstLoaded(service);
+      expect(first.unreadFor(convBob), 1,
+          reason: 'the healthy sibling is unaffected by the other one failing');
+      expect(first.unreadFor(convCarol), 0, reason: 'never got a snapshot for the broken one');
+
+      // The dead listener is really gone, not merely filtered from display:
+      // a change on the server while it is down must not reach this session.
+      await db.collection('conversations').doc(convCarol).update(<String, Object?>{
+        'participantState.$me.incoming': 5,
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(service.snapshot.unreadFor(convCarol), 0);
+
+      // The exact action DirectMessages' pull-to-refresh and Retry button
+      // call — see DirectMessages.build()'s `retry`.
+      final Future<DmUnreadSnapshot> recoveredFuture =
+          service.watch().firstWhere((DmUnreadSnapshot s) => s.unreadFor(convCarol) == 5);
+      flaky.healConversation(convCarol);
+      service.retryFailed();
+
+      final DmUnreadSnapshot recovered = await recoveredFuture;
+      expect(recovered.unreadFor(convBob), 1,
+          reason: 'retrying the dead listener never touched the healthy one');
+    });
+
+    test(
+        'unfriending drops the row and cancels the subscription; re-adding '
+        'starts a fresh one, never a stale resurrection', () async {
+      await seedConversation(db, convId: convBob, other: bob, incoming: 2);
+      await firstLoaded(service);
+      expect(service.snapshot.unreadFor(convBob), 2);
+
+      final Future<DmUnreadSnapshot> droppedFuture = service
+          .watch()
+          .firstWhere((DmUnreadSnapshot s) => !s.conversations.containsKey(convBob));
+      await removeFriend(db, bob);
+      await droppedFuture;
+      expect(service.snapshot.total, 0);
+
+      // Not merely hidden: the subscription is actually cancelled, so a
+      // change made while unfriended cannot leak in.
+      await db.collection('conversations').doc(convBob).update(<String, Object?>{
+        'participantState.$me.incoming': 9,
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(service.snapshot.unreadFor(convBob), 0);
+
+      // Re-adding attaches a genuinely fresh listener that reflects the
+      // CURRENT server truth (9), not a stale cached row from before.
+      final Future<DmUnreadSnapshot> resurrectedFuture =
+          service.watch().firstWhere((DmUnreadSnapshot s) => s.unreadFor(convBob) == 9);
+      await addFriend(db, bob);
+      expect((await resurrectedFuture).total, 9);
+    });
+
+    test(
+        'switching accounts drops the previous account\'s subscriptions; a '
+        'write for the old account cannot resurrect a row on the new one',
+        () async {
+      String currentUid = me;
+      final FakeFirebaseFirestore db2 = FakeFirebaseFirestore();
+      final FlakyConvFirestore flaky2 = FlakyConvFirestore(db2);
+      final RecordingPlatform platform2 = RecordingPlatform();
+      final DmUnreadService service2 = DmUnreadService(
+          firestore: flaky2, currentUid: () => currentUid, notifications: platform2);
+      addTearDown(service2.dispose);
+
+      await seedConversation(db2, convId: convBob, other: bob, incoming: 2);
+      await firstLoaded(service2);
+      expect(service2.snapshot.total, 2);
+
+      currentUid = carol;
+      service2.onAccountChanged(carol);
+      expect(service2.snapshot.total, 0, reason: 'the old account state is dropped synchronously');
+
+      // A write on the old account's conversation must not resurrect it on
+      // the newly signed-in account.
+      final Future<DmUnreadSnapshot> carolLoadedFuture =
+          service2.watch().firstWhere((DmUnreadSnapshot s) => s.loaded);
+      await db2.collection('conversations').doc(convBob).update(<String, Object?>{
+        'participantState.$me.incoming': 7,
+      });
+      await carolLoadedFuture;
+      expect(service2.snapshot.total, 0);
+      expect(service2.snapshot.conversations.containsKey(convBob), isFalse);
     });
   });
 

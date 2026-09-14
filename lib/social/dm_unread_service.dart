@@ -237,8 +237,27 @@ class DmUnreadService {
   // unaffected, so a lapsed friendship can never poison the rest of the
   // inbox the way the old collection query could.
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _friendsSub;
+
+  /// Live listeners only. An entry here means Firestore may still deliver
+  /// events for that conversation; a terminated listener is removed from
+  /// this map (see [_deadConvIds]), never left behind under a stale key —
+  /// otherwise a later friends snapshot sees the id as "already subscribed"
+  /// and never retries it.
   final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
       _convSubs = <String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>{};
+
+  /// The full current desired set: every confirmed friend's conversation id,
+  /// independent of whether its listener is currently healthy. Lets a retry
+  /// re-attach exactly the ones that died without waiting for the NEXT
+  /// friends snapshot (creating a conversation does not touch socialGraph).
+  final Map<String, String> _desiredConvFriend = <String, String>{};
+
+  /// Desired conversation ids whose listener has terminated (an error the
+  /// Firestore SDK will not itself retry) and has not yet been re-attached.
+  /// Disjoint from [_convSubs]'s keys — a convId is in exactly one of the two
+  /// while desired, and in neither once its friendship ends.
+  final Set<String> _deadConvIds = <String>{};
+
   final Map<String, DmConversationUnread> _conversations =
       <String, DmConversationUnread>{};
 
@@ -305,6 +324,8 @@ class DmUnreadService {
       s.cancel();
     }
     _convSubs.clear();
+    _desiredConvFriend.clear();
+    _deadConvIds.clear();
     _conversations.clear();
     _pendingFirst.clear();
     _subscribedUid = null;
@@ -323,11 +344,16 @@ class DmUnreadService {
       _acked.clear();
       _last = DmUnreadSnapshot.empty;
     }
+    _subscribeFriends(uid);
+  }
+
+  void _subscribeFriends(String uid) {
     _friendsSub = _db.collection('socialGraph').doc(uid).snapshots().listen(
       (DocumentSnapshot<Map<String, dynamic>> snap) => _onFriendsSnapshot(uid, snap),
       onError: (Object e) {
         debugPrint('[dm] friend list unavailable: $e');
         if (_subscribedUid != uid) return;
+        _friendsSub = null;
         _hadError = true;
         _emit(uid);
       },
@@ -349,30 +375,83 @@ class DmUnreadService {
       for (final String f in friends) conversationIdFor(uid, f): f,
     };
 
-    for (final String convId in _convSubs.keys.where((String c) => !desired.containsKey(c)).toList()) {
+    // A friend removed (or never desired): drop everything about their
+    // conversation, healthy or dead.
+    for (final String convId
+        in _desiredConvFriend.keys.where((String c) => !desired.containsKey(c)).toList()) {
+      _desiredConvFriend.remove(convId);
       _convSubs.remove(convId)?.cancel();
+      _deadConvIds.remove(convId);
       _conversations.remove(convId);
       _pendingFirst.remove(convId);
     }
-    for (final String convId in desired.keys) {
+    // A friend gained, or one whose listener previously terminated: attach.
+    // A friend already healthily subscribed is left alone.
+    for (final MapEntry<String, String> entry in desired.entries) {
+      final String convId = entry.key;
+      _desiredConvFriend[convId] = entry.value;
       if (_convSubs.containsKey(convId)) continue;
-      _pendingFirst.add(convId);
-      _convSubs[convId] = _db.collection('conversations').doc(convId).snapshots().listen(
-        (DocumentSnapshot<Map<String, dynamic>> doc) => _onConversationSnapshot(uid, convId, doc),
-        onError: (Object e) {
-          debugPrint('[dm] conversation $convId unavailable: $e');
-          if (_currentUid() != uid || _subscribedUid != uid) return;
-          _pendingFirst.remove(convId); // do not block loading forever
-          _emit(uid);
-        },
-      );
+      _deadConvIds.remove(convId);
+      _attachConversationListener(uid, convId);
     }
     _emit(uid);
   }
 
-  void _onConversationSnapshot(
-      String uid, String convId, DocumentSnapshot<Map<String, dynamic>> doc) {
+  /// Subscribes [convId] and records it as the CURRENT live listener for
+  /// that id, so a late callback from a subscription this has since replaced
+  /// (an old attempt superseded by a retry) can recognise itself as stale and
+  /// do nothing — checked by identity, not merely by convId, in both
+  /// callbacks below.
+  void _attachConversationListener(String uid, String convId) {
+    _pendingFirst.add(convId);
+    late final StreamSubscription<DocumentSnapshot<Map<String, dynamic>>> sub;
+    sub = _db.collection('conversations').doc(convId).snapshots().listen(
+      (DocumentSnapshot<Map<String, dynamic>> doc) =>
+          _onConversationSnapshot(uid, convId, doc, sub),
+      onError: (Object e) {
+        debugPrint('[dm] conversation $convId unavailable: $e');
+        if (_currentUid() != uid || _subscribedUid != uid) return;
+        if (!identical(_convSubs[convId], sub)) return; // superseded already
+        _pendingFirst.remove(convId); // do not block loading forever
+        _convSubs.remove(convId);
+        // Only worth retrying while still a desired (confirmed-friend)
+        // conversation — onFriendsSnapshot already dropped it otherwise.
+        if (_desiredConvFriend.containsKey(convId)) _deadConvIds.add(convId);
+        _emit(uid);
+      },
+    );
+    _convSubs[convId] = sub;
+  }
+
+  /// Re-attempts every conversation listener that has terminated — most
+  /// commonly because the conversation did not exist yet when a confirmed
+  /// friend's inbox first subscribed to it (see firestore.rules: a MISSING
+  /// conversation is now readable as "does not exist" rather than denied, so
+  /// this should be rare going forward, but a transient failure of any kind
+  /// lands here too) — and the friends listener itself if IT has terminated.
+  ///
+  /// Safe to call repeatedly and from a plain user action (pull-to-refresh,
+  /// reopening Messages): a listener that is currently healthy is left
+  /// completely alone, so this never duplicates or disturbs live
+  /// subscriptions, and never retries on its own schedule — only when asked.
+  void retryFailed() {
+    final String? uid = _currentUid();
+    if (uid == null || _subscribedUid != uid) return;
+    if (_friendsSub == null) {
+      _subscribeFriends(uid);
+    }
+    if (_deadConvIds.isEmpty) return;
+    for (final String convId in _deadConvIds.toList(growable: false)) {
+      _deadConvIds.remove(convId);
+      _attachConversationListener(uid, convId);
+    }
+    _emit(uid);
+  }
+
+  void _onConversationSnapshot(String uid, String convId,
+      DocumentSnapshot<Map<String, dynamic>> doc, StreamSubscription<Object?> sub) {
     if (_currentUid() != uid || _subscribedUid != uid) return;
+    if (!identical(_convSubs[convId], sub)) return; // late callback, superseded
     _pendingFirst.remove(convId);
     final Map<String, dynamic>? data = doc.data();
     final DmConversationUnread? c =

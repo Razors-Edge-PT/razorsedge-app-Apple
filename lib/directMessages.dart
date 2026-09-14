@@ -175,9 +175,45 @@ class DirectMessages extends StatelessWidget {
         initialData: unread.snapshot,
         builder: (context, snapshot) {
           final DmUnreadSnapshot state = snapshot.data ?? DmUnreadSnapshot.empty;
+          // Retries whatever is actually recoverable right now: a terminated
+          // per-conversation listener (most often one that failed before its
+          // conversation existed) and the friend-list listener itself if that
+          // is what failed — never a duplicate of an already-healthy one.
+          // `watch()` above cannot do this itself: it is a no-op once this
+          // account is already subscribed, so "reopening" this screen alone
+          // does not retry anything without this explicit call.
+          Future<void> retry() async => unread.retryFailed();
+
           if (state.error && !state.loaded) {
-            return const Center(
-              child: Text("Couldn't load your messages. Pull down or reopen to retry."),
+            return RefreshIndicator(
+              onRefresh: retry,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: [
+                  SizedBox(
+                    height: MediaQuery.of(context).size.height * 0.6,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 32),
+                            child: Text(
+                              "Couldn't load your messages.",
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextButton(
+                            onPressed: retry,
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             );
           }
           if (!state.loaded) {
@@ -190,10 +226,24 @@ class DirectMessages extends StatelessWidget {
               return bt.compareTo(at);
             });
           if (rows.isEmpty) {
-            return const Center(child: Text("No conversations yet"));
+            return RefreshIndicator(
+              onRefresh: retry,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                children: const [
+                  SizedBox(
+                    height: 400,
+                    child: Center(child: Text("No conversations yet")),
+                  ),
+                ],
+              ),
+            );
           }
 
-          return ListView.builder(
+          return RefreshIndicator(
+            onRefresh: retry,
+            child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
             itemCount: rows.length,
             itemBuilder: (context, i) {
               final DmConversationUnread row = rows[i];
@@ -276,6 +326,7 @@ class DirectMessages extends StatelessWidget {
                 },
               );
             },
+            ),
           );
         },
       ),
@@ -298,6 +349,16 @@ class ConversationPage extends StatefulWidget {
   final DmUnreadService? unreadService;
   final SocialActivityService? activityService;
 
+  /// Injectable for tests only — production always uses the real
+  /// `FirebaseFirestore.instance` / signed-in `FirebaseAuth.instance` user.
+  /// Only the reads the read-acknowledgement path itself needs (the message
+  /// stream backing `_displayed`, the one-time lastReadAt fetch, and the
+  /// current uid) go through these; everything else in this screen — sending,
+  /// reactions, media — is unaffected and keeps using the production
+  /// singletons directly.
+  final FirebaseFirestore? firestore;
+  final String? Function()? currentUid;
+
   const ConversationPage({
     super.key,
     required this.convId,
@@ -306,6 +367,8 @@ class ConversationPage extends StatefulWidget {
     this.focusActivityId,
     this.unreadService,
     this.activityService,
+    this.firestore,
+    this.currentUid,
   });
 
   @override
@@ -447,6 +510,11 @@ class _ConversationPageState extends State<ConversationPage>
   SocialActivityService get _activity =>
       widget.activityService ?? SocialActivityService.instance;
 
+  FirebaseFirestore get _db => widget.firestore ?? FirebaseFirestore.instance;
+
+  String? get _uid =>
+      (widget.currentUid ?? (() => FirebaseAuth.instance.currentUser?.uid))();
+
   /// The messages actually in the viewport, by id.
   ///
   /// `_displayed` is the whole loaded thread — hundreds of messages, of which
@@ -487,7 +555,7 @@ class _ConversationPageState extends State<ConversationPage>
         routeVisible: _routeVisible,
         appResumed:
             WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed,
-        signedIn: FirebaseAuth.instance.currentUser?.uid != null,
+        signedIn: _uid != null,
       );
 
   void _acknowledgeDisplayedReactions() {
@@ -588,7 +656,7 @@ class _ConversationPageState extends State<ConversationPage>
   }
 
   void _acknowledgeDisplayed() {
-    final String? uid = FirebaseAuth.instance.currentUser?.uid;
+    final String? uid = _uid;
     if (!mounted ||
         !shouldAcknowledgeRead(
           routeVisible: _routeVisible,
@@ -624,12 +692,17 @@ class _ConversationPageState extends State<ConversationPage>
     if (nothingNew) return;
     _ackedSeq = boundary.upToSeq > _ackedSeq ? boundary.upToSeq : _ackedSeq;
     _ackedMessageIds.addAll(boundary.incomingIds);
+    // Every incoming id this boundary covers, unabridged: cancellation is
+    // now by EXACT message tag (see DmUnreadService.clearConversationAlerts),
+    // not a conversation-wide prefix, so an id left out here would leave that
+    // one alert stuck in the tray even though its content was just read. A
+    // slice of only the most recent ids — the previous behaviour — silently
+    // stopped covering anything older once a thread passed 50 unread.
     final List<String> ids = boundary.incomingIds;
     unawaited(_unread.acknowledge(
       convId: widget.convId,
       upToSeq: boundary.upToSeq,
-      // Enough to cancel alerts from builds that tagged per message id.
-      messageIds: ids.length > 50 ? ids.sublist(ids.length - 50) : ids,
+      messageIds: ids,
     ));
   }
 
@@ -975,8 +1048,8 @@ class _ConversationPageState extends State<ConversationPage>
     unawaited(_resolveFocusActivity());
 
     // 👇 One-time fetch of my lastReadAt from the conversation doc
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    FirebaseFirestore.instance
+    final uid = _uid!;
+    _db
         .collection('conversations')
         .doc(widget.convId)
         .get()
@@ -993,7 +1066,7 @@ class _ConversationPageState extends State<ConversationPage>
 
   @override
   Widget build(BuildContext context) {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final uid = _uid!;
 
     return Scaffold(
         appBar: AppBar(
@@ -1003,7 +1076,7 @@ class _ConversationPageState extends State<ConversationPage>
           children: [
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                stream: FirebaseFirestore.instance
+                stream: _db
                     .collection('conversations')
                     .doc(widget.convId)
                     .collection('messages')
@@ -1085,8 +1158,7 @@ class _ConversationPageState extends State<ConversationPage>
                     final last = msgs.last;
                     final lastData = last.data() as Map<String, dynamic>;
                     final lastFromSelf =
-                        (lastData['senderId']?.toString() ?? '') ==
-                            FirebaseAuth.instance.currentUser!.uid;
+                        (lastData['senderId']?.toString() ?? '') == uid;
                     if (lastFromSelf) {
                       final latestId = last.id;
                       if (latestId != _lastLatestMsgId) {
@@ -1135,7 +1207,6 @@ class _ConversationPageState extends State<ConversationPage>
                         return const SizedBox.shrink();
                       final data = raw;
 
-                      final uid = FirebaseAuth.instance.currentUser!.uid;
                       final fromSelf =
                           (data['senderId']?.toString() ?? '') == uid;
 
@@ -1175,8 +1246,7 @@ class _ConversationPageState extends State<ConversationPage>
 
                       final Map<String, int> reactionCounts = {};
                       final Set<String> myReactions = {};
-                      final uidForReactions =
-                          FirebaseAuth.instance.currentUser!.uid;
+                      final uidForReactions = uid;
 
                       reactionsMap.forEach((user, emoji) {
                         if (emoji is String && emoji.isNotEmpty) {
