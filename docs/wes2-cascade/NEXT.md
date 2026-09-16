@@ -8,8 +8,9 @@ saving) is not started.**
 * Stage 1 commit: see `git log` — one commit, hints only, existing persistence
   architecture untouched.
 * Review checkpoint for the implementation: **a456c075**, pushed to
-  `origin/fix/wes2-live-hint-cascade`. `b-coverage` follow-up commit adds the
-  acceptance-coverage map, the saved-structure-across-reload fix and its tests.
+  `origin/fix/wes2-live-hint-cascade`. Follow-up commit **0005959d**
+  adds the acceptance-coverage map, the saved-structure-across-reload fix and
+  its tests.
 * Full `flutter test`: **2205 passing, 0 failing.** New suites:
   `wes2_accepted_hint_view_test` (all-model gate), `wes2_cascade_contract_test`,
   `wes2_setn_centre_test`, `wes2_display_agreement_test`,
@@ -19,7 +20,7 @@ saving) is not started.**
   requirement).
 * **Release blocker:** the real `Wes2Screen` integration test — PLAN.md
   "Release". It may land with Stage 2's wiring changes.
-* Two existing suites were updated with reasons recorded in PLAN.md §S1-5.
+* Two existing suites were updated with reasons recorded in PLAN.md §S1-6.
 * `flutter pub get` rewrites `windows/flutter/generated_plugin*`; those are not
   part of the change and must not be committed.
 * Do not touch `C:\Projects\RE-test` dirty files (`.docx`, lock file,
