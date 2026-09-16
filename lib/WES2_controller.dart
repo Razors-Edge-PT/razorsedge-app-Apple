@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'WES2_hint_service.dart';
 import 'WES2_models.dart';
+import 'wes2_field_parser.dart';
 import 'wes2_hint_trace.dart';
 import 'wes2_video/set_identity.dart';
 
@@ -23,11 +24,9 @@ class Wes2SessionController extends ChangeNotifier {
   DateTime? _blockEndDate;
   Map<String, dynamic> _exerciseSettings = const {};
   Wes2HintService? _hintService;
-  String? _hintBlockId;
-  // Per-exercise snapshot of rows immediately after initial hint application.
-  // Same-set recalculation rebuilds from this baseline so clearing actuals
-  // always restores the original loaded hints.
-  Map<String, Wes2ExerciseRow> _baselineHintRows = {};
+  // Positional BB3 prescriptions per exercise. The ONLY source of prescription
+  // authority: a row's current hintValue is output, never input.
+  Map<String, Wes2Prescriptions> _prescriptions = <String, Wes2Prescriptions>{};
   int _loadEpoch = 0;
   String? _loadErrorMessage;
   final List<({String exerciseId, String name})> _pendingExerciseAdds = [];
@@ -93,77 +92,51 @@ class Wes2SessionController extends ChangeNotifier {
   /// Called once per day load after exerciseSettings are fetched.
   void setHintService(Wes2HintService service, String blockId) {
     _hintService = service;
-    _hintBlockId = blockId;
   }
 
-  /// Snapshot the current rows as the hint baseline.
-  /// Called once after all initial applyModelHints() calls complete so that
-  /// same-set recalculation can restore original hints when actuals are cleared.
-  void captureBaselineHintRows() {
-    _baselineHintRows = {for (final r in _rows) r.exerciseId: r};
-    if (Wes2HintTrace.enabled) {
-      // Cause F probe: a baseline that already contains user actuals means the
-      // user typed BEFORE the initial hint pass finished — same-set recalc will
-      // then treat those actuals as the "original hints" forever.
-      final withActuals = _rows
-          .where(Wes2HintTrace.rowHasActuals)
-          .map((r) => '"${r.name}"')
-          .toList();
-      Wes2HintTrace.log(
-          'baseline',
-          'captured rows=${_rows.length} '
-          'rowsWithUserActualsAtCapture=${withActuals.length}'
-          '${withActuals.isEmpty ? '' : ' ⚠️(F): ${withActuals.join(', ')}'}');
+  /// Installs the positional BB3 prescriptions for the day.
+  ///
+  /// Prescriptions are held here, apart from the rows, because a row's
+  /// `hintValue` is calculation OUTPUT. Reading prescriptions back out of it
+  /// is what let a generated — or draft-recovered — number act as a BB3 lock.
+  void setPrescriptions(Map<String, Wes2Prescriptions> byExerciseId,
+      {bool recompute = true}) {
+    _prescriptions = Map<String, Wes2Prescriptions>.from(byExerciseId);
+    if (recompute && _hintService != null) {
+      _recomputeAll();
+      notifyListeners();
     }
   }
 
-  /// Debug-only view of the baseline snapshot for the hint debug dump.
-  /// Read-only; production code paths never use this.
-  Map<String, Wes2ExerciseRow> get debugBaselineHintRows =>
-      Map.unmodifiable(_baselineHintRows);
+  Wes2Prescriptions prescriptionsFor(String exerciseId) =>
+      _prescriptions[exerciseId] ?? Wes2Prescriptions.none;
 
-  /// Returns the original planned/model RIR hint value for [setIndex] of
-  /// [exerciseId] as captured at load time.  Used by Wes2SetRow to compute
-  /// the Phase 21F RIR direction cue without exposing the full baseline map.
-  double? baselineRirHintFor(String exerciseId, int setIndex) {
-    final baselineRow = _baselineHintRows[exerciseId];
-    if (baselineRow == null) return null;
-    if (setIndex >= baselineRow.sets.length) return null;
-    return baselineRow.sets[setIndex].rir.hintValue;
+  /// Publishes one completed load: the day's rows AND its prescriptions,
+  /// together, and only while [epoch] is still the current load.
+  ///
+  /// They must arrive as one unit. Installing prescriptions first let a stale
+  /// day-A load write A's prescriptions, have its rows rejected by the epoch
+  /// check, and leave day B on screen being hinted against A's plan.
+  void publishLoad({
+    required List<Wes2ExerciseRow> rows,
+    required Map<String, Wes2Prescriptions> prescriptions,
+    required int epoch,
+  }) {
+    if (epoch != _loadEpoch) return;
+    _prescriptions = Map<String, Wes2Prescriptions>.from(prescriptions);
+    setRows(rows, epoch);
   }
 
-  /// Apply model hints from a pre-computed hinted row onto the current row state.
-  /// Uses the CURRENT row (not a snapshot) to avoid overwriting actuals typed
-  /// between hint computation and application.
-  /// BB3-origin hints on the current row are preserved — they take priority.
-  void applyModelHints(String exerciseId, Wes2ExerciseRow hintedRow) {
-    final idx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
-    if (idx == -1) return;
-    final current = _rows[idx];
-    int count = hintedRow.setCount > 0 ? hintedRow.setCount : current.setCount;
-    for (final cs in current.sets) {
-      final hasActual = cs.weight.actualValue != null ||
-          cs.reps.actualValue != null ||
-          cs.rir.actualValue != null;
-      if (hasActual && cs.setIndex + 1 > count) count = cs.setIndex + 1;
+  /// Applies a freshly built hint context: registers the service and resolves
+  /// every row once, from the CURRENT entries and structure, with a single
+  /// assignment and a single notification.
+  void applyHintContext(Wes2HintService service, String blockId,
+      {Map<String, Wes2Prescriptions>? prescriptions}) {
+    _hintService = service;
+    if (prescriptions != null) {
+      _prescriptions = Map<String, Wes2Prescriptions>.from(prescriptions);
     }
-    bool changed = count != current.setCount;
-    final newSets = List<Wes2SetState>.generate(count, (i) {
-      final cs =
-          i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
-      final hs = i < hintedRow.sets.length ? hintedRow.sets[i] : null;
-      if (hs == null) return cs;
-      final nw = cs.weight.withHint(hs.weight.hintValue, hs.weight.hintOrigin);
-      final nr = cs.reps.withHint(hs.reps.hintValue, hs.reps.hintOrigin);
-      final nrir = cs.rir.withHint(hs.rir.hintValue, hs.rir.hintOrigin);
-      if (nw == cs.weight && nr == cs.reps && nrir == cs.rir) return cs;
-      changed = true;
-      return cs.copyWith(weight: nw, reps: nr, rir: nrir);
-    });
-    if (!changed) return;
-    final newRows = List<Wes2ExerciseRow>.from(_rows);
-    newRows[idx] = current.copyWith(sets: newSets, setCount: count);
-    _rows = newRows;
+    _recomputeAll();
     notifyListeners();
   }
 
@@ -185,7 +158,7 @@ class Wes2SessionController extends ChangeNotifier {
   void setRows(List<Wes2ExerciseRow> rows, int epoch) {
     if (epoch != _loadEpoch) return;
     _rows = rows;
-    _baselineHintRows = {};
+    _recomputeAll();
     _loadState = rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     _loadErrorMessage = null;
     _originHadBb3Rows = rows.any((r) => r.source == Wes2RowSource.bb3Planned);
@@ -214,7 +187,7 @@ class Wes2SessionController extends ChangeNotifier {
     _flushedExercises.clear();
     _readPlanNotes.clear();
     _readExercisePlanNotes.clear();
-    _baselineHintRows = {};
+    _prescriptions = <String, Wes2Prescriptions>{};
     _loadEpoch++;
     _loadState = Wes2LoadState.idle;
     _loadErrorMessage = null;
@@ -228,6 +201,9 @@ class Wes2SessionController extends ChangeNotifier {
   void undo() {
     if (_undoStack.isEmpty) return;
     _rows = _undoStack.removeLast();
+    // A restored row re-cascades immediately, so recovered sets agree with a
+    // fresh pass instead of keeping the hints they had before the removal.
+    _recomputeAll();
     // Restore load state to match the recovered row count.
     _loadState = _rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     notifyListeners();
@@ -251,7 +227,10 @@ class Wes2SessionController extends ChangeNotifier {
     required String rawText,
   }) {
     final text = rawText.trim();
-    if (text.isNotEmpty && !_canParse(fieldKey, text)) return;
+    // Invalid non-empty text (a lone "-", "NaN", "1e3") leaves the model
+    // exactly as it was: the athlete is mid-keystroke, and the last valid
+    // number keeps driving the cascade until they finish.
+    if (Wes2FieldParser.isInvalidEntry(fieldKey, text)) return;
 
     final rowIdx = _rows.indexWhere((r) => r.exerciseId == exerciseId);
     if (rowIdx == -1) return;
@@ -260,8 +239,7 @@ class Wes2SessionController extends ChangeNotifier {
       Wes2HintTrace.log(
           'edit',
           'updateSetField "${row.name}" set=$setIndex field=${fieldKey.name} '
-          'rawText="$rawText" hintServiceNull=${_hintService == null} '
-          'baselineExists=${_baselineHintRows.containsKey(exerciseId)}',
+          'rawText="$rawText" hintServiceNull=${_hintService == null}',
           exerciseId: exerciseId);
     }
     final sets = List<Wes2SetState>.from(row.sets);
@@ -272,245 +250,70 @@ class Wes2SessionController extends ChangeNotifier {
     final newRows = List<Wes2ExerciseRow>.from(_rows);
     newRows[rowIdx] = row.copyWith(sets: sets);
     _rows = newRows;
-    // Phase 21C: same-set hint recalculation (synchronous).
-    _applyHintsForRow(rowIdx);
+    // Sibling hints for THIS set first, then every later set from its result.
+    // Earlier sets are untouched — an edit never reaches backwards.
+    _recomputeRow(rowIdx, fromSet: setIndex);
     notifyListeners();
   }
 
-  /// Recomputes hints for row at [rowIdx] using the registered hint service
-  /// and merges the results into [_rows]. No-op when no service is registered.
+  /// Recomputes [rowIdx] from [fromSet] onward and stores the result.
   ///
-  /// Builds the recalculation input from the baseline hint row overlaid with
-  /// the current actual values so clearing actuals always restores original hints.
-  void _applyHintsForRow(int rowIdx) {
+  /// The input is rebuilt from actuals + prescriptions only, so the row's own
+  /// previous hints can never feed their own regeneration, and sets before
+  /// [fromSet] are carried across untouched.
+  void _recomputeRow(int rowIdx, {int fromSet = 0}) {
     final svc = _hintService;
-    final blockId = _hintBlockId;
-    if (svc == null || blockId == null) {
-      if (Wes2HintTrace.enabled) {
-        // Cause A probe: edits made before setHintService() get NO same-set
-        // recalc at all — and no baseline protection when hints arrive later.
-        Wes2HintTrace.log(
-            'recalc',
-            '⚠️ SKIP(A): hint service not registered yet '
-            '(svcNull=${svc == null} blockIdNull=${blockId == null}) — '
-            'edit happened before the initial hint pass finished',
-            exerciseId: _rows[rowIdx].exerciseId);
-      }
-      return;
-    }
+    if (svc == null) return;
     final current = _rows[rowIdx];
-    final baseline = _baselineHintRows[current.exerciseId];
-    if (Wes2HintTrace.enabled && baseline == null) {
-      // Cause A/F probe: recalc without a baseline uses the CURRENT row,
-      // whose model hints may already reflect earlier user edits.
-      Wes2HintTrace.log(
-          'recalc',
-          '⚠️ NO-BASELINE(A/F) for "${current.name}" — recalc input is the '
-          'current row, not the load-time hint snapshot',
-          exerciseId: current.exerciseId);
-    }
-    final rowForRecalc = baseline != null
-        ? _rowWithCurrentActualsOverBaseline(current, baseline)
-        : current;
-    if (Wes2HintTrace.enabled) {
-      Wes2HintTrace.log('recalc', 'current  ${Wes2HintTrace.fmtRow(current)}',
-          exerciseId: current.exerciseId);
-      if (baseline != null) {
-        Wes2HintTrace.log(
-            'recalc', 'baseline ${Wes2HintTrace.fmtRow(baseline)}',
-            exerciseId: current.exerciseId);
-      }
-      Wes2HintTrace.log(
-          'recalc', 'recalcIn ${Wes2HintTrace.fmtRow(rowForRecalc)}',
-          exerciseId: current.exerciseId);
-    }
-    Wes2ExerciseRow hinted;
+    Wes2ExerciseRow resolved;
     try {
-      hinted = svc.computeRowHints(
-        row: rowForRecalc,
-        blockId: blockId,
+      resolved = svc.resolveRow(
+        row: current,
+        prescriptions: prescriptionsFor(current.exerciseId),
         uid: _actingUid,
         date: _selectedDate,
+        fromSet: fromSet,
+        existingFinals: current.sets,
       );
     } catch (e) {
       if (Wes2HintTrace.enabled) {
-        Wes2HintTrace.log('recalc', '❌ computeRowHints threw: $e',
+        Wes2HintTrace.log('recalc', '❌ resolveRow threw: $e',
             exerciseId: current.exerciseId);
       }
       return; // hint failure is non-fatal; typed values are unaffected
     }
-    _mergeHintsIntoRow(rowIdx, hinted);
-    if (Wes2HintTrace.enabled) {
-      Wes2HintTrace.log('recalc', 'hinted   ${Wes2HintTrace.fmtRow(hinted)}',
-          exerciseId: current.exerciseId);
-      Wes2HintTrace.log(
-          'recalc', 'final    ${Wes2HintTrace.fmtRow(_rows[rowIdx])}',
-          exerciseId: current.exerciseId);
-    }
-  }
-
-  /// Returns true when [actual] equals [hint] within floating-point tolerance.
-  /// Suppresses same-value constraints so BB3HintService sees the value as
-  /// unconstrained and solves siblings identically to the initial hint pass.
-  static bool _sameAsHint(double? actual, double? hint) {
-    if (actual == null || hint == null) return false;
-    return (actual - hint).abs() < 0.001;
-  }
-
-  static bool _sameAsHintInt(int? actual, int? hint) {
-    if (actual == null || hint == null) return false;
-    return actual == hint;
-  }
-
-  /// Builds a row that combines [baseline] hint values/origins with
-  /// [current] actual values. Direct field construction avoids the
-  /// withActual(null) origin mis-labeling that would treat stale model hints
-  /// as BB3 constraints on subsequent recalculation.
-  ///
-  /// Same-value actuals (where the user accepted a displayed hint verbatim)
-  /// are suppressed so that BB3HintService solves siblings using the same
-  /// unconstrained path it used during the initial hint pass.
-  static Wes2ExerciseRow _rowWithCurrentActualsOverBaseline(
-      Wes2ExerciseRow current, Wes2ExerciseRow baseline) {
-    final count = current.setCount > baseline.setCount
-        ? current.setCount
-        : baseline.setCount;
-    final newSets = List<Wes2SetState>.generate(count, (i) {
-      final cs =
-          i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
-      final bs =
-          i < baseline.sets.length ? baseline.sets[i] : Wes2SetState(setIndex: i);
-      // Suppress actuals that equal the baseline hint — the user accepted the
-      // displayed value without changing it. Passing the same numeric value as
-      // a hard constraint changes BB3HintService's solving path and produces
-      // different sibling hints than the unconstrained initial pass.
-      //
-      // Exception: when a field has a BB3 hint and the OTHER sibling has a
-      // different actual (and RIR is not yet typed), keep the same-as-hint
-      // actual so Phase 21F and the 21C RIR cue can see both fields as entered.
-      // Safety: _constraintWeight/_constraintReps in the hint service falls back
-      // to the BB3 hintValue when actualValue is null, so the numeric constraint
-      // seen by BB3HintService is identical either way — no sibling-solve regression.
-      final weightHasDifferentActual = cs.weight.actualValue != null &&
-          !_sameAsHint(cs.weight.actualValue, bs.weight.hintValue);
-      final repsHasDifferentActual = cs.reps.actualValue != null &&
-          !_sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue);
-      // RIR is E1RM-relevant exactly like weight and reps: changing it alone
-      // changes the set's resolved E1RM, so it must be treated symmetrically
-      // here. Omitting it let an RIR-only edit look like "nothing changed",
-      // which suppressed the same-as-hint weight/reps actuals and allowed
-      // _computeSet1Hints to re-solve a hidden Set 1 weight under the new RIR.
-      // The later-set cap then measured against that re-solved hint instead of
-      // the athlete's resolved load, so Set 2 could suggest MORE than Set 1.
-      final rirHasDifferentActual = cs.rir.actualValue != null &&
-          !_sameAsHint(cs.rir.actualValue, bs.rir.hintValue);
-      // When any E1RM-relevant actual differs from baseline, preserve all user-entered
-      // actuals so the cascade uses the correct resolved E1RM, not a BB3HintService
-      // re-solve against the old target. Suppression applies only when nothing has
-      // changed (all actuals equal hints), keeping the unconstrained initial-pass path.
-      final anyActualDiffersFromHint = weightHasDifferentActual ||
-          repsHasDifferentActual ||
-          rirHasDifferentActual;
-
-      final weightActual = (_sameAsHint(cs.weight.actualValue, bs.weight.hintValue) && !anyActualDiffersFromHint)
-          ? null
-          : cs.weight.actualValue;
-      final repsActual = (_sameAsHintInt(cs.reps.actualValue, bs.reps.hintValue) && !anyActualDiffersFromHint)
-          ? null
-          : cs.reps.actualValue;
-      final rirActual = (_sameAsHint(cs.rir.actualValue, bs.rir.hintValue) && !anyActualDiffersFromHint)
-          ? null
-          : cs.rir.actualValue;
-      return Wes2SetState(
-        setIndex: i,
-        setId: cs.setId,
-        weight: Wes2FieldState<double>(
-          actualValue: weightActual,
-          hintValue: bs.weight.hintValue,
-          hintOrigin: bs.weight.hintOrigin,
-          origin: weightActual != null
-              ? FieldOrigin.typed
-              : bs.weight.hintOrigin,
-          dirty: cs.weight.dirty,
-          lastEditedAt: cs.weight.lastEditedAt,
-        ),
-        reps: Wes2FieldState<int>(
-          actualValue: repsActual,
-          hintValue: bs.reps.hintValue,
-          hintOrigin: bs.reps.hintOrigin,
-          origin: repsActual != null
-              ? FieldOrigin.typed
-              : bs.reps.hintOrigin,
-          dirty: cs.reps.dirty,
-          lastEditedAt: cs.reps.lastEditedAt,
-        ),
-        rir: Wes2FieldState<double>(
-          actualValue: rirActual,
-          hintValue: bs.rir.hintValue,
-          hintOrigin: bs.rir.hintOrigin,
-          origin: rirActual != null
-              ? FieldOrigin.typed
-              : bs.rir.hintOrigin,
-          dirty: cs.rir.dirty,
-          lastEditedAt: cs.rir.lastEditedAt,
-        ),
-        velocity: Wes2FieldState<double>(
-          actualValue: cs.velocity.actualValue,
-          hintValue: bs.velocity.hintValue,
-          hintOrigin: bs.velocity.hintOrigin,
-          origin: cs.velocity.actualValue != null
-              ? FieldOrigin.typed
-              : bs.velocity.hintOrigin,
-          dirty: cs.velocity.dirty,
-          lastEditedAt: cs.velocity.lastEditedAt,
-        ),
-        executionNote: cs.executionNote,
-        planNote: bs.planNote ?? cs.planNote,
-      );
-    });
-    return baseline.copyWith(
-      sets: newSets,
-      setCount: count,
-      isMarkedDone: current.isMarkedDone,
-      isExpanded: current.isExpanded,
-    );
-  }
-
-  /// Merges hintValues from [hintedRow] into the row at [rowIdx].
-  /// actualValues and executionNote/planNote are never changed.
-  void _mergeHintsIntoRow(int rowIdx, Wes2ExerciseRow hintedRow) {
-    final current = _rows[rowIdx];
-    final count = current.setCount;
-    final newSets = List<Wes2SetState>.generate(count, (i) {
-      final cs =
-          i < current.sets.length ? current.sets[i] : Wes2SetState(setIndex: i);
-      final hs = i < hintedRow.sets.length ? hintedRow.sets[i] : null;
-      if (hs == null) return cs;
-      return cs.copyWith(
-        weight: cs.weight.withHint(hs.weight.hintValue, hs.weight.hintOrigin),
-        reps: cs.reps.withHint(hs.reps.hintValue, hs.reps.hintOrigin),
-        rir: cs.rir.withHint(hs.rir.hintValue, hs.rir.hintOrigin),
-        weightLockedByBb3OverrideCue: hs.weightLockedByBb3OverrideCue,
-        repsLockedByBb3OverrideCue: hs.repsLockedByBb3OverrideCue,
-        rirLockedByBb3OverrideCue: hs.rirLockedByBb3OverrideCue,
-      );
-    });
     final newRows = List<Wes2ExerciseRow>.from(_rows);
-    newRows[rowIdx] = current.copyWith(sets: newSets);
+    newRows[rowIdx] = resolved;
     _rows = newRows;
+    if (Wes2HintTrace.enabled) {
+      Wes2HintTrace.log(
+          'recalc', 'from=$fromSet ${Wes2HintTrace.fmtRow(resolved)}',
+          exerciseId: current.exerciseId);
+    }
   }
 
-  static bool _canParse(Wes2FieldKey key, String text) {
-    switch (key) {
-      case Wes2FieldKey.weight:
-        return double.tryParse(text) != null;
-      case Wes2FieldKey.reps:
-        return int.tryParse(text) != null;
-      case Wes2FieldKey.rir:
-        return double.tryParse(text) != null;
-      case Wes2FieldKey.velocity:
-        return double.tryParse(text) != null;
+  /// Recomputes every row in place. One assignment; the caller notifies.
+  void _recomputeAll() {
+    final svc = _hintService;
+    if (svc == null) return;
+    final List<Wes2ExerciseRow> next = <Wes2ExerciseRow>[];
+    for (final row in _rows) {
+      try {
+        next.add(svc.resolveRow(
+          row: row,
+          prescriptions: prescriptionsFor(row.exerciseId),
+          uid: _actingUid,
+          date: _selectedDate,
+        ));
+      } catch (e) {
+        if (Wes2HintTrace.enabled) {
+          Wes2HintTrace.log('recalc', '❌ resolveRow threw: $e',
+              exerciseId: row.exerciseId);
+        }
+        next.add(row);
+      }
     }
+    _rows = next;
   }
 
   static Wes2SetState _applyFieldUpdate(
@@ -522,25 +325,33 @@ class Wes2SessionController extends ChangeNotifier {
       case Wes2FieldKey.weight:
         return set.copyWith(
           weight: set.weight.withActual(
-            text.isEmpty ? null : double.tryParse(text),
+            text.isEmpty
+                ? null
+                : Wes2FieldParser.valueOrNull(key, text) as double?,
           ),
         );
       case Wes2FieldKey.reps:
         return set.copyWith(
           reps: set.reps.withActual(
-            text.isEmpty ? null : int.tryParse(text),
+            text.isEmpty
+                ? null
+                : Wes2FieldParser.valueOrNull(key, text) as int?,
           ),
         );
       case Wes2FieldKey.rir:
         return set.copyWith(
           rir: set.rir.withActual(
-            text.isEmpty ? null : double.tryParse(text),
+            text.isEmpty
+                ? null
+                : Wes2FieldParser.valueOrNull(key, text) as double?,
           ),
         );
       case Wes2FieldKey.velocity:
         return set.copyWith(
           velocity: set.velocity.withActual(
-            text.isEmpty ? null : double.tryParse(text),
+            text.isEmpty
+                ? null
+                : Wes2FieldParser.valueOrNull(key, text) as double?,
           ),
         );
     }
@@ -583,8 +394,15 @@ class Wes2SessionController extends ChangeNotifier {
     }
 
     final newRows = List<Wes2ExerciseRow>.from(_rows);
-    newRows[rowIdx] = row.copyWith(sets: sets, setCount: newSetCount);
+    newRows[rowIdx] = row.copyWith(
+      sets: sets,
+      setCount: newSetCount,
+      // An added set is session structure: a later hint pass must not treat
+      // the plan count as authoritative and drop it again.
+      structureEstablished: true,
+    );
     _rows = newRows;
+    _recomputeRow(rowIdx, fromSet: newSetIndex);
     notifyListeners();
   }
 
@@ -740,8 +558,13 @@ class Wes2SessionController extends ChangeNotifier {
     newRows[rowIdx] = row.copyWith(
       sets: compacted,
       setCount: row.setCount - 1,
+      // The surviving sets are now the session's structure.
+      structureEstablished: true,
     );
     _rows = newRows;
+    // The set that moved into the gap has a NEW predecessor, so it and every
+    // set after it re-cascade now rather than on some later pass.
+    _recomputeRow(rowIdx, fromSet: setIndex);
     notifyListeners();
   }
 
@@ -754,7 +577,6 @@ class Wes2SessionController extends ChangeNotifier {
     if (idx == -1) return;
     _pushUndo();
     _rows = List<Wes2ExerciseRow>.from(_rows)..removeAt(idx);
-    _baselineHintRows.remove(exerciseId);
     if (_rows.isEmpty) _loadState = Wes2LoadState.empty;
     notifyListeners();
   }
@@ -774,7 +596,6 @@ class Wes2SessionController extends ChangeNotifier {
       return;
     }
     _pushUndo();
-    _baselineHintRows.remove(oldExerciseId);
     final old = _rows[idx];
     final newRow = Wes2ExerciseRow(
       exerciseId: newExerciseId,
@@ -790,6 +611,7 @@ class Wes2SessionController extends ChangeNotifier {
     final newRows = List<Wes2ExerciseRow>.from(_rows);
     newRows[idx] = newRow;
     _rows = newRows;
+    _recomputeRow(idx);
     notifyListeners();
   }
 
@@ -905,7 +727,7 @@ class Wes2SessionController extends ChangeNotifier {
   void replaceWithTemplateRows(List<Wes2ExerciseRow> templateRows) {
     _pushUndo();
     _rows = List<Wes2ExerciseRow>.from(templateRows);
-    _baselineHintRows = {};
+    _recomputeAll();
     _templateWasLoaded = true;
     _loadState = _rows.isEmpty ? Wes2LoadState.empty : Wes2LoadState.loaded;
     notifyListeners();
@@ -916,7 +738,6 @@ class Wes2SessionController extends ChangeNotifier {
     if (_rows.isEmpty) return;
     _pushUndo();
     _rows = [];
-    _baselineHintRows = {};
     _loadState = Wes2LoadState.empty;
     _templateWasLoaded = false;
     _originHadBb3Rows = false;

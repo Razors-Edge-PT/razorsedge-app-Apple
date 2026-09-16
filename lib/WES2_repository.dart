@@ -289,6 +289,11 @@ class FirestoreWes2Repository implements Wes2Repository {
       sets: _parseSets(rawSets, setCount),
       source: source,
       isMarkedDone: isMarkedDone,
+      // A stored row IS the session's structure: it was written with the set
+      // count the athlete ended up with. Without this the next hint pass grew
+      // it back to the planned count, so a set deleted before a reload came
+      // back afterwards.
+      structureEstablished: storedSetCount > 0 || rawSets.isNotEmpty,
       exerciseExecutionNote: raw['exerciseExecutionNote'] as String?,
     );
   }

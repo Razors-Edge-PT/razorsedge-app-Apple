@@ -4,6 +4,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../WES2_models.dart';
 import '../periodization_model_utils.dart';
+import '../wes2_cascade_resolver.dart';
+import '../wes2_field_parser.dart';
 import '../wes2_video/set_video_copy.dart';
 
 /// Height of the trailing icon slots.
@@ -204,9 +206,6 @@ class Wes2SetRow extends StatefulWidget {
   final bool hasVideo;
 
   final bool isPlanNoteRead;
-  /// Phase 21F: original planned/model RIR hint captured at session load.
-  /// Used to compute the green/amber direction cue on the RIR field.
-  final double? baselineRirHint;
   /// Required only for timedWeighted E1RM display. Passed from the exercise card.
   final String? uid;
   final DateTime? selectedDate;
@@ -230,7 +229,6 @@ class Wes2SetRow extends StatefulWidget {
     this.onVideoTap,
     this.hasVideo = false,
     this.isPlanNoteRead = false,
-    this.baselineRirHint,
     this.uid,
     this.selectedDate,
     this.tutorialStep = 0,
@@ -247,6 +245,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   late TextEditingController _rirCtrl;
   late TextEditingController _velocityCtrl;
   late FocusNode _weightFocus;
+  /// Fields the athlete has put a MEANINGFUL value into since the row was
+  /// built - a number, or an empty field they cleared themselves. An emptied
+  /// field must still be saved as a clear, or the old value returns on the
+  /// next reload; a field they never really touched records nothing, even if
+  /// they leave half-typed text in it.
+  final Set<Wes2FieldKey> _edited = <Wes2FieldKey>{};
+
   late FocusNode _repsFocus;
   late FocusNode _rirFocus;
   late FocusNode _velocityFocus;
@@ -256,18 +261,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   /// 16.0 → "16", 16.5 → "16.5", 16.25 → "16.25", 16.125 → "16.125".
   /// Bounded fixed precision first also collapses float artefacts such as
   /// 16.249999999999996 → "16.25". Display-only; never mutates the stored double.
-  static String _fmtWeight(double v) {
-    final s = v.toStringAsFixed(3);
-    return s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
-  }
-  static String _fmtInt(int v) => v.toString();
-  static String _fmtDouble(double v) => v.toStringAsFixed(1);
-  /// Velocity: preserve up to 3 decimal places, strip trailing zeros.
-  /// 0.734 → "0.734", 0.700 → "0.7", 1.000 → "1".
-  static String _fmtVelocity(double v) {
-    final s = v.toStringAsFixed(3);
-    return s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
-  }
+  /// The canonical display formatters, shared with the cascade resolver so
+  /// "the athlete accepted what they saw" is decided with exactly the text
+  /// this row renders.
+  static String _fmtWeight(double v) => Wes2HintFormat.weight(v);
+  static String _fmtInt(int v) => Wes2HintFormat.reps(v);
+  static String _fmtDouble(double v) => Wes2HintFormat.rir(v);
+  static String _fmtVelocity(double v) => Wes2HintFormat.velocity(v);
 
   static String _fromActual<T extends Object>(
     Wes2FieldState<T> f,
@@ -300,26 +300,72 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
 
   void _onWeightFocusChange() {
     if (!_weightFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.weight, _weightCtrl.text);
+      _leaveField(_weightCtrl, Wes2FieldKey.weight, widget.set.weight,
+          _fmtWeight);
     }
   }
 
   void _onRepsFocusChange() {
     if (!_repsFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.reps, _repsCtrl.text);
+      _leaveField(_repsCtrl, Wes2FieldKey.reps, widget.set.reps, _fmtInt);
     }
   }
 
   void _onRirFocusChange() {
     if (!_rirFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.rir, _rirCtrl.text);
+      _leaveField(_rirCtrl, Wes2FieldKey.rir, widget.set.rir, _fmtDouble);
     }
   }
 
   void _onVelocityFocusChange() {
     if (!_velocityFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.velocity, _velocityCtrl.text);
+      _leaveField(_velocityCtrl, Wes2FieldKey.velocity, widget.set.velocity,
+          _fmtVelocity);
     }
+  }
+
+  /// Leaving a field.
+  ///
+  /// Ordinary text — including an empty field, which is a deliberate clear —
+  /// goes straight to the save path. Text that is not a number ("-", "12e")
+  /// is not an entry: the field goes back to the last value the MODEL holds,
+  /// and that value is still saved, because the durable write happens here on
+  /// blur rather than on every keystroke. Skipping it left the athlete looking
+  /// at 25 while the server still held 20.
+  ///
+  /// The saved string is the model's own number, not the displayed one: the
+  /// row renders three decimals, and 22.4999999 must not reach the server as
+  /// 22.5. An untouched empty field has nothing to record, so nothing is sent
+  /// and the field stays empty — never 0, and never the hint behind it.
+  void _leaveField<T extends Object>(
+    TextEditingController ctrl,
+    Wes2FieldKey key,
+    Wes2FieldState<T> field,
+    String Function(T) fmt,
+  ) {
+    if (!Wes2FieldParser.isInvalidEntry(key, ctrl.text)) {
+      _edited.remove(key);
+      widget.onFieldUnfocused(key, ctrl.text);
+      return;
+    }
+
+    final T? actual = field.actualValue;
+    final String restored = actual != null ? fmt(actual) : '';
+    if (ctrl.text != restored) {
+      ctrl.text = restored;
+      ctrl.selection = TextSelection.collapsed(offset: restored.length);
+    }
+    final bool touched = _edited.remove(key);
+    if (actual != null) {
+      // `toString()` round-trips a Dart num exactly; the formatter is for the
+      // display only.
+      widget.onFieldUnfocused(key, actual.toString());
+      return;
+    }
+    // No value left. If the athlete emptied the field themselves that is an
+    // explicit clear and must reach the save path, or the old value comes back
+    // on the next reload. An untouched field creates nothing.
+    if (touched) widget.onFieldUnfocused(key, '');
   }
 
   @override
@@ -473,7 +519,11 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     if (s.weight.actualValue == null) return null;
     if (s.reps.actualValue == null) return null;
     if (s.rir.actualValue != null) return null;
-    final bRir = widget.baselineRirHint;
+    // The reference is this set's RIR hint with its own weight/reps entries
+    // removed, for the CURRENT predecessor — recomputed every pass. The old
+    // load-time baseline went stale as soon as anything upstream changed, and
+    // could even carry the athlete's own earlier entries.
+    final bRir = widget.set.rirReferenceHint;
     final cRir = s.rir.hintValue;
     if (bRir == null || cRir == null) return null;
     final delta = cRir - bRir;
@@ -609,7 +659,16 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             focusedBorder: _kFocusedBorder,
             isDense: true,
           ),
-          onChanged: (v) => widget.onFieldChanged(fieldKey, v),
+          onChanged: (v) {
+            // Only a change that MEANS something marks the field: emptying it
+            // is a deliberate clear, while half-typed text is not an edit at
+            // all - otherwise typing "-" into an untouched empty field would
+            // look like the athlete had cleared a value.
+            if (!Wes2FieldParser.isInvalidEntry(fieldKey, v)) {
+              _edited.add(fieldKey);
+            }
+            widget.onFieldChanged(fieldKey, v);
+          },
           style: _kFieldStyle,
         ),
       ),

@@ -71,6 +71,14 @@ double _targetFrom({
   final reps =
       repsOverride ?? Wes2SetNSolver.repCandidates(preferredRep: preferredRep);
 
+  // Minimum absolute E1RM error, with the DOCUMENTED tie ladder applied
+  // independently of the implementation: several pairings can hit the target
+  // exactly (32.5x9, 35x7 and 37.5x5 all give 45.0), so error alone does not
+  // determine the answer.
+  //   1. smallest |reps - preferredRep|
+  //   2. smallest |weight - previousResolvedDisplayWeight|
+  //   3. lower reps
+  //   4. lower weight
   double bestErr = double.infinity;
   double bw = weights.first;
   int br = reps.first;
@@ -78,7 +86,28 @@ double _targetFrom({
     final aw = toAbs == null ? w : toAbs(w);
     for (final r in reps) {
       final err = (_e1rm(aw, r, thisRir) - target).abs();
-      if (err < bestErr - 1e-12) {
+      if (err < bestErr - 1e-9) {
+        bestErr = err;
+        bw = w;
+        br = r;
+        continue;
+      }
+      if (err > bestErr + 1e-9) continue;
+      final repDist = (r - preferredRep).abs();
+      final bestRepDist = (br - preferredRep).abs();
+      final wDist = (w - prevDisplayWeight).abs();
+      final bestWDist = (bw - prevDisplayWeight).abs();
+      final bool take;
+      if (repDist != bestRepDist) {
+        take = repDist < bestRepDist;
+      } else if ((wDist - bestWDist).abs() > 1e-9) {
+        take = wDist < bestWDist;
+      } else if (r != br) {
+        take = r < br;
+      } else {
+        take = w < bw;
+      }
+      if (take) {
         bestErr = err;
         bw = w;
         br = r;
@@ -239,11 +268,9 @@ void main() {
         [_row(List.generate(3, (i) => Wes2SetState(setIndex: i)))],
         epoch,
       );
-      final hinted = svc.computeAllHints(
-          rows: controller.rows, blockId: _blockId, uid: _uid, date: _day);
-      controller.applyModelHints(_exId, hinted.first);
-      controller.captureBaselineHintRows();
-      controller.setHintService(svc, _blockId);
+      // The screen's single hint application: register the context and let
+      // the controller resolve every row from the current entries.
+      controller.applyHintContext(svc, _blockId);
       baseline = controller.rows.first;
     });
 
@@ -280,7 +307,12 @@ void main() {
         target: target,
         prevDisplayWeight: 37.5,
         prevActualRir: 1.0,
-        preferredRep: baseline.sets[1].reps.hintValue!,
+        preferredRep: Wes2SetNSolver.centre(
+          targetE1rm: target,
+          absoluteWeight: 37.5,
+          thisRir: 2.0,
+          fallbackReps: 7,
+        ).rep,
         thisRir: 2.0,
       );
 
@@ -423,15 +455,25 @@ void main() {
       if (typedReps != null) expect(resolvedR, typedReps);
       if (typedRir != null) expect(resolvedRir, typedRir);
 
+      final target = _targetFrom(
+        prevWeightAbs: resolvedW,
+        prevReps: resolvedR,
+        prevRir: resolvedRir,
+      );
       final best = _bestLegal(
-        target: _targetFrom(
-          prevWeightAbs: resolvedW,
-          prevReps: resolvedR,
-          prevRir: resolvedRir,
-        ),
+        target: target,
         prevDisplayWeight: resolvedW,
         prevActualRir: s1.rir.actualValue,
-        preferredRep: 7,
+        // The centre is what the live target implies at the anchor weight,
+        // not the planned rep target: after a Set 1 of 20x20@0 the old plan
+        // centre could not reach the target at all.
+        preferredRep: Wes2SetNSolver.centre(
+          targetE1rm: target,
+          absoluteWeight: IncrementGrid(primary: 2.5)
+              .previousOrSame(resolvedW),
+          thisRir: 2.0,
+          fallbackReps: resolvedR,
+        ).rep,
         thisRir: 2.0,
       );
       expect(out.sets[1].weight.hintValue, best.weight,

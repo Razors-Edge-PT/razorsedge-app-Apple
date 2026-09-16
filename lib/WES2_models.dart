@@ -74,22 +74,139 @@ class Wes2FieldState<T> {
         lastEditedAt: lastEditedAt,
       );
 
+  /// [hintOrigin] is emitted so a reloaded draft can tell a BB3 PRESCRIPTION
+  /// from a generated display hint. Without it every recovered hint looked
+  /// alike, and a generated number could be treated as a BB3 lock on the next
+  /// pass. Readers of older payloads see no key and default to
+  /// [FieldOrigin.empty], which never counts as a prescription.
   Map<String, dynamic> toJson() => {
         'actual': actualValue,
         'hint': hintValue,
+        if (hintOrigin != FieldOrigin.empty) 'hintOrigin': hintOrigin.name,
       };
 
-  static Wes2FieldState<double> doubleFromJson(Map<String, dynamic> map) =>
-      Wes2FieldState<double>(
-        actualValue: (map['actual'] as num?)?.toDouble(),
-        hintValue: (map['hint'] as num?)?.toDouble(),
-      );
+  static FieldOrigin _originFromJson(Object? raw) {
+    if (raw is! String) return FieldOrigin.empty;
+    for (final FieldOrigin o in FieldOrigin.values) {
+      if (o.name == raw) return o;
+    }
+    return FieldOrigin.empty;
+  }
 
-  static Wes2FieldState<int> intFromJson(Map<String, dynamic> map) =>
-      Wes2FieldState<int>(
-        actualValue: (map['actual'] as num?)?.toInt(),
-        hintValue: (map['hint'] as num?)?.toInt(),
+  static Wes2FieldState<double> doubleFromJson(Map<String, dynamic> map) {
+    final FieldOrigin origin = _originFromJson(map['hintOrigin']);
+    final double? hint = (map['hint'] as num?)?.toDouble();
+    return Wes2FieldState<double>(
+      actualValue: (map['actual'] as num?)?.toDouble(),
+      hintValue: hint,
+      hintOrigin: hint == null ? FieldOrigin.empty : origin,
+    );
+  }
+
+  static Wes2FieldState<int> intFromJson(Map<String, dynamic> map) {
+    final FieldOrigin origin = _originFromJson(map['hintOrigin']);
+    final int? hint = (map['hint'] as num?)?.toInt();
+    return Wes2FieldState<int>(
+      actualValue: (map['actual'] as num?)?.toInt(),
+      hintValue: hint,
+      hintOrigin: hint == null ? FieldOrigin.empty : origin,
+    );
+  }
+}
+
+/// One BB3-prescribed set, held separately from the row so a generated hint
+/// can never be mistaken for a prescription (the defect that let recovered
+/// display values act as BB3 locks).
+class Wes2PrescribedSet {
+  const Wes2PrescribedSet({
+    this.weight,
+    this.reps,
+    this.rir,
+    this.velocity,
+    this.planNote,
+  });
+
+  final double? weight;
+  final int? reps;
+  final double? rir;
+  final double? velocity;
+  final String? planNote;
+
+  bool get isEmpty =>
+      weight == null &&
+      reps == null &&
+      rir == null &&
+      velocity == null &&
+      (planNote == null || planNote!.isEmpty);
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        if (weight != null) 'weight': weight,
+        if (reps != null) 'reps': reps,
+        if (rir != null) 'rir': rir,
+        if (velocity != null) 'velocity': velocity,
+        if (planNote != null) 'planNote': planNote,
+      };
+
+  static Wes2PrescribedSet fromJson(Map<String, dynamic> m) =>
+      Wes2PrescribedSet(
+        weight: (m['weight'] as num?)?.toDouble(),
+        reps: (m['reps'] as num?)?.toInt(),
+        rir: (m['rir'] as num?)?.toDouble(),
+        velocity: (m['velocity'] as num?)?.toDouble(),
+        planNote: m['planNote'] as String?,
       );
+}
+
+/// Where a set of prescriptions came from. Only these sources are ever treated
+/// as authoritative BB3 intent.
+enum Wes2PrescriptionSource { server, firestoreCache, localStored }
+
+/// The positional BB3 prescriptions for one exercise on one day.
+class Wes2Prescriptions {
+  const Wes2Prescriptions({
+    required this.sets,
+    this.exercisePlanNote,
+    this.source = Wes2PrescriptionSource.server,
+  });
+
+  final List<Wes2PrescribedSet> sets;
+  final String? exercisePlanNote;
+  final Wes2PrescriptionSource source;
+
+  static const Wes2Prescriptions none =
+      Wes2Prescriptions(sets: <Wes2PrescribedSet>[]);
+
+  bool get isEmpty =>
+      sets.every((Wes2PrescribedSet s) => s.isEmpty) &&
+      (exercisePlanNote == null || exercisePlanNote!.isEmpty);
+
+  /// Positional: set `i` keeps prescription `i` after a removal, exactly as a
+  /// reload from the planned day would present it.
+  Wes2PrescribedSet at(int index) =>
+      index >= 0 && index < sets.length ? sets[index] : const Wes2PrescribedSet();
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'source': source.name,
+        if (exercisePlanNote != null) 'exercisePlanNote': exercisePlanNote,
+        'sets': sets.map((Wes2PrescribedSet s) => s.toJson()).toList(),
+      };
+
+  static Wes2Prescriptions fromJson(Map<String, dynamic> m) {
+    final Object? raw = m['sets'];
+    return Wes2Prescriptions(
+      sets: raw is List
+          ? raw
+              .whereType<Map<String, dynamic>>()
+              .map(Wes2PrescribedSet.fromJson)
+              .toList()
+          : const <Wes2PrescribedSet>[],
+      exercisePlanNote: m['exercisePlanNote'] as String?,
+      source: Wes2PrescriptionSource.values.firstWhere(
+        (Wes2PrescriptionSource s) => s.name == m['source'],
+        orElse: () => Wes2PrescriptionSource.localStored,
+      ),
+    );
+  }
 }
 
 /// Reads a set's stable identity out of a decoded set map.
@@ -150,6 +267,14 @@ class Wes2SetState {
   final bool repsLockedByBb3OverrideCue;
   final bool rirLockedByBb3OverrideCue;
 
+  /// The RIR this set would be hinted at with its OWN weight/reps entries
+  /// removed, for the current predecessor. The direction cue compares against
+  /// this rather than a load-time baseline, which went stale (and could carry
+  /// the athlete's own earlier entries) the moment anything upstream changed.
+  ///
+  /// Display only, recomputed every pass, never serialised.
+  final double? rirReferenceHint;
+
   const Wes2SetState({
     required this.setIndex,
     this.setId,
@@ -162,6 +287,7 @@ class Wes2SetState {
     this.weightLockedByBb3OverrideCue = false,
     this.repsLockedByBb3OverrideCue = false,
     this.rirLockedByBb3OverrideCue = false,
+    this.rirReferenceHint,
   });
 
   bool get hasAnyActual =>
@@ -178,6 +304,7 @@ class Wes2SetState {
     bool? weightLockedByBb3OverrideCue,
     bool? repsLockedByBb3OverrideCue,
     bool? rirLockedByBb3OverrideCue,
+    double? rirReferenceHint,
   }) {
     return Wes2SetState(
       setIndex: setIndex,
@@ -194,6 +321,7 @@ class Wes2SetState {
           repsLockedByBb3OverrideCue ?? this.repsLockedByBb3OverrideCue,
       rirLockedByBb3OverrideCue:
           rirLockedByBb3OverrideCue ?? this.rirLockedByBb3OverrideCue,
+      rirReferenceHint: rirReferenceHint ?? this.rirReferenceHint,
     );
   }
 
@@ -251,6 +379,13 @@ class Wes2ExerciseRow {
   /// Never overwrites exercisePlanNote or BB3 perExerciseNote.
   final String? exerciseExecutionNote;
 
+  /// True when this row's set count comes from stored session structure (a
+  /// saved workout row, or local structural intent) rather than from the plan.
+  ///
+  /// Hint passes must not grow such a row back to the planned count: that is
+  /// how a set the athlete deleted reappeared on the next recalculation.
+  final bool structureEstablished;
+
   const Wes2ExerciseRow({
     required this.exerciseId,
     required this.name,
@@ -263,6 +398,7 @@ class Wes2ExerciseRow {
     this.isExpanded = true,
     this.exercisePlanNote,
     this.exerciseExecutionNote,
+    this.structureEstablished = false,
   });
 
   /// BB3 completion rule: at least one set has weight AND reps.
@@ -290,6 +426,7 @@ class Wes2ExerciseRow {
     String? exercisePlanNote,
     String? exerciseExecutionNote,
     bool clearExerciseExecutionNote = false,
+    bool? structureEstablished,
   }) {
     return Wes2ExerciseRow(
       exerciseId: exerciseId ?? this.exerciseId,
@@ -305,6 +442,7 @@ class Wes2ExerciseRow {
       exerciseExecutionNote: clearExerciseExecutionNote
           ? null
           : (exerciseExecutionNote ?? this.exerciseExecutionNote),
+      structureEstablished: structureEstablished ?? this.structureEstablished,
     );
   }
 
@@ -317,6 +455,7 @@ class Wes2ExerciseRow {
         'source': source.name,
         'isMarkedDone': isMarkedDone,
         'sets': sets.map((s) => s.toJson()).toList(),
+        if (structureEstablished) 'structureEstablished': true,
         if (exercisePlanNote != null) 'exercisePlanNote': exercisePlanNote,
         if (exerciseExecutionNote != null)
           'exerciseExecutionNote': exerciseExecutionNote,
@@ -336,6 +475,7 @@ class Wes2ExerciseRow {
       setCount: map['setCount'] as int,
       source: src,
       isMarkedDone: map['isMarkedDone'] as bool? ?? false,
+      structureEstablished: map['structureEstablished'] as bool? ?? false,
       exercisePlanNote: map['exercisePlanNote'] as String?,
       exerciseExecutionNote: map['exerciseExecutionNote'] as String?,
       sets: (map['sets'] as List<dynamic>)

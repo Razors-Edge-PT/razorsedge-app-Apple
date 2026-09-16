@@ -5,11 +5,28 @@ import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'periodization_model_utils.dart';
 import 'increment_grid.dart';
+import 'wes2_cascade_resolver.dart';
+import 'wes2_hint_input.dart';
 import 'wes2_setn_solver.dart';
 import 'progression_engine.dart';
 import 'wes2_hint_trace.dart';
 
 abstract class Wes2HintService {
+  /// Resolves a row forward under explicit [prescriptions].
+  ///
+  /// The cascade entry point: input is rebuilt from actuals + prescriptions
+  /// only, so no hint from a previous pass can influence the result.
+  /// [fromSet] recomputes from that set onward, with [existingFinals]
+  /// supplying the untouched earlier sets.
+  Wes2ExerciseRow resolveRow({
+    required Wes2ExerciseRow row,
+    required Wes2Prescriptions prescriptions,
+    required String uid,
+    required DateTime date,
+    int fromSet,
+    List<Wes2SetState> existingFinals,
+  });
+
   /// Recompute hints for a single exercise row.
   /// Returns a new row with hintValue populated on each Wes2FieldState.
   /// Never overwrites actualValue.
@@ -47,10 +64,67 @@ class Wes2HintServiceImpl implements Wes2HintService {
     this.exerciseTypes = const {},
   });
 
+  /// Resolves the whole row forward under explicit [prescriptions].
+  ///
+  /// This is the entry point the controller uses: the input is rebuilt from
+  /// actuals + prescriptions only ([Wes2HintInput]), so no generated hint from
+  /// a previous pass can influence the result, and the cascade then runs
+  /// through [Wes2CascadeResolver] (accepted-hint view included).
+  ///
+  /// [fromSet] recomputes only from that set onward; [existingFinals] supplies
+  /// the untouched earlier sets, whose last member is the first predecessor.
+  @override
+  Wes2ExerciseRow resolveRow({
+    required Wes2ExerciseRow row,
+    required Wes2Prescriptions prescriptions,
+    required String uid,
+    required DateTime date,
+    int fromSet = 0,
+    List<Wes2SetState> existingFinals = const <Wes2SetState>[],
+  }) {
+    final Wes2RowHintContext ctx = buildRowContext(row: row, uid: uid, date: date);
+    final Wes2ExerciseRow input = Wes2HintInput.build(
+      row,
+      prescriptions: prescriptions,
+      setCount: ctx.effectiveCount,
+    );
+    final Wes2ExerciseRow processed = ctx.preprocessTimed(input);
+    // The pure Set 1 fallback must be built from THIS input, not from the row
+    // that came in: after a removal the incoming row still carries the hint
+    // its old position left behind, so the solve and its fallback were using
+    // different prescriptions.
+    ctx.bindInput(processed);
+    return Wes2CascadeResolver.resolveRow(
+      input: processed,
+      computer: ctx,
+      fromSet: fromSet,
+      existingFinals: existingFinals,
+    );
+  }
+
   @override
   Wes2ExerciseRow computeRowHints({
     required Wes2ExerciseRow row,
     required String blockId,
+    required String uid,
+    required DateTime date,
+  }) {
+    // Prescriptions are whatever the caller already marked as BB3 locks on the
+    // row (planned-day load, the BB3 day panel's Set 1). A generated or
+    // recovered display hint has a different origin and is never promoted.
+    return resolveRow(
+      row: row,
+      prescriptions: Wes2HintInput.prescriptionsFromRow(row),
+      uid: uid,
+      date: date,
+    );
+  }
+
+  /// Builds the per-row context (week/session indices, plan count, timed and
+  /// bodyweight flags) once per pass. Exposed so the controller can resolve
+  /// one row repeatedly without recomputing DUP resolution each time.
+  Wes2RowHintContext buildRowContext({
+    required Wes2ExerciseRow row,
     required String uid,
     required DateTime date,
   }) {
@@ -98,64 +172,21 @@ class Wes2HintServiceImpl implements Wes2HintService {
         sessionIndex: sessionIndex,
       );
     }
-    final effectiveCount = _resolveEffectiveSetCount(row, planCount);
-    final padded = List<Wes2SetState>.generate(effectiveCount, (i) {
-      return i < row.sets.length ? row.sets[i] : Wes2SetState(setIndex: i);
-    });
-
-    // For timed exercises: pre-convert BB3 planned rep hints from rep units to
-    // seconds (× 5), and suppress BB3 RIR hints, before per-set hint computation.
-    // This ensures _constraintReps returns null (rep-unit BB3 locks do not
-    // constrain the solver) and _mergeInt can apply seconds-based hints correctly.
-    final isTimed = PeriodizationModelUtils.isTimedExercise(
-        id: row.exerciseId, name: row.name);
-    final isWeightedTimed =
-        PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
-    final processedPadded = isTimed
-        ? padded.map((s) {
-            var u = s;
-            if (_isBb3Locked(s.reps) && s.reps.hintValue != null) {
-              u = u.copyWith(
-                  reps: u.reps
-                      .withHint(s.reps.hintValue! * 5, FieldOrigin.modelHint));
-            }
-            if (_isBb3Locked(s.rir)) {
-              u = u.copyWith(rir: u.rir.withHint(null, FieldOrigin.empty));
-            }
-            if (!isWeightedTimed && _isBb3Locked(s.weight)) {
-              u = u.copyWith(
-                  weight: u.weight.withHint(null, FieldOrigin.empty));
-            }
-            return u;
-          }).toList()
-        : padded;
-
-    final newSets = List<Wes2SetState>.from(processedPadded);
-    newSets[0] = _computeSet1Hints(
+    return Wes2RowHintContext(
+      service: this,
       row: row,
-      set: processedPadded[0],
+      uid: uid,
+      date: date,
       weekIndex: weekIndex,
       sessionIndex: sessionIndex,
-      date: date,
-      uid: uid,
+      planCount: planCount,
+      exSettings: exSettings,
+      effectiveCount: _resolveEffectiveSetCount(row, planCount),
+      isTimed: PeriodizationModelUtils.isTimedExercise(
+          id: row.exerciseId, name: row.name),
+      isWeightedTimed:
+          PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId),
     );
-
-    // Phase 21D: cascade Set 2+ hints from the immediately prior resolved set.
-    for (int i = 1; i < effectiveCount; i++) {
-      newSets[i] = _computeSetNHints(
-        row: row,
-        set: newSets[i],
-        prevSet: newSets[i - 1],
-        setIdx: i,
-        planCount: planCount,
-        exSettings: exSettings,
-        weekIndex: weekIndex,
-        sessionIndex: sessionIndex,
-        date: date,
-      );
-    }
-
-    return row.copyWith(sets: newSets, setCount: effectiveCount);
   }
 
   @override
@@ -193,6 +224,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required int sessionIndex,
     required DateTime date,
     required String uid,
+    double? Function()? pureSet1E1rm,
   }) {
     final exSettings =
         exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
@@ -507,29 +539,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
       final isBw1 = PeriodizationModelUtils.isBodyweightExercise(
           id: row.exerciseId, name: row.name);
 
-      // Third fallback: E1RM implied by the pre-edit baseline hint values.
-      // Used when bb3SetTarget is null (no explicit BB3 weight override) and
-      // the exercise has no saved history for _getTargetE1rm to resolve.
-      double? baselineHintE1rm;
-      {
-        final hW = set.weight.hintValue;
-        final hR = set.reps.hintValue;
-        if (hW != null && hR != null) {
-          final hRir = set.rir.hintValue ?? rirForWeight;
-          final absHW = isBw1
-              ? PeriodizationModelUtils.toAbsoluteWeight(
-                  uid: uid,
-                  displayAddedKg: hW,
-                  exerciseId: row.exerciseId,
-                  exerciseName: row.name,
-                  asOfDate: date,
-                )
-              : hW;
-          final e =
-              PeriodizationModelUtils.calculateE1RM(absHW, hR.toDouble(), hRir);
-          if (e > 0) baselineHintE1rm = e;
-        }
-      }
+      // Third fallback: the E1RM of this day's PURE Set 1 — the same Set 1
+      // computed with no entries at all, in this same pass.
+      //
+      // It used to read the set's own current hint values, which after the
+      // first edit were the previous pass's output: the fallback then drifted
+      // with every recalculation and could be contaminated by the athlete's
+      // own earlier entries. The pure context depends only on plan, settings
+      // and history, so repeated passes agree.
+      final double? baselineHintE1rm = pureSet1E1rm?.call();
 
       final targetE1rm = bb3SetTarget ??
           _getTargetE1rm(
@@ -729,6 +747,40 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }) {
     final prevWeight = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
     final prevReps = prevSet.reps.actualValue ?? prevSet.reps.hintValue;
+
+    // Timed exercises are resolved FIRST. An unweighted plank has no weight by
+    // design, so the ordinary "previous set unresolved" guard below used to
+    // discard it before the seconds could propagate at all.
+    final bool isTimedEarly = PeriodizationModelUtils.isTimedExercise(
+        id: row.exerciseId, name: row.name);
+    if (isTimedEarly) {
+      final bool isWeightedTimedEarly =
+          PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
+      final repsHintSec =
+          (!_isBb3Locked(set.reps) && set.reps.actualValue == null)
+              ? prevReps
+              : null;
+      final weightHintFwd = (isWeightedTimedEarly &&
+              !_isBb3Locked(set.weight) &&
+              set.weight.actualValue == null)
+          ? prevWeight
+          : null;
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log(
+            'setN',
+            'S$setIdx timed: seconds=$repsHintSec weight=$weightHintFwd '
+            '(weighted=$isWeightedTimedEarly)',
+            exerciseId: row.exerciseId);
+      }
+      if (repsHintSec == null && weightHintFwd == null) return set;
+      return _applyModelHintToSet(
+        existing: set,
+        weightHint: weightHintFwd,
+        repsHint: repsHintSec,
+        rirHint: null,
+      );
+    }
+
     if (prevWeight == null || prevReps == null) {
       if (Wes2HintTrace.enabled) {
         Wes2HintTrace.log(
@@ -751,34 +803,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // Bodyweight exercises store display-added load; E1RM math needs absolute load.
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
         id: row.exerciseId, name: row.name);
-
-    // Timed exercises: bypass the E1RM cascade (seconds-as-reps breaks the math).
-    // Propagate Set 1's already-converted hints to all subsequent sets.
-    // prevSet.reps.hintValue is in seconds (converted by _computeSet1Hints).
-    final bool isTimed = PeriodizationModelUtils.isTimedExercise(
-        id: row.exerciseId, name: row.name);
-    final bool isWeightedTimed =
-        PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
-    if (isTimed) {
-      final repsHintSec =
-          (!_isBb3Locked(set.reps) && set.reps.actualValue == null)
-              ? prevSet.reps.hintValue
-              : null;
-      final weightHintFwd = (isWeightedTimed &&
-              !_isBb3Locked(set.weight) &&
-              set.weight.actualValue == null)
-          ? prevSet.weight.hintValue
-          : null;
-      if (repsHintSec != null || weightHintFwd != null) {
-        return _applyModelHintToSet(
-          existing: set,
-          weightHint: weightHintFwd,
-          repsHint: repsHintSec,
-          rirHint: null,
-        );
-      }
-      return set;
-    }
 
     final prevWeightAbs = isBw
         ? PeriodizationModelUtils.toAbsoluteWeight(
@@ -878,20 +902,24 @@ class Wes2HintServiceImpl implements Wes2HintService {
           )
         : displayWeight;
 
-    // Preferred rep centre: this set's own model/baseline rep hint first, then
-    // the planned target for this set, then the previous set's resolved reps,
-    // then the WES fallback. Anchoring on the baseline hint keeps repeated
-    // recalculations of the same set stable.
-    final planRepsForSet = BB3PlannedExerciseService.getRepTargetForSet(
-      exSettings: exSettings,
-      weekIndex: weekIndex,
-      sessionIndex: sessionIndex,
-      setIndex: setIdx,
+    // Preferred rep centre: what this set's LIVE target implies at the weight
+    // the search is anchored on — never this set's own previous output, and
+    // never the planned rep target, which is unrelated to the live target.
+    // See [Wes2SetNSolver.centre] for the fallbacks and their reporting.
+    final double? centreWeightAbs = cwt != null
+        ? toAbs(cwt)
+        : (() {
+            final double? w0 = _sNGrid.previousOrSame(prevWeight);
+            return w0 == null ? null : toAbs(w0);
+          })();
+    final Wes2SetNCentre centre = Wes2SetNSolver.centre(
+      constrainedReps: creps,
+      targetE1rm: targetE1rm,
+      absoluteWeight: centreWeightAbs,
+      thisRir: thisRir,
+      fallbackReps: prevReps > 0 ? prevReps : null,
     );
-    final int preferredRep = (set.reps.hintValue != null &&
-            set.reps.hintValue! > 0)
-        ? set.reps.hintValue!
-        : (planRepsForSet > 0 ? planRepsForSet : (prevReps > 0 ? prevReps : 8));
+    final int preferredRep = centre.rep;
 
     if (cwt != null && creps != null) {
       // Both locked — nothing to compute.
@@ -959,6 +987,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
       Wes2HintTrace.log(
           'setN',
           'S$setIdx solver preferredRep=$preferredRep '
+          'centreSource=${centre.source.name} '
           'mayIncrease=${Wes2SetNSolver.mayIncrease(prevSet.rir.actualValue)} '
           '→ w=$weightHint r=$repsHint',
           exerciseId: row.exerciseId);
@@ -1503,8 +1532,14 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
   /// Returns the effective set count for hint row generation.
   /// Never shrinks below row.setCount — blank added sets are intentional state.
+  ///
+  /// A row whose structure is ESTABLISHED (loaded from a saved workout row, or
+  /// carrying local structural intent) is never grown back to the planned
+  /// count: doing so resurrected a set the athlete had deleted on the next
+  /// hint pass. Plan-only rows still take their initial count from the plan.
   static int _resolveEffectiveSetCount(Wes2ExerciseRow row, int planCount) {
     final current = row.setCount > 0 ? row.setCount : 3;
+    if (row.structureEstablished) return current;
     if (planCount > current) return planCount;
     return current;
   }
@@ -1560,5 +1595,167 @@ class Wes2HintServiceImpl implements Wes2HintService {
     }
 
     return null;
+  }
+}
+
+/// One row's hint computation for one pass.
+///
+/// Holds the context that does not change between sets (week/session indices,
+/// plan count, settings, timed and bodyweight flags) and answers the
+/// resolver's per-set questions. Building it once per pass keeps DUP
+/// resolution and the plan lookups off the per-set path, which matters because
+/// the accepted-hint view may ask for several variants of the same set.
+class Wes2RowHintContext implements Wes2SetHintComputer {
+  Wes2RowHintContext({
+    required this.service,
+    required this.row,
+    required this.uid,
+    required this.date,
+    required this.weekIndex,
+    required this.sessionIndex,
+    required this.planCount,
+    required this.exSettings,
+    required this.effectiveCount,
+    required this.isTimed,
+    required this.isWeightedTimed,
+  });
+
+  final Wes2HintServiceImpl service;
+  final Wes2ExerciseRow row;
+  final String uid;
+  final DateTime date;
+  final int weekIndex;
+  final int sessionIndex;
+  final int planCount;
+  final Map<String, dynamic>? exSettings;
+  final int effectiveCount;
+  final bool isTimed;
+  final bool isWeightedTimed;
+
+  bool _pureSet1Computed = false;
+  double? _pureSet1E1rm;
+  bool _computingPureSet1 = false;
+
+  /// The authoritative input for this pass (actuals + current prescriptions).
+  Wes2ExerciseRow? _boundInput;
+
+  /// Binds the built input. Everything that needs the prescription context —
+  /// the pure Set 1 fallback in particular — reads it from here.
+  void bindInput(Wes2ExerciseRow input) => _boundInput = input;
+
+  /// Timed rows: BB3 rep prescriptions are in rep units and must become
+  /// seconds once, from the prescription itself — never from an already
+  /// converted hint, which is how a value could be multiplied twice.
+  Wes2ExerciseRow preprocessTimed(Wes2ExerciseRow input) {
+    if (!isTimed) return input;
+    return input.copyWith(
+      sets: input.sets.map((Wes2SetState s) {
+        Wes2SetState u = s;
+        if (Wes2HintServiceImpl._isBb3Locked(s.reps) && s.reps.hintValue != null) {
+          u = u.copyWith(
+              reps: u.reps.withHint(s.reps.hintValue! * 5, FieldOrigin.modelHint));
+        }
+        if (Wes2HintServiceImpl._isBb3Locked(s.rir)) {
+          u = u.copyWith(rir: u.rir.withHint(null, FieldOrigin.empty));
+        }
+        if (!isWeightedTimed && Wes2HintServiceImpl._isBb3Locked(s.weight)) {
+          u = u.copyWith(weight: u.weight.withHint(null, FieldOrigin.empty));
+        }
+        return u;
+      }).toList(),
+    );
+  }
+
+  @override
+  Wes2SetState computeSet({
+    required int setIdx,
+    required Wes2SetState input,
+    required Wes2SetState? prevResolved,
+  }) {
+    if (setIdx == 0 || prevResolved == null) {
+      return service._computeSet1Hints(
+        row: row,
+        set: input,
+        weekIndex: weekIndex,
+        sessionIndex: sessionIndex,
+        date: date,
+        uid: uid,
+        pureSet1E1rm: _pureSet1,
+      );
+    }
+    return service._computeSetNHints(
+      row: row,
+      set: input,
+      prevSet: prevResolved,
+      setIdx: setIdx,
+      planCount: planCount,
+      exSettings: exSettings,
+      weekIndex: weekIndex,
+      sessionIndex: sessionIndex,
+      date: date,
+    );
+  }
+
+  /// The E1RM of this day's Set 1 with NO entries — computed once per pass.
+  double? _pureSet1() {
+    if (_pureSet1Computed) return _pureSet1E1rm;
+    if (_computingPureSet1) return null; // never re-enter
+    _computingPureSet1 = true;
+    try {
+      final List<Wes2SetState> inputSets =
+          _boundInput?.sets ?? const <Wes2SetState>[];
+      final Wes2SetState source = inputSets.isNotEmpty
+          ? inputSets.first
+          : const Wes2SetState(setIndex: 0);
+      final Wes2SetState bare = Wes2SetState(
+        setIndex: 0,
+        weight: _hintOnly<double>(source.weight),
+        reps: _hintOnly<int>(source.reps),
+        rir: _hintOnly<double>(source.rir),
+      );
+      final Wes2SetState pure = service._computeSet1Hints(
+        row: row,
+        set: bare,
+        weekIndex: weekIndex,
+        sessionIndex: sessionIndex,
+        date: date,
+        uid: uid,
+      );
+      final double? w = pure.weight.hintValue;
+      final int? r = pure.reps.hintValue;
+      if (w != null && r != null) {
+        final double absW = PeriodizationModelUtils.isBodyweightExercise(
+                id: row.exerciseId, name: row.name)
+            ? PeriodizationModelUtils.toAbsoluteWeight(
+                uid: uid,
+                displayAddedKg: w,
+                exerciseId: row.exerciseId,
+                exerciseName: row.name,
+                asOfDate: date,
+              )
+            : w;
+        final double e = PeriodizationModelUtils.calculateE1RM(
+            absW, r.toDouble(), pure.rir.hintValue ?? 0.0);
+        if (e > 0) _pureSet1E1rm = e;
+      }
+    } catch (_) {
+      _pureSet1E1rm = null;
+    } finally {
+      _computingPureSet1 = false;
+      _pureSet1Computed = true;
+    }
+    return _pureSet1E1rm;
+  }
+
+  /// Keeps only the prescription side of a field (used to build the pure
+  /// Set 1 context: the plan still applies, the athlete's entries do not).
+  static Wes2FieldState<T> _hintOnly<T extends Object>(Wes2FieldState<T> f) {
+    final bool prescribed =
+        f.hintOrigin == FieldOrigin.bb3Hint && f.hintValue != null;
+    return Wes2FieldState<T>(
+      hintValue: prescribed ? f.hintValue : null,
+      hintOrigin: prescribed ? FieldOrigin.bb3Hint : FieldOrigin.empty,
+      origin: prescribed ? FieldOrigin.bb3Hint : FieldOrigin.empty,
+    );
   }
 }

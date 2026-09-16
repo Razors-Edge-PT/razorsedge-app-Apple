@@ -55,9 +55,79 @@ class Wes2SetNChoice {
       'e1rm=${e1rm.toStringAsFixed(3)}, err=${error.toStringAsFixed(3)})';
 }
 
+/// Where a rep search centre came from. Reported so a wrong centre is
+/// diagnosable instead of invisible.
+enum Wes2CentreSource { constraint, inverse, clamp, fallback }
+
+/// The rep the bounded search is centred on, with its provenance.
+class Wes2SetNCentre {
+  const Wes2SetNCentre(this.rep, this.source);
+  final int rep;
+  final Wes2CentreSource source;
+
+  @override
+  String toString() => '$rep (${source.name})';
+}
+
 /// Bounded candidate generation and scoring for Set 2+.
 class Wes2SetNSolver {
   Wes2SetNSolver._();
+
+  /// The rep count this set's target implies at [absoluteWeight].
+  ///
+  /// The old centre was the set's OWN previous rep hint, then the plan target:
+  /// the first fed a set's stale output back into its own search, and the
+  /// second centred the window on a number unrelated to the live target (after
+  /// Set 1 of 20×20@0, Set 2's target of 41.35 was searched around the planned
+  /// 10 reps, and 20×15 = 36.0 was the closest the window could reach).
+  ///
+  /// Inputs are validated BEFORE the inverse: `reverseCalculateReps` clamps to
+  /// 1–45, and `double.nan.clamp(1, 45)` returns 45 — a NaN would silently look
+  /// like a legitimate 45-rep centre.
+  ///
+  /// [constrainedReps] wins outright; otherwise the inverse at
+  /// [absoluteWeight]; otherwise [fallbackReps] (the previous set's reps) or 8.
+  static Wes2SetNCentre centre({
+    int? constrainedReps,
+    required double targetE1rm,
+    required double? absoluteWeight,
+    required double thisRir,
+    int? fallbackReps,
+  }) {
+    if (constrainedReps != null && constrainedReps > 0) {
+      return Wes2SetNCentre(constrainedReps, Wes2CentreSource.constraint);
+    }
+    final int fallback =
+        (fallbackReps != null && fallbackReps > 0) ? fallbackReps : 8;
+
+    if (!targetE1rm.isFinite || targetE1rm <= 0) {
+      return Wes2SetNCentre(fallback, Wes2CentreSource.fallback);
+    }
+    final double? w = absoluteWeight;
+    if (w == null || !w.isFinite || w <= 0) {
+      return Wes2SetNCentre(fallback, Wes2CentreSource.fallback);
+    }
+    if (!thisRir.isFinite) {
+      return Wes2SetNCentre(fallback, Wes2CentreSource.fallback);
+    }
+
+    final double raw = PeriodizationModelUtils.reverseCalculateReps(
+      targetE1RM: targetE1rm,
+      weight: w,
+      baseWeight: w,
+      rir: thisRir,
+    );
+    if (!raw.isFinite || raw <= 0) {
+      return Wes2SetNCentre(fallback, Wes2CentreSource.fallback);
+    }
+    // reverseCalculateReps clamps to [1, 45]; landing exactly on a bound is
+    // reported as a clamp so an out-of-range target is visible in traces.
+    final bool clamped = raw == 1.0 || raw == 45.0;
+    return Wes2SetNCentre(
+      raw.round().clamp(1, 100),
+      clamped ? Wes2CentreSource.clamp : Wes2CentreSource.inverse,
+    );
+  }
 
   /// How far the rep search reaches either side of the preferred rep centre.
   static const int repSpan = 5;
