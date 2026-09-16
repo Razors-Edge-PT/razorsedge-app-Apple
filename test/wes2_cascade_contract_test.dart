@@ -10,7 +10,10 @@ import 'package:localtest222/WES2_controller.dart';
 import 'package:localtest222/WES2_hint_service.dart';
 import 'package:localtest222/WES2_models.dart';
 import 'package:localtest222/periodization_model_utils.dart';
+import 'package:localtest222/increment_grid.dart';
 import 'package:localtest222/wes2_cascade_resolver.dart';
+
+import 'support/wes2_expected_next_set.dart';
 
 const _exId = 'ex_press';
 const _exName = 'Seated Shoulder Dumbbell Press';
@@ -149,18 +152,39 @@ void main() {
           if (!ar) expect(edited.reps.hintValue, isNotNull);
           if (!arir) expect(edited.rir.hintValue, isNotNull);
 
-          // The next set consumed exactly what this set shows.
-          final v = Wes2CascadeResolver.resolvedValues(edited);
+          // The next set consumed exactly what this set SHOWS - asserted
+          // against an independent reference model, not an inequality.
           final Wes2SetState next = _s(c, target + 1);
-          expect(next.weight.hintValue, isNotNull);
-          expect(next.reps.hintValue, isNotNull);
-          final double nextE1rm = PeriodizationModelUtils.calculateE1RM(
-              next.weight.hintValue!, next.reps.hintValue!.toDouble(),
-              next.rir.hintValue ?? 0);
-          final double prevE1rm = PeriodizationModelUtils.calculateE1RM(
-              v.weight!, v.reps!.toDouble(), v.rir ?? 0);
-          expect(nextE1rm, lessThanOrEqualTo(prevE1rm + 1.5),
-              reason: 'the next set must derive from THIS set, not the plan');
+          final double nextRir = next.rir.actualValue ?? next.rir.hintValue!;
+          final ExpectedNextSet expected = expectedNextSet(
+            previousFinal: edited,
+            thisRir: nextRir,
+            grid: IncrementGrid(primary: 2.5),
+          );
+          expect(next.weight.hintValue, expected.weight,
+              reason: 'set ${target + 2} weight must follow set '
+                  '${target + 1}: $expected');
+          expect(next.reps.hintValue, expected.reps,
+              reason: 'set ${target + 2} reps must follow set '
+                  '${target + 1}: $expected');
+
+          // Provenance: the next set is hinted, not entered, and its RIR came
+          // from the plan rather than being re-solved.
+          expect(next.weight.actualValue, isNull);
+          expect(next.reps.actualValue, isNull);
+          expect(next.rir.actualValue, isNull);
+          expect(next.weight.hintOrigin, FieldOrigin.modelHint);
+          expect(next.rir.hintValue, 2.0);
+
+          // And the values the reference consumed are the ones the edited set
+          // displays, with the provenance the athlete gave them.
+          final v = Wes2CascadeResolver.resolvedValues(edited);
+          expect(v.weight, aw ? 32.5 : edited.weight.hintValue);
+          expect(v.reps, ar ? 9 : edited.reps.hintValue);
+          expect(v.rir, arir ? 1.5 : edited.rir.hintValue);
+          expect(edited.weight.actualValue != null, aw);
+          expect(edited.reps.actualValue != null, ar);
+          expect(edited.rir.actualValue != null, arir);
         });
       }
     }
@@ -180,6 +204,60 @@ void main() {
       _type(c, 0, Wes2FieldKey.weight, '42.5');
       expect(_s(c, 2).weight.actualValue, 25.0);
       expect(_s(c, 2).reps.actualValue, 12);
+    });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // H-PUBLISH — a stale load cannot install anything, prescriptions included.
+  // ───────────────────────────────────────────────────────────────────────────
+  group('H-PUBLISH — rows and prescriptions are published together', () {
+    Wes2Prescriptions pres(double w) => Wes2Prescriptions(
+          sets: <Wes2PrescribedSet>[Wes2PrescribedSet(weight: w)],
+        );
+
+    test('a completion for an older epoch changes nothing at all', () {
+      final Wes2SessionController c = _load();
+      final Wes2Prescriptions current = c.prescriptionsFor(_exId);
+
+      // Day A's load is in flight when the athlete moves to day B.
+      final int epochA = c.beginLoad();
+      final int epochB = c.beginLoad();
+      expect(epochB, isNot(epochA));
+
+      // Day A's rows are distinguishable, so their rejection is observable.
+      final Wes2ExerciseRow rowA = Wes2ExerciseRow(
+        exerciseId: 'ex_from_day_a',
+        name: 'Day A exercise',
+        circuitIndex: 0,
+        orderIndex: 0,
+        setCount: 3,
+        source: Wes2RowSource.wes2Manual,
+        sets: List<Wes2SetState>.generate(
+            3, (int i) => Wes2SetState(setIndex: i)),
+      );
+      c.publishLoad(
+        rows: <Wes2ExerciseRow>[rowA],
+        prescriptions: <String, Wes2Prescriptions>{_exId: pres(99)},
+        epoch: epochA,
+      );
+
+      expect(c.prescriptionsFor(_exId).at(0).weight, current.at(0).weight,
+          reason: "a stale load must not install its day's prescriptions");
+      expect(c.rows.any((Wes2ExerciseRow r) => r.exerciseId == 'ex_from_day_a'),
+          isFalse,
+          reason: 'and its rows are still rejected');
+    });
+
+    test('the current load publishes both', () {
+      final Wes2SessionController c = _load();
+      final int epoch = c.beginLoad();
+      c.publishLoad(
+        rows: <Wes2ExerciseRow>[_row(3)],
+        prescriptions: <String, Wes2Prescriptions>{_exId: pres(99)},
+        epoch: epoch,
+      );
+      expect(c.prescriptionsFor(_exId).at(0).weight, 99.0);
+      expect(c.rows, hasLength(1));
     });
   });
 

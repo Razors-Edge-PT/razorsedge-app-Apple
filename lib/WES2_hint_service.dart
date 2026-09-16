@@ -89,6 +89,11 @@ class Wes2HintServiceImpl implements Wes2HintService {
       setCount: ctx.effectiveCount,
     );
     final Wes2ExerciseRow processed = ctx.preprocessTimed(input);
+    // The pure Set 1 fallback must be built from THIS input, not from the row
+    // that came in: after a removal the incoming row still carries the hint
+    // its old position left behind, so the solve and its fallback were using
+    // different prescriptions.
+    ctx.bindInput(processed);
     return Wes2CascadeResolver.resolveRow(
       input: processed,
       computer: ctx,
@@ -742,6 +747,40 @@ class Wes2HintServiceImpl implements Wes2HintService {
   }) {
     final prevWeight = prevSet.weight.actualValue ?? prevSet.weight.hintValue;
     final prevReps = prevSet.reps.actualValue ?? prevSet.reps.hintValue;
+
+    // Timed exercises are resolved FIRST. An unweighted plank has no weight by
+    // design, so the ordinary "previous set unresolved" guard below used to
+    // discard it before the seconds could propagate at all.
+    final bool isTimedEarly = PeriodizationModelUtils.isTimedExercise(
+        id: row.exerciseId, name: row.name);
+    if (isTimedEarly) {
+      final bool isWeightedTimedEarly =
+          PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
+      final repsHintSec =
+          (!_isBb3Locked(set.reps) && set.reps.actualValue == null)
+              ? prevReps
+              : null;
+      final weightHintFwd = (isWeightedTimedEarly &&
+              !_isBb3Locked(set.weight) &&
+              set.weight.actualValue == null)
+          ? prevWeight
+          : null;
+      if (Wes2HintTrace.enabled) {
+        Wes2HintTrace.log(
+            'setN',
+            'S$setIdx timed: seconds=$repsHintSec weight=$weightHintFwd '
+            '(weighted=$isWeightedTimedEarly)',
+            exerciseId: row.exerciseId);
+      }
+      if (repsHintSec == null && weightHintFwd == null) return set;
+      return _applyModelHintToSet(
+        existing: set,
+        weightHint: weightHintFwd,
+        repsHint: repsHintSec,
+        rirHint: null,
+      );
+    }
+
     if (prevWeight == null || prevReps == null) {
       if (Wes2HintTrace.enabled) {
         Wes2HintTrace.log(
@@ -764,37 +803,6 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // Bodyweight exercises store display-added load; E1RM math needs absolute load.
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
         id: row.exerciseId, name: row.name);
-
-    // Timed exercises: bypass the E1RM cascade (seconds-as-reps breaks the math).
-    // Propagate Set 1's already-converted hints to all subsequent sets.
-    // prevSet.reps.hintValue is in seconds (converted by _computeSet1Hints).
-    final bool isTimed = PeriodizationModelUtils.isTimedExercise(
-        id: row.exerciseId, name: row.name);
-    final bool isWeightedTimed =
-        PeriodizationModelUtils.isWeightedTimedExercise(id: row.exerciseId);
-    if (isTimed) {
-      // The previous set's RESOLVED seconds/weight — an entered time is what
-      // the athlete actually held, so it must propagate exactly like an
-      // entered weight does in the normal cascade.
-      final repsHintSec =
-          (!_isBb3Locked(set.reps) && set.reps.actualValue == null)
-              ? (prevSet.reps.actualValue ?? prevSet.reps.hintValue)
-              : null;
-      final weightHintFwd = (isWeightedTimed &&
-              !_isBb3Locked(set.weight) &&
-              set.weight.actualValue == null)
-          ? (prevSet.weight.actualValue ?? prevSet.weight.hintValue)
-          : null;
-      if (repsHintSec != null || weightHintFwd != null) {
-        return _applyModelHintToSet(
-          existing: set,
-          weightHint: weightHintFwd,
-          repsHint: repsHintSec,
-          rirHint: null,
-        );
-      }
-      return set;
-    }
 
     final prevWeightAbs = isBw
         ? PeriodizationModelUtils.toAbsoluteWeight(
@@ -1628,6 +1636,13 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
   double? _pureSet1E1rm;
   bool _computingPureSet1 = false;
 
+  /// The authoritative input for this pass (actuals + current prescriptions).
+  Wes2ExerciseRow? _boundInput;
+
+  /// Binds the built input. Everything that needs the prescription context —
+  /// the pure Set 1 fallback in particular — reads it from here.
+  void bindInput(Wes2ExerciseRow input) => _boundInput = input;
+
   /// Timed rows: BB3 rep prescriptions are in rep units and must become
   /// seconds once, from the prescription itself — never from an already
   /// converted hint, which is how a value could be multiplied twice.
@@ -1687,16 +1702,16 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
     if (_computingPureSet1) return null; // never re-enter
     _computingPureSet1 = true;
     try {
+      final List<Wes2SetState> inputSets =
+          _boundInput?.sets ?? const <Wes2SetState>[];
+      final Wes2SetState source = inputSets.isNotEmpty
+          ? inputSets.first
+          : const Wes2SetState(setIndex: 0);
       final Wes2SetState bare = Wes2SetState(
         setIndex: 0,
-        weight: _hintOnly<double>(row.sets.isNotEmpty
-            ? row.sets.first.weight
-            : const Wes2FieldState<double>()),
-        reps: _hintOnly<int>(
-            row.sets.isNotEmpty ? row.sets.first.reps : const Wes2FieldState<int>()),
-        rir: _hintOnly<double>(row.sets.isNotEmpty
-            ? row.sets.first.rir
-            : const Wes2FieldState<double>()),
+        weight: _hintOnly<double>(source.weight),
+        reps: _hintOnly<int>(source.reps),
+        rir: _hintOnly<double>(source.rir),
       );
       final Wes2SetState pure = service._computeSet1Hints(
         row: row,

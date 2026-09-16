@@ -9,7 +9,7 @@ protocol — background only, **not approved for implementation**).
 
 ## Stage 1 — hint cascade. IMPLEMENTED, full suite green.
 
-`flutter test`: **2195 passing, 0 failing.** `flutter analyze lib/`: 1017
+`flutter test`: **2216 passing, 0 failing.** `flutter analyze lib/`: 1017
 issues on both `origin/main` and this branch — **no new issues**; the only
 differences are line numbers of pre-existing style infos.
 
@@ -85,8 +85,8 @@ descriptions in the named file.
 
 | Requirement | Test |
 |---|---|
-| Eight combinations at Set 1, next set observes | `wes2_cascade_contract_test` → `H-MASK` group, `set 1 HHH` … `set 1 AAA` (8) |
-| Eight combinations at an intermediate set | same group, `set 2 HHH` … `set 2 AAA` (8) |
+| Eight combinations at Set 1, next set observes | `wes2_cascade_contract_test` → `H-MASK` group, `set 1 HHH` … `set 1 AAA` (8). Each asserts the next set's weight and reps EXACTLY against `test/support/wes2_expected_next_set.dart`, an independent reference model keyed on the displayed predecessor, plus provenance on both sets |
+| Eight combinations at an intermediate set | same group, `set 2 HHH` … `set 2 AAA` (8), same exact assertions |
 | Accepting a displayed hint leaves the rest of that set alone | `wes2_accepted_hint_view_test` → `H-VIEW-40x10` group (free / weight-first / reps-first / Set 3 follow-on) |
 | Acceptance across every progression model, history present and absent | same file → `H-VIEW-GATE`, `<model> (history: true|false) — accepting any displayed hint leaves the rest of that set unchanged` (8 tests) |
 | Acceptance matches what was displayed, not a tolerance | same file → `H-VIEW-FORMAT` group (3) |
@@ -99,12 +99,18 @@ descriptions in the named file.
 
 | Requirement | Test |
 |---|---|
-| A saved row keeps its own set count across a reload (through `FirestoreWes2Repository.loadDay`) | `wes2_hint_structure_and_provenance_test` → `a two-set saved row is not grown back to the planned four` |
+| A saved row keeps its own set count across a reload (through `FirestoreWes2Repository.loadDay` and the hint pass) | `wes2_hint_structure_and_provenance_test` → `a two-set saved row is not grown back to the planned four` |
 | A plan-only row still takes the planned count | same file → `a plan-only row still takes the planned count` |
 | A hint pass never resurrects a removed set in-session | `wes2_cascade_contract_test` → `a hint pass never resurrects a removed set` |
 | Each set shows its own prescription, as a BB3 lock | `wes2_hint_structure_and_provenance_test` → `each set shows its own prescription, as a BB3 lock` |
 | Prescriptions stay positional after a removal | same file → `after removing set 2, position 2 keeps prescription 2` |
 | BB3 locks stay authoritative through the cascade | `wes2_setn_cascade_test` → `TESTS 24-25` (pre-existing, still green) |
+
+**Not** yet proven through the complete load merge: `wes2ApplyDraftWithoutOverridingServer`
+still takes `max(server, draft)` set count, so a saved two-set row meeting a
+stale four-set draft would still show four. That path is **deferred to the
+Stage 2 structural-recovery work**, where pending additions must be preserved
+rather than the draft blindly discarded; it is listed in NEXT.md.
 
 **Hint provenance and entries surviving a draft reload — COMPLETE at the draft
 payload level**
@@ -144,7 +150,22 @@ this work.
 
 **Production screen integration — DEFERRED, release blocker (see Release).**
 
-### S1-6 Existing tests updated, with reasons
+### S1-6 Review corrections (applied after checkpoint `a456c075`)
+
+Each was reproduced through production code first, then fixed.
+
+| Finding | Reproduction | Fix |
+|---|---|---|
+| 1. Restoring unfinished input left the entry unsaved — the durable write happens on blur, so `20 → type 25 → type "-" → blur` showed 25 while the server kept 20 | `wes2_field_entry_widget_test` → `H-TEXT-BLUR restores the last valid number AND saves it` (failed: nothing saved) | `Wes2SetRow._leaveField` restores the display AND saves the model's own value, using `num.toString()` so 22.4999999 is not rounded to the displayed 22.5. An untouched empty field still saves nothing. Second test: `H-TEXT-BLUR saves the exact number, not the displayed rounding` |
+| 2. The pure Set 1 fallback read the ORIGINAL row's hints, not the authoritative prescription input | `wes2_stage1_corrections_test` → `after removing Set 1 the survivor uses ITS position prescription` (failed: RIR 7 then 9, exactly as predicted) | `resolveRow` binds the built input to the row context; `_pureSet1` reads the bound input. Also covered: first-pass agreement with a fresh controller, and prescription replacement moving the fallback |
+| 3. `_loadDay` wrote shared prescriptions before the epoch check | `wes2_cascade_contract_test` → `H-PUBLISH` group; `wes2_hint_load_runner_test` → `H-RUN-SAME-IDENTITY-OVERLAP` (verified failing with the guard removed) | New `Wes2SessionController.publishLoad` installs rows and prescriptions together, only for the current epoch; the screen keeps prescriptions local until then, on both the success and offline-recovery paths. The runner gained a request sequence so an older pass with an identical token cannot overwrite a newer one |
+| 4. Unweighted timed exercises never reached the timed branch | `wes2_stage1_corrections_test` → `C4` group (failed: no seconds at all, even the planned 45) | `_computeSetNHints` resolves timed behaviour before the weight/reps prerequisites; the later duplicate branch was removed. Weighted-timed coverage retained in `wes2_timed_cascade_test` |
+
+Scope note on 3: these drive the controller's publication contract and the
+runner's ordering, which is where the defect lives. The screen's own call site
+is still only covered by the release-blocker screen test.
+
+### S1-7 Existing tests updated, with reasons
 
 * `wes2_rir_actual_cascade_cap_test` — harness moved to `applyHintContext`;
   "TEST 3 — same-value suppression still applies" **rewritten** to

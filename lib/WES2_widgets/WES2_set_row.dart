@@ -293,52 +293,64 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
 
   void _onWeightFocusChange() {
     if (!_weightFocus.hasFocus) {
-      _leaveField(_weightCtrl, Wes2FieldKey.weight,
-          _fromActual(widget.set.weight, _fmtWeight));
+      _leaveField(_weightCtrl, Wes2FieldKey.weight, widget.set.weight,
+          _fmtWeight);
     }
   }
 
   void _onRepsFocusChange() {
     if (!_repsFocus.hasFocus) {
-      _leaveField(
-          _repsCtrl, Wes2FieldKey.reps, _fromActual(widget.set.reps, _fmtInt));
+      _leaveField(_repsCtrl, Wes2FieldKey.reps, widget.set.reps, _fmtInt);
     }
   }
 
   void _onRirFocusChange() {
     if (!_rirFocus.hasFocus) {
-      _leaveField(
-          _rirCtrl, Wes2FieldKey.rir, _fromActual(widget.set.rir, _fmtDouble));
+      _leaveField(_rirCtrl, Wes2FieldKey.rir, widget.set.rir, _fmtDouble);
     }
   }
 
   void _onVelocityFocusChange() {
     if (!_velocityFocus.hasFocus) {
-      _leaveField(_velocityCtrl, Wes2FieldKey.velocity,
-          _fromActual(widget.set.velocity, _fmtVelocity));
+      _leaveField(_velocityCtrl, Wes2FieldKey.velocity, widget.set.velocity,
+          _fmtVelocity);
     }
   }
 
-  /// Leaving a field with text that is not a number.
+  /// Leaving a field.
   ///
-  /// A half-typed "-" or "12e" is not an entry, so nothing is saved and the
-  /// field goes back to the last value the model actually holds — the athlete's
-  /// own number, or empty. It never becomes 0, and it never silently accepts
-  /// the hint that is showing behind it.
-  void _leaveField(
+  /// Ordinary text — including an empty field, which is a deliberate clear —
+  /// goes straight to the save path. Text that is not a number ("-", "12e")
+  /// is not an entry: the field goes back to the last value the MODEL holds,
+  /// and that value is still saved, because the durable write happens here on
+  /// blur rather than on every keystroke. Skipping it left the athlete looking
+  /// at 25 while the server still held 20.
+  ///
+  /// The saved string is the model's own number, not the displayed one: the
+  /// row renders three decimals, and 22.4999999 must not reach the server as
+  /// 22.5. An untouched empty field has nothing to record, so nothing is sent
+  /// and the field stays empty — never 0, and never the hint behind it.
+  void _leaveField<T extends Object>(
     TextEditingController ctrl,
     Wes2FieldKey key,
-    String lastValidText,
+    Wes2FieldState<T> field,
+    String Function(T) fmt,
   ) {
-    if (Wes2FieldParser.isInvalidEntry(key, ctrl.text)) {
-      if (ctrl.text != lastValidText) {
-        ctrl.text = lastValidText;
-        ctrl.selection =
-            TextSelection.collapsed(offset: lastValidText.length);
-      }
+    if (!Wes2FieldParser.isInvalidEntry(key, ctrl.text)) {
+      widget.onFieldUnfocused(key, ctrl.text);
       return;
     }
-    widget.onFieldUnfocused(key, ctrl.text);
+
+    final T? actual = field.actualValue;
+    final String restored = actual != null ? fmt(actual) : '';
+    if (ctrl.text != restored) {
+      ctrl.text = restored;
+      ctrl.selection = TextSelection.collapsed(offset: restored.length);
+    }
+    if (actual == null) return;
+    // `toString()` round-trips a Dart num exactly; the formatter is for the
+    // display only.
+    widget.onFieldUnfocused(key, actual.toString());
   }
 
   @override

@@ -539,7 +539,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // Phase 4: BB3 planned day — skip if block context is absent or if
       // selectedDate is before blockStartDate (no negative week/day paths).
       _bb3PlannedExerciseIds = const {}; // reset before each load
-      _prescriptions = const <String, Wes2Prescriptions>{};
+      // Kept LOCAL until the load is proven current: a stale day's
+      // prescriptions must never reach shared state, even if its rows are
+      // rejected a moment later.
+      Map<String, Wes2Prescriptions> prescriptions =
+          const <String, Wes2Prescriptions>{};
       var bb3Rows = const <Wes2ExerciseRow>[];
       final blockId = _controller.activeBlockId;
       final blockStart = _controller.blockStartDate;
@@ -555,7 +559,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           dayIndex: wd.dayIndex,
         );
         _bb3PlannedExerciseIds = bb3Rows.map((r) => r.exerciseId).toSet();
-        _prescriptions = <String, Wes2Prescriptions>{
+        prescriptions = <String, Wes2Prescriptions>{
           for (final Wes2ExerciseRow r in bb3Rows)
             r.exerciseId: Wes2HintInput.prescriptionsFromRow(r),
         };
@@ -584,8 +588,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         ),
         pending,
       ));
-      _controller.setPrescriptions(_prescriptions, recompute: false);
-      _controller.setRows(mergedRows, epoch);
+      // One guarded publication: a stale completion changes nothing at all.
+      if (_controller.loadEpoch != epoch) return;
+      _prescriptions = prescriptions;
+      _controller.publishLoad(
+        rows: mergedRows,
+        prescriptions: prescriptions,
+        epoch: epoch,
+      );
       // A successful read proves the server is reachable, so anything still
       // queued is retried now instead of waiting out a backoff set while there
       // was no signal.
@@ -645,7 +655,15 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       final recovered = await _offlineRowsFromLocalState();
       if (!mounted) return;
       if (recovered != null && recovered.isNotEmpty) {
-        _controller.setRows(recovered, epoch);
+        if (_controller.loadEpoch != epoch) return;
+        // Offline recovery has no planned day, so it publishes no
+        // prescriptions rather than leaving another day's in place.
+        _prescriptions = const <String, Wes2Prescriptions>{};
+        _controller.publishLoad(
+          rows: recovered,
+          prescriptions: const <String, Wes2Prescriptions>{},
+          epoch: epoch,
+        );
         // ignore: discarded_futures
         _loadAndApplyHints();
         return;

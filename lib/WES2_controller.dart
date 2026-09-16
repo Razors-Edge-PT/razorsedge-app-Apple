@@ -111,6 +111,22 @@ class Wes2SessionController extends ChangeNotifier {
   Wes2Prescriptions prescriptionsFor(String exerciseId) =>
       _prescriptions[exerciseId] ?? Wes2Prescriptions.none;
 
+  /// Publishes one completed load: the day's rows AND its prescriptions,
+  /// together, and only while [epoch] is still the current load.
+  ///
+  /// They must arrive as one unit. Installing prescriptions first let a stale
+  /// day-A load write A's prescriptions, have its rows rejected by the epoch
+  /// check, and leave day B on screen being hinted against A's plan.
+  void publishLoad({
+    required List<Wes2ExerciseRow> rows,
+    required Map<String, Wes2Prescriptions> prescriptions,
+    required int epoch,
+  }) {
+    if (epoch != _loadEpoch) return;
+    _prescriptions = Map<String, Wes2Prescriptions>.from(prescriptions);
+    setRows(rows, epoch);
+  }
+
   /// Applies a freshly built hint context: registers the service and resolves
   /// every row once, from the CURRENT entries and structure, with a single
   /// assignment and a single notification.

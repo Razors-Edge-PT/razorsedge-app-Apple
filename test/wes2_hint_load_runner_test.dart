@@ -257,6 +257,41 @@ void main() {
     );
   });
 
+  test('H-RUN-SAME-IDENTITY-OVERLAP an older pass loses even with an equal '
+      'token', () async {
+    // Two passes started inside the same load epoch and settings generation
+    // carry IDENTICAL tokens - a reload trigger and a resume trigger, say - so
+    // identity alone cannot order them. The older one must still lose.
+    final plan = _ScriptedPlanService(<Map<String, dynamic>>[
+      _settings('10 x 3'), // first (older) pass
+      _settings('5 x 3'), // second (newer) pass, same token
+    ])
+      ..holdSettings = true;
+    final b = _build(plan);
+
+    final Future<Wes2HintPassOutcome> first = b.runner.run();
+    await pumpEventQueue();
+    final Wes2HintPassToken? tokenA = b.runner.currentToken();
+
+    final Future<Wes2HintPassOutcome> second = b.runner.run();
+    await pumpEventQueue();
+    expect(b.runner.currentToken(), tokenA,
+        reason: 'the fixture is only meaningful while the tokens are equal');
+
+    // The newer pass finishes first; the older one lands afterwards.
+    expect(plan.gates, hasLength(2));
+    plan.gates[1].complete();
+    expect(await second, Wes2HintPassOutcome.applied);
+
+    plan.gates[0].complete();
+    expect(await first, Wes2HintPassOutcome.superseded);
+
+    final Map<String, dynamic> ex =
+        b.runner.settings[_exId] as Map<String, dynamic>;
+    expect(((ex['repTargets'] as Map)['week1'] as Map)['instance1'], '5 x 3',
+        reason: 'the older pass overwrote the newer settings');
+  });
+
   test('H-RUN-LATE-EDITS entries made while loading are included', () async {
     final plan = _ScriptedPlanService(<Map<String, dynamic>>[_settings('10 x 3')])
       ..holdSettings = true;

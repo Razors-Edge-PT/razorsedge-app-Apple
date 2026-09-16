@@ -11,11 +11,14 @@ saving) is not started.**
   `origin/fix/wes2-live-hint-cascade`. Follow-up commit **0005959d**
   adds the acceptance-coverage map, the saved-structure-across-reload fix and
   its tests.
-* Full `flutter test`: **2205 passing, 0 failing.** New suites:
+* Review corrections (findings 1-4) applied on top; see PLAN.md §S1-6.
+* Full `flutter test`: **2216 passing, 0 failing.** New suites:
   `wes2_accepted_hint_view_test` (all-model gate), `wes2_cascade_contract_test`,
   `wes2_setn_centre_test`, `wes2_display_agreement_test`,
   `wes2_field_entry_widget_test`, `wes2_hint_load_runner_test`,
-  `wes2_timed_cascade_test`, `wes2_hint_structure_and_provenance_test`.
+  `wes2_timed_cascade_test`, `wes2_hint_structure_and_provenance_test`,
+  `wes2_stage1_corrections_test`; shared reference model in
+  `test/support/wes2_expected_next_set.dart`.
 * Acceptance coverage map: PLAN.md §S1-5 (complete vs deferred, per
   requirement).
 * **Release blocker:** the real `Wes2Screen` integration test — PLAN.md
@@ -30,6 +33,11 @@ saving) is not started.**
 **Next step — Stage 2**, kept separately reviewable. Scope is limited to the
 reproduced failures in PROBES.md, each with a named regression:
 
+0. **Carried in from Stage 1 review:** the complete load merge still takes
+   `max(server, draft)` set count in `wes2ApplyDraftWithoutOverridingServer`,
+   so a saved two-set row meeting a stale four-set draft shows four. Fix it
+   with the structural-recovery work, preserving genuinely pending additions
+   rather than discarding draft data.
 1. `R-UNDO` — deletion Undo is not durable (server reload still shows the set
    removed).
 2. `probe5` — an edit to a later set is lost when an earlier set is removed

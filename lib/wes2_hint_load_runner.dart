@@ -93,6 +93,12 @@ class Wes2HintLoadRunner {
   int _settingsGeneration = 0;
   bool _disposed = false;
 
+  /// Orders passes that share an identity token. Two passes started within the
+  /// same load epoch and settings generation are indistinguishable by token
+  /// alone, so the older one could still finish last and overwrite the newer
+  /// one's settings.
+  int _requestSeq = 0;
+
   /// The settings this runner has installed. The screen reads these for the
   /// settings sheet; they are only ever replaced by a current pass.
   Map<String, dynamic> get settings => _settings;
@@ -127,6 +133,7 @@ class Wes2HintLoadRunner {
   /// infer it from side effects.
   Future<Wes2HintPassOutcome> run() async {
     if (_disposed) return Wes2HintPassOutcome.disposed;
+    final int request = ++_requestSeq;
     final Wes2HintPassToken? token = currentToken();
     final DateTime? blockStart = _controller.blockStartDate;
     if (token == null || blockStart == null) {
@@ -136,7 +143,8 @@ class Wes2HintLoadRunner {
       return Wes2HintPassOutcome.noBlock;
     }
 
-    bool current() => !_disposed && currentToken() == token;
+    bool current() =>
+        !_disposed && currentToken() == token && _requestSeq == request;
 
     if (Wes2HintTrace.enabled) {
       Wes2HintTrace.log('hints', 'start $token');

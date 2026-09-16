@@ -177,8 +177,11 @@ void main() {
     expect(set0().weight.actualValue, 25.0);
   });
 
-  testWidgets('H-TEXT-BLUR restores the last valid number and saves nothing',
+  testWidgets('H-TEXT-BLUR restores the last valid number AND saves it',
       (WidgetTester tester) async {
+    // The durable write happens on blur, not on every keystroke. Restoring the
+    // display without saving left the athlete looking at 25 while the server
+    // still held the old value, and a reload brought the old value back.
     await pump(tester);
     await tester.enterText(fieldAt(0), '25');
     saved.clear();
@@ -188,7 +191,26 @@ void main() {
     expect(widgetAt(tester, 0).controller!.text, '25',
         reason: 'invalid text is replaced by the value the model holds');
     expect(set0().weight.actualValue, 25.0);
-    expect(saved, isEmpty, reason: 'half-typed text must not be saved');
+    expect(saved, hasLength(1),
+        reason: 'the last valid entry must still reach the durable write');
+    expect(saved.single.key, Wes2FieldKey.weight);
+    expect(double.parse(saved.single.text), 25.0);
+  });
+
+  testWidgets('H-TEXT-BLUR saves the exact number, not the displayed rounding',
+      (WidgetTester tester) async {
+    await pump(tester);
+    await tester.enterText(fieldAt(0), '22.4999999');
+    expect(set0().weight.actualValue, 22.4999999);
+    saved.clear();
+    await tester.enterText(fieldAt(0), '-');
+    await dropFocus(tester);
+
+    // The row displays three decimals; what is saved must not be rounded to
+    // the display on the way out.
+    expect(widgetAt(tester, 0).controller!.text, '22.5');
+    expect(set0().weight.actualValue, 22.4999999);
+    expect(double.parse(saved.single.text), 22.4999999);
   });
 
   testWidgets('H-TEXT-BLUR on an empty-model field leaves it empty, never 0',
