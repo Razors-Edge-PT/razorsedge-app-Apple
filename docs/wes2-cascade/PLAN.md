@@ -150,6 +150,24 @@ this work.
 
 **Production screen integration — DEFERRED, release blocker (see Release).**
 
+### S1-6a Final corrections before release
+
+* **`_leaveField` distinguishes an untouched field from an explicit clear.**
+  A field is recorded as edited only when the athlete's change is a real value
+  or a deliberate emptying; half-typed text (`-`, `.`) marks nothing. Saved 25
+  -> cleared -> `-` -> blur now saves the clear, so 25 does not come back on
+  reload, while an untouched empty field left holding `-` still creates no
+  entry. Tests: `wes2_field_entry_widget_test` H-TEXT-BLUR (both cases).
+* **`_bb3PlannedExerciseIds` is local during `_loadDay`** and published under
+  the same current-load guard as rows and prescriptions.
+* **Offline recovery keeps the draft's prescriptions.** The recovery path
+  published no prescriptions at all, so an offline BB3 day silently fell back
+  to history-derived hints (reproduced: prescribed 40 shown as 5). It now reads
+  them back from the recovered rows' own `bb3Hint` fields as
+  `Wes2PrescriptionSource.localStored`, scoped to that day's rows. Test:
+  `wes2_screen_cascade_e2e_test` "offline recovery keeps the BB3
+  prescriptions the draft still holds".
+
 ### S1-6 Review corrections (applied after checkpoint `a456c075`)
 
 Each was reproduced through production code first, then fixed.
@@ -196,14 +214,20 @@ proposed smallest fix are recorded for review rather than implemented.
 
 ## Release
 
-### RELEASE BLOCKER — real `Wes2Screen` integration test
+### RELEASE GATE — real `Wes2Screen` integration test. DONE.
 
-Not shippable without it. It may land with Stage 2, whose persistence work
-touches the same wiring (the screen builds its repository, local store and
-sync services internally, which is why it cannot be pumped today), but it is a
-gate on the release, not on Stage 2's review.
+`test/wes2_screen_cascade_e2e_test.dart`, 7 tests, green. The screen takes
+three `@visibleForTesting` overrides (repository, plan service, local store);
+everything else is production code, with Firebase, Isar and Drift absent
+exactly as on a phone with no connection. The sync services are the real ones
+over an in-memory Drift database.
 
-It must drive the **actual** `Wes2Screen` — not the controller standing in for
+Covered: load and cascade, editing, clearing, accepting a displayed hint, a
+later entered set surviving an earlier edit, add/remove set, reload of the day,
+repeat-edit drift, and offline recovery keeping the prescriptions the stored
+draft still holds.
+
+It drives the **actual** `Wes2Screen` — not the controller standing in for
 it — and prove, after each interaction:
 
 * **numerical predecessor equality** — the values the cascade consumed equal
@@ -220,9 +244,21 @@ Until it exists, `wes2_display_agreement_test` covers the same three levels one
 layer down (real controller, real hint service, real `Wes2SetRow`), and that
 distinction is stated rather than glossed.
 
-### Then
+### Stage 1 released independently
 
-After Stage 2 review, this blocker and the remaining integration gates,
-`/goodlift-release` performs the already-authorised version bump, integration
-checks and verified signed AAB. `main` and the release version stay unchanged
-during review. The custom E1RM formula remains a separate future task.
+Stage 2 no longer gates this release. Released via `/goodlift-release` from
+`main` with the Stage 1 hint work only; the Stage 2 failures in PROBES.md stay
+open and documented, and are NOT claimed as delivered. The custom E1RM formula
+remains a separate future task.
+
+Analyzer comparison on the final candidate: **1313 issues on
+`origin/main` (abdaa477), 1313 on the branch, 0 errors on both** — no new
+issue site, measured file-by-file and rule-by-rule from full (untruncated)
+`flutter analyze` output in a throwaway `origin/main` worktree. An earlier
+"1017 vs 1017" note in this file came from a truncated capture and was wrong in
+its absolute numbers, not in its conclusion.
+
+Two archived pre-fix evidence files (`recovered-probes/probe_test.dart`,
+`repro/repro_current_main_test.dart`) are kept as `.dart.txt`: they deliberately
+call the removed baseline-hint API, so as `.dart` they made repo-wide
+`flutter analyze` report 6 errors.

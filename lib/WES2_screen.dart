@@ -54,7 +54,23 @@ import 'wes2_hint_trace.dart';
 class Wes2Screen extends StatefulWidget {
   final DateTime? initialDate;
 
-  const Wes2Screen({super.key, this.initialDate});
+  /// Test seams. Production passes nothing and gets the real services, exactly
+  /// as before; the integration test supplies fakes so the actual screen can
+  /// be driven without Firebase, Isar or Drift.
+  @visibleForTesting
+  final Wes2Repository? repositoryOverride;
+  @visibleForTesting
+  final Wes2PlanService? planServiceOverride;
+  @visibleForTesting
+  final Wes2LocalStore? localStoreOverride;
+
+  const Wes2Screen({
+    super.key,
+    this.initialDate,
+    this.repositoryOverride,
+    this.planServiceOverride,
+    this.localStoreOverride,
+  });
 
   @override
   State<Wes2Screen> createState() => _Wes2ScreenState();
@@ -67,9 +83,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// the durable store by stable setId, refreshed whenever the day changes or
   /// the video flow reports a change.
   Map<String, Set<int>> _setsWithVideo = const <String, Set<int>>{};
-  final Wes2Repository _repository = FirestoreWes2Repository();
-  final Wes2PlanService _planService = FirestoreWes2PlanService();
-  final Wes2LocalStore _localStore = IsarWes2LocalStore();
+  late final Wes2Repository _repository =
+      widget.repositoryOverride ?? FirestoreWes2Repository();
+  late final Wes2PlanService _planService =
+      widget.planServiceOverride ?? FirestoreWes2PlanService();
+  late final Wes2LocalStore _localStore =
+      widget.localStoreOverride ?? IsarWes2LocalStore();
   final Wes2TemplateService _templateService = FirestoreWes2TemplateService();
   bool _loadStarted = false;
   // One-shot guard so the WES2-first-build timing trace fires only once.
@@ -186,7 +205,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   Future<void> _loadTutorialState() async {
     // Uses Firebase Auth UID (logged-in actor), never the impersonated athlete.
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final uid = _authUidOrNull();
     if (uid == null) return;
     final svc = OnboardingCueService.instance;
     await svc.ensureLoaded(uid);
@@ -200,7 +219,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   Future<void> _loadCogCueState() async {
     // Uses FirebaseAuth actor UID — never the impersonated athlete UID.
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final uid = _authUidOrNull();
     if (uid == null) return;
     final svc = OnboardingCueService.instance;
     await svc.ensureLoaded(uid);
@@ -222,7 +241,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (_tutorialStep < 5) {
       setState(() => _tutorialStep++);
     } else {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final uid = _authUidOrNull();
       if (uid != null) {
         await OnboardingCueService.instance
             .markCueComplete(OnboardingCueId.wes2FieldWalkthrough, uid);
@@ -538,10 +557,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
       // Phase 4: BB3 planned day — skip if block context is absent or if
       // selectedDate is before blockStartDate (no negative week/day paths).
-      _bb3PlannedExerciseIds = const {}; // reset before each load
       // Kept LOCAL until the load is proven current: a stale day's
-      // prescriptions must never reach shared state, even if its rows are
-      // rejected a moment later.
+      // prescriptions and planned-exercise ids must never reach shared state,
+      // even if its rows are rejected a moment later.
+      Set<String> plannedIds = const <String>{};
       Map<String, Wes2Prescriptions> prescriptions =
           const <String, Wes2Prescriptions>{};
       var bb3Rows = const <Wes2ExerciseRow>[];
@@ -558,7 +577,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           weekIndex: wd.weekIndex,
           dayIndex: wd.dayIndex,
         );
-        _bb3PlannedExerciseIds = bb3Rows.map((r) => r.exerciseId).toSet();
+        plannedIds = bb3Rows.map((r) => r.exerciseId).toSet();
         prescriptions = <String, Wes2Prescriptions>{
           for (final Wes2ExerciseRow r in bb3Rows)
             r.exerciseId: Wes2HintInput.prescriptionsFromRow(r),
@@ -591,6 +610,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // One guarded publication: a stale completion changes nothing at all.
       if (_controller.loadEpoch != epoch) return;
       _prescriptions = prescriptions;
+      _bb3PlannedExerciseIds = plannedIds;
       _controller.publishLoad(
         rows: mergedRows,
         prescriptions: prescriptions,
@@ -656,18 +676,37 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (!mounted) return;
       if (recovered != null && recovered.isNotEmpty) {
         if (_controller.loadEpoch != epoch) return;
-        // Offline recovery has no planned day, so it publishes no
-        // prescriptions rather than leaving another day's in place.
-        _prescriptions = const <String, Wes2Prescriptions>{};
+        // The planned day could not be read, but the recovered rows carry the
+        // coach's prescription themselves, stored as bb3 hints. Reading it back
+        // from them keeps an offline day on the prescribed numbers; publishing
+        // nothing would silently replace them with history-derived hints.
+        // Only this day's rows are used, so no other day's plan can leak in.
+        final Map<String, Wes2Prescriptions> recoveredPrescriptions =
+            <String, Wes2Prescriptions>{};
+        for (final Wes2ExerciseRow row in recovered) {
+          final Wes2Prescriptions p = Wes2HintInput.prescriptionsFromRow(
+            row,
+            source: Wes2PrescriptionSource.localStored,
+          );
+          if (!p.isEmpty) recoveredPrescriptions[row.exerciseId] = p;
+        }
+        _bb3PlannedExerciseIds = recovered
+            .where((Wes2ExerciseRow r) =>
+                r.source == Wes2RowSource.bb3Planned &&
+                recoveredPrescriptions.containsKey(r.exerciseId))
+            .map((Wes2ExerciseRow r) => r.exerciseId)
+            .toSet();
+        _prescriptions = recoveredPrescriptions;
         _controller.publishLoad(
           rows: recovered,
-          prescriptions: const <String, Wes2Prescriptions>{},
+          prescriptions: recoveredPrescriptions,
           epoch: epoch,
         );
         // ignore: discarded_futures
         _loadAndApplyHints();
         return;
       }
+      if (_controller.loadEpoch != epoch) return;
       _controller.setLoadError(e.toString(), epoch);
     }
   }
@@ -1124,7 +1163,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         if (mounted) setState(() => _tutorialStep = 4);
       } else if (_tutorialStep == 5 && fieldKey == Wes2FieldKey.rir) {
         // RIR entered → complete tutorial (idempotent with _onTutorialStepDismiss).
-        final uid = FirebaseAuth.instance.currentUser?.uid;
+        final uid = _authUidOrNull();
         if (uid != null) {
           unawaited(OnboardingCueService.instance
               .markCueComplete(OnboardingCueId.wes2FieldWalkthrough, uid));
@@ -1238,8 +1277,19 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// guaranteed to be on disk before the field widgets are destroyed.
   Future<void> _awaitDurableWrites() => _durableWrites.settle();
 
+  /// The signed-in account, or null when Firebase Auth is not available.
+  /// Reading `FirebaseAuth.instance` throws when no app is configured, which
+  /// must not take down an ordinary screen path.
+  static String? _authUidOrNull() {
+    try {
+      return FirebaseAuth.instance.currentUser?.uid;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String get _actorUidForMutations {
-    final String fromAuth = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final String fromAuth = _authUidOrNull() ?? '';
     if (fromAuth.isNotEmpty) return fromAuth;
     // Coach mode still routes through the authenticated account; the controller
     // actor is the fallback for the brief window before auth has surfaced.
@@ -2264,7 +2314,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
     if (!_cogCueDismissed && mounted) {
       setState(() => _cogCueDismissed = true);
-      final actorUid = FirebaseAuth.instance.currentUser?.uid;
+      final actorUid = _authUidOrNull();
       if (actorUid != null) {
         unawaited(OnboardingCueService.instance
             .markCueComplete(OnboardingCueId.wes2SettingsCog, actorUid));

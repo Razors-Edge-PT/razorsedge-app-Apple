@@ -12,7 +12,7 @@ saving) is not started.**
   adds the acceptance-coverage map, the saved-structure-across-reload fix and
   its tests.
 * Review corrections (findings 1-4) applied on top; see PLAN.md §S1-6.
-* Full `flutter test`: **2216 passing, 0 failing.** New suites:
+* Full `flutter test`: **2224 passing, 0 failing.** New suites:
   `wes2_accepted_hint_view_test` (all-model gate), `wes2_cascade_contract_test`,
   `wes2_setn_centre_test`, `wes2_display_agreement_test`,
   `wes2_field_entry_widget_test`, `wes2_hint_load_runner_test`,
@@ -21,14 +21,19 @@ saving) is not started.**
   `test/support/wes2_expected_next_set.dart`.
 * Acceptance coverage map: PLAN.md §S1-5 (complete vs deferred, per
   requirement).
-* **Release blocker:** the real `Wes2Screen` integration test — PLAN.md
-  "Release". It may land with Stage 2's wiring changes.
+* **Release gate met:** the real `Wes2Screen` integration test is done —
+  `test/wes2_screen_cascade_e2e_test.dart`, 7 tests, PLAN.md "Release".
+* Analyzer: 1313 issues on `origin/main`, 1313 on the branch, 0 errors on
+  both; no new issue site.
 * Two existing suites were updated with reasons recorded in PLAN.md §S1-6.
 * `flutter pub get` rewrites `windows/flutter/generated_plugin*`; those are not
   part of the change and must not be committed.
 * Do not touch `C:\Projects\RE-test` dirty files (`.docx`, lock file,
   `android/build/`) — not ours. A temporary `C:\Projects\RE-baseline` worktree
   was used for the analyzer baseline; remove it when done.
+
+**Stage 1 has been released on its own.** Stage 2 does not block it and its
+recorded failures below remain open and undelivered.
 
 **Next step — Stage 2**, kept separately reviewable. Scope is limited to the
 reproduced failures in PROBES.md, each with a named regression:

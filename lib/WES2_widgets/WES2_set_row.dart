@@ -245,6 +245,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   late TextEditingController _rirCtrl;
   late TextEditingController _velocityCtrl;
   late FocusNode _weightFocus;
+  /// Fields the athlete has put a MEANINGFUL value into since the row was
+  /// built - a number, or an empty field they cleared themselves. An emptied
+  /// field must still be saved as a clear, or the old value returns on the
+  /// next reload; a field they never really touched records nothing, even if
+  /// they leave half-typed text in it.
+  final Set<Wes2FieldKey> _edited = <Wes2FieldKey>{};
+
   late FocusNode _repsFocus;
   late FocusNode _rirFocus;
   late FocusNode _velocityFocus;
@@ -337,6 +344,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     String Function(T) fmt,
   ) {
     if (!Wes2FieldParser.isInvalidEntry(key, ctrl.text)) {
+      _edited.remove(key);
       widget.onFieldUnfocused(key, ctrl.text);
       return;
     }
@@ -347,10 +355,17 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
       ctrl.text = restored;
       ctrl.selection = TextSelection.collapsed(offset: restored.length);
     }
-    if (actual == null) return;
-    // `toString()` round-trips a Dart num exactly; the formatter is for the
-    // display only.
-    widget.onFieldUnfocused(key, actual.toString());
+    final bool touched = _edited.remove(key);
+    if (actual != null) {
+      // `toString()` round-trips a Dart num exactly; the formatter is for the
+      // display only.
+      widget.onFieldUnfocused(key, actual.toString());
+      return;
+    }
+    // No value left. If the athlete emptied the field themselves that is an
+    // explicit clear and must reach the save path, or the old value comes back
+    // on the next reload. An untouched field creates nothing.
+    if (touched) widget.onFieldUnfocused(key, '');
   }
 
   @override
@@ -644,7 +659,16 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             focusedBorder: _kFocusedBorder,
             isDense: true,
           ),
-          onChanged: (v) => widget.onFieldChanged(fieldKey, v),
+          onChanged: (v) {
+            // Only a change that MEANS something marks the field: emptying it
+            // is a deliberate clear, while half-typed text is not an edit at
+            // all - otherwise typing "-" into an untouched empty field would
+            // look like the athlete had cleared a value.
+            if (!Wes2FieldParser.isInvalidEntry(fieldKey, v)) {
+              _edited.add(fieldKey);
+            }
+            widget.onFieldChanged(fieldKey, v);
+          },
           style: _kFieldStyle,
         ),
       ),

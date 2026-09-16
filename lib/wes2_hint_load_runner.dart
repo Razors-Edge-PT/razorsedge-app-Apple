@@ -153,7 +153,13 @@ class Wes2HintLoadRunner {
     try {
       final Future<void> Function()? refresh = _refreshHistory;
       if (refresh != null) {
-        await refresh();
+        try {
+          await refresh();
+        } catch (e) {
+          // History hydration is best effort: offline, or with the store
+          // unavailable, the pass still computes hints from plan and settings.
+          debugPrint('[WES2] history refresh failed: $e');
+        }
         if (!current()) return _superseded(token);
       }
 

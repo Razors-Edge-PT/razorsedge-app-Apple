@@ -164,6 +164,21 @@ class UserContext extends ChangeNotifier {
   String _kS(String uid)   => 'block.$uid.start';
   String _kE(String uid)   => 'block.$uid.end';
 
+  /// Test seam: installs block metadata without the prefs/server hydration
+  /// path. Production code always goes through the hydration methods below.
+  @visibleForTesting
+  void debugSetBlockMeta({
+    required String activeBlockId,
+    DateTime? startDate,
+    DateTime? endDate,
+  }) =>
+      _setBlockMetaAtomic(
+        activeBlockId: activeBlockId,
+        startDate: startDate,
+        endDate: endDate,
+        source: 'prefs',
+      );
+
   // Set all three atomically and notify once
   void _setBlockMetaAtomic({
     required String activeBlockId,

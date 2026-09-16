@@ -226,6 +226,28 @@ void main() {
     expect(saved, isEmpty);
   });
 
+  testWidgets('H-TEXT-BLUR an explicit clear still reaches the save path',
+      (WidgetTester tester) async {
+    // saved 25 -> clear it -> leave half-typed text -> blur. The clear is the
+    // athlete's real intent; without it the old 25 comes back on reload.
+    await pump(tester);
+    await tester.enterText(fieldAt(0), '25');
+    await dropFocus(tester);
+    expect(set0().weight.actualValue, 25.0);
+
+    saved.clear();
+    await tester.tap(fieldAt(0));
+    await tester.pump();
+    await tester.enterText(fieldAt(0), '');
+    await tester.enterText(fieldAt(0), '-');
+    await dropFocus(tester);
+
+    expect(set0().weight.actualValue, isNull);
+    expect(widgetAt(tester, 0).controller!.text, '');
+    expect(saved, hasLength(1), reason: 'the clear must be recorded');
+    expect(saved.single.text, '');
+  });
+
   testWidgets('H-TEXT-NONFINITE NaN, Infinity and exponent forms are refused',
       (WidgetTester tester) async {
     await pump(tester);
