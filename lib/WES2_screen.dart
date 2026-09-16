@@ -1008,8 +1008,12 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     Wes2ExerciseRow completed,
     Wes2ExerciseRow bb3,
   ) {
-    final setCount =
-        completed.setCount > bb3.setCount ? completed.setCount : bb3.setCount;
+    // Saved structure wins over a larger plan: a row the athlete has already
+    // shaped keeps its own count, and the plan's extra sets are not re-added.
+    // Prescriptions stay POSITIONAL, so set i keeps prescription i.
+    final setCount = completed.structureEstablished
+        ? completed.setCount
+        : (completed.setCount > bb3.setCount ? completed.setCount : bb3.setCount);
     final sets = List.generate(setCount, (i) {
       final cs = i < completed.sets.length ? completed.sets[i] : null;
       final bs = i < bb3.sets.length ? bb3.sets[i] : null;
