@@ -23,7 +23,6 @@ import 'WES2_widgets/WES2_empty_state.dart';
 import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
 import 'WES2_widgets/WES2_exercise_picker.dart';
-import 'WES2_hint_service.dart';
 import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
 import 'WES2_widgets/WES2_template_picker.dart';
@@ -44,6 +43,9 @@ import 'wes2_sync/wes2_mutation_outbox.dart';
 import 'wes2_sync/wes2_pending_overlay.dart';
 import 'wes2_sync/wes2_sync_engine.dart';
 import 'wes2_sync/wes2_sync_services.dart';
+import 'wes2_field_parser.dart';
+import 'wes2_hint_input.dart';
+import 'wes2_hint_load_runner.dart';
 import 'wes2_hint_trace.dart';
 
 /// WES2 beta route shell.
@@ -106,8 +108,19 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   String? _athleteUsername;
   String? _athleteGreeting;
   String? _fetchedForUid;
-  Map<String, dynamic> _cachedExerciseSettings = const {};
-  Map<String, String> _cachedExerciseTypes = const {};
+  /// Owns the hint pass: the settings/type caches, the identity guards and
+  /// the single application to the controller.
+  late final Wes2HintLoadRunner _hintRunner;
+
+  Map<String, dynamic> get _cachedExerciseSettings => _hintRunner.settings;
+
+  /// Authoritative BB3 prescriptions for the loaded day, by exerciseId.
+  /// Held apart from the rows: a row's hintValue is calculation output, and
+  /// treating it as prescription authority is what let a generated - or
+  /// draft-recovered - number behave like a BB3 lock.
+  Map<String, Wes2Prescriptions> _prescriptions =
+      const <String, Wes2Prescriptions>{};
+
 
   static const Set<String> _defaultVelocityExerciseIds = {
     'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
@@ -133,9 +146,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// True while a background history refresh triggered by this screen is
   /// still pending, so the follow-up hint pass is scheduled only once.
   bool _awaitingHistoryRefresh = false;
-  // Composite identity key for _cachedExerciseSettings — 'actingUid|blockId'.
-  // Reloads cache unconditionally when actingUid or blockId changes.
-  String? _cachedSettingsKey;
+
 
   // ── Tutorial state (Phase 2 onboarding) ──────────────────────────────────
   // 0=inactive 1=loadTemplateCue 2=firstTemplateCue 3=weight 4=reps 5=rir
@@ -280,6 +291,18 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // Opening the logger is a retry trigger in its own right: whatever failed
     // to sync on the last visit gets another attempt before the athlete has
     // done anything.
+    _hintRunner = Wes2HintLoadRunner(
+      controller: _controller,
+      planService: _planService,
+      ensureExerciseDefaults: (String exerciseId, String blockId) =>
+          BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+        uid: _controller.actingUid,
+        blockId: blockId,
+        exerciseId: exerciseId,
+      ),
+      isSettingsUsable: BlockExerciseDefaultsRepository.isSettingsUsable,
+      refreshHistory: () => _refreshHistoryForHints(_controller.selectedDate),
+    );
     unawaited(_attachSyncEngine());
   }
 
@@ -336,6 +359,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   @override
   void dispose() {
     _timerTicker?.cancel();
+    _hintRunner.dispose();
     _pauseWorkoutDurationSegment();
     _saveDraftNow();
     unawaited(_syncStatusSub?.cancel());
@@ -515,6 +539,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // Phase 4: BB3 planned day — skip if block context is absent or if
       // selectedDate is before blockStartDate (no negative week/day paths).
       _bb3PlannedExerciseIds = const {}; // reset before each load
+      _prescriptions = const <String, Wes2Prescriptions>{};
       var bb3Rows = const <Wes2ExerciseRow>[];
       final blockId = _controller.activeBlockId;
       final blockStart = _controller.blockStartDate;
@@ -530,6 +555,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           dayIndex: wd.dayIndex,
         );
         _bb3PlannedExerciseIds = bb3Rows.map((r) => r.exerciseId).toSet();
+        _prescriptions = <String, Wes2Prescriptions>{
+          for (final Wes2ExerciseRow r in bb3Rows)
+            r.exerciseId: Wes2HintInput.prescriptionsFromRow(r),
+        };
       }
 
       // Phase 7: overlay local draft actuals onto server/BB3 merged structure.
@@ -555,6 +584,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         ),
         pending,
       ));
+      _controller.setPrescriptions(_prescriptions, recompute: false);
       _controller.setRows(mergedRows, epoch);
       // A successful read proves the server is reachable, so anything still
       // queued is retried now instead of waiting out a backoff set while there
@@ -685,192 +715,30 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
-  /// Loads exerciseSettings once and applies Phase 21B Set 1 model/default
-  /// hints to every current row. Fire-and-forget; errors are logged only.
+  /// Runs one hint pass through [Wes2HintLoadRunner].
+  ///
+  /// Everything the pass needs to guard against — a date change, an athlete
+  /// switch, a reload, a settings save landing mid-flight — lives in the
+  /// runner, which applies its result only while it is still the current pass.
   Future<void> _loadAndApplyHints() async {
-    final blockId = _controller.activeBlockId;
-    final blockStart = _controller.blockStartDate;
-    if (blockId == null || blockId.isEmpty || blockStart == null) {
-      if (Wes2HintTrace.enabled) {
-        Wes2HintTrace.log('hints',
-            'abort: no block context blockId=$blockId blockStart=$blockStart');
-      }
-      return;
-    }
+    final Wes2HintPassOutcome outcome = await _hintRunner.run();
+    if (outcome != Wes2HintPassOutcome.applied) return;
+    if (!mounted) return;
 
-    // Identity snapshot: if any of these change while this async pass runs
-    // (athlete switch, date navigation, reload), applying its results to the
-    // now-visible rows would be a stale-pass bug (likely cause B).
-    final snapUid = _controller.actingUid;
-    final snapDate = _controller.selectedDate;
-    final snapBlockId = blockId;
-    final snapEpoch = _controller.loadEpoch;
-    if (Wes2HintTrace.enabled) {
-      Wes2HintTrace.log(
-          'hints',
-          'start uid=$snapUid '
-          'date=${snapDate.toIso8601String().substring(0, 10)} '
-          'blockId=$snapBlockId epoch=$snapEpoch');
-    }
-    // True when uid/date/blockId/epoch still match the snapshot taken above.
-    bool identityUnchanged() =>
-        _controller.actingUid == snapUid &&
-        _controller.selectedDate == snapDate &&
-        _controller.activeBlockId == snapBlockId &&
-        _controller.loadEpoch == snapEpoch;
-
-    await _refreshHistoryForHints(_controller.selectedDate);
-
-    try {
-      // ── Settings cache with identity guard ─────────────────────────────
-      // Reload when actingUid or blockId changes (coach/athlete switch, new block).
-      final currentSettingsKey = '${_controller.actingUid}|$blockId';
-      if (_cachedSettingsKey != currentSettingsKey) {
-        _cachedExerciseSettings = await _planService.loadExerciseSettings(
-          uid: _controller.actingUid,
-          blockId: blockId,
-        );
-        _cachedSettingsKey = currentSettingsKey;
-        _controller.setExerciseSettings(_cachedExerciseSettings);
-      }
-
-      if (!mounted) return;
-
-      // ── Centralized defaults guard ──────────────────────────────────────
-      // Ensures every row.exerciseId has exerciseSettings regardless of how
-      // the row arrived (BB3 planned, completed workout, template, replace).
-      // ensureExerciseDefaults is idempotent — rows already present are no-ops.
-      final missingIds = _controller.rows.map((r) => r.exerciseId).where((id) {
-        if (id.isEmpty) return false;
-        final s = _cachedExerciseSettings[id];
-        return !BlockExerciseDefaultsRepository.isSettingsUsable(
-          s is Map<String, dynamic> ? s : null,
-        );
-      }).toSet();
-
-      if (missingIds.isNotEmpty) {
-        for (final exerciseId in missingIds) {
-          try {
-            await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
-              uid: _controller.actingUid,
-              blockId: blockId,
-              exerciseId: exerciseId,
-            );
-          } catch (e) {
-            debugPrint('[WES2] ensureDefaults failed for $exerciseId: $e');
-          }
-        }
+    // A background history refresh may still be in flight. The hints just
+    // applied came from valid history, so nothing bogus is on screen; when
+    // fresher history lands, recompute once and apply atomically.
+    final pending =
+        ProgressionHistoryStore.instance.pendingRefresh(_controller.actingUid);
+    if (pending != null && !_awaitingHistoryRefresh) {
+      _awaitingHistoryRefresh = true;
+      // ignore: discarded_futures
+      pending.whenComplete(() {
+        _awaitingHistoryRefresh = false;
         if (!mounted) return;
-        _cachedExerciseSettings = await _planService.loadExerciseSettings(
-          uid: _controller.actingUid,
-          blockId: blockId,
-        );
-        _controller.setExerciseSettings(_cachedExerciseSettings);
-      }
-
-      if (!mounted) return;
-
-      // Fetch exercise types for type-aware default weight hints (Issue 5).
-      // Only fetches IDs not already cached; keyed by exerciseId.
-      final uncachedIds = _controller.rows
-          .map((r) => r.exerciseId)
-          .where((id) => !_cachedExerciseTypes.containsKey(id))
-          .toSet()
-          .toList();
-      if (uncachedIds.isNotEmpty) {
-        try {
-          final fetched = await _planService.loadExerciseTypes(uncachedIds,
-              uid: _controller.actingUid);
-          _cachedExerciseTypes = {..._cachedExerciseTypes, ...fetched};
-        } catch (_) {
-          // Type fetch is non-critical; hints still work without it.
-        }
-      }
-
-      if (!mounted) return;
-
-      final svc = Wes2HintServiceImpl(
-        exerciseSettings: _cachedExerciseSettings,
-        exerciseTypes: _cachedExerciseTypes,
-        blockStartDate: blockStart,
-        blockEndDate: _controller.blockEndDate,
-        uid: _controller.actingUid,
-      );
-      // Phase 21C: register service so updateSetField can do same-set recalc.
-      _controller.setHintService(svc, blockId);
-
-      final date = _controller.selectedDate;
-      final rows = _controller.rows.toList();
-
-      if (Wes2HintTrace.enabled && !identityUnchanged()) {
-        Wes2HintTrace.log(
-            'hints',
-            '⚠️ STALE-PASS(B): identity changed before hint application! '
-            'snap=$snapUid/${snapDate.toIso8601String().substring(0, 10)}/'
-            '$snapBlockId/e$snapEpoch '
-            'now=${_controller.actingUid}/'
-            '${_controller.selectedDate.toIso8601String().substring(0, 10)}/'
-            '${_controller.activeBlockId}/e${_controller.loadEpoch}');
-      }
-
-      for (final row in rows) {
-        if (!mounted) return;
-        try {
-          final hinted = svc.computeRowHints(
-            row: row,
-            blockId: blockId,
-            uid: _controller.actingUid,
-            date: date,
-          );
-          if (Wes2HintTrace.enabled && !identityUnchanged()) {
-            Wes2HintTrace.log(
-                'hints',
-                '⚠️ STALE-PASS(B): applying hinted row "${row.name}" after '
-                'uid/date/block/epoch changed '
-                '(now=${_controller.actingUid}/'
-                '${_controller.selectedDate.toIso8601String().substring(0, 10)}/'
-                '${_controller.activeBlockId}/e${_controller.loadEpoch})',
-                exerciseId: row.exerciseId);
-          }
-          _controller.applyModelHints(row.exerciseId, hinted);
-          if (Wes2HintTrace.enabled) {
-            Wes2HintTrace.log('hints', 'applied ${Wes2HintTrace.fmtRow(hinted)}',
-                exerciseId: row.exerciseId);
-          }
-        } catch (e) {
-          debugPrint(
-              '[WES2] Hint failed for ${row.name} (${row.exerciseId}): $e');
-          if (Wes2HintTrace.enabled) {
-            Wes2HintTrace.log('hints', '❌ computeRowHints threw: $e',
-                exerciseId: row.exerciseId);
-          }
-        }
-      }
-      // Snapshot hinted rows as baseline so same-set recalc can restore
-      // original hints when the user clears all typed actuals.
-      if (mounted) _controller.captureBaselineHintRows();
-
-      // A background history refresh (stale snapshot, or a day this session
-      // edited) may still be in flight. The hints just applied came from valid
-      // history, so nothing bogus is on screen; when fresher history lands,
-      // recompute once and apply atomically.
-      final pending =
-          ProgressionHistoryStore.instance.pendingRefresh(_controller.actingUid);
-      if (pending != null && !_awaitingHistoryRefresh) {
-        _awaitingHistoryRefresh = true;
         // ignore: discarded_futures
-        pending.whenComplete(() {
-          _awaitingHistoryRefresh = false;
-          if (!mounted || !identityUnchanged()) return;
-          // ignore: discarded_futures
-          _loadAndApplyHints();
-        });
-      }
-    } catch (e) {
-      debugPrint('[WES2] Hint computation failed: $e');
-      if (Wes2HintTrace.enabled) {
-        Wes2HintTrace.log('hints', '❌ hint pass failed: $e');
-      }
+        _loadAndApplyHints();
+      });
     }
   }
 
@@ -957,7 +825,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     final normKeys = <String, String>{
       for (final k in tops.keys) k.trim().toLowerCase(): k,
     };
-    final baselines = _controller.debugBaselineHintRows;
+    final prescriptions = _prescriptions;
 
     b.writeln('===== WES2 HINT DEBUG SNAPSHOT =====');
     b.writeln('capturedAt: ${DateTime.now().toIso8601String()}');
@@ -975,26 +843,23 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     b.writeln('historySnapshot: workouts=${histSnap?.workoutCount ?? 0} '
         'authoritative=${histSnap?.authoritative} '
         'hydratedAt=${histSnap?.hydratedAt.toIso8601String()}');
-    b.writeln('cachedSettingsKey: $_cachedSettingsKey');
+    b.writeln('cachedSettingsKey: ${_hintRunner.settingsKey}');
     b.writeln('savedWorkoutsList: '
         '${PeriodizationModelUtils.savedWorkoutsList.length} entries');
     b.writeln('topSetsByExercise: ${tops.length} keys');
-    b.writeln('baselineHintRows: ${baselines.length} entries');
+    b.writeln('prescriptions: ${prescriptions.length} exercises');
     b.writeln('');
 
     for (final row in _controller.rows) {
       b.writeln('--- ROW "${row.name}" (${row.exerciseId}) ---');
       b.writeln('current: ${Wes2HintTrace.fmtRow(row)}');
 
-      final baseline = baselines[row.exerciseId];
-      if (baseline == null) {
-        b.writeln('baseline: ⚠️ MISSING (edits recalc from current row — '
-            'race/no-baseline signature, causes A/F)');
+      final p = prescriptions[row.exerciseId];
+      if (p == null || p.isEmpty) {
+        b.writeln('prescription: none (model hints only)');
       } else {
-        final baselineHadActuals = Wes2HintTrace.rowHasActuals(baseline);
-        b.writeln('baseline: ${Wes2HintTrace.fmtRow(baseline)}');
-        b.writeln('baselineContainsUserActuals: $baselineHadActuals'
-            '${baselineHadActuals ? ' ⚠️ (F: user typed before baseline capture)' : ''}');
+        b.writeln('prescription (${p.source.name}): '
+            '${p.sets.map((x) => '${x.weight ?? '-'}x${x.reps ?? '-'}@${x.rir ?? '-'}').join(' | ')}');
       }
 
       final s = _cachedExerciseSettings[row.exerciseId];
@@ -1630,18 +1495,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   /// Parses [text] into the correct Dart type for [fieldKey].
   /// Returns null if [text] cannot be parsed (invalid non-empty input).
-  static dynamic _parseFieldValue(Wes2FieldKey fieldKey, String text) {
-    switch (fieldKey) {
-      case Wes2FieldKey.weight:
-        return double.tryParse(text);
-      case Wes2FieldKey.reps:
-        return int.tryParse(text);
-      case Wes2FieldKey.rir:
-        return double.tryParse(text);
-      case Wes2FieldKey.velocity:
-        return double.tryParse(text);
-    }
-  }
+  /// Parses [text] for [fieldKey], or null when it is not a saveable number.
+  /// Shared with the controller and the row widget so every path agrees on
+  /// what counts as an entry - NaN, Infinity and exponent forms do not.
+  static dynamic _parseFieldValue(Wes2FieldKey fieldKey, String text) =>
+      Wes2FieldParser.valueOrNull(fieldKey, text);
 
   /// Deliberate exit to the actual previous route (explicit Back button and
   /// Android/system Back via PopScope).
@@ -2409,11 +2267,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       ),
     );
     if (saved == true && mounted) {
-      _cachedExerciseSettings = await _planService.loadExerciseSettings(
-        uid: _controller.actingUid,
-        blockId: blockId,
-      );
-      _controller.setExerciseSettings(_cachedExerciseSettings);
+      // Invalidated BEFORE awaiting anything: a settings response already in
+      // flight belongs to the old settings and must not win.
+      _hintRunner.invalidateSettings();
       await _loadAndApplyHints();
     }
   }

@@ -4,6 +4,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import '../WES2_models.dart';
 import '../periodization_model_utils.dart';
+import '../wes2_cascade_resolver.dart';
+import '../wes2_field_parser.dart';
 import '../wes2_video/set_video_copy.dart';
 
 /// Height of the trailing icon slots.
@@ -204,9 +206,6 @@ class Wes2SetRow extends StatefulWidget {
   final bool hasVideo;
 
   final bool isPlanNoteRead;
-  /// Phase 21F: original planned/model RIR hint captured at session load.
-  /// Used to compute the green/amber direction cue on the RIR field.
-  final double? baselineRirHint;
   /// Required only for timedWeighted E1RM display. Passed from the exercise card.
   final String? uid;
   final DateTime? selectedDate;
@@ -230,7 +229,6 @@ class Wes2SetRow extends StatefulWidget {
     this.onVideoTap,
     this.hasVideo = false,
     this.isPlanNoteRead = false,
-    this.baselineRirHint,
     this.uid,
     this.selectedDate,
     this.tutorialStep = 0,
@@ -256,18 +254,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   /// 16.0 → "16", 16.5 → "16.5", 16.25 → "16.25", 16.125 → "16.125".
   /// Bounded fixed precision first also collapses float artefacts such as
   /// 16.249999999999996 → "16.25". Display-only; never mutates the stored double.
-  static String _fmtWeight(double v) {
-    final s = v.toStringAsFixed(3);
-    return s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
-  }
-  static String _fmtInt(int v) => v.toString();
-  static String _fmtDouble(double v) => v.toStringAsFixed(1);
-  /// Velocity: preserve up to 3 decimal places, strip trailing zeros.
-  /// 0.734 → "0.734", 0.700 → "0.7", 1.000 → "1".
-  static String _fmtVelocity(double v) {
-    final s = v.toStringAsFixed(3);
-    return s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
-  }
+  /// The canonical display formatters, shared with the cascade resolver so
+  /// "the athlete accepted what they saw" is decided with exactly the text
+  /// this row renders.
+  static String _fmtWeight(double v) => Wes2HintFormat.weight(v);
+  static String _fmtInt(int v) => Wes2HintFormat.reps(v);
+  static String _fmtDouble(double v) => Wes2HintFormat.rir(v);
+  static String _fmtVelocity(double v) => Wes2HintFormat.velocity(v);
 
   static String _fromActual<T extends Object>(
     Wes2FieldState<T> f,
@@ -300,26 +293,52 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
 
   void _onWeightFocusChange() {
     if (!_weightFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.weight, _weightCtrl.text);
+      _leaveField(_weightCtrl, Wes2FieldKey.weight,
+          _fromActual(widget.set.weight, _fmtWeight));
     }
   }
 
   void _onRepsFocusChange() {
     if (!_repsFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.reps, _repsCtrl.text);
+      _leaveField(
+          _repsCtrl, Wes2FieldKey.reps, _fromActual(widget.set.reps, _fmtInt));
     }
   }
 
   void _onRirFocusChange() {
     if (!_rirFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.rir, _rirCtrl.text);
+      _leaveField(
+          _rirCtrl, Wes2FieldKey.rir, _fromActual(widget.set.rir, _fmtDouble));
     }
   }
 
   void _onVelocityFocusChange() {
     if (!_velocityFocus.hasFocus) {
-      widget.onFieldUnfocused(Wes2FieldKey.velocity, _velocityCtrl.text);
+      _leaveField(_velocityCtrl, Wes2FieldKey.velocity,
+          _fromActual(widget.set.velocity, _fmtVelocity));
     }
+  }
+
+  /// Leaving a field with text that is not a number.
+  ///
+  /// A half-typed "-" or "12e" is not an entry, so nothing is saved and the
+  /// field goes back to the last value the model actually holds — the athlete's
+  /// own number, or empty. It never becomes 0, and it never silently accepts
+  /// the hint that is showing behind it.
+  void _leaveField(
+    TextEditingController ctrl,
+    Wes2FieldKey key,
+    String lastValidText,
+  ) {
+    if (Wes2FieldParser.isInvalidEntry(key, ctrl.text)) {
+      if (ctrl.text != lastValidText) {
+        ctrl.text = lastValidText;
+        ctrl.selection =
+            TextSelection.collapsed(offset: lastValidText.length);
+      }
+      return;
+    }
+    widget.onFieldUnfocused(key, ctrl.text);
   }
 
   @override
@@ -473,7 +492,11 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     if (s.weight.actualValue == null) return null;
     if (s.reps.actualValue == null) return null;
     if (s.rir.actualValue != null) return null;
-    final bRir = widget.baselineRirHint;
+    // The reference is this set's RIR hint with its own weight/reps entries
+    // removed, for the CURRENT predecessor — recomputed every pass. The old
+    // load-time baseline went stale as soon as anything upstream changed, and
+    // could even carry the athlete's own earlier entries.
+    final bRir = widget.set.rirReferenceHint;
     final cRir = s.rir.hintValue;
     if (bRir == null || cRir == null) return null;
     final delta = cRir - bRir;

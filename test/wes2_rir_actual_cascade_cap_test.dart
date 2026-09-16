@@ -94,9 +94,9 @@ Wes2ExerciseRow _emptyRow({int setCount = 3}) => Wes2ExerciseRow(
       sets: List.generate(setCount, (i) => Wes2SetState(setIndex: i)),
     );
 
-/// Records the row handed to computeRowHints — i.e. the recalculation INPUT
-/// built by _rowWithCurrentActualsOverBaseline — while delegating to the real
-/// hint service so the production cascade still runs.
+/// Records the row handed to the service — the recalculation INPUT the
+/// controller builds — while delegating to the real hint service so the
+/// production cascade still runs.
 class _SpyHintService implements Wes2HintService {
   _SpyHintService(this.inner);
 
@@ -104,6 +104,26 @@ class _SpyHintService implements Wes2HintService {
   final List<Wes2ExerciseRow> inputs = <Wes2ExerciseRow>[];
 
   Wes2ExerciseRow get lastInput => inputs.last;
+
+  @override
+  Wes2ExerciseRow resolveRow({
+    required Wes2ExerciseRow row,
+    required Wes2Prescriptions prescriptions,
+    required String uid,
+    required DateTime date,
+    int fromSet = 0,
+    List<Wes2SetState> existingFinals = const <Wes2SetState>[],
+  }) {
+    inputs.add(row);
+    return inner.resolveRow(
+      row: row,
+      prescriptions: prescriptions,
+      uid: uid,
+      date: date,
+      fromSet: fromSet,
+      existingFinals: existingFinals,
+    );
+  }
 
   @override
   Wes2ExerciseRow computeRowHints({
@@ -151,16 +171,9 @@ class _SpyHintService implements Wes2HintService {
   final epoch = controller.beginLoad();
   controller.setRows([_emptyRow(setCount: setCount)], epoch);
 
-  // Initial hint pass (the screen's applyModelHints + captureBaselineHintRows).
-  final hinted = real.computeAllHints(
-    rows: controller.rows,
-    blockId: _blockId,
-    uid: _uid,
-    date: _day,
-  );
-  controller.applyModelHints(_exId, hinted.first);
-  controller.captureBaselineHintRows();
-  controller.setHintService(spy, _blockId);
+  // The screen's single hint application, through the spy so the inputs the
+  // service actually receives can be asserted.
+  controller.applyHintContext(spy, _blockId);
 
   return (
     controller: controller,
@@ -367,16 +380,25 @@ void main() {
       expect(input.rir.origin, FieldOrigin.typed);
     });
 
-    test('TEST 3 — nothing differs: same-value suppression still applies', () {
+    // Rewritten: the old behaviour SUPPRESSED an entry that equalled its hint,
+    // so the cascade calculated from a value the athlete had not entered while
+    // the screen showed one they had. Typing a number is an entry whatever it
+    // equals; the accepted-hint view — not suppression — is what keeps the
+    // set's remaining hints stable (see wes2_accepted_hint_view_test.dart).
+    test('TEST 3 — entries equal to their hints are preserved, not suppressed',
+        () {
       final input =
           inputAfter(weight: 37.5, reps: (r) => r, rir: 1.5); // all == hints
 
-      expect(input.weight.actualValue, isNull,
-          reason: 'accepted-verbatim weight is still suppressed');
-      expect(input.reps.actualValue, isNull,
-          reason: 'accepted-verbatim reps is still suppressed');
-      expect(input.rir.actualValue, isNull,
-          reason: 'accepted-verbatim RIR is still suppressed');
+      expect(input.weight.actualValue, 37.5,
+          reason: 'an accepted weight is still a real entry');
+      expect(input.reps.actualValue, isNotNull,
+          reason: 'accepted reps are still a real entry');
+      expect(input.rir.actualValue, 1.5,
+          reason: 'an accepted RIR keeps its actual-only authority');
+      expect(input.weight.origin, FieldOrigin.typed);
+      expect(input.reps.origin, FieldOrigin.typed);
+      expect(input.rir.origin, FieldOrigin.typed);
     });
 
     test('TEST 4 — weight differing preserves all three actuals', () {
