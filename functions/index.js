@@ -817,17 +817,9 @@ exports.coachModeRemoveAthleteFromRoster = coachMode.coachModeRemoveAthleteFromR
 exports.coachOnCoachAthleteLinkWritten = coachMode.coachOnCoachAthleteLinkWritten;
 exports.coachOnAccountEntitlementWritten = coachMode.coachOnAccountEntitlementWritten;
 
-// ====================================
-// Planned-blocks schema transition
-// ====================================
-// Temporary two-way compatibility mirror. It lets released app builds that
-// still use /planned_blocks/{uid}/blocks/... coexist safely with the canonical
-// /users/{uid}/planned_blocks/... hierarchy during rollout.
-const plannedBlocksCompat = require('./planned_blocks_compat');
-exports.mirrorLegacyPlannedBlocksToUsers =
-  plannedBlocksCompat.mirrorLegacyPlannedBlocksToUsers;
-exports.mirrorUserPlannedBlocksToLegacy =
-  plannedBlocksCompat.mirrorUserPlannedBlocksToLegacy;
+// The temporary reciprocal planned-block compatibility mirrors were retired
+// after all active clients moved to users/{uid}/planned_blocks/... . They must
+// not be re-exported: reciprocal writes caused a runaway trigger loop.
 
 // ====================================
 // Profile showcase (Big Five achievements, identity, stories)
