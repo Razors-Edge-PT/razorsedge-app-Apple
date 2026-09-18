@@ -334,9 +334,10 @@ class Bp2SettingsResolver {
       final inst = Bp2Field.repInstanceNumber(key);
       if (inst != null) {
         final baseText = baseRep['instance$inst']?.toString().trim() ?? '';
-        if (text != baseText)
+        if (text != baseText) {
           reps.add(
               RepTargetChange('instance$inst', text.isEmpty ? null : text));
+        }
         return;
       }
       final coords = Bp2Field.rirCoords(key);

@@ -166,6 +166,23 @@ class Bp2Repository {
     );
   }
 
+  /// Resolves one exercise by id after the canonical add flow returns:
+  /// global pool first, then the athlete's custom pool (at most two reads).
+  Future<CatalogExercise?> fetchExerciseById(String uid, String id) async {
+    if (id.isEmpty) return null;
+    final g = await _exercises().doc(id).get();
+    if (g.exists && g.data() != null) {
+      return CatalogExercise.fromMap(g.id, g.data()!,
+          source: ExerciseSource.global);
+    }
+    final c = await _custom(uid).doc(id).get();
+    if (c.exists && c.data() != null) {
+      return CatalogExercise.fromMap(c.id, c.data()!,
+          source: ExerciseSource.custom, ownerUid: uid);
+    }
+    return null;
+  }
+
   /// `username` → `displayName` → neutral fallback.
   Future<String> fetchAthleteLabel(String uid) async {
     try {

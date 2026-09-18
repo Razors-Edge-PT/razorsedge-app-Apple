@@ -514,8 +514,9 @@ class Bp2Controller extends ChangeNotifier {
     final uid = _uid;
     final gen = _gen;
     var b = _block;
-    if (uid == null || b == null)
+    if (uid == null || b == null) {
       return Bp2SaveOutcome.failed('Block not loaded yet.');
+    }
 
     final invalid = _validate();
     if (invalid != null) return invalid;
@@ -680,15 +681,15 @@ class Bp2Controller extends ChangeNotifier {
     }
   }
 
-  // ── Custom exercise added via the canonical flow ──────────────────────────
+  // ── Exercise added via the canonical flow ─────────────────────────────────
 
-  Future<void> onCustomExerciseAdded(CatalogExercise e) async {
+  /// Refreshes only the affected pool (custom or shared) in cache + memory so
+  /// the new exercise appears immediately in its alphabetical position.
+  Future<void> onExerciseAdded(CatalogExercise e) async {
     final uid = _uid;
     final gen = _gen;
     if (uid == null) return;
     try {
-      final custom = await sync.addCustomExerciseToCache(uid, e);
-      if (!_live(gen)) return;
       final snap = _snapshot ??
           const Bp2CatalogueSnapshot(
               shared: [],
@@ -696,9 +697,14 @@ class Bp2Controller extends ChangeNotifier {
               templates: [],
               blocks: [],
               athleteLabel: null);
-      _applySnapshot(snap.copyWith(custom: custom));
+      final updated = e.source == ExerciseSource.custom
+          ? snap.copyWith(custom: await sync.addCustomExerciseToCache(uid, e))
+          : snap.copyWith(shared: await sync.addSharedExerciseToCache(e));
+      if (!_live(gen)) return;
+      _defaults.remove(e.id);
+      _applySnapshot(updated);
     } catch (err) {
-      debugPrint('[BP2] could not add custom exercise to cache: $err');
+      debugPrint('[BP2] could not add exercise to cache: $err');
     }
   }
 

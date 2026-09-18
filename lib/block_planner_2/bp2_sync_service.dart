@@ -314,6 +314,17 @@ class Bp2SyncService {
     return items;
   }
 
+  /// Same for an admin-created GLOBAL exercise (shared scope).
+  Future<List<CatalogExercise>> addSharedExerciseToCache(
+      CatalogExercise e) async {
+    final cached = await _readCollection(sharedScope, kShared, _decodeShared);
+    final items = [...?cached?.items]..removeWhere((x) => x.id == e.id);
+    items.add(e);
+    await _writeCollection<CatalogExercise>(
+        sharedScope, kShared, items, _encodeExercise);
+    return items;
+  }
+
   /// Replaces the cached block summaries (after save/activation).
   Future<void> writeBlockSummaries(String uid, List<Bp2BlockSummary> blocks) =>
       _writeCollection<Bp2BlockSummary>(
