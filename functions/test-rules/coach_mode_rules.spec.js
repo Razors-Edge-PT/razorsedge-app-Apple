@@ -245,7 +245,6 @@ test('rules: only the super admin may write coachAssignments (seeding preserved)
 test('rules: active entitlement + ACTIVE link grants assigned training access', async () => {
   await assertSucceeds(as('cmCoachActive').doc('users/cmAthlete').get());
   await assertSucceeds(as('cmCoachActive').doc('users/cmAthlete/workouts/2026-08-10').get());
-  await assertSucceeds(as('cmCoachActive').doc('planned_blocks/cmAthlete').get());
   await assertSucceeds(as('cmCoachActive').doc('coachAnalytics/cmAthlete').get());
 });
 
@@ -448,7 +447,6 @@ test('rules: a coach cannot edit their athlete\'s identity document', async () =
 test('rules: super admin retains every intended access path', async () => {
   await assertSucceeds(as(SUPER).doc('users/cmAthlete').get());
   await assertSucceeds(as(SUPER).doc('users/cmAthlete/workouts/2026-08-10').get());
-  await assertSucceeds(as(SUPER).doc('planned_blocks/cmAthlete').get());
   await assertSucceeds(as(SUPER).doc('coachAnalytics/cmAthlete').get());
   await assertSucceeds(as(SUPER).doc('coachApplications/cmApplicant').get());
   await assertSucceeds(as(SUPER).doc('accountEntitlements/cmCoachSuspended').get());
@@ -644,11 +642,9 @@ test('rules: super admin still reaches every users subcollection', async () => {
   await assertSucceeds(s.doc('users/cmAthlete/planned_blocks/b1').get());
 });
 
-test('rules: legacy top-level planned_blocks stays entitlement-gated', async () => {
-  // The legacy compatibility hierarchy is still readable by an authorised
-  // coach, and still denied to a suspended one. No active read/write path to
-  // planned_blocks/{uid}/blocks/... is reintroduced here.
-  await assertSucceeds(as('cmCoachActive').doc('planned_blocks/cmAthlete').get());
+test('rules: retired top-level planned_blocks is closed to every client role', async () => {
+  await assertFails(as('cmCoachActive').doc('planned_blocks/cmAthlete').get());
   await assertFails(as('cmCoachSuspended').doc('planned_blocks/cmAthleteSusp').get());
   await assertFails(as('cmCoachSeeded').doc('planned_blocks/cmAthleteSeeded').get());
+  await assertFails(as(SUPER).doc('planned_blocks/cmAthlete').get());
 });
