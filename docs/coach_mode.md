@@ -301,7 +301,7 @@ The owner and the super admin keep full access to everything. A coach reaches
 **only** this allowlist (`isTrainingSubcollection`):
 
 `workouts`, `weights`, `planned_blocks`, `block_planner`, `block_data`,
-`plannedExerciseDetails`, `templates`, `customExercises`
+`templates`, `customExercises`
 
 `planned_blocks` covers the canonical nested hierarchy
 `users/{userId}/planned_blocks/{blockId}/...` via the `{doc=**}` recursion.

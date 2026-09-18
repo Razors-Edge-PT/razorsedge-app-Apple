@@ -28,7 +28,7 @@
 > Concretely:
 > - `users/{uid}/exerciseDefaults/{exerciseName}` — library defaults (increment, sets, rep range,
 >   periodization/RIR/progression models). Source of truth for all workouts.
-> - `users/{uid}/blocks/{blockId}.plannedExerciseDetails` — per-cycle overrides. Seeded from
+> - `users/{uid}/planned_blocks/{blockId}.exerciseSettings` — per-cycle overrides. Seeded from
 >   library defaults; may diverge for a specific block without affecting library defaults.
 > - Hint tier resolution in any session (see Section 7):
 >   1. User-typed value
@@ -264,10 +264,10 @@ Note: these are *cumulative* drops from Set 1's E1RM, not incremental between ad
 
 ### 3.1 RIR Plan Storage Format
 
-RIR targets are stored in the block planner under `plannedExerciseDetails`:
+RIR targets are stored in the block planner under `exerciseSettings`:
 
 ```
-plannedExerciseDetails[exerciseId]['rirPlan'] = {
+exerciseSettings[exerciseId]['rirPlan'] = {
     'week_0': {                    // week_0 = applies to all weeks (catch-all)
         'session_0': {             // session_0 = first session of exercise
             'set_0': { 'rir': 2.0 },   // set_0 = Set 1
@@ -288,14 +288,14 @@ Set keys: `'set_0'` through `'set_7'`.
 
 ```
 function getRirFromPlanOrInput(exerciseId, setIndex, weekIndex, sessionIndex,
-                                resolvedBB2Values, plannedExerciseDetails):
+                                resolvedBB2Values, exerciseSettings):
     // Step 1: BB2 override (block planner explicit value)
     bb2 = resolvedBB2Values[exerciseId]
     if bb2 != null and bb2['rir'] != null:
         return bb2['rir'].toDouble()
 
     // Step 2: rirPlan lookup
-    plan = plannedExerciseDetails[exerciseId]?['rirPlan']
+    plan = exerciseSettings[exerciseId]?['rirPlan']
     if plan != null:
         // Try exact week first, fall back to week_0
         weekKey = 'week_$weekIndex'
@@ -316,7 +316,7 @@ function getRirFromPlanOrInput(exerciseId, setIndex, weekIndex, sessionIndex,
 
 ### 3.3 `getSet1RirByModel` and `getSet1RirForExercise`
 
-`getSet1RirByModel` reads from `modelSpecificRepTargets` (stored in `plannedExerciseDetails`) or falls back to hardcoded model defaults:
+`getSet1RirByModel` reads from `modelSpecificRepTargets` (stored in `exerciseSettings`) or falls back to hardcoded model defaults:
 
 ```
 Model defaults for RIR (Set 1, various weeks):
@@ -335,7 +335,7 @@ Model defaults for RIR (Set 1, various weeks):
 
 ### 4.1 Overview
 
-Five models are supported. The model is stored per exercise in `plannedExerciseDetails[exerciseId]['periodizationModel']`.
+Five models are supported. The model is stored per exercise in `exerciseSettings[exerciseId]['periodizationModel']`.
 
 | Model Enum | Display Name |
 |---|---|
@@ -352,7 +352,7 @@ Each *exposure* (session) within a week has a different rep target. The target i
 ```
 getSuggestedRepTargetByModel(exerciseId, weekIndex, exposureIndex, model):
     // model = dailyUndulatingExposure
-    repOptions = plannedExerciseDetails[exerciseId]['dupExposureReps']
+    repOptions = exerciseSettings[exerciseId]['dupExposureReps']
                  ?? getDefaultDupExposureReps(frequencyPerWeek)
     return repOptions[exposureIndex % repOptions.length]
 ```
@@ -369,7 +369,7 @@ Default DUP exposure rep patterns by frequency:
 Rep target changes each *week* (not each session). All sessions in a given week use the same rep target.
 
 ```
-// week_reps = plannedExerciseDetails[exerciseId]['weeklyReps'] (list)
+// week_reps = exerciseSettings[exerciseId]['weeklyReps'] (list)
 // Falls back to cycling default pattern
 repTarget = weeklyReps[weekIndex % weeklyReps.length]
 ```
@@ -388,7 +388,7 @@ Phase map (0-indexed week → rep target):
     weeks 12+:  repTarget = baseReps - 6       (e.g. 6, minimum 3)
 ```
 
-`baseReps` is stored in `plannedExerciseDetails[exerciseId]['defaultReps']`, defaulting to 12.
+`baseReps` is stored in `exerciseSettings[exerciseId]['defaultReps']`, defaulting to 12.
 
 ### 4.5 Linear by Exposure (`linearExposure`)
 
@@ -414,7 +414,7 @@ Entry point for scheduled rep targets (used in WeekPlanner display):
 ```
 function getDupSignatureRepTarget(exerciseId, weekIndex, dayIndex, rirPlan):
     // Look up pre-computed rep sequence stored in block planner
-    sequence = plannedExerciseDetails[exerciseId]['repSequence']
+    sequence = exerciseSettings[exerciseId]['repSequence']
     if sequence == null:
         sequence = REsignatureRepTargets(exerciseId, weekCount, frequencyPerWeek)
     sessionIndex = weekIndex * frequencyPerWeek + dayIndex
@@ -528,7 +528,7 @@ class ProgressionEngineInputs {
 
     // Callbacks:
     Function getWorkoutHistory;           // exerciseId → List<WorkoutEntry>
-    Function getPlannedExerciseDetails;   // exerciseId → Map<String, dynamic>
+    Function getExerciseSettings;         // exerciseId → Map<String, dynamic>
     Function getResolvedBB2Values;        // exerciseId → {weight, reps, rir, addedWeight}?
     Function getSeedHints;                // key → {s1_weight, s1_reps, ...}?
     Function getCachedProgressedValues;   // cacheKey → result?
@@ -558,7 +558,7 @@ function engineProgressedValues(inputs):
         return result
 
     // Layer 3: guard — return placeholder if metadata not ready
-    details = inputs.getPlannedExerciseDetails(inputs.exerciseId)
+    details = inputs.getExerciseSettings(inputs.exerciseId)
     if details == null or metadataNotReady:
         return {weight: 20.0, reps: 10.0, rir: 17.9}  // sentinel for "loading"
 
@@ -1178,7 +1178,7 @@ Note: Seed hints only pre-compute Set 1 weight/reps and all-set RIR. Sets 2+ wei
 This hash is stored alongside the seed hints. If the plan changes, the hash changes and the cached hints are invalidated.
 
 ```
-function computePlanInputsHash(uid, blockId, weekIndex, plannedExerciseDetails,
+function computePlanInputsHash(uid, blockId, weekIndex, exerciseSettings,
                                 blockStart, blockEnd, exerciseIds):
     components = [
         uid,
@@ -1188,7 +1188,7 @@ function computePlanInputsHash(uid, blockId, weekIndex, plannedExerciseDetails,
         blockEnd.toIso8601String(),
     ]
     for exerciseId in sorted(exerciseIds):
-        details = plannedExerciseDetails[exerciseId]
+        details = exerciseSettings[exerciseId]
         components.add(exerciseId)
         components.add(details['periodizationModel'] ?? '')
         components.add(details['progressionModel'] ?? '')
@@ -1317,7 +1317,7 @@ lib/
 
 4. **Bodyweight abstraction**. BW conversion (absolute ↔ added) appears in 7+ separate functions. Extract a `BwWeightDomain` helper with `toAbsolute(added)` / `toAdded(absolute)` / `isBodyweight(id)` that all other functions call.
 
-5. **Collapse `exerciseSettings` into `plannedExerciseDetails`**. Already done in the reference implementation (legacy docs have both), but a clean rebuild should have a single source of truth from day one.
+5. **Keep `exerciseSettings` as the only block-level settings map**. A clean rebuild should have a single source of truth from day one.
 
 6. **Remove the 17.9 RIR sentinel**. The placeholder `{weight:20, reps:10, rir:17.9}` returned when metadata is not ready is a leaky abstraction. Replace with `null` / `Optional` and handle the loading state explicitly in the UI.
 
@@ -1336,7 +1336,6 @@ lib/
 - **RIR > 2.0 gating**: A high-RIR set completely suppresses the cascade drop for the next set. This is intentional — if Set 1 was very easy, Set 2 should match Set 1's weight.
 - **Brzycki/Epley crossover at exactly 25 effective reps**: Both formulas yield the same result. The 4-decimal rounding prevents float drift from causing inconsistent branch selection.
 - **Missing history for new exercises**: All 5 tiers of `computeBaseE1RMFromHistory` may return null. The caller must fall back to a weight-by-category default table, not crash.
-- **Legacy `exerciseSettings` field**: Old Firestore documents may have a separate `exerciseSettings` map alongside `plannedExerciseDetails`. On read, merge `exerciseSettings` into `plannedExerciseDetails` and re-write in the canonical format.
 - **ID-keyed vs name-keyed `exerciseDetails`**: Legacy block documents may have `exerciseDetails` keyed by Firestore document ID rather than exercise display name. `resolveExerciseIds()` on `BlockPlannerState` handles this migration.
 
 ---
@@ -1345,7 +1344,7 @@ lib/
 
 This is a deliberate departure from RE-Test-Main's architecture and must be respected throughout the rebuild.
 
-**Principle**: The exercise library (`users/{uid}/exerciseDefaults/{exerciseName}`) is the single source of truth for how the engine behaves for any exercise in any workout context. Block planning is additive — it inherits library defaults and may override them per cycle; those overrides are stored in `plannedExerciseDetails` and are local to the cycle.
+**Principle**: The exercise library (`users/{uid}/exerciseDefaults/{exerciseName}`) is the single source of truth for how the engine behaves for any exercise in any workout context. Block planning is additive — it inherits library defaults and may override them per cycle; those overrides are stored in `exerciseSettings` and are local to the cycle.
 
 **Consequences for hint generation:**
 
@@ -1354,7 +1353,7 @@ For a *block workout* where a schedule has been generated:
 - Those values were computed using either the block override (if set) or the library defaults.
 
 For a *block workout* where no schedule has been generated (e.g. first run before generation):
-- Hints are computed on the fly from the block's `plannedExerciseDetails` + E1RM history.
+- Hints are computed on the fly from the block's `exerciseSettings` + E1RM history.
 
 For an *ad-hoc workout* (no block):
 - Hints are computed on the fly from `exerciseDefaults` library settings + E1RM history.
@@ -1368,7 +1367,7 @@ The library default `numSets` applies to both ad-hoc and block workouts. When a 
 
 ```
 User in-session edit
-  ↓ Block cycle override (plannedExerciseDetails — cycle-specific)
+  ↓ Block cycle override (exerciseSettings — cycle-specific)
   ↓ Exercise library default (exerciseDefaults — user's personal standard)
   ↓ App hardcoded default (ExerciseDefaultSettings — category/name fallback)
 ```

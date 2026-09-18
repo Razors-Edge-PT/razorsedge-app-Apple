@@ -424,7 +424,7 @@ class WarmupService {
 // STEP 4: Build exerciseSettings map used by the engine
 
   double? _rirFromPlan(String exerciseId, int weekIndex, int sessionIndex, int setNumber) {
-    final plan = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['rirPlan'] as Map?;
+    final plan = PeriodizationModelUtils.exerciseSettings[exerciseId]?['rirPlan'] as Map?;
     if (plan == null) return null;
     final wkKey  = 'week${weekIndex + 1}';
     final sesKey = 'session${sessionIndex + 1}';

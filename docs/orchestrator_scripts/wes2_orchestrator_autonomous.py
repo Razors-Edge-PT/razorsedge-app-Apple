@@ -349,7 +349,8 @@ Phase 18 target: Templates.
     if phase_no == 19:
         return """
 Phase 19 target: Settings Cog Dialog.
-- Use block-level exerciseSettings only; do not write plannedExerciseDetails.
+- Use block-level exerciseSettings only; do not create a duplicate per-exercise
+  settings map or collection.
 - Requires activeBlockId guard.
 - Internet-required; no offline queue.
 - Save only users/{uid}/planned_blocks/{blockId}.exerciseSettings[exerciseId].

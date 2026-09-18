@@ -1,8 +1,7 @@
 /// Pure, Firestore-free helpers for canonical `exerciseSettings` merging,
 /// model-aware cross-week propagation, and conservative sparse-shadow repair.
 ///
-/// These functions never touch any storage and never reference the deprecated
-/// `plannedExerciseDetails` structure. They operate only on the in-memory
+/// These functions never touch any storage and operate only on the in-memory
 /// `exerciseSettings[exerciseId]` map shape:
 ///   {
 ///     periodizationModel, rirModel, progressionModel,

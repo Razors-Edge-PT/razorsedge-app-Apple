@@ -565,7 +565,6 @@ void main() {
         ),
       );
       expect(out.containsKey('exerciseSettings'), isFalse);
-      expect(out.containsKey('plannedExerciseDetails'), isFalse);
     });
   });
 
@@ -733,9 +732,7 @@ void main() {
           },
         },
         // Another top-level field that must survive the write untouched.
-        'plannedExerciseDetails': {
-          exerciseId: {'legacy': 'DO_NOT_TOUCH'}
-        },
+        'completedWorkoutMetadata': {'keep': 'DO_NOT_TOUCH'},
       });
       return db;
     }

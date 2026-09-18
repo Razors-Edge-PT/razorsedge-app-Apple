@@ -74,10 +74,8 @@ Future<FakeFirebaseFirestore> _seed(Map<String, dynamic> settings,
         },
       },
     },
-    // Legacy/other top-level keys that must never change.
-    'plannedExerciseDetails': {
-      'benchId': {'legacy': 'DO_NOT_TOUCH'}
-    },
+    // Other top-level keys that must never change.
+    'completedWorkoutMetadata': {'keep': 'DO_NOT_TOUCH'},
     ...extraDocFields,
   });
   return db;
@@ -351,8 +349,8 @@ void main() {
         () async {
       // NOTE: production uses set(SetOptions(mergeFields: ['exerciseSettings'])),
       // which in REAL Firestore writes ONLY the exerciseSettings field and
-      // leaves every other top-level field (plannedExerciseDetails, completed
-      // workout records, etc.) untouched. fake_cloud_firestore does not model
+      // leaves every other top-level field (completed workout records, metadata,
+      // etc.) untouched. fake_cloud_firestore does not model
       // mergeFields' preservation of unlisted top-level fields, so here we
       // assert the property fake CAN model: other exercises inside the written
       // field are preserved and only the edited exercise changes.

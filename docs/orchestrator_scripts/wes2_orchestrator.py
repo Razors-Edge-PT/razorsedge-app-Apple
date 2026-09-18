@@ -157,7 +157,8 @@ PHASE_GUIDANCE = {
           Never proceed with a save if activeBlockId is absent.
         - Save writes ONLY to:
             users/{uid}/planned_blocks/{blockId}.exerciseSettings[exerciseId]
-          NEVER write to plannedExerciseDetails under any circumstances.
+          ONLY write block-level exerciseSettings; never create a duplicate
+          per-exercise settings map or collection.
         - Internet required for save. Do NOT queue offline. If offline, show error in dialog
           and leave dialog open so user can retry.
         - Hints do not update automatically after save. Hints update only when user triggers
@@ -246,7 +247,8 @@ COMPACT_SPEC_BRIEF = textwrap.dedent("""\
     - Completed rows live in exercises[] only.
     - isMarkedDone lives in exercises[] only.
     - ExerciseSettings writes only to users/{uid}/planned_blocks/{blockId}.exerciseSettings.
-    - NEVER write to plannedExerciseDetails.
+    - ONLY write block-level exerciseSettings; never create a duplicate
+      per-exercise settings map or collection.
     - ExerciseSettings save requires internet; do NOT queue offline.
     - BB3 structural updates (delete/replace/reorder) write back to BB3 planned day path only.
     - WES2 must use Isar for local draft/fast reopen/offline.
@@ -1503,5 +1505,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 

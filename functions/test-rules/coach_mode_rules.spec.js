@@ -165,7 +165,7 @@ test.before(async () => {
 
     // Subcollection fixtures for the fail-closed allowlist tests.
     for (const sub of ['workouts', 'weights', 'block_planner', 'block_data',
-      'plannedExerciseDetails', 'templates', 'customExercises']) {
+      'templates', 'customExercises']) {
       await db.doc(`users/cmAthlete/${sub}/d1`).set({ seeded: true });
     }
     await db.doc('users/cmAthlete/planned_blocks/b1').set({ name: 'Block 1' });
@@ -564,7 +564,7 @@ test('rules: a terminated link does NOT override a super-admin seed', async () =
 test('rules: an assigned coach CAN reach every training subcollection', async () => {
   const c = as('cmCoachActive');
   for (const sub of ['workouts', 'weights', 'block_planner', 'block_data',
-    'plannedExerciseDetails', 'templates', 'customExercises']) {
+    'templates', 'customExercises']) {
     await assertSucceeds(c.doc(`users/cmAthlete/${sub}/d1`).get());
     await assertSucceeds(c.doc(`users/cmAthlete/${sub}/d1`).set({ x: 1 }));
   }

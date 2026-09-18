@@ -1841,13 +1841,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           'allExercisesAvailable': true,
           'excludedExerciseIds': <String>[],
           'templateCandidateExerciseIds': candidateExerciseIds,
-          'plannedExerciseDetails': {
-            'blockMeta': {
-              'blockStartDate': start.toIso8601String(),
-              'blockEndDate': end.toIso8601String(),
-              'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-            }
-          },
         };
       }
 
@@ -1884,13 +1877,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         'blockId': block1Id,
         'blockName': block1Name,
         'templateCandidateExerciseIds': candidateIds,
-        'plannedExerciseDetails': {
-          'blockMeta': {
-            'blockStartDate': startDate1.toIso8601String(),
-            'blockEndDate': endDate1.toIso8601String(),
-            'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-          }
-        },
         'blockMeta': {
           'blockStartDate': startDate1.toIso8601String(),
           'blockEndDate': endDate1.toIso8601String(),
@@ -2442,8 +2428,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
       // ─────────────────────────────────────────────────────────────
       // 4) Ensure first planned block exists, then write best-effort PRs
-      //    into users/<uid>/planned_blocks/<blockId> under BOTH:
-      //    exerciseSettings + plannedExerciseDetails
+      //    into users/<uid>/planned_blocks/<blockId>.exerciseSettings
       // ─────────────────────────────────────────────────────────────
 
       // IMPORTANT: call your existing block seeding logic here (move the function
@@ -2513,23 +2498,16 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
             0.0, // ignore RIR, default 0
           );
 
-          // Write into BOTH maps
-          // Ensure root maps exist
+          // Ensure the canonical root map exists.
           updates['exerciseSettings'] ??= <String, dynamic>{};
-          updates['plannedExerciseDetails'] ??= <String, dynamic>{};
 
 // Ensure per-exercise maps exist
           (updates['exerciseSettings'] as Map<String, dynamic>)
-              .putIfAbsent(exerciseId, () => <String, dynamic>{});
-          (updates['plannedExerciseDetails'] as Map<String, dynamic>)
               .putIfAbsent(exerciseId, () => <String, dynamic>{});
 
 // Write values
           (updates['exerciseSettings'][exerciseId] as Map<String, dynamic>)['maxWeightByReps_manual'] = manual;
           (updates['exerciseSettings'][exerciseId] as Map<String, dynamic>)['e1rm'] = e1rm;
-
-          (updates['plannedExerciseDetails'][exerciseId] as Map<String, dynamic>)['maxWeightByReps_manual'] = manual;
-          (updates['plannedExerciseDetails'][exerciseId] as Map<String, dynamic>)['e1rm'] = e1rm;
 
         }
 
@@ -5390,5 +5368,4 @@ class _Vis {
   final FontWeight fw;
   _Vis(this.borderColor, this.labelColor, this.bgColor, this.borderW, this.fw);
 }
-
 
