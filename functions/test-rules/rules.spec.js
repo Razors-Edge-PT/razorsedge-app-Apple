@@ -144,10 +144,11 @@ test('rules: canonical nested planned blocks use the training-access gate', asyn
   );
 });
 
-test('rules: legacy planned-block path remains available during rollout', async () => {
+test('rules: retired legacy planned-block path is closed', async () => {
   const legacy = as('ath1').doc('planned_blocks/ath1/blocks/blockA');
-  await assertSucceeds(legacy.set({ name: 'Legacy block' }));
-  await assertSucceeds(
+  await assertFails(legacy.set({ name: 'Legacy block' }));
+  await assertFails(legacy.get());
+  await assertFails(
     as('coachSeeded').doc('planned_blocks/ath1/blocks/blockA').get(),
   );
   await assertFails(
