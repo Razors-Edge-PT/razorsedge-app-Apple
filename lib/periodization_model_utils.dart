@@ -49,7 +49,6 @@ class PeriodizationModelUtils {
   static final Map<String, List<int>> exercisePreviousTopSetReps = {};
   static final Map<String, List<Map<String, dynamic>>> topSetsByExercise = {};
   static Map<String, PeriodizationModelType> exercisePeriodizationModels = {};
-  static Map<String, dynamic> plannedExerciseDetails = {}; // ✅ Add this line
   static Map<String, String> nameToId = {};
 
   static final Map<String, String> idToName = {};        // id → name ✅
@@ -837,24 +836,43 @@ class PeriodizationModelUtils {
   };
 
 
-  static Future<void> loadPeriodizationModelsFromFirestore({String? uid}) async {
+  static Future<void> loadPeriodizationModelsFromFirestore({
+    String? uid,
+    String? blockId,
+  }) async {
     final resolvedUid = uid ?? FirebaseAuth.instance.currentUser!.uid;
     print('📦 [PMU] Loading periodization models for UID: $resolvedUid');
+
+    var resolvedBlockId = blockId;
+    if (resolvedBlockId == null || resolvedBlockId.isEmpty) {
+      final pointer = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(resolvedUid)
+          .collection('block_planner')
+          .doc('current_block')
+          .get();
+      resolvedBlockId = pointer.data()?['blockId']?.toString();
+    }
+    if (resolvedBlockId == null || resolvedBlockId.isEmpty) return;
 
     final snapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(resolvedUid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('planned_blocks')
+        .doc(resolvedBlockId)
         .get();
 
     final data = snapshot.data();
-    if (data == null || !data.containsKey('plannedExerciseDetails')) return;
+    final rawSettings = data?['exerciseSettings'];
+    if (rawSettings is! Map) return;
 
-    final Map<String, dynamic> details = Map<String, dynamic>.from(data['plannedExerciseDetails']);
+    final settings = Map<String, dynamic>.from(rawSettings);
+    setExerciseSettings(settings);
     exercisePeriodizationModels.clear();
 
-    details.forEach((id, entry) {
+    settings.forEach((id, rawEntry) {
+      if (rawEntry is! Map) return;
+      final entry = Map<String, dynamic>.from(rawEntry);
       final modelStr = entry['periodizationModel'] as String?;
       if (modelStr != null) {
         final model = _parseModelFromString(modelStr);
@@ -1321,11 +1339,11 @@ class PeriodizationModelUtils {
     required String exerciseId,
     required int exposureIndex,
     required Map<String, dynamic> repTargetsByExercise,
-    required Map<String, dynamic> plannedExerciseDetails,
+    required Map<String, dynamic> exerciseSettings,
   }) {
     print('🧪 [Exposure] Looking up $exerciseId at instance $exposureIndex');
 
-    final repsData = plannedExerciseDetails[exerciseId]?['repTargets'];
+    final repsData = exerciseSettings[exerciseId]?['repTargets'];
 
     if (repsData == null) {
       print('⚠️ [LE] No repTargets found for $exerciseId');
@@ -1384,7 +1402,7 @@ class PeriodizationModelUtils {
     DateTime? blockStartDate,
     DateTime? blockEndDate,
     Map<String, dynamic>? repTargetsByExercise,
-    Map<String, dynamic>? plannedExerciseDetails,
+    Map<String, dynamic>? exerciseSettings,
   }) {
 
 
@@ -1467,7 +1485,7 @@ class PeriodizationModelUtils {
           final repTargetsRaw =
           (repTargetsByExercise != null && repTargetsByExercise.containsKey(exerciseName))
               ? repTargetsByExercise[exerciseName]                          // ✅ use inner map
-              : plannedExerciseDetails?[exerciseName]?['repTargets'];
+              : exerciseSettings?[exerciseName]?['repTargets'];
 
 
 
@@ -1477,14 +1495,9 @@ class PeriodizationModelUtils {
             return 10;
           }
 
-          final blockMeta = plannedExerciseDetails?['blockMeta'] as Map<String, dynamic>? ?? {};
-          print('📎 blockMeta = ${jsonEncode(blockMeta)}');
-
-          final start = DateTime.tryParse(blockMeta['blockStartDate'] ?? '');
-          final end = DateTime.tryParse(blockMeta['blockEndDate'] ?? '');
           final blockLength = PeriodizationModelUtils.getBlockLength(
-            blockStartDate: start,
-            blockEndDate: end,
+            blockStartDate: blockStartDate,
+            blockEndDate: blockEndDate,
           );
           print('🧠 [LinearClassic] Calculated blockLength = $blockLength');
 
@@ -1534,14 +1547,14 @@ class PeriodizationModelUtils {
             exerciseId: exerciseName,
             exposureIndex: plannedIndex,
             repTargetsByExercise: repTargetsByExercise ?? {},
-            plannedExerciseDetails: plannedExerciseDetails ?? {},
+            exerciseSettings: exerciseSettings ?? {},
           );
           print('📊 LinearExposure → $reps reps');
           return reps;
 
         case PeriodizationModelType.dailyUndulatingWeek: // Now used as DUP by Week
           final repTargetsRaw = repTargetsByExercise?[exerciseName]?['repTargets']
-              ?? plannedExerciseDetails?[exerciseName]?['repTargets'];
+              ?? exerciseSettings?[exerciseName]?['repTargets'];
 
           final weekKey = 'week1'; // ✅ Always use week1 for DUP by Week
 
@@ -1596,7 +1609,7 @@ class PeriodizationModelUtils {
     required int weekNumber,
     required int sessionNumber,
   }) {
-    final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
+    final rirPlan = _exerciseSettings[exerciseId]?['rirPlan'];
     if (rirPlan == null) return null;
 
     final weekKey = 'week$weekNumber';
@@ -1610,9 +1623,9 @@ class PeriodizationModelUtils {
     required String exerciseId,
     required int weekIndex,
     required int sessionIndex,
-    required Map<String, dynamic> plannedExerciseDetails,
+    required Map<String, dynamic> exerciseSettings,
   }) {
-    final rirPlan = plannedExerciseDetails[exerciseId]?['rirPlan'];
+    final rirPlan = exerciseSettings[exerciseId]?['rirPlan'];
     if (rirPlan == null) return '0.5';
 
     final weekKey = 'week${weekIndex + 1}';
@@ -1991,7 +2004,7 @@ class PeriodizationModelUtils {
   // ==== BEGIN: Shared plan inputs hash (Warmup + WES use the same) ====
   static String computePlanInputsHash({
     required List<Map<String, dynamic>> plannedExercises,           // WES rows to paint
-    required Map<String, dynamic> plannedExerciseDetails,           // from Firestore (rirPlan, repTargets, increments, progressionModel, etc.)
+    required Map<String, dynamic> exerciseSettings,                  // from Firestore (rirPlan, repTargets, increments, progressionModel, etc.)
     required DateTime? blockStartDate,
     required DateTime? blockEndDate,
     DateTime? selectedDate,
@@ -2009,12 +2022,11 @@ class PeriodizationModelUtils {
     }).toList();
 
     // Only serialize per-exercise bits Warmup uses for hinted values
-    final detailsLite = <String, dynamic>{};
-    plannedExerciseDetails.forEach((k, v) {
-      if (k == 'blockMeta') return; // block meta is in its own fields below
+    final settingsLite = <String, dynamic>{};
+    exerciseSettings.forEach((k, v) {
       if (v is! Map) return;
       final m = v as Map;
-      detailsLite[k] = {
+      settingsLite[k] = {
         // These are the fields that affect reps/weight/RIR hints:
         if (m['progressionModel'] != null) 'progressionModel': m['progressionModel'],
         if (m['repTargets'] != null)       'repTargets': m['repTargets'],
@@ -2025,7 +2037,7 @@ class PeriodizationModelUtils {
 
     final payload = {
       'plan': planLite,
-      'details': detailsLite,
+      'settings': settingsLite,
       'blockStartDate': blockStartDate?.toIso8601String(),
       'blockEndDate': blockEndDate?.toIso8601String(),
       // weekIndex matters whenever DUP by week or linear w/ week interpolation
@@ -3886,7 +3898,7 @@ class PeriodizationModelUtils {
           return null;
         })();
 
-    final details = PeriodizationModelUtils.plannedExerciseDetails[exerciseId];
+    final details = PeriodizationModelUtils.exerciseSettings[exerciseId];
     if (details == null) {
       print("❌ [upcomingRepTargetSequence] No details found for ID=$exerciseId at this time.");
     } else {
@@ -3900,8 +3912,8 @@ class PeriodizationModelUtils {
     }
 
     print('✅ [upcomingRepTargetSequence] Found details for $exerciseName (ID=$exerciseId)');
-    print('🧪 [DUP Signature] Raw week1.instance1 value for $exerciseName → ${PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1']?['instance1']}');
-    final rawInstance1 = PeriodizationModelUtils.plannedExerciseDetails[exerciseId]?['repTargets']?['week1']?['instance1']?.toString();
+    print('🧪 [DUP Signature] Raw week1.instance1 value for $exerciseName → ${PeriodizationModelUtils.exerciseSettings[exerciseId]?['repTargets']?['week1']?['instance1']}');
+    final rawInstance1 = PeriodizationModelUtils.exerciseSettings[exerciseId]?['repTargets']?['week1']?['instance1']?.toString();
     print('🧪 [DUP Signature] Raw week1.instance1 value for $exerciseName → $rawInstance1');
 
     final parsedMin = rawInstance1 != null && rawInstance1.contains('–')
@@ -4087,13 +4099,13 @@ class PeriodizationModelUtils {
 
   static Map<String, int>? getDupSignatureRepRange(String exerciseKey) {
     // Step 1: Try direct lookup (assume key is an ID)
-    var details = plannedExerciseDetails[exerciseKey];
+    var details = _exerciseSettings[exerciseKey];
 
     // Step 2: If null, try converting from name → ID
     if (details == null && nameToId.containsKey(exerciseKey)) {
       final id = nameToId[exerciseKey];
       if (id != null) {
-        details = plannedExerciseDetails[id];
+        details = _exerciseSettings[id];
         print('🔁 [getDupSignatureRepRange] Used name to find ID "$id"');
       }
     }
@@ -4461,7 +4473,6 @@ class WesHintInputsPayload {
   final int weekIndex;
 
   final List<Map<String, dynamic>> plannedExercises;
-  final Map<String, dynamic> plannedExerciseDetails;
   final Map<String, dynamic> exerciseSettings;
 
   final double bodyweightAsOfDay;
@@ -4474,7 +4485,6 @@ class WesHintInputsPayload {
     required this.dateYmd,
     required this.weekIndex,
     required this.plannedExercises,
-    required this.plannedExerciseDetails,
     required this.exerciseSettings,
     required this.bodyweightAsOfDay,
     required this.lastWorkoutDate,
@@ -4495,7 +4505,7 @@ class WesHintInputsPayload {
         'id': (e['id'] ?? e['exerciseId'] ?? e['name'] ?? '').toString(),
         'c' : (e['circuitIndex'] ?? 0),
       }).toList(),
-      'details': plannedExerciseDetails.map((k, v) {
+      'settings': exerciseSettings.map((k, v) {
         final m = (v is Map) ? v : const {};
         return MapEntry(k.toString(), {
           'periodizationModel': m['periodizationModel'],
@@ -4503,12 +4513,6 @@ class WesHintInputsPayload {
           'repTargets'        : m['repTargets'],
           'rirPlan'           : m['rirPlan'],
           'increments'        : m['increments'],
-        });
-      }),
-      'settings': exerciseSettings.map((k, v) {
-        final m = (v is Map) ? v : const {};
-        return MapEntry(k.toString(), {
-          if (m['increments'] != null) 'increments': m['increments'],
         });
       }),
     };
@@ -4544,6 +4548,4 @@ String wesMaxTopSetDate(Map<String, List<Map<String,dynamic>>> topSets) {
   }
   return best;
 }
-
-
 

@@ -297,13 +297,6 @@ class HomeBootstrapService {
           'allExercisesAvailable': true,
           'excludedExerciseIds': <String>[],
           'templateCandidateExerciseIds': candidateExerciseIds,
-          'plannedExerciseDetails': {
-            'blockMeta': {
-              'blockStartDate': start.toIso8601String(),
-              'blockEndDate': end.toIso8601String(),
-              'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-            }
-          },
           // Admin/debug fields — not read by app logic.
           'ownerUid': uid,
           if (ownerEmail != null) 'ownerEmail': ownerEmail,
@@ -353,13 +346,6 @@ class HomeBootstrapService {
         'blockId': block1Id,
         'blockName': block1Name,
         'templateCandidateExerciseIds': candidateIds,
-        'plannedExerciseDetails': {
-          'blockMeta': {
-            'blockStartDate': startDate1.toIso8601String(),
-            'blockEndDate': endDate1.toIso8601String(),
-            'selectedDays': ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-          }
-        },
         'blockMeta': {
           'blockStartDate': startDate1.toIso8601String(),
           'blockEndDate': endDate1.toIso8601String(),

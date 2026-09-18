@@ -102,7 +102,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
   final ScrollController _horizontalScrollController = ScrollController();
   final ScrollController _verticalScrollController = ScrollController();
   Map<String, dynamic> repTargetsByExercise = {};
-  Map<String, dynamic> plannedExerciseDetails = {};
+  Map<String, dynamic> exerciseSettings = {};
 
   final Map<String, dynamic> _repTargetsByExercise = {};
   Map<String, List<int>> scheduledRepTargets = {}; // 🆕
@@ -150,7 +150,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
       loadTopSetsFromWorkouts(),
       loadPlannedExercisesFromFirestore(),
       _loadRepTargets(),
-      PeriodizationModelUtils.loadPeriodizationModelsFromFirestore(),
+      PeriodizationModelUtils.loadPeriodizationModelsFromFirestore(
+        blockId: widget.blockId,
+      ),
     ]);
 
     selectedTemplateIds =
@@ -231,7 +233,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
 
     if (exerciseId == null) return null;
 
-    final details = plannedExerciseDetails[exerciseId];
+    final details = exerciseSettings[exerciseId];
     if (details == null) return null;
 
     final repTargets = details['repTargets'];
@@ -250,7 +252,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
             repTargetsByExercise: {
               exerciseId: {'repTargets': repTargets}
             },
-            plannedExerciseDetails: plannedExerciseDetails,
+            exerciseSettings: exerciseSettings,
           );
           return reps.toString();
 
@@ -262,7 +264,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
             plannedIndex: plannedIndex,
             weekIndex: week,
             repTargetsByExercise: repTargetsByExercise,
-            plannedExerciseDetails: plannedExerciseDetails,
+            exerciseSettings: exerciseSettings,
             blockStartDate: blockStartDate,
             blockEndDate: blockEndDate,
           );
@@ -276,7 +278,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
             exerciseName: exerciseId,
             plannedIndex: indexInWeek, // ✅ resets each week
             weekIndex: week,
-            plannedExerciseDetails: plannedExerciseDetails,
+            exerciseSettings: exerciseSettings,
           );
 
           return rep.toString();
@@ -303,7 +305,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
             repTargetsByExercise: {
               exerciseId: {'repTargets': repTargets}
             },
-            plannedExerciseDetails: plannedExerciseDetails,
+            exerciseSettings: exerciseSettings,
           );
 
           return rep.toString();
@@ -359,47 +361,59 @@ class _WeekPlannerState extends State<WeekPlanner> {
     return count - 1; // zero-based
   }
 
-  Future<void> _loadRepTargets() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  Future<String?> _resolveBlockIdForLoad() async {
+    final explicit = widget.blockId;
+    if (explicit != null && explicit.isNotEmpty) return explicit;
 
-    final doc = await FirebaseFirestore.instance
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+
+    final pointer = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
         .collection('block_planner')
         .doc('current_block')
         .get();
+    return pointer.data()?['blockId']?.toString();
+  }
+
+  Future<void> _loadRepTargets() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final blockId = await _resolveBlockIdForLoad();
+    if (blockId == null || blockId.isEmpty) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('planned_blocks')
+        .doc(blockId)
+        .get();
 
     final data = doc.data();
     if (data == null) return;
+    final rawSettings = data['exerciseSettings'];
+    if (rawSettings is! Map) return;
+
+    final loadedSettings = Map<String, dynamic>.from(rawSettings);
+    PeriodizationModelUtils.setExerciseSettings(loadedSettings);
 
     setState(() {
-      if (data.containsKey('plannedExerciseDetails')) {
-        plannedExerciseDetails =
-            Map<String, dynamic>.from(data['plannedExerciseDetails']);
-
-        // ✅ Inject blockMeta if it exists
-        if (data.containsKey('blockMeta')) {
-          plannedExerciseDetails['blockMeta'] =
-              Map<String, dynamic>.from(data['blockMeta']);
+      exerciseSettings = loadedSettings;
+      _repTargetsByExercise.clear();
+      exerciseSettings.forEach((exerciseId, details) {
+        if (details is Map && details.containsKey('repTargets')) {
+          _repTargetsByExercise[exerciseId] = {
+            'repTargets': details['repTargets'],
+          };
         }
-
-        // ✅ Preload repTargets into _repTargetsByExercise
-        plannedExerciseDetails.forEach((exerciseId, details) {
-          if (exerciseId == 'blockMeta') return; // skip meta
-          if (details is Map<String, dynamic> &&
-              details.containsKey('repTargets')) {
-            _repTargetsByExercise[exerciseId] = {
-              'repTargets': details['repTargets']
-            };
-          }
-          PeriodizationModelUtils.plannedExerciseDetails[exerciseId] = details;
-        });
-      } else {}
+      });
     });
 
-    plannedExerciseDetails.forEach((exerciseId, details) {
-      if (exerciseId == 'blockMeta') return;
+    exerciseSettings.forEach((exerciseId, rawDetails) {
+      if (rawDetails is! Map) return;
+      final details = Map<String, dynamic>.from(rawDetails);
 
       final modelName = details['periodizationModel'];
       if (modelName != null) {
@@ -437,17 +451,26 @@ class _WeekPlannerState extends State<WeekPlanner> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
+    final blockId = await _resolveBlockIdForLoad();
+    if (blockId == null || blockId.isEmpty) return;
+
     final doc = await FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
-        .collection('block_planner')
-        .doc('current_block')
+        .collection('planned_blocks')
+        .doc(blockId)
         .get();
 
     if (doc.exists) {
       final data = doc.data();
-      if (data != null && data['plannedExercises'] != null) {
-        plannedExercises = List<String>.from(data['plannedExercises']);
+      if (data != null) {
+        final rawExercises = data['plannedExercises'] ?? data['exercises'];
+        if (rawExercises is List) {
+          plannedExercises = rawExercises.map((e) => e.toString()).toList();
+        } else if (data['exerciseSettings'] is Map) {
+          plannedExercises =
+              Map<String, dynamic>.from(data['exerciseSettings']).keys.toList();
+        }
       }
     }
 
@@ -1462,8 +1485,7 @@ class _WeekPlannerState extends State<WeekPlanner> {
                                 ),
                                 weekIndex: weekIndex,
                                 repTargetsByExercise: repTargetsByExercise,
-                                plannedExerciseDetails:
-                                    plannedExerciseDetails, // ✅ Pass it in here
+                                exerciseSettings: exerciseSettings,
                               );
 
                               // Do not set repsController.text — just clear it
@@ -1676,13 +1698,9 @@ class _WeekPlannerState extends State<WeekPlanner> {
         DateFormat('E d MMM y').format(date); // e.g., "Mon 17 Mar 2025"
 
     return StatefulBuilder(builder: (context, localSetState) {
-      final meta =
-          (plannedExerciseDetails['blockMeta'] ?? {}) as Map<String, dynamic>;
-      final blockStart = DateTime.tryParse(meta['blockStartDate'] ?? '');
-      final blockEnd = DateTime.tryParse(meta['blockEndDate'] ?? '');
       final blockLength = PeriodizationModelUtils.getBlockLength(
-        blockStartDate: blockStart,
-        blockEndDate: blockEnd,
+        blockStartDate: blockStartDate,
+        blockEndDate: blockEndDate,
       );
 
       return Card(

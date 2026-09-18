@@ -534,7 +534,6 @@ class BlockExerciseDefaultsRepository {
     }
 
     // 2) Build per-exercise defaults (same as BP, but in a local map)
-    final Map<String, dynamic> newExerciseDetails = {};
     final Map<String, dynamic> newExerciseSettings = {};
 
     for (final id in exerciseIds) {
@@ -562,7 +561,7 @@ class BlockExerciseDefaultsRepository {
           ? repTargets
           : _convertToMap(repTargets);
 
-      newExerciseDetails[id] = {
+      newExerciseSettings[id] = {
         'periodizationModel': periodizationModel,
         'repTargets': savedTargets,
         'rirPlan': rirPlan,
@@ -572,10 +571,6 @@ class BlockExerciseDefaultsRepository {
         'weeklyFrequency': weeklyFrequency,
         'maxWeightXReps': '',
         'notes': '',
-      };
-
-      newExerciseSettings[id] = {
-        ...newExerciseDetails[id] as Map<String, dynamic>,
         'defaultSets': defaultSets,
         'modelSpecificRepTargets': defaults['modelSpecificRepTargets'],
       };
@@ -587,16 +582,10 @@ class BlockExerciseDefaultsRepository {
     final snapshot = await docRef.get();
     final data = snapshot.data() ?? {};
 
-    final existingDetails = Map<String, dynamic>.from(
-      data['plannedExerciseDetails'] ?? {},
-    );
     final existingSettings = Map<String, dynamic>.from(
       data['exerciseSettings'] ?? {},
     );
 
-    newExerciseDetails.forEach((id, payload) {
-      existingDetails[id] = payload;
-    });
     newExerciseSettings.forEach((id, payload) {
       final Map<String, dynamic> existing = Map<String, dynamic>.from(
         existingSettings[id] ?? {},
@@ -605,11 +594,9 @@ class BlockExerciseDefaultsRepository {
       existingSettings[id] = existing;
     });
 
-    print('📤 [DefaultsRepo] Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}');
     print('📤 [DefaultsRepo] Saving exerciseSettings:\n${jsonEncode(existingSettings)}');
 
     await docRef.set({
-      'plannedExerciseDetails': existingDetails,
       'exerciseSettings': existingSettings,
     }, SetOptions(merge: true));
 
@@ -711,7 +698,7 @@ class BlockExerciseDefaultsRepository {
         ? repTargets
         : _convertToMap(repTargets);
 
-    final detailPayload = {
+    final settingsPayload = {
       'periodizationModel': defaults['periodizationModel'],
       'repTargets': savedTargets,
       'rirPlan': defaults['rirPlan'],
@@ -721,19 +708,14 @@ class BlockExerciseDefaultsRepository {
       'weeklyFrequency': defaults['weeklyFrequency'],
       'maxWeightXReps': '',
       'notes': '',
-    };
-
-    final settingsPayload = {
-      ...detailPayload,
       'defaultSets': defaults['defaultSets'],
       'modelSpecificRepTargets': defaults['modelSpecificRepTargets'],
     };
 
     // 4. Write: strategy depends on whether a partial entry already exists.
     if (existingForId == null) {
-      // Fully absent: write the complete payload for both sub-collections.
+      // Fully absent: write the complete canonical payload.
       await docRef.set({
-        'plannedExerciseDetails': {exerciseId: detailPayload},
         'exerciseSettings': {exerciseId: settingsPayload},
       }, SetOptions(merge: true));
     } else {

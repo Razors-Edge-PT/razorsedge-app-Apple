@@ -376,13 +376,6 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
             'exercises': exerciseIds,
             'plannedExercises': exerciseIds,
             'templateCandidateExerciseIds': candidateExerciseIds,
-            'plannedExerciseDetails': {
-              'blockMeta': {
-                'blockStartDate': start.toIso8601String(),
-                'blockEndDate': end.toIso8601String(),
-                'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-              }
-            },
           };
         }
 
@@ -421,13 +414,6 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
           'blockName': block1Name,
           'plannedExercises': allExerciseIds,
           'templateCandidateExerciseIds': candidateIds,
-          'plannedExerciseDetails': {
-            'blockMeta': {
-              'blockStartDate': startDate1.toIso8601String(),
-              'blockEndDate': endDate1.toIso8601String(),
-              'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-            }
-          },
           'blockMeta': {
             'blockStartDate': startDate1.toIso8601String(),
             'blockEndDate': endDate1.toIso8601String(),

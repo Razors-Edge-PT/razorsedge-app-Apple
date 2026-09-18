@@ -93,41 +93,8 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
         print("💾 [BP.dispose] _savePlannedExercises() completed");
 
-        // 2) Mirror per-exercise details to WES-compatible location
-        //    Use in-memory exerciseSettings as the source of truth.
-        if (exercises.isEmpty) {
-          print("ℹ️ [BP.dispose] No exercises to mirror");
-          return;
-        }
-
-        for (final exerciseId in exercises) {
-          final data = exerciseSettings[exerciseId];
-          if (data == null) {
-            print("⚠️ [BP.dispose] No settings for $exerciseId; skipping mirror");
-            continue;
-          }
-
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(userId)
-              .collection('plannedExerciseDetails')
-              .doc(exerciseId)
-              .set({
-            'progressionModel': data['progressionModel'],
-            'periodizationModel': data['periodizationModel'],
-            'repTargets': data['repTargets'],
-            'rirPlan': data['rirPlan'],
-            'rirModel': data['rirModel'],
-            'increments': data['increments'],
-            'weeklyFrequency': data['weeklyFrequency'],
-            'maxWeightXReps': data['maxWeightXReps'],
-            'notes': data['notes'] ?? '',
-          }, SetOptions(merge: true));
-
-          print("📌 [BP.dispose] Mirrored plannedExerciseDetails for $exerciseId");
-        }
       } catch (e) {
-        print("❌ [BP.dispose] Background save/mirror error: $e");
+        print("❌ [BP.dispose] Background save error: $e");
       }
     });
 
@@ -270,7 +237,6 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   DateTime? _blockStartDate;
   DateTime? _blockEndDate;
   Map<String, dynamic> exerciseRepTargets = {};
-  Map<String, dynamic> plannedExerciseDetails = {};
   final TextEditingController _blockGoalsController = TextEditingController();
 
   Map<String, Map<String, dynamic>> exerciseSettings = {};
@@ -324,7 +290,6 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     if (key == 'repTargets') {
       docRef.update({
         'exerciseSettings.$exerciseId.repTargets': safeValue,
-        'plannedExerciseDetails.$exerciseId.repTargets': safeValue,
       }).catchError((e) {
         print("❌ Failed to save $key for $exerciseId: $e");
       });
@@ -334,11 +299,6 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 // ✅ Default path for all other keys (keep your existing merge behavior)
     docRef.set({
       'exerciseSettings': {
-        exerciseId: {
-          key: safeValue,
-        },
-      },
-      'plannedExerciseDetails': {
         exerciseId: {
           key: safeValue,
         },
@@ -446,7 +406,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
         if (!mounted) return;
 
-// 2) Save plannedExerciseDetails/exerciseSettings/week docs/current_block pointer, etc.
+// 2) Save exerciseSettings/week docs/current_block pointer, etc.
         await _savePlannedExercises(suppressSnack: true);
 
       }
@@ -1442,14 +1402,10 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         ..addAll(uniqueExercises);
     }
 
-    // Read-modify your exerciseDetails as before
+    // Read-modify exerciseSettings so unknown per-exercise keys are preserved.
     final snapshot = await docRef.get();
     final data = snapshot.data() ?? {};
 
-    final existingDetails = Map<String, dynamic>.from(
-      data['plannedExerciseDetails'] ?? {},
-    );
-    // 🔁 Also track existing exerciseSettings so we mirror all changes there too
     final existingSettings = Map<String, dynamic>.from(
       data['exerciseSettings'] ?? {},
     );
@@ -1541,64 +1497,36 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
             '🔁 Converted DUP repTargets for $exercise: ${jsonEncode(dupMap)}');
       }
 
-      if (entry['periodizationModel'] == 'DUP, Signature') {
-
-        existingDetails[exercise] = {
-          'periodizationModel': 'DUP, Signature',
-          'repTargets': entry['repTargets'], // ← include the correct full structure
-          'rirPlan': entry['rirPlan'], // ✅ Add this
-          'rirModel': entry['rirModel'], // ✅ add this line
-          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
-          'increments': entry['increments'] ?? {'primary': 2.5},
-          'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
-          'maxWeightXReps': entry['maxWeightXReps'] ?? '',
-          'notes': entry['notes'] ?? '',
-        };
-      }
-      else {
-        existingDetails[exercise] = {
-          'periodizationModel': entry['periodizationModel'],
-          'repTargets': savedTargets,
-          'rirPlan': entry['rirPlan'], // ✅ Add this
-          'rirModel': entry['rirModel'], // ✅ add this line
-          'progressionModel': entry['progressionModel'] ?? 'Linear Weight Increase',
-          'increments': entry['increments'] ?? {'primary': 2.5},
-          'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
-          'maxWeightXReps': entry['maxWeightXReps'] ?? '',
-          'notes': entry['notes'] ?? '',
-        };
-      }
+      final normalizedEntry = <String, dynamic>{
+        ...Map<String, dynamic>.from(existingSettings[exercise] ?? {}),
+        ...entry,
+        'periodizationModel': entry['periodizationModel'],
+        'repTargets': entry['periodizationModel'] == 'DUP, Signature'
+            ? entry['repTargets']
+            : savedTargets,
+        'rirPlan': entry['rirPlan'],
+        'rirModel': entry['rirModel'],
+        'progressionModel':
+            entry['progressionModel'] ?? 'Linear Weight Increase',
+        'increments': entry['increments'] ?? {'primary': 2.5},
+        'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
+        'maxWeightXReps': entry['maxWeightXReps'] ?? '',
+        'notes': entry['notes'] ?? '',
+      };
+      existingSettings[exercise] = normalizedEntry;
       print('💾 [BP] saving increments for $exercise → '
-          '${jsonEncode(existingDetails[exercise]['increments'])}');
+          '${jsonEncode(existingSettings[exercise]['increments'])}');
 
-      // 🔁 Mirror the same per-exercise payload into exerciseSettings,
-      // but keep any extra keys that already existed there (e.g. defaultSets).
-      final Map<String, dynamic> existingSettingsEntry =
-      Map<String, dynamic>.from(existingSettings[exercise] ?? {});
-      existingSettingsEntry.addAll(
-          existingDetails[exercise] as Map<String, dynamic>);
-      existingSettings[exercise] = existingSettingsEntry;
-
-      print('💾 [BP] mirrored into exerciseSettings for $exercise → '
+      print('💾 [BP] saved exerciseSettings for $exercise → '
           '${jsonEncode(existingSettings[exercise])}');
     }
 
-
-    if (_blockStartDate != null && _blockEndDate != null) {
-      existingDetails['blockMeta'] = {
-        'blockStartDate': _blockStartDate!.toIso8601String(),
-        'blockEndDate': _blockEndDate!.toIso8601String(),
-      };
-      print("📅 Saved blockMeta to plannedExerciseDetails");
-    }
-
-    // 🧹 Remove details for exercises that were deleted (keep blockMeta).
+    // 🧹 Remove settings for exercises that were deleted.
     // For allExercisesAvailable blocks, prune against exercisesToSave (settings-keyed list).
-    existingDetails.removeWhere(
-      (k, v) => k != 'blockMeta' && !exercisesToSave.contains(k),
+    existingSettings.removeWhere(
+      (k, v) => !exercisesToSave.contains(k),
     );
 
-    print("📤 Saving plannedExerciseDetails:\n${jsonEncode(existingDetails)}");
     print("📤 Saving exerciseSettings:\n${jsonEncode(existingSettings)}");
 
     if (_allExercisesAvailable) {
@@ -1608,14 +1536,12 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       final excluded = allIds.difference(exercises.toSet()).toList();
       await docRef.set({
         'excludedExerciseIds': excluded,
-        'plannedExerciseDetails': existingDetails,
         'exerciseSettings': existingSettings,
       }, SetOptions(merge: true));
     } else {
       await docRef.set({
         'exercises': exercises,
         'plannedExercises': exercises,
-        'plannedExerciseDetails': existingDetails,
         'exerciseSettings': existingSettings,
       }, SetOptions(merge: true));
     }
@@ -1769,13 +1695,12 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       }
     }
 
-    // ✅ Restore detailed settings, skipping blockMeta and guarding local edits
-    if (data.containsKey('plannedExerciseDetails') && !_hasLocalEdits) {
-      final raw = Map<String, dynamic>.from(data['plannedExerciseDetails'] ?? const {});
+    // ✅ Restore canonical settings while guarding local edits.
+    if (data.containsKey('exerciseSettings') && !_hasLocalEdits) {
+      final raw = Map<String, dynamic>.from(data['exerciseSettings'] ?? const {});
       final Map<String, Map<String, dynamic>> converted = {};
 
       raw.forEach((exerciseId, value) {
-        if (exerciseId == 'blockMeta') return; // 🚫 skip metadata
         if (value is Map) {
           converted[exerciseId] = Map<String, dynamic>.from(value);
         }
@@ -2290,7 +2215,6 @@ class _ExerciseCard extends StatefulWidget {
       onUpdateSetting;
   final DateTime? blockStartDate;
   final DateTime? blockEndDate;
-  final Map<String, dynamic>? plannedExerciseDetails;
 
 
   const _ExerciseCard({
@@ -2298,7 +2222,6 @@ class _ExerciseCard extends StatefulWidget {
     required this.exerciseName,
     required this.exerciseSettings,
     required this.onUpdateSetting,
-    this.plannedExerciseDetails, // 🔁 not required
     this.blockStartDate,
     this.blockEndDate,
 
@@ -2662,9 +2585,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
     final payload = <String, dynamic>{
       'exerciseSettings.${widget.exerciseId}.rirPlan': entry['rirPlan'],
-      'plannedExerciseDetails.${widget.exerciseId}.rirPlan': entry['rirPlan'],
       'exerciseSettings.${widget.exerciseId}.rirModel': entry['rirModel'],
-      'plannedExerciseDetails.${widget.exerciseId}.rirModel': entry['rirModel'],
     };
 
     FirebaseFirestore.instance
@@ -2973,9 +2894,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 
         final payload = <String, dynamic>{
           'exerciseSettings.${widget.exerciseId}.rirPlan': entry['rirPlan'],
-          'plannedExerciseDetails.${widget.exerciseId}.rirPlan': entry['rirPlan'],
           'exerciseSettings.${widget.exerciseId}.rirModel': entry['rirModel'],
-          'plannedExerciseDetails.${widget.exerciseId}.rirModel': entry['rirModel'],
         };
 
         docRef.set(payload, SetOptions(merge: true)).catchError((e) {
