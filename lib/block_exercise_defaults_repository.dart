@@ -651,6 +651,41 @@ class BlockExerciseDefaultsRepository {
     return projected;
   }
 
+  /// The complete canonical `exerciseSettings[exerciseId]` payload written for
+  /// an exercise that has no settings yet (tiered defaults by name → category
+  /// → isolation). Returns an empty map when no default tier applies.
+  ///
+  /// Shared by [ensureExerciseDefaults] and Block Planner 2 so both produce
+  /// byte-identical default objects.
+  static Map<String, dynamic> defaultSettingsPayload({
+    required String name,
+    required String category,
+    required String bodyPart,
+  }) {
+    final defaults = getDefaultSettings(
+        name, category.isNotEmpty ? category : 'Other', bodyPart);
+    if (defaults.isEmpty) return const {};
+
+    final repTargets = defaults['repTargets'];
+    final savedTargets = repTargets is Map<String, Map<String, String>>
+        ? repTargets
+        : _convertToMap(repTargets);
+
+    return {
+      'periodizationModel': defaults['periodizationModel'],
+      'repTargets': savedTargets,
+      'rirPlan': defaults['rirPlan'],
+      'rirModel': defaults['rirModel'],
+      'progressionModel': defaults['progressionModel'],
+      'increments': defaults['increments'],
+      'weeklyFrequency': defaults['weeklyFrequency'],
+      'maxWeightXReps': '',
+      'notes': '',
+      'defaultSets': defaults['defaultSets'],
+      'modelSpecificRepTargets': defaults['modelSpecificRepTargets'],
+    };
+  }
+
   /// Ensures [exerciseId] has complete, usable exerciseSettings in [blockId].
   /// No-op when settings are already complete (per [isSettingsUsable]).
   /// When settings are absent, writes the full default payload.
@@ -690,27 +725,12 @@ class BlockExerciseDefaultsRepository {
     final bodyPart = ex.bodyPart;
 
     // 3. Compute defaults using the same logic as seedDefaultsForBlock.
-    final defaults = getDefaultSettings(name, category, bodyPart);
-    if (defaults.isEmpty) return;
-
-    final repTargets = defaults['repTargets'];
-    final savedTargets = repTargets is Map<String, Map<String, String>>
-        ? repTargets
-        : _convertToMap(repTargets);
-
-    final settingsPayload = {
-      'periodizationModel': defaults['periodizationModel'],
-      'repTargets': savedTargets,
-      'rirPlan': defaults['rirPlan'],
-      'rirModel': defaults['rirModel'],
-      'progressionModel': defaults['progressionModel'],
-      'increments': defaults['increments'],
-      'weeklyFrequency': defaults['weeklyFrequency'],
-      'maxWeightXReps': '',
-      'notes': '',
-      'defaultSets': defaults['defaultSets'],
-      'modelSpecificRepTargets': defaults['modelSpecificRepTargets'],
-    };
+    final settingsPayload = defaultSettingsPayload(
+      name: name,
+      category: category,
+      bodyPart: bodyPart,
+    );
+    if (settingsPayload.isEmpty) return;
 
     // 4. Write: strategy depends on whether a partial entry already exists.
     if (existingForId == null) {

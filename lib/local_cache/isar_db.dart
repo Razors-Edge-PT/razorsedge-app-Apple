@@ -4,6 +4,7 @@ import 'package:isar_community/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'isar_claude_bullet_snapshot.dart';
 import 'isar_block_plan.dart';
+import 'isar_planner_cache.dart';
 
 class IsarDb {
   static Isar? _isar;
@@ -26,6 +27,7 @@ class IsarDb {
       [
         BlockDaySchema,
         ClaudeBulletSnapshotSchema,
+        PlannerCacheRecordSchema,
       ],
 
       directory: dir.path,

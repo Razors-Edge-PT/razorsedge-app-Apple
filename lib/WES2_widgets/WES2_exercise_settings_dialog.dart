@@ -2,25 +2,9 @@ import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 import '../block_exercise_defaults_repository.dart';
 import '../exercise_catalog.dart';
+import '../exercise_model_registry.dart';
 import '../wes2_exercise_settings_patch.dart';
 
-const Set<String> _defaultVelocityExerciseIds = {
-  'heeBViVINHO6tUScSd6y',
-  'AJIQi4kzUVb7IfOyxfZs',
-  'm6zHYgovIiYPM7NgqoeR',
-  'AmfUWbF1DH3I7qPAdh5k',
-  'pU7wce56hFDsam53aKDr',
-  'wtrVB88vFR0EDRc7Uli0',
-  'IECRZ5GJrc78DRnyuhtQ',
-  'ZH6VIWHexxxlpKRYgwil',
-  'WH2qpYjDeb6M0j2FtlGs',
-  'MsGl7e9yanDeEnYX0e4X',
-  'EQL6s4QJnXApe8DdmJbX',
-  'YvwK9kwc1hcA2omz1g4r',
-  'lVDG90yN6Z8aPjRNV2wc',
-  '10pEctikt6PP8eAg9Eip',
-  'NkctO0XmQrUHfLCkpRXr',
-};
 
 class Wes2ExerciseSettingsDialog extends StatefulWidget {
   final String uid;
@@ -284,7 +268,8 @@ class _Wes2ExerciseSettingsDialogState
       final explicitVelocity = settings['showVelocityField'];
       _showVelocityField = explicitVelocity is bool
           ? explicitVelocity
-          : _defaultVelocityExerciseIds.contains(widget.exerciseId);
+          : ExerciseModelRegistry.defaultVelocityExerciseIds
+              .contains(widget.exerciseId);
       _initialShowVelocity = _showVelocityField;
 
       final wf = settings['weeklyFrequency'];
@@ -682,13 +667,7 @@ class _Wes2ExerciseSettingsDialogState
             _buildDropdown(
               label: 'Periodisation Reps Model',
               value: _periodizationModel,
-              items: const [
-                'DUP, By Exposure',
-                'DUP, Signature',
-                'DUP, By Week',
-                'Linear, Classic',
-                'Linear, by Exposure',
-              ],
+              items: ExerciseModelRegistry.repModels,
               onChanged: (v) {
                 final wasSignature = _isDupSignature;
                 _periodizationModel = v;
@@ -706,12 +685,7 @@ class _Wes2ExerciseSettingsDialogState
             _buildDropdown(
               label: 'Periodisation RIR Model',
               value: _rirModel,
-              items: const [
-                'Linear-Taper',
-                'Wave RIR undulation',
-                'Session RIR Undulation',
-                'Static RIR',
-              ],
+              items: ExerciseModelRegistry.rirModels,
               onChanged: (v) => setState(() => _rirModel = v),
             ),
             const SizedBox(height: 8),
@@ -720,12 +694,7 @@ class _Wes2ExerciseSettingsDialogState
             _buildDropdown(
               label: 'Progression Model',
               value: _progressionModel,
-              items: const [
-                'Linear Weight Increase',
-                'Add Reps',
-                'Smart Progression',
-                'None',
-              ],
+              items: ExerciseModelRegistry.progressionModels,
               onChanged: (v) => setState(() => _progressionModel = v),
             ),
             const SizedBox(height: 10),

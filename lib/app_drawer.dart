@@ -17,6 +17,7 @@ import 'planned_blocks_screen.dart';
 import 'package:provider/provider.dart';
 import 'block_planner.dart';
 import 'bb3_week_planner.dart';
+import 'block_planner_2/bp2_screen.dart';
 import 'templates.dart';
 import 'exercises.dart';
 import 'body_weight_tracker.dart';
@@ -114,6 +115,21 @@ class AppDrawer extends StatelessWidget {
                 settings: RouteSettings(
                   arguments: {'newBlock': true}, // 👈 preserve your arguments
                 ),
+              ),
+            );
+          }),
+
+          // TEMPORARY sibling entry while Block Planner 2 is evaluated. The
+          // original Block Planner entry above is unchanged for rollback.
+          _drawerTile(context, Icons.extension_outlined, 'Block Planner 2', () {
+            final userContext = UserContext.of(context, listen: false);
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChangeNotifierProvider<UserContext>.value(
+                  value: userContext,
+                  child: const Bp2Screen(),
+                ),
+                settings: const RouteSettings(name: '/block_planner_2'),
               ),
             );
           }),

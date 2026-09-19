@@ -9,6 +9,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'block_repository.dart';   // BlockRepository().fetchActiveBlockId(...)
 import 'coach_mode/coach_mode_models.dart';
 import 'warmup_service.dart';                  // WarmupService.instance.warmWES(...)
+import 'block_planner_2/bp2_warmup.dart';
 import 'app_check_ready.dart';
 import 'startup_trace.dart';
 
@@ -350,6 +351,9 @@ class UserContext extends ChangeNotifier {
   void refreshBlockMetaInBackground(String uid) {
     // ignore: unawaited_futures
     _refreshFromServerInBackground(uid);
+    // Block Planner 2 cache warm-up for THIS athlete (first login and every
+    // athlete switch). Fire-and-forget, never throws, never blocks render.
+    Bp2Warmup.instance.warm(uid);
     if (_activeBlockId != null && _activeBlockId!.isNotEmpty) {
       // ignore: unawaited_futures
       WarmupService.instance.warmWES(
