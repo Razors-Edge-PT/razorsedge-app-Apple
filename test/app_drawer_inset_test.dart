@@ -24,7 +24,6 @@ const String kSuperAdmin = 'yoVAqScwLMQLAgNHh8v9IK49fBw2';
 const List<String> kAthleteItems = <String>[
   'Planned Blocks',
   'Block Planner',
-  'Block Planner 2',
   'BB3 Week Planner',
   'Training Preferences',
   'Workout Planner',

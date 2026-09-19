@@ -40,7 +40,9 @@ void main() {
       await c.bind(uid: athlete, activeBlockId: 'active1');
       expect(c.nameIsAuto, isTrue);
       expect(c.name, startsWith('richard — 21 Sep 2026 to '));
-      expect(c.range!.weeks, 26); // canonical kDefaultBlockWeeks
+      expect(c.range!.weeks, 4); // four Monday–Sunday weeks
+      expect(c.range!.start, DateTime(2026, 9, 21));
+      expect(c.range!.end, DateTime(2026, 10, 18));
 
       c.setRange(DateTime(2026, 9, 23), DateTime(2026, 10, 6));
       expect(
@@ -54,11 +56,11 @@ void main() {
       c.setRange(DateTime(2026, 11, 2), DateTime(2026, 11, 29));
       expect(c.name, 'Hypertrophy block');
 
-      c.setName('');
-      expect(c.nameError, isNotNull);
-      final out = await c.save();
-      expect(out.success, isFalse);
-      expect(out.focus?.field, 'name');
+      // Whitespace-only means "no custom name": the fallback returns and
+      // follows the dates again.
+      c.setName('   ');
+      expect(c.nameIsAuto, isTrue);
+      expect(c.effectiveName, 'richard — 2 Nov 2026 to 29 Nov 2026');
       c.dispose();
     });
 

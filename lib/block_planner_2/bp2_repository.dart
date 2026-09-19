@@ -127,14 +127,35 @@ class Bp2Repository {
     return null;
   }
 
-  static Bp2BlockSummary parseBlockSummary(String id, Map<String, dynamic> d) =>
-      Bp2BlockSummary(
-        id: id,
-        name: (d['name'] ?? '').toString(),
-        startDate: _date(d['startDate']),
-        endDate: _date(d['endDate']),
-        isActive: d['isActive'] == true,
-      );
+  /// Canonical block-name field is `name`; `blockName` is a legacy read
+  /// fallback. Only `name` is ever written.
+  static String readBlockName(Map<String, dynamic> d) {
+    for (final key in const ['name', 'blockName']) {
+      final v = d[key];
+      if (v is String && v.trim().isNotEmpty) return v;
+    }
+    return '';
+  }
+
+  /// Display range from stored dates (see [Bp2DateUtils.fromStored]); null
+  /// when either date is missing.
+  static Bp2DateRange? readRange(Map<String, dynamic> d) {
+    final start = _date(d['startDate']);
+    final end = _date(d['endDate']);
+    if (start == null || end == null) return null;
+    return Bp2DateUtils.fromStored(start, end);
+  }
+
+  static Bp2BlockSummary parseBlockSummary(String id, Map<String, dynamic> d) {
+    final range = readRange(d);
+    return Bp2BlockSummary(
+      id: id,
+      name: readBlockName(d),
+      startDate: range?.start,
+      endDate: range?.end,
+      isActive: d['isActive'] == true,
+    );
+  }
 
   static Map<String, Map<String, dynamic>> parseExerciseSettings(dynamic raw) {
     final out = <String, Map<String, dynamic>>{};
@@ -151,15 +172,14 @@ class Bp2Repository {
     final snap = await _blocks(uid).doc(blockId).get();
     if (!snap.exists) return null;
     final d = snap.data() ?? const {};
-    final start = _date(d['startDate']);
-    final end = _date(d['endDate']);
     return Bp2BlockRecord(
       id: blockId,
-      name: (d['name'] ?? '').toString(),
-      range: start != null && end != null
-          ? Bp2DateUtils.normalizeRange(start, end)
-          : Bp2DateUtils.defaultRange(DateTime.now(),
-              weeks: block_domain.kDefaultBlockWeeks),
+      name: readBlockName(d),
+      // A block without stored dates shows a 4-week range from its start (or
+      // today); nothing is written unless the user changes the dates.
+      range: readRange(d) ??
+          Bp2DateUtils.defaultRange(_date(d['startDate']) ?? DateTime.now(),
+              weeks: kBp2DefaultDraftWeeks),
       isActive: d['isActive'] == true,
       exerciseSettings: parseExerciseSettings(d['exerciseSettings']),
       existsRemotely: true,
@@ -208,18 +228,25 @@ class Bp2Repository {
   /// Creates or updates the block's name and Monday–Sunday dates. Nothing else
   /// on the document is touched. Creation writes the same top-level fields
   /// the app's bootstrap uses so every existing consumer can read the block.
+  ///
+  /// [name] / [range] are written only when non-null, so saving a name never
+  /// rewrites (and thereby reinterprets) an existing block's stored dates.
+  /// Persisted `endDate` is the inclusive Sunday.
   Future<void> upsertBlock({
     required String uid,
     required String blockId,
-    required String name,
-    required Bp2DateRange range,
+    String? name,
+    Bp2DateRange? range,
     required bool create,
   }) async {
+    assert(!create || (name != null && range != null));
     final ref = _blocks(uid).doc(blockId);
     final data = <String, dynamic>{
-      'name': name,
-      'startDate': Timestamp.fromDate(range.start),
-      'endDate': Timestamp.fromDate(range.end),
+      if (name != null) 'name': name,
+      if (range != null) ...{
+        'startDate': Timestamp.fromDate(range.start),
+        'endDate': Timestamp.fromDate(range.end),
+      },
       'updatedAt': FieldValue.serverTimestamp(),
       if (create) ...{
         'isActive': false,

@@ -148,6 +148,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
   }
 
   Widget _buildQACard({
+    Key? key,
     required IconData icon,
     required String label,
     required VoidCallback onTap,
@@ -155,6 +156,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     Widget? iconWidget,
   }) {
     return SizedBox(
+      key: key,
       width: kFeatureCardWidth,
       height: 130,
       child: GestureDetector(
@@ -511,6 +513,29 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   );
                                 },
                               ),
+                            ),
+                            // Column 3b: Planned Blocks 2 — the same planned-
+                            // block selection screen, opening blocks in Block
+                            // Planner 2. Sits between Planned Blocks and
+                            // Settings in the top row.
+                            _buildQAColumn(
+                              _buildQACard(
+                                key: const ValueKey('qa-planned-blocks-2'),
+                                icon: Icons.track_changes_outlined,
+                                label: 'Planned\nBlocks 2',
+                                onTap: () {
+                                  if (_ctrl.isFirstTimeSetup) {
+                                    _showBlockNotReadySnack();
+                                    return;
+                                  }
+                                  openPlannedBlocks(
+                                    context,
+                                    PlannedBlocksDestination.blockPlanner2,
+                                  );
+                                },
+                              ),
+                              const SizedBox(
+                                  width: kFeatureCardWidth, height: 130),
                             ),
                             // Column 4: Settings / Coach Dashboard (coach) or
                             // Analytics (non-coach — directly right of Week

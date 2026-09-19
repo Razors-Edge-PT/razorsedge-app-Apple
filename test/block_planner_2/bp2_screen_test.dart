@@ -91,7 +91,7 @@ void main() {
     expect(find.text('Current block'), findsOneWidget);
     expect(find.text('Other blocks'), findsOneWidget);
     expect(find.text('All other exercises'), findsOneWidget);
-    expect(find.text('26 weeks'), findsOneWidget);
+    expect(find.text('4 weeks'), findsOneWidget);
     expect(h.controller.name, startsWith('richard — '));
     expect(h.controller.uid, athlete, reason: 'scoped to selected athlete');
 

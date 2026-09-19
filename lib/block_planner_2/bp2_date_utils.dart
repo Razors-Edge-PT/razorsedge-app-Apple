@@ -7,6 +7,9 @@ library;
 
 import 'package:intl/intl.dart';
 
+/// Length of a brand-new Block Planner 2 draft: four Monday–Sunday weeks.
+const int kBp2DefaultDraftWeeks = 4;
+
 class Bp2DateUtils {
   Bp2DateUtils._();
 
@@ -51,6 +54,31 @@ class Bp2DateUtils {
     }
     return Bp2DateRange(mondayOnOrBefore(s), sundayOnOrAfter(e));
   }
+
+  /// Interprets a PERSISTED `startDate` / `endDate` pair.
+  ///
+  /// Canonical semantics (block bootstrap, WES2, the Home calendar and the
+  /// week scaffold): `endDate` is the INCLUSIVE last day, normally a Sunday.
+  /// Legacy planner data sometimes stored the exclusive boundary instead —
+  /// an end exactly N×7 days after the start (e.g. Mon 17 Aug → Mon 2 Nov
+  /// 2026). That is N whole weeks whose last day is the day before the stored
+  /// end, so it is read as ending on that day (Sun 1 Nov, 11 weeks) instead
+  /// of spilling a single day into a phantom 12th week.
+  ///
+  /// Display-only: the stored values are never rewritten by this.
+  static Bp2DateRange fromStored(DateTime start, DateTime end) {
+    final s = dateOnly(start);
+    var e = dateOnly(end);
+    final span = inclusiveDays(s, e) - 1;
+    if (span > 0 && span % 7 == 0) e = addDays(e, -1);
+    return normalizeRange(s, e);
+  }
+
+  /// True when [name] is exactly the generated fallback for [range] (for any
+  /// athlete label). Used to tell a materialised generated name apart from a
+  /// custom one without an extra provenance field.
+  static bool isGeneratedName(String name, Bp2DateRange range) => name
+      .endsWith(' — ${formatDate(range.start)} to ${formatDate(range.end)}');
 
   /// Default range for a brand-new block: this week's Monday through the
   /// Sunday that closes a [weeks]-week block.

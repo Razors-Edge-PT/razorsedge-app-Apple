@@ -10,12 +10,115 @@ import 'block_planner_repository.dart';
 import 'dart:async';
 import 'block_exercise_defaults_repository.dart';
 import 'block_creation_helper.dart';
+import 'block_planner_2/bp2_screen.dart';
 
 
 
+
+/// Which planner a planned block opens in.
+enum PlannedBlocksDestination {
+  /// The original Block Planner (default — every existing call site).
+  blockPlanner,
+
+  /// Block Planner 2.
+  blockPlanner2,
+}
+
+/// Builds the route pushed when a block (or "new block") is chosen.
+/// [blockId] null means "create a new block". [athleteUid] is always the
+/// SELECTED athlete (UserContext.currentUid), never the signed-in coach.
+typedef PlannedBlockRouteFactory = Route<void> Function({
+  required PlannedBlocksDestination destination,
+  required UserContext userContext,
+  required String athleteUid,
+  String? blockId,
+  String? blockName,
+});
+
+/// The planner screen a destination opens.
+Widget plannerScreenFor(
+  PlannedBlocksDestination destination, {
+  required String athleteUid,
+  String? blockId,
+}) {
+  switch (destination) {
+    case PlannedBlocksDestination.blockPlanner:
+      return const Block_Planner();
+    case PlannedBlocksDestination.blockPlanner2:
+      return Bp2Screen(blockId: blockId, athleteUid: athleteUid);
+  }
+}
+
+/// Default routes. The original destination builds exactly the route the
+/// screen has always pushed; Block Planner 2 gets typed [Bp2RouteArgs].
+Route<void> defaultPlannedBlockRoute({
+  required PlannedBlocksDestination destination,
+  required UserContext userContext,
+  required String athleteUid,
+  String? blockId,
+  String? blockName,
+}) {
+  switch (destination) {
+    case PlannedBlocksDestination.blockPlanner:
+      return MaterialPageRoute<void>(
+        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+          value: userContext,
+          child: plannerScreenFor(destination, athleteUid: athleteUid),
+        ),
+        settings: RouteSettings(
+          arguments: blockId == null
+              ? {'newBlock': true}
+              : {
+                  'blockId': blockId,
+                  if (blockName != null) 'blockName': blockName,
+                },
+        ),
+      );
+    case PlannedBlocksDestination.blockPlanner2:
+      return Bp2Screen.route(
+        userContext: userContext,
+        args: Bp2RouteArgs(athleteUid: athleteUid, blockId: blockId),
+      );
+  }
+}
+
+/// Opens the planned-block selection screen for the SELECTED athlete in the
+/// given [destination] mode (used by the Home Quick Access cards).
+Future<void> openPlannedBlocks(
+  BuildContext context,
+  PlannedBlocksDestination destination,
+) {
+  final uc = UserContext.of(context, listen: false);
+  return Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+        value: uc,
+        child: PlannedBlocksScreen(destination: destination),
+      ),
+    ),
+  );
+}
 
 class PlannedBlocksScreen extends StatefulWidget {
-  const PlannedBlocksScreen({super.key});
+  const PlannedBlocksScreen({
+    super.key,
+    this.destination = PlannedBlocksDestination.blockPlanner,
+    this.routeFactory,
+    this.firestore,
+  });
+
+  /// Planner that blocks open in; the original planner by default.
+  final PlannedBlocksDestination destination;
+
+  /// Test seam; production uses [defaultPlannedBlockRoute].
+  final PlannedBlockRouteFactory? routeFactory;
+
+  /// Test seam; production uses the app-wide Firestore instance.
+  final FirebaseFirestore? firestore;
+
+  String get title => destination == PlannedBlocksDestination.blockPlanner2
+      ? 'Planned Blocks 2'
+      : 'Planned Blocks';
 
   @override
   State<PlannedBlocksScreen> createState() => _PlannedBlocksScreenState();
@@ -24,6 +127,29 @@ class PlannedBlocksScreen extends StatefulWidget {
 class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
   String get userId => UserContext.of(context, listen: false).currentUid;
 
+  FirebaseFirestore get _db => widget.firestore ?? FirebaseFirestore.instance;
+
+  /// Original mode without an override keeps its historical navigation code
+  /// verbatim; every other case goes through the typed route factory.
+  bool get _legacyNavigation =>
+      widget.routeFactory == null &&
+      widget.destination == PlannedBlocksDestination.blockPlanner;
+
+  Future<void> _pushPlanner({String? blockId, String? blockName}) async {
+    final uc = UserContext.of(context, listen: false);
+    final factory = widget.routeFactory ?? defaultPlannedBlockRoute;
+    await Navigator.of(context).push(factory(
+      destination: widget.destination,
+      userContext: uc,
+      athleteUid: uc.currentUid,
+      blockId: blockId,
+      blockName: blockName,
+    ));
+    // Cards refresh through the screen's own block stream; a rebuild makes a
+    // changed name/date/status visible as soon as the planner pops.
+    if (mounted) setState(() {});
+  }
+
   bool _isSeedingDefaults = false;
   String? _seedStatus; // optional UI text
 
@@ -31,7 +157,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 
 
   Future<void> _setBlockAsActive(String blockId) async {
-    final blocksRef = FirebaseFirestore.instance
+    final blocksRef = _db
         .collection('users')
         .doc(userId)
         .collection('planned_blocks');
@@ -63,7 +189,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
       if (shouldOverride != true) return;
 
       // batch‐deactivate the old one(s)
-      final batch = FirebaseFirestore.instance.batch();
+      final batch = _db.batch();
       for (final doc in others) {
         batch.update(doc.reference, {'isActive': false});
       }
@@ -76,7 +202,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
   }
 
   Future<void> _deleteBlock(String blockId) async {
-    await FirebaseFirestore.instance
+    await _db
         .collection('users')
         .doc(userId)
         .collection('planned_blocks')
@@ -85,6 +211,10 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
   }
 
   void _createNewBlock() {
+    if (!_legacyNavigation) {
+      _pushPlanner();
+      return;
+    }
     Navigator.pushNamed(
       context,
       '/block_builder',
@@ -93,6 +223,10 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
   }
 
   void _editBlock(String blockId, [String? blockName]) {
+    if (!_legacyNavigation) {
+      _pushPlanner(blockId: blockId, blockName: blockName);
+      return;
+    }
     final userContext = UserContext.of(context, listen: false);
 
     Navigator.push(
@@ -124,7 +258,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
       // ✅ IMPORTANT: use selected/acting uid, not FirebaseAuth uid
       final uid = userId;
 
-      final blocksRef = FirebaseFirestore.instance
+      final blocksRef = _db
           .collection('users')
           .doc(uid)
           .collection('planned_blocks');
@@ -133,7 +267,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 
       if (existingBlocks.docs.isEmpty) {
         // ── Fetch username & sex from /users/{uid} ───────────────────────────────
-        final usersRef = FirebaseFirestore.instance.collection('users').doc(uid);
+        final usersRef = _db.collection('users').doc(uid);
         final userSnap = await usersRef.get();
         final data = userSnap.data() ?? {};
 
@@ -404,7 +538,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 
         // Pointer write to current_block → Block 1
         final swPtr = Stopwatch()..start();
-        await FirebaseFirestore.instance
+        await _db
             .collection('users')
             .doc(uid)
             .collection('block_planner')
@@ -425,7 +559,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         // Scaffold weeks & days for Block 1
         final swScaffold1 = Stopwatch()..start();
         {
-          final batch = FirebaseFirestore.instance.batch();
+          final batch = _db.batch();
           for (int week = 0; week < 26; week++) {
             final weekRef = block1Ref.collection('weeks').doc('week_$week');
             batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
@@ -480,7 +614,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         // Scaffold weeks & days for Block 2
         final swScaffold2 = Stopwatch()..start();
         {
-          final batch = FirebaseFirestore.instance.batch();
+          final batch = _db.batch();
           for (int week = 0; week < 26; week++) {
             final weekRef = block2Ref.collection('weeks').doc('week_$week');
             batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
@@ -549,7 +683,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 // Scaffold weeks & days for Block 3
         final swScaffold3 = Stopwatch()..start();
         {
-          final batch = FirebaseFirestore.instance.batch();
+          final batch = _db.batch();
           for (int week = 0; week < 26; week++) {
             final weekRef = block3Ref.collection('weeks').doc('week_$week');
             batch.set(weekRef, {'exists': true}, SetOptions(merge: true));
@@ -601,13 +735,13 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final blocksRef = FirebaseFirestore.instance
+    final blocksRef = _db
         .collection('users')
         .doc(userId)
         .collection('planned_blocks');
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Planned Blocks')),
+      appBar: AppBar(title: Text(widget.title)),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNewBlock,
         icon: const Icon(Icons.add),
