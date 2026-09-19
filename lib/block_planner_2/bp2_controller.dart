@@ -11,7 +11,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
-import '../block_creation_helper.dart' show kDefaultBlockWeeks;
 import '../block_exercise_defaults_repository.dart';
 import '../exercise_catalog.dart';
 import 'bp2_date_utils.dart';
@@ -75,7 +74,7 @@ class Bp2Controller extends ChangeNotifier {
     required this.sync,
     required this.repo,
     DateTime Function()? now,
-    this.defaultWeeks = kDefaultBlockWeeks,
+    this.defaultWeeks = kBp2DefaultDraftWeeks,
     this.draftDebounce = const Duration(milliseconds: 400),
     this.writeTimeout = const Duration(seconds: 8),
   }) : _now = now ?? DateTime.now;
@@ -93,20 +92,64 @@ class Bp2Controller extends ChangeNotifier {
   // ── Block state ───────────────────────────────────────────────────────────
 
   Bp2BlockRecord? _block;
+
+  /// Name exactly as stored on the block (`''` when none).
   String _persistedName = '';
   Bp2DateRange? _persistedRange;
-  bool _nameIsAuto = true;
+
+  /// Raw Block Name field text; authoritative only when [_nameEdited].
+  String _nameText = '';
+  bool _nameEdited = false;
+  bool _rangeTouched = false;
+
+  /// Any user interaction with a NEW (not yet persisted) block.
   bool _blockTouched = false;
-  String? _nameError;
   bool _blockLoaded = false;
+  String? _blockLoadError;
 
   Bp2BlockRecord? get block => _block;
   bool get blockLoaded => _blockLoaded;
-  bool get nameIsAuto => _nameIsAuto;
-  String? get nameError => _nameError;
-  String get name => _block?.name ?? '';
+  String? get blockLoadError => _blockLoadError;
   Bp2DateRange? get range => _block?.range;
   int get totalWeeks => _block?.range.weeks ?? defaultWeeks;
+
+  /// Generated fallback: `<athlete username> — <start> to <end>`.
+  String get generatedName {
+    final r = _block?.range;
+    if (r == null) return '';
+    final label = _snapshot?.athleteLabel ?? Bp2Repository.neutralAthleteLabel;
+    return Bp2DateUtils.autoBlockName(label, r);
+  }
+
+  /// True when the stored name is a genuine custom name: non-blank and not a
+  /// materialised generated fallback for the stored dates.
+  bool get _persistedIsCustom {
+    final n = _persistedName.trim();
+    if (n.isEmpty) return false;
+    final r = _persistedRange;
+    return r == null || !Bp2DateUtils.isGeneratedName(n, r);
+  }
+
+  /// Text shown in the Block Name field:
+  ///  1. what the user typed (unsaved),
+  ///  2. a non-empty custom name saved on the block,
+  ///  3. the generated athlete/date fallback.
+  String get name {
+    if (_nameEdited) return _nameText;
+    if (_persistedIsCustom) return _persistedName;
+    return generatedName;
+  }
+
+  /// The name Save persists: blank/whitespace means "no custom name", i.e.
+  /// the generated fallback.
+  String get effectiveName {
+    final t = name.trim();
+    return t.isEmpty ? generatedName : t;
+  }
+
+  /// True while the displayed name follows the generated fallback.
+  bool get nameIsAuto =>
+      _nameEdited ? _nameText.trim().isEmpty : !_persistedIsCustom;
 
   // ── Catalogue / grouping ──────────────────────────────────────────────────
 
@@ -180,10 +223,12 @@ class Bp2Controller extends ChangeNotifier {
     _block = null;
     _persistedName = '';
     _persistedRange = null;
-    _nameIsAuto = true;
+    _nameText = '';
+    _nameEdited = false;
+    _rangeTouched = false;
     _blockTouched = false;
-    _nameError = null;
     _blockLoaded = false;
+    _blockLoadError = null;
     _snapshot = null;
     _catalogue = const [];
     _byId = const {};
@@ -208,68 +253,110 @@ class Bp2Controller extends ChangeNotifier {
       debugPrint('[BP2] cached snapshot read failed: $e');
     }
 
-    // 2. The block (existing: cached copy; new: pending draft or fresh id).
-    await _loadBlock(gen, uid, blockId);
-    if (!_live(gen)) return;
-
-    // 3. One-shot freshness check (non-blocking for the UI).
-    await _refresh(gen, uid, force: false);
-    if (!_live(gen)) return;
-
-    // 4. Existing block: single document read so exerciseSettings are current.
+    // 2. The block: an existing block is the exact stored document (cached
+    //    copy first, then ONE document read); a new block is the pending
+    //    local draft or a freshly allocated id.
     if (blockId != null) {
-      try {
-        final fresh = await sync.refreshBlock(uid, blockId);
-        if (!_live(gen)) return;
-        if (fresh != null) _mergeRemoteBlock(fresh);
-      } catch (e) {
-        debugPrint('[BP2] block refresh failed: $e');
+      await _loadExistingBlock(gen, uid, blockId);
+    } else {
+      await _loadNewDraft(gen, uid);
+    }
+    if (!_live(gen)) return;
+
+    // 3. One-shot catalogue freshness check (non-blocking for the UI).
+    await _refresh(gen, uid, force: false);
+  }
+
+  Future<void> _loadExistingBlock(int gen, String uid, String blockId) async {
+    Bp2BlockRecord? cached;
+    Bp2LocalDraft? draft;
+    try {
+      cached = await sync.readCachedBlock(uid, blockId);
+      draft = await sync.readDraft(uid, blockId);
+    } catch (e) {
+      debugPrint('[BP2] block cache read failed: $e');
+    }
+    if (!_live(gen)) return;
+    if (cached != null) _adoptPersisted(cached, draft);
+
+    try {
+      final fresh = await sync.refreshBlock(uid, blockId);
+      if (!_live(gen)) return;
+      if (fresh != null) {
+        if (_block == null) {
+          _adoptPersisted(fresh, draft);
+        } else {
+          _mergeRemoteBlock(fresh);
+        }
+      } else if (_block == null) {
+        _blockLoadError = 'This block no longer exists.';
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[BP2] block refresh failed: $e');
+      if (!_live(gen)) return;
+      if (_block == null) {
+        // Never fabricate a draft for an existing id: saving it would
+        // overwrite the real block's metadata.
+        _blockLoadError = 'Could not load this block. Check your connection.';
+        notifyListeners();
       }
     }
   }
 
-  Future<void> _loadBlock(int gen, String uid, String? blockId) async {
-    Bp2BlockRecord? record;
+  Future<void> _loadNewDraft(int gen, String uid) async {
     Bp2LocalDraft? draft;
     try {
-      if (blockId != null) {
-        record = await sync.readCachedBlock(uid, blockId);
-        draft = await sync.readDraft(uid, blockId);
-      } else {
-        final pending = await sync.readPendingDraftId(uid);
-        if (pending != null) draft = await sync.readDraft(uid, pending);
-      }
+      final pending = await sync.readPendingDraftId(uid);
+      if (pending != null) draft = await sync.readDraft(uid, pending);
     } catch (e) {
-      debugPrint('[BP2] draft/block cache read failed: $e');
+      debugPrint('[BP2] draft cache read failed: $e');
     }
     if (!_live(gen)) return;
-
-    if (record == null) {
-      final id = blockId ?? draft?.blockId ?? repo.newBlockId(uid);
-      final range = Bp2DateUtils.defaultRange(_now(), weeks: defaultWeeks);
-      record = Bp2BlockRecord(
-        id: id,
-        name: '',
-        range: range,
-        isActive: false,
-        exerciseSettings: const {},
-        existsRemotely: false,
-      );
-    }
-    _block = record;
-    _persistedName = record.existsRemotely ? record.name : '';
-    _persistedRange = record.existsRemotely ? record.range : null;
-    _nameIsAuto = !record.existsRemotely;
-
-    if (draft != null && draft.blockId == record.id) {
-      _block = record.copyWith(name: draft.name, range: draft.range);
-      _nameIsAuto = draft.nameIsAuto;
+    _block = Bp2BlockRecord(
+      id: draft?.blockId ?? repo.newBlockId(uid),
+      name: '',
+      range: draft?.range ??
+          Bp2DateUtils.defaultRange(_now(), weeks: defaultWeeks),
+      isActive: false,
+      exerciseSettings: const {},
+      existsRemotely: false,
+    );
+    _persistedName = '';
+    _persistedRange = null;
+    if (draft != null) {
+      _nameEdited = draft.nameEdited;
+      _nameText = draft.name;
+      _rangeTouched = draft.rangeTouched;
       _blockTouched = draft.blockTouched;
       _drafts
         ..clear()
         ..addAll(draft.exerciseDrafts);
     }
-    if (_nameIsAuto) _regenerateName();
+    _blockLoaded = true;
+    notifyListeners();
+  }
+
+  /// Installs a persisted block as the baseline, then overlays any durable
+  /// local draft for it (unsaved typing survives an app kill).
+  void _adoptPersisted(Bp2BlockRecord record, Bp2LocalDraft? draft) {
+    _block = record;
+    _persistedName = record.name;
+    _persistedRange = record.range;
+    _blockLoadError = null;
+    if (draft != null && draft.blockId == record.id) {
+      if (draft.nameEdited) {
+        _nameEdited = true;
+        _nameText = draft.name;
+      }
+      if (draft.rangeTouched) {
+        _rangeTouched = true;
+        _block = record.copyWith(range: draft.range);
+      }
+      _drafts
+        ..clear()
+        ..addAll(draft.exerciseDrafts);
+    }
     _blockLoaded = true;
     notifyListeners();
   }
@@ -281,7 +368,6 @@ class Bp2Controller extends ChangeNotifier {
     _byId = {for (final e in _catalogue) e.id: e};
     _catalogueLoaded = true;
     _regroup();
-    if (_nameIsAuto) _regenerateName(notify: false);
     notifyListeners();
   }
 
@@ -327,17 +413,14 @@ class Bp2Controller extends ChangeNotifier {
     await _refresh(_gen, uid, force: false);
   }
 
-  /// Replaces persisted (non-dirty) block state with a fresh server copy.
-  /// Drafts are overlays and are never touched here.
+  /// Replaces the persisted baseline with a fresh server copy. Unsaved name,
+  /// date and exercise edits are overlays and are never replaced.
   void _mergeRemoteBlock(Bp2BlockRecord fresh) {
     final cur = _block;
     if (cur == null || cur.id != fresh.id) return;
-    final keepName = blockDirty ? cur.name : fresh.name;
-    final keepRange = blockDirty ? cur.range : fresh.range;
-    _block = fresh.copyWith(name: keepName, range: keepRange);
+    _block = fresh.copyWith(range: _rangeTouched ? cur.range : fresh.range);
     _persistedName = fresh.name;
     _persistedRange = fresh.range;
-    if (!blockDirty && _nameIsAuto) _nameIsAuto = false;
     notifyListeners();
   }
 
@@ -351,35 +434,28 @@ class Bp2Controller extends ChangeNotifier {
 
   // ── Block name / dates ────────────────────────────────────────────────────
 
-  void _regenerateName({bool notify = true}) {
-    final b = _block;
-    if (b == null) return;
-    final label = _snapshot?.athleteLabel ?? Bp2Repository.neutralAthleteLabel;
-    _block = b.copyWith(name: Bp2DateUtils.autoBlockName(label, b.range));
-    if (notify) notifyListeners();
-  }
-
+  /// Raw Block Name edit. Blank/whitespace is allowed and means "use the
+  /// generated fallback"; a non-blank value is a custom name that later date
+  /// changes never overwrite.
   void setName(String value) {
-    final b = _block;
-    if (b == null) return;
-    if (value == b.name) return;
-    _nameIsAuto = false;
-    _blockTouched = true;
-    _nameError = value.trim().isEmpty ? 'Block name cannot be empty.' : null;
-    _block = b.copyWith(name: value);
+    if (_block == null) return;
+    if (value == name) return;
+    _nameEdited = true;
+    _nameText = value;
+    if (!_block!.existsRemotely) _blockTouched = true;
     _scheduleDraftPersist();
     notifyListeners();
   }
 
-  /// Snaps outward to Monday–Sunday and regenerates an auto name.
+  /// Snaps outward to Monday–Sunday. A generated name follows automatically.
   void setRange(DateTime start, DateTime end) {
     final b = _block;
     if (b == null) return;
     final normalized = Bp2DateUtils.normalizeRange(start, end);
     if (normalized == b.range) return;
     _block = b.copyWith(range: normalized);
-    _blockTouched = true;
-    if (_nameIsAuto) _regenerateName(notify: false);
+    _rangeTouched = true;
+    if (!b.existsRemotely) _blockTouched = true;
     _scheduleDraftPersist();
     notifyListeners();
   }
@@ -435,11 +511,19 @@ class Bp2Controller extends ChangeNotifier {
           if (isExerciseDirty(id)) id
       };
 
+  bool get _rangeDirty =>
+      _rangeTouched && _block != null && _block!.range != _persistedRange;
+
+  /// A name write is needed only after a user edit or a date change; the
+  /// label/date-derived fallback appearing on open is never a change.
+  bool get _nameDirty =>
+      (_nameEdited || _rangeDirty) && effectiveName != _persistedName;
+
   bool get blockDirty {
     final b = _block;
     if (b == null) return false;
     if (!b.existsRemotely) return _blockTouched;
-    return b.name != _persistedName || b.range != _persistedRange;
+    return _nameDirty || _rangeDirty;
   }
 
   bool get isDirty => blockDirty || dirtyExerciseIds.isNotEmpty;
@@ -459,8 +543,9 @@ class Bp2Controller extends ChangeNotifier {
     if (uid == null || b == null) return;
     final draft = Bp2LocalDraft(
       blockId: b.id,
-      name: b.name,
-      nameIsAuto: _nameIsAuto,
+      name: _nameText,
+      nameEdited: _nameEdited,
+      rangeTouched: _rangeTouched,
       range: b.range,
       exerciseDrafts: Map.of(_drafts),
       blockTouched: _blockTouched,
@@ -480,12 +565,6 @@ class Bp2Controller extends ChangeNotifier {
   Bp2SaveOutcome? _validate() {
     final b = _block;
     if (b == null) return Bp2SaveOutcome.failed('Block not loaded yet.');
-    if (b.name.trim().isEmpty) {
-      _nameError = 'Block name cannot be empty.';
-      notifyListeners();
-      return Bp2SaveOutcome.invalid(
-          _nameError!, const Bp2FieldFocus(field: 'name'));
-    }
     for (final entry in _drafts.entries) {
       final errors = Bp2SettingsResolver.validate(entry.value);
       if (errors.isNotEmpty) {
@@ -532,33 +611,35 @@ class Bp2Controller extends ChangeNotifier {
 
     var offline = false;
     try {
-      final name = b.name.trim();
       final range = b.range;
 
       if (needsBlockWrite) {
         final create = !b.existsRemotely;
-        final weeksChanged = create ||
-            _persistedRange?.weeks != range.weeks ||
-            _persistedRange?.start != range.start;
+        final writeRange = create || _rangeDirty;
+        final writeName = create || _nameDirty;
+        final name = effectiveName;
         try {
           await _withTimeout(repo.upsertBlock(
             uid: uid,
             blockId: b.id,
-            name: name,
-            range: range,
+            name: writeName ? name : null,
+            range: writeRange ? range : null,
             create: create,
           ));
         } catch (e) {
           if (!_isOfflineError(e)) rethrow;
           offline = true; // durable in Firestore's offline queue
         }
-        if (weeksChanged) {
+        if (writeRange) {
           unawaited(
               repo.ensureWeekScaffold(uid: uid, blockId: b.id, range: range));
         }
-        b = b.copyWith(name: name, range: range, existsRemotely: true);
-        _persistedName = name;
-        _persistedRange = range;
+        if (writeName) _persistedName = name;
+        if (writeRange) _persistedRange = range;
+        b = b.copyWith(name: _persistedName, existsRemotely: true);
+        _nameEdited = false;
+        _nameText = '';
+        _rangeTouched = false;
         _blockTouched = false;
       }
 
@@ -635,7 +716,9 @@ class Bp2Controller extends ChangeNotifier {
         _flushDraftNow();
       } else {
         await sync.clearDraft(uid, b.id);
-        await sync.clearPendingDraftId(uid);
+        if (await sync.readPendingDraftId(uid) == b.id) {
+          await sync.clearPendingDraftId(uid);
+        }
       }
     } catch (e) {
       debugPrint('[BP2] cache update after save failed: $e');

@@ -145,13 +145,16 @@ class Harness {
   Future<void> seedBlock(String uid, String id,
           {required bool isActive,
           String? name,
+          bool omitName = false,
+          DateTime? start,
+          DateTime? end,
           Map<String, dynamic>? exerciseSettings,
           Map<String, dynamic> extra = const {}}) =>
       db.collection('users').doc(uid).collection('planned_blocks').doc(id).set({
-        'name': name ?? id,
+        if (!omitName) 'name': name ?? id,
         'isActive': isActive,
-        'startDate': Timestamp.fromDate(DateTime(2026, 8, 3)),
-        'endDate': Timestamp.fromDate(DateTime(2026, 8, 30)),
+        'startDate': Timestamp.fromDate(start ?? DateTime(2026, 8, 3)),
+        'endDate': Timestamp.fromDate(end ?? DateTime(2026, 8, 30)),
         if (exerciseSettings != null) 'exerciseSettings': exerciseSettings,
         ...extra,
       });

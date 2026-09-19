@@ -7,8 +7,15 @@ import 'bp2_settings_resolver.dart';
 
 class Bp2LocalDraft {
   final String blockId;
+
+  /// Raw Block Name field text (only meaningful when [nameEdited]).
   final String name;
-  final bool nameIsAuto;
+
+  /// The user typed in the Block Name field.
+  final bool nameEdited;
+
+  /// The user changed the date range.
+  final bool rangeTouched;
   final Bp2DateRange range;
   final Map<String, Bp2ExerciseDraft> exerciseDrafts;
 
@@ -19,7 +26,8 @@ class Bp2LocalDraft {
   const Bp2LocalDraft({
     required this.blockId,
     required this.name,
-    required this.nameIsAuto,
+    required this.nameEdited,
+    required this.rangeTouched,
     required this.range,
     required this.exerciseDrafts,
     required this.blockTouched,
@@ -28,7 +36,8 @@ class Bp2LocalDraft {
   Map<String, dynamic> toJson() => {
         'blockId': blockId,
         'name': name,
-        'nameIsAuto': nameIsAuto,
+        'nameEdited': nameEdited,
+        'rangeTouched': rangeTouched,
         'start': range.start.toIso8601String(),
         'end': range.end.toIso8601String(),
         'blockTouched': blockTouched,
@@ -53,7 +62,14 @@ class Bp2LocalDraft {
     return Bp2LocalDraft(
       blockId: blockId,
       name: (m['name'] ?? '').toString(),
-      nameIsAuto: m['nameIsAuto'] == true,
+      // Drafts written before these flags existed: fall back to the older
+      // `nameIsAuto` / `blockTouched` markers.
+      nameEdited: m['nameEdited'] is bool
+          ? m['nameEdited'] as bool
+          : m.containsKey('nameIsAuto') && m['nameIsAuto'] != true,
+      rangeTouched: m['rangeTouched'] is bool
+          ? m['rangeTouched'] as bool
+          : m['blockTouched'] == true,
       range: Bp2DateUtils.normalizeRange(start, end),
       exerciseDrafts: drafts,
       blockTouched: m['blockTouched'] == true,

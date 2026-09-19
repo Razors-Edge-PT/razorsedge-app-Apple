@@ -3,6 +3,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../add_exercise_dialog.dart';
 import '../exercise_catalog.dart';
@@ -20,9 +21,36 @@ typedef Bp2AddExerciseFlow = Future<AddExerciseResult?> Function(
   required String actorUid,
 });
 
+/// Typed route arguments for Block Planner 2.
+///
+/// [athleteUid] is the SELECTED athlete whose block is edited (never inferred
+/// from the signed-in coach). [blockId] is the exact block to open; null opens
+/// a new draft.
+@immutable
+class Bp2RouteArgs {
+  final String athleteUid;
+  final String? blockId;
+  const Bp2RouteArgs({required this.athleteUid, this.blockId});
+
+  @override
+  bool operator ==(Object other) =>
+      other is Bp2RouteArgs &&
+      other.athleteUid == athleteUid &&
+      other.blockId == blockId;
+
+  @override
+  int get hashCode => Object.hash(athleteUid, blockId);
+
+  @override
+  String toString() => 'Bp2RouteArgs($athleteUid, $blockId)';
+}
+
 class Bp2Screen extends StatefulWidget {
   /// Existing block to edit; null opens a new draft.
   final String? blockId;
+
+  /// Selected athlete that owns [blockId]. Null → `UserContext.currentUid`.
+  final String? athleteUid;
 
   /// Test seams. Production wiring is built from [Bp2Warmup.instance.sync].
   final Bp2Controller? controller;
@@ -31,11 +59,31 @@ class Bp2Screen extends StatefulWidget {
   const Bp2Screen({
     super.key,
     this.blockId,
+    this.athleteUid,
     this.controller,
     this.addExerciseFlow,
   });
 
   static const String title = 'Block Planner 2';
+  static const String routeName = '/block_planner_2';
+
+  /// The internal Block Planner 2 route (with or without a selected block).
+  static Route<void> route({
+    required UserContext userContext,
+    required Bp2RouteArgs args,
+    Bp2Controller? controller,
+  }) =>
+      MaterialPageRoute<void>(
+        settings: RouteSettings(name: routeName, arguments: args),
+        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+          value: userContext,
+          child: Bp2Screen(
+            blockId: args.blockId,
+            athleteUid: args.athleteUid,
+            controller: controller,
+          ),
+        ),
+      );
 
   @override
   State<Bp2Screen> createState() => _Bp2ScreenState();
@@ -66,8 +114,10 @@ class _Bp2ScreenState extends State<Bp2Screen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final uc = UserContext.of(context);
-    final uid = uc.currentUid;
-    final active = uc.activeBlockId;
+    final uid = widget.athleteUid ?? uc.currentUid;
+    // The UserContext active pointer only describes the athlete it is acting
+    // for; otherwise the athlete's cached isActive flag is used.
+    final active = uc.currentUid == uid ? uc.activeBlockId : null;
     if (uid == _boundUid && active == _boundActive) return;
     _boundUid = uid;
     _boundActive = active;
@@ -230,10 +280,11 @@ class _Bp2ScreenState extends State<Bp2Screen> {
 
   Future<void> _addExercise() async {
     final uc = UserContext.of(context, listen: false);
+    final owner = _controller.uid ?? uc.currentUid;
     final flow = widget.addExerciseFlow ?? showAddExerciseDialog;
     final result = await flow(
       context,
-      ownerUid: uc.currentUid,
+      ownerUid: owner,
       actorUid: uc.actorUid,
     );
     if (!mounted || result == null) return;
@@ -241,8 +292,8 @@ class _Bp2ScreenState extends State<Bp2Screen> {
       _snack('That exercise already exists in your list.');
       return;
     }
-    final ex = await _controller.repo
-        .fetchExerciseById(uc.currentUid, result.exerciseId);
+    final ex =
+        await _controller.repo.fetchExerciseById(owner, result.exerciseId);
     if (!mounted) return;
     if (ex == null) {
       _snack('Exercise added — pull to refresh if it does not appear.');
@@ -317,8 +368,13 @@ class _Body extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = controller;
-    final items = _flatten(c.grouping, c.catalogueLoaded);
+    if (!c.blockLoaded) {
+      return _BlockLoading(error: c.blockLoadError);
+    }
+    final g = c.grouping;
+    final loaded = c.catalogueLoaded;
     return CustomScrollView(
+      key: const ValueKey('bp2-scroll'),
       controller: scroll,
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       slivers: [
@@ -337,7 +393,7 @@ class _Body extends StatelessWidget {
                   children: [
                     TextButton.icon(
                       key: const ValueKey('bp2-add-exercise'),
-                      onPressed: c.blockLoaded ? onAddExercise : null,
+                      onPressed: onAddExercise,
                       icon: const Icon(Icons.add),
                       label: const Text('Add exercise'),
                     ),
@@ -347,88 +403,133 @@ class _Body extends StatelessWidget {
             ),
           ),
         ),
-        if (!c.catalogueLoaded && c.syncStatus.state == Bp2SyncState.syncing)
+        if (!loaded && c.syncStatus.state == Bp2SyncState.syncing)
           const SliverToBoxAdapter(child: LinearProgressIndicator()),
-        SliverList.builder(
-          itemCount: items.length,
-          itemBuilder: (context, i) {
-            final item = items[i];
-            switch (item) {
-              case _SectionHeader(:final title):
-                return _Header(title, primary: true);
-              case _SubHeader(:final title):
-                return _Header(title, primary: false);
-              case _EmptyNote(:final text):
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
-                  child:
-                      Text(text, style: Theme.of(context).textTheme.bodySmall),
-                );
-              case _ExerciseItem(:final exercise):
-                return Bp2ExerciseTile(
-                  key: ValueKey('bp2-tile-${exercise.id}'),
-                  exercise: exercise,
-                  expanded: c.expandedExerciseId == exercise.id,
-                  dirty: c.isExerciseDirty(exercise.id),
-                  controller: c,
-                );
-            }
-          },
+
+        // Each top-level category is a group whose heading stays pinned
+        // while any of its rows are on screen, so the category being viewed
+        // is always labelled — including at the very bottom of a long list.
+        SliverMainAxisGroup(
+          key: const ValueKey('bp2-group-templates'),
+          slivers: [
+            const _SectionSliver('Exercises in templates',
+                key: ValueKey('bp2-section-templates')),
+            const _SubSectionSliver('Current block',
+                key: ValueKey('bp2-section-current')),
+            ..._group(
+                c,
+                g.currentBlock,
+                loaded
+                    ? "No exercises in the current block's templates."
+                    : null),
+            const _SubSectionSliver('Other blocks',
+                key: ValueKey('bp2-section-other')),
+            ..._group(c, g.otherBlocks,
+                loaded ? "No exercises in other blocks' templates." : null),
+          ],
         ),
-        const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
+        // All other exercises: always its own top-level category after the
+        // whole Other blocks subgroup, with an explicit empty state.
+        SliverMainAxisGroup(
+          key: const ValueKey('bp2-group-all-other'),
+          slivers: [
+            const _SectionSliver('All other exercises',
+                key: ValueKey('bp2-section-all-other')),
+            ..._group(c, g.allOther,
+                loaded ? 'No exercises outside planned blocks.' : null),
+          ],
+        ),
+
+        // Clear the system navigation / gesture area (edge-to-edge).
+        SliverPadding(
+          padding: EdgeInsets.only(
+              bottom: 32 + MediaQuery.viewPaddingOf(context).bottom),
+        ),
       ],
     );
   }
 
-  static List<_ListItem> _flatten(Bp2Grouping g, bool loaded) {
-    final out = <_ListItem>[
-      const _SectionHeader('Exercises in templates'),
-      const _SubHeader('Current block'),
+  /// One exercise group: a lazily built list, or an explicit empty state.
+  /// [emptyText] null means the catalogue is still loading.
+  static List<Widget> _group(
+      Bp2Controller c, List<Bp2Exercise> items, String? emptyText) {
+    if (items.isEmpty) {
+      return [_EmptyNoteSliver(emptyText ?? 'Loading…')];
+    }
+    return [
+      SliverList.builder(
+        itemCount: items.length,
+        itemBuilder: (context, i) {
+          final exercise = items[i];
+          return Bp2ExerciseTile(
+            key: ValueKey('bp2-tile-${exercise.id}'),
+            exercise: exercise,
+            expanded: c.expandedExerciseId == exercise.id,
+            dirty: c.isExerciseDirty(exercise.id),
+            controller: c,
+          );
+        },
+      ),
     ];
-    if (g.currentBlock.isEmpty) {
-      out.add(
-          _EmptyNote(loaded ? 'No active block templates yet.' : 'Loading…'));
-    } else {
-      out.addAll(g.currentBlock.map(_ExerciseItem.new));
-    }
-    out.add(const _SubHeader('Other blocks'));
-    if (g.otherBlocks.isEmpty) {
-      out.add(_EmptyNote(loaded ? 'No other block templates.' : 'Loading…'));
-    } else {
-      out.addAll(g.otherBlocks.map(_ExerciseItem.new));
-    }
-    out.add(const _SectionHeader('All other exercises'));
-    if (g.allOther.isEmpty) {
-      out.add(_EmptyNote(loaded ? 'No other exercises.' : 'Loading…'));
-    } else {
-      out.addAll(g.allOther.map(_ExerciseItem.new));
-    }
-    return out;
   }
 }
 
-sealed class _ListItem {
-  const _ListItem();
-}
-
-class _SectionHeader extends _ListItem {
+class _SectionSliver extends StatelessWidget {
   final String title;
-  const _SectionHeader(this.title);
+  const _SectionSliver(this.title, {super.key});
+  @override
+  Widget build(BuildContext context) => PinnedHeaderSliver(
+        child: ColoredBox(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          child: _Header(title, primary: true),
+        ),
+      );
 }
 
-class _SubHeader extends _ListItem {
+class _SubSectionSliver extends StatelessWidget {
   final String title;
-  const _SubHeader(this.title);
+  const _SubSectionSliver(this.title, {super.key});
+  @override
+  Widget build(BuildContext context) =>
+      SliverToBoxAdapter(child: _Header(title, primary: false));
 }
 
-class _EmptyNote extends _ListItem {
+class _EmptyNoteSliver extends StatelessWidget {
   final String text;
-  const _EmptyNote(this.text);
+  const _EmptyNoteSliver(this.text);
+  @override
+  Widget build(BuildContext context) => SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+          child: Text(text, style: Theme.of(context).textTheme.bodySmall),
+        ),
+      );
 }
 
-class _ExerciseItem extends _ListItem {
-  final Bp2Exercise exercise;
-  const _ExerciseItem(this.exercise);
+class _BlockLoading extends StatelessWidget {
+  final String? error;
+  const _BlockLoading({required this.error});
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: error == null
+            ? const CircularProgressIndicator()
+            : Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.cloud_off, color: theme.colorScheme.error),
+                  const SizedBox(width: 8),
+                  Flexible(
+                      child:
+                          Text(error!, key: const ValueKey('bp2-load-error'))),
+                ],
+              ),
+      ),
+    );
+  }
 }
 
 class _Header extends StatelessWidget {
@@ -505,10 +606,12 @@ class _NameFieldState extends State<_NameField> {
       decoration: InputDecoration(
         labelText: 'Block name',
         border: const OutlineInputBorder(),
-        errorText: widget.controller.nameError,
         helperText: widget.controller.nameIsAuto
-            ? 'Auto-named from athlete and dates — edit to keep your own name.'
+            ? (widget.controller.name.trim().isEmpty
+                ? 'Blank uses: ${widget.controller.generatedName}'
+                : 'Auto-named from athlete and dates — edit to keep your own name.')
             : null,
+        helperMaxLines: 2,
       ),
       onChanged: widget.controller.setName,
     );
