@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'WES2_tap_target.dart';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -673,8 +674,19 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
         ),
       ),
     );
-    if (onDoubleTap == null) return field;
-    return GestureDetector(onDoubleTap: onDoubleTap, child: field);
+    final visible = onDoubleTap == null
+        ? field
+        : GestureDetector(onDoubleTap: onDoubleTap, child: field);
+    // The visible cell is unchanged; only the dead strip above it becomes
+    // part of this field's tap target.
+    return Wes2CellTapTarget(
+      key: ValueKey('wes2-cell-${fieldKey.name}'),
+      width: width,
+      onTap: () {
+        if (!focus.hasFocus) focus.requestFocus();
+      },
+      child: visible,
+    );
   }
 
   // ── Timed row builders ───────────────────────────────────────────────────
@@ -1294,7 +1306,12 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          GestureDetector(
+          Wes2CellTapTarget(
+            key: const ValueKey('wes2-cell-time'),
+            width: widget.width,
+            onTap: _onTap,
+            onLongPress: _onLongPress,
+            child: GestureDetector(
             onTap: _onTap,
             onLongPress: _onLongPress,
             child: SizedBox(
@@ -1332,6 +1349,7 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
                 ),
               ),
             ),
+          ),
           ),
           // Manual edit control — separate from the Time tap target. Disabled
           // while the timer runs so it can never race an active tick; stop the
