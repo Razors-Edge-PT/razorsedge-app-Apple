@@ -19,8 +19,11 @@
 //   - every PB stream is keyed on that folded id; rep counts are TARGETS,
 //     not independent streams (see below).
 //
-// A set participates only when weight > 0 AND reps > 0 (matches the app's
-// completed-set convention in HomeV2CalendarService).
+// A set participates only when its RAW STORED weight is valid and reps > 0
+// (matches the app's completed-set convention in HomeV2CalendarService). Valid
+// means positive — or exactly 0 on a BODYWEIGHT exercise, where WES2 stores
+// the ADDED load and 0 is a real set at the athlete's own bodyweight. Negative
+// is never valid. See bodyweight_exercises.isRawSetPerformed.
 //
 // ── PB semantics (lifetime, dominance-aware) ────────────────────────────────
 //
@@ -73,7 +76,9 @@
 
 const { coachE1rm, E1RM_FORMULA_VERSION } = require('./e1rm');
 const { normalizeLoad, setLoadBasis, typedAddedKg } = require('../showcase/bodyweight');
-const { isBodyweightExercise } = require('./bodyweight_exercises');
+const {
+  rowIsBodyweight, isRawSetPerformed,
+} = require('./bodyweight_exercises');
 
 // Relative epsilon. Absorbs representation noise without ever letting an
 // exact tie count as an improvement.
@@ -164,15 +169,30 @@ function hasUpperCase(id) {
  * left out rather than guessed. The day then carries `bodyweightKg`, so the
  * events it produces can be presented as the added load.
  *
- * Without options every set is read as stored: that form only answers WHICH
- * exercises were trained (the coverage count), never how much.
+ * Without `options.bodyweightKg` every set is read as stored: that form only
+ * answers WHICH exercises were trained (the coverage count), never how much.
+ *
+ * `options.exerciseTypes` is an optional exerciseId → catalogue-`type` map (a
+ * Map or a plain object), resolved by the caller at its own Firestore
+ * boundary. It classifies HISTORICAL rows that predate the `type` snapshot
+ * WES2 now writes onto each row. Nothing here reads Firestore.
  */
 function summarizeWorkoutDay(workoutData, options) {
-  const normalize = !!options;
+  // Normalisation is requested by supplying `bodyweightKg` (even as null,
+  // which means "no weigh-in on or before this day"). Passing only
+  // `exerciseTypes` asks for the RAW coverage form — which exercises were
+  // trained — and must not start excluding bodyweight sets for want of a
+  // weigh-in.
+  const normalize = !!options
+    && Object.prototype.hasOwnProperty.call(options, 'bodyweightKg');
   const bodyweightKg = options && typeof options.bodyweightKg === 'number'
     && Number.isFinite(options.bodyweightKg) && options.bodyweightKg > 0
     ? options.bodyweightKg
     : null;
+  // exerciseId → catalogue type, resolved by the CALLER (coach/exercise_types
+  // .js) at its Firestore boundary. This function performs no I/O: it is
+  // handed the classification context as plain data.
+  const exerciseTypes = (options && options.exerciseTypes) || null;
   const out = {};
   const exercises = Array.isArray(workoutData && workoutData.exercises)
     ? workoutData.exercises
@@ -185,13 +205,26 @@ function summarizeWorkoutDay(workoutData, options) {
     if (!rawExerciseId) continue;
     const exerciseId = canonicalExerciseId(rawExerciseId);
     if (!exerciseId) continue;
-    const bwExercise = normalize && isBodyweightExercise(rawExerciseId, ex.name);
+    // The row's own `type` snapshot, else the resolved catalogue type, else
+    // the hard-coded id/name catalogue.
+    const isBw = rowIsBodyweight(ex, exerciseTypes);
+    const bwExercise = normalize && isBw;
     const sets = Array.isArray(ex.sets) ? ex.sets : [];
     for (const s of sets) {
       if (!s || typeof s !== 'object') continue;
-      let weight = toNum(s.weight != null ? s.weight : s.actualWeight);
+      const rawWeight = s.weight != null ? s.weight : s.actualWeight;
+      let weight = toNum(rawWeight);
       const reps = toNum(s.reps != null ? s.reps : s.actualReps);
-      if (!(weight > 0) || !(reps > 0)) continue;
+      // RAW stored weight: 0 is "0 kg ADDED" on a bodyweight exercise (a real
+      // set at the athlete's own bodyweight) and "nothing logged" on every
+      // other exercise. Negative is invalid everywhere. The normalised TOTAL
+      // below keeps its own strictly-positive requirement.
+      //
+      // Classification here is the exercise's, NOT the caller's `normalize`
+      // flag: the coverage count (which exercises were trained) must accept a
+      // bodyweight-only set exactly as the normalised pass does, or the two
+      // would disagree about whether the day happened.
+      if (!isRawSetPerformed(toNumOrNull(rawWeight), reps, isBw)) continue;
       if (bwExercise) {
         const total = normalizeLoad({
           basis: setLoadBasis(s),
@@ -263,16 +296,18 @@ function summarizeWorkoutDay(workoutData, options) {
   return out;
 }
 
-/** True when a workout document holds a row of a bodyweight exercise. */
-function hasBodyweightExercise(workoutData) {
+/**
+ * True when a workout document holds a row of a bodyweight exercise.
+ *
+ * [exerciseTypes] is the optional exerciseId → catalogue-type map; without it
+ * only the rows' own `type` snapshots and the hard-coded id/name catalogue are
+ * consulted. Pure — it never reads Firestore.
+ */
+function hasBodyweightExercise(workoutData, exerciseTypes) {
   const exercises = Array.isArray(workoutData && workoutData.exercises)
     ? workoutData.exercises
     : [];
-  return exercises.some((ex) => ex && typeof ex === 'object'
-    && isBodyweightExercise(
-      typeof ex.exerciseId === 'string' && ex.exerciseId ? ex.exerciseId : ex.id,
-      ex.name,
-    ));
+  return exercises.some((ex) => rowIsBodyweight(ex, exerciseTypes || null));
 }
 
 /** Empty lifetime state for one exercise. */
@@ -549,12 +584,24 @@ function rirOrNull(v) {
 }
 
 function toNum(v) {
+  const n = toNumOrNull(v);
+  return n === null ? 0 : n;
+}
+
+/**
+ * [v] as a number, or null when the field is ABSENT or unparseable.
+ *
+ * The distinction matters for a bodyweight exercise's raw stored weight: an
+ * explicit `0` is "0 kg added" (a performed set), a MISSING weight is nothing
+ * at all. toNum flattens both to 0 and must not decide set validity.
+ */
+function toNumOrNull(v) {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   if (typeof v === 'string') {
     const p = parseFloat(v);
     if (Number.isFinite(p)) return p;
   }
-  return 0;
+  return null;
 }
 
 function strOr(v, fallback) {

@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'bb3_models.dart';
 import 'local_cache/block_plan_cache.dart';
+import 'exercise_type.dart';
 import 'periodization_model_utils.dart';
 
 // ─── BB3PlannedExerciseService ────────────────────────────────────────────────
@@ -21,6 +22,33 @@ class BB3PlannedExerciseService {
 
   static final _fs = FirebaseFirestore.instance;
   static final _dateFmt = DateFormat('yyyy-MM-dd');
+
+  /// Did this stored workout row record a PERFORMED set?
+  ///
+  /// The one raw-set rule shared with the training calendar, coach adherence
+  /// and progression exposure ([isRawSetPerformed]): a stored weight of 0 is
+  /// "0 kg ADDED" on a bodyweight exercise — a real set — and nothing logged on
+  /// any other exercise. A negative weight is never valid.
+  static bool _hasPerformedSet(Map ex) {
+    final sets = (ex['sets'] as List?) ?? const [];
+    if (sets.isEmpty) return false;
+    final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+      id: (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim(),
+      name: (ex['name'] ?? '').toString(),
+      type: (ex['type'] ?? '').toString(),
+    );
+    for (final s in sets) {
+      if (s is! Map) continue;
+      final Object? w = s['weight'] ?? s['weightKg'];
+      if (isRawSetPerformed(
+          weightKg: w is num ? w : null,
+          reps: s['reps'] is num ? s['reps'] as num : null,
+          isBodyweight: isBw)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   // ── Path helpers ─────────────────────────────────────────────────────────
 
@@ -600,13 +628,7 @@ class BB3PlannedExerciseService {
             final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
             final name = (ex['name'] ?? '').toString().trim().toLowerCase();
             if (id != exerciseId && name != normName) return false;
-            final sets = (ex['sets'] as List?) ?? [];
-            return sets.any((s) {
-              if (s is! Map) return false;
-              final w = s['weight'] ?? s['weightKg'] ?? 0;
-              final r = s['reps'] ?? 0;
-              return (w is num && w > 0) && (r is num && r > 0);
-            });
+            return _hasPerformedSet(ex);
           })) {
             count++;
           }
@@ -868,13 +890,7 @@ class BB3PlannedExerciseService {
             final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
             final name = (ex['name'] ?? '').toString().trim().toLowerCase();
             if (id != exerciseId && name != normName) return false;
-            final sets = (ex['sets'] as List?) ?? [];
-            return sets.any((s) {
-              if (s is! Map) return false;
-              final w = s['weight'] ?? s['weightKg'] ?? 0;
-              final r = s['reps'] ?? 0;
-              return (w is num && w > 0) && (r is num && r > 0);
-            });
+            return _hasPerformedSet(ex);
           })) {
             countedDates.add(doc.id);
           }
@@ -1026,13 +1042,7 @@ class BB3PlannedExerciseService {
             final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
             final name = (ex['name'] ?? '').toString().trim().toLowerCase();
             if (id != exerciseId && name != normName) return false;
-            final sets = (ex['sets'] as List?) ?? [];
-            return sets.any((s) {
-              if (s is! Map) return false;
-              final w = s['weight'] ?? s['weightKg'] ?? 0;
-              final r = s['reps'] ?? 0;
-              return (w is num && w > 0) && (r is num && r > 0);
-            });
+            return _hasPerformedSet(ex);
           })) {
             count++;
           }
@@ -1063,13 +1073,7 @@ class BB3PlannedExerciseService {
             final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
             final name = (ex['name'] ?? '').toString().trim().toLowerCase();
             if (id != exerciseId && name != normName) return false;
-            final sets = (ex['sets'] as List?) ?? [];
-            return sets.any((s) {
-              if (s is! Map) return false;
-              final w = s['weight'] ?? s['weightKg'] ?? 0;
-              final r = s['reps'] ?? 0;
-              return (w is num && w > 0) && (r is num && r > 0);
-            });
+            return _hasPerformedSet(ex);
           });
           if (alreadyCounted) continue;
         }

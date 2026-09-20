@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'WES2_hint_service.dart';
 import 'WES2_models.dart';
+import 'exercise_type.dart';
 import 'wes2_field_parser.dart';
 import 'wes2_hint_trace.dart';
 import 'wes2_video/set_identity.dart';
@@ -87,6 +88,30 @@ class Wes2SessionController extends ChangeNotifier {
   }
 
   Map<String, dynamic> get exerciseSettings => _exerciseSettings;
+
+  /// Stamps the catalogue `type` resolved for each exercise onto its row, so
+  /// rows loaded before the catalogue was read (a reloaded workout, a planned
+  /// day, a restored local draft) become classifiable — and carry the snapshot
+  /// into the next save.
+  ///
+  /// No-op when nothing changes, so it never provokes a spurious rebuild.
+  /// Never notifies: hint passes call it inside their own apply step.
+  bool applyExerciseTypes(Map<String, String> typesById) {
+    if (typesById.isEmpty || _rows.isEmpty) return false;
+    bool changed = false;
+    final List<Wes2ExerciseRow> next = <Wes2ExerciseRow>[];
+    for (final Wes2ExerciseRow r in _rows) {
+      final String? t = typesById[r.exerciseId];
+      if (t == null || t.isEmpty || r.exerciseType == t) {
+        next.add(r);
+        continue;
+      }
+      next.add(r.copyWith(exerciseType: t));
+      changed = true;
+    }
+    if (changed) _rows = next;
+    return changed;
+  }
 
   /// Register the hint service for same-set real-time recalculation.
   /// Called once per day load after exerciseSettings are fetched.
@@ -440,6 +465,7 @@ class Wes2SessionController extends ChangeNotifier {
       setCount: 3,
       sets: const [],
       source: Wes2RowSource.wes2Manual,
+      exerciseType: ExerciseTypeRegistry.typeOf(exerciseId),
     );
     _rows = [..._rows, newRow];
     // Empty-state day transitions to loaded once a row is added.
@@ -607,6 +633,8 @@ class Wes2SessionController extends ChangeNotifier {
       source: old.source == Wes2RowSource.bb3Planned
           ? Wes2RowSource.bb3Planned
           : Wes2RowSource.wes2Manual,
+      // The REPLACEMENT exercise's own type — never the replaced one's.
+      exerciseType: ExerciseTypeRegistry.typeOf(newExerciseId),
     );
     final newRows = List<Wes2ExerciseRow>.from(_rows);
     newRows[idx] = newRow;

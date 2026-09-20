@@ -359,6 +359,13 @@ class Wes2SetState {
       );
 }
 
+/// [raw] as a trimmed, non-empty String, or null.
+String? _nonBlank(Object? raw) {
+  if (raw is! String) return null;
+  final String t = raw.trim();
+  return t.isEmpty ? null : t;
+}
+
 /// One exercise row for a given day.
 /// Identity: date + exerciseId (never keyed by row/list index).
 class Wes2ExerciseRow {
@@ -371,6 +378,21 @@ class Wes2ExerciseRow {
   final Wes2RowSource source;
   final bool isMarkedDone;
   final bool isExpanded;
+
+  /// This exercise's CATALOGUE `type` (`/exercises/{id}.type` or
+  /// `/users/{uid}/customExercises/{id}.type`), when it is known.
+  ///
+  /// Carried on the row — and snapshotted onto the saved workout row — so the
+  /// shared bodyweight classifier
+  /// ([PeriodizationModelUtils.isBodyweightExercise]) has the same answer in
+  /// WES2, in a reloaded or offline workout, in local drafts and in the
+  /// Firestore triggers, with no lookup at the point of use. Null simply means
+  /// "not known here"; classification then falls back to the type registry and
+  /// the hard-coded id/name catalogue.
+  ///
+  /// Bodyweight and TIMED are separate concepts: this field never changes a
+  /// row's timed-entry mode.
+  final String? exerciseType;
 
   /// BB3 exercise-level plan note. Display-only; never written to WES2 execution data.
   final String? exercisePlanNote;
@@ -396,6 +418,7 @@ class Wes2ExerciseRow {
     required this.source,
     this.isMarkedDone = false,
     this.isExpanded = true,
+    this.exerciseType,
     this.exercisePlanNote,
     this.exerciseExecutionNote,
     this.structureEstablished = false,
@@ -423,6 +446,7 @@ class Wes2ExerciseRow {
     Wes2RowSource? source,
     bool? isMarkedDone,
     bool? isExpanded,
+    String? exerciseType,
     String? exercisePlanNote,
     String? exerciseExecutionNote,
     bool clearExerciseExecutionNote = false,
@@ -438,6 +462,7 @@ class Wes2ExerciseRow {
       source: source ?? this.source,
       isMarkedDone: isMarkedDone ?? this.isMarkedDone,
       isExpanded: isExpanded ?? this.isExpanded,
+      exerciseType: exerciseType ?? this.exerciseType,
       exercisePlanNote: exercisePlanNote ?? this.exercisePlanNote,
       exerciseExecutionNote: clearExerciseExecutionNote
           ? null
@@ -455,6 +480,7 @@ class Wes2ExerciseRow {
         'source': source.name,
         'isMarkedDone': isMarkedDone,
         'sets': sets.map((s) => s.toJson()).toList(),
+        if (exerciseType != null) 'type': exerciseType,
         if (structureEstablished) 'structureEstablished': true,
         if (exercisePlanNote != null) 'exercisePlanNote': exercisePlanNote,
         if (exerciseExecutionNote != null)
@@ -475,6 +501,7 @@ class Wes2ExerciseRow {
       setCount: map['setCount'] as int,
       source: src,
       isMarkedDone: map['isMarkedDone'] as bool? ?? false,
+      exerciseType: _nonBlank(map['type']),
       structureEstablished: map['structureEstablished'] as bool? ?? false,
       exercisePlanNote: map['exercisePlanNote'] as String?,
       exerciseExecutionNote: map['exerciseExecutionNote'] as String?,

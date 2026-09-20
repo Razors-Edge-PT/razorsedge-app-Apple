@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'exercise_type.dart';
+
 /// Shared catalog / repository layer for exercises.
 ///
 /// There are two sources of exercises, and from the user's point of view there
@@ -44,10 +46,10 @@ class ExerciseCatalog {
   /// Global exercises from `/exercises`.
   static Future<List<CatalogExercise>> loadGlobalExercises() async {
     final snap = await _db.collection('exercises').get();
-    return snap.docs
+    return _remember(snap.docs
         .map((d) => CatalogExercise.fromMap(d.id, d.data(),
             source: ExerciseSource.global))
-        .toList();
+        .toList());
   }
 
   /// Custom exercises for a specific account from
@@ -60,10 +62,10 @@ class ExerciseCatalog {
         .doc(uid)
         .collection('customExercises')
         .get();
-    return snap.docs
+    return _remember(snap.docs
         .map((d) => CatalogExercise.fromMap(d.id, d.data(),
             source: ExerciseSource.custom, ownerUid: uid))
-        .toList();
+        .toList());
   }
 
   /// Combined global + that account's custom exercises, sorted by category then
@@ -78,6 +80,20 @@ class ExerciseCatalog {
     final combined = <CatalogExercise>[...results[0], ...results[1]];
     combined.sort(_byCategoryThenName);
     return combined;
+  }
+
+  /// Caches every resolved exercise's catalogue `type` in
+  /// [ExerciseTypeRegistry], then returns [list] unchanged.
+  ///
+  /// Every catalogue read funnels through here, so the app's ONE bodyweight
+  /// classifier ([PeriodizationModelUtils.isBodyweightExercise]) can answer for
+  /// an exercise it knows only by id — a picker row, a planned-block entry, a
+  /// template row, an analytics screen — without any of them performing I/O.
+  static List<CatalogExercise> _remember(List<CatalogExercise> list) {
+    for (final CatalogExercise e in list) {
+      ExerciseTypeRegistry.register(e.id, e.type);
+    }
+    return list;
   }
 
   static int _byCategoryThenName(CatalogExercise a, CatalogExercise b) {
@@ -103,8 +119,9 @@ class ExerciseCatalog {
     final globalDoc =
         await _db.collection('exercises').doc(exerciseId).get();
     if (globalDoc.exists && globalDoc.data() != null) {
-      return CatalogExercise.fromMap(globalDoc.id, globalDoc.data()!,
-          source: ExerciseSource.global);
+      return _rememberOne(CatalogExercise.fromMap(
+          globalDoc.id, globalDoc.data()!,
+          source: ExerciseSource.global));
     }
     if (uid.isEmpty) return null;
     final customDoc = await _db
@@ -114,10 +131,17 @@ class ExerciseCatalog {
         .doc(exerciseId)
         .get();
     if (customDoc.exists && customDoc.data() != null) {
-      return CatalogExercise.fromMap(customDoc.id, customDoc.data()!,
-          source: ExerciseSource.custom, ownerUid: uid);
+      return _rememberOne(CatalogExercise.fromMap(
+          customDoc.id, customDoc.data()!,
+          source: ExerciseSource.custom, ownerUid: uid));
     }
     return null;
+  }
+
+  /// [_remember] for a single exercise.
+  static CatalogExercise _rememberOne(CatalogExercise e) {
+    ExerciseTypeRegistry.register(e.id, e.type);
+    return e;
   }
 
   // ---------------------------------------------------------------------------
@@ -167,6 +191,10 @@ class ExerciseCatalog {
         'source': 'global',
       };
       final ref = await _db.collection('exercises').add(data);
+      // A brand-new exercise is classifiable the moment it is created — before
+      // any list reload — so adding one with type "Body Weight" and logging it
+      // straight away behaves correctly.
+      ExerciseTypeRegistry.register(ref.id, type);
       return AddExerciseResult(
         outcome: AddExerciseOutcome.createdGlobal,
         exerciseId: ref.id,
@@ -206,6 +234,7 @@ class ExerciseCatalog {
         .doc(ownerUid)
         .collection('customExercises')
         .add(data);
+    ExerciseTypeRegistry.register(ref.id, type);
     return AddExerciseResult(
       outcome: AddExerciseOutcome.createdCustom,
       exerciseId: ref.id,

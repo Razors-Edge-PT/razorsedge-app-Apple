@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'app_check_ready.dart';
+import 'exercise_type.dart';
+import 'periodization_model_utils.dart';
 
 /// Calendar day state for the HomeScreen2 training calendar.
 enum HomeV2CalendarDayKind {
@@ -206,9 +208,23 @@ class HomeV2CalendarService {
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
-  /// A set is considered completed when it has weight > 0 AND reps > 0.
-  /// Checks both current (`weight`/`reps`) and legacy (`actualWeight`/`actualReps`)
-  /// field names to handle older workout documents.
+  /// A set is considered completed when its stored weight is valid and its
+  /// reps are positive. Checks both current (`weight`/`reps`) and legacy
+  /// (`actualWeight`/`actualReps`) field names to handle older workout
+  /// documents.
+  ///
+  /// "Valid" is the shared raw-set rule ([isRawSetPerformed]): a stored 0 is
+  /// "0 kg ADDED" on a bodyweight exercise — a real set at the athlete's own
+  /// bodyweight — and nothing logged on every other exercise. Negative is
+  /// never valid. The row's own `type` snapshot classifies it offline; rows
+  /// written before that snapshot existed fall back to the type registry and
+  /// the hard-coded id/name catalogue.
+  /// [_hasCompletedSets], exposed for the tests that pin the shared raw-set
+  /// rule across calendar, adherence and progression.
+  @visibleForTesting
+  static bool debugHasCompletedSets(Map<String, dynamic> data) =>
+      _hasCompletedSets(data);
+
   static bool _hasCompletedSets(Map<String, dynamic> data) {
     final exercises = data['exercises'];
     if (exercises is! List) return false;
@@ -216,11 +232,21 @@ class HomeV2CalendarService {
       if (ex is! Map) continue;
       final sets = ex['sets'];
       if (sets is! List) continue;
+      final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+        id: (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim(),
+        name: (ex['name'] ?? '').toString(),
+        type: (ex['type'] ?? '').toString(),
+      );
       for (final s in sets) {
         if (s is! Map) continue;
-        final weight = _toNum(s['weight'] ?? s['actualWeight']);
-        final reps   = _toNum(s['reps']   ?? s['actualReps']);
-        if (weight > 0 && reps > 0) return true;
+        final Object? w = s['weight'] ?? s['actualWeight'];
+        final Object? r = s['reps'] ?? s['actualReps'];
+        if (isRawSetPerformed(
+            weightKg: _toNumOrNull(w),
+            reps: _toNumOrNull(r),
+            isBodyweight: isBw)) {
+          return true;
+        }
       }
     }
     return false;
@@ -228,10 +254,12 @@ class HomeV2CalendarService {
 
   static DateTime _normalise(DateTime d) => DateTime(d.year, d.month, d.day);
 
-  static double _toNum(dynamic v) {
-    if (v == null) return 0.0;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString()) ?? 0.0;
+  /// [v] as a number, or null when ABSENT/unparseable. A bodyweight set's
+  /// stored `0` must be distinguishable from a missing weight.
+  static double? _toNumOrNull(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.isFinite ? v.toDouble() : null;
+    return double.tryParse(v.toString().trim());
   }
 
   static String _dateKey(DateTime d) =>

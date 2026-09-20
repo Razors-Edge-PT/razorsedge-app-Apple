@@ -30,6 +30,11 @@
 //   withExerciseLock(exerciseId, fn(store)) – serialises reconciliation per
 //     exercise (a Firestore transaction in production, an async mutex in the
 //     memory store); fn must perform all reads before any write.
+//   getExerciseTypesFor(workoutData) → Map<exerciseId, catalogue type>
+//     – OPTIONAL. The bounded exercise-type boundary: the rows' own `type`
+//       snapshots plus, for HISTORICAL rows that carry none, a cached
+//       catalogue lookup (/exercises then the athlete's customExercises).
+//       Absent → only the row snapshots and the hard-coded id/name catalogue.
 //   flush()
 //
 // ── Cost model ──────────────────────────────────────────────────────────────
@@ -49,9 +54,33 @@ const {
   summarizeWorkoutDay, hasBodyweightExercise, deriveExerciseEvents, applyDayToState,
   emptyState,
 } = require('./pb_engine');
+const { typesFromRows } = require('./exercise_types');
 
 function dayDocId(exerciseId, dateKey) {
   return `${exerciseId}_${dateKey}`;
+}
+
+/**
+ * exerciseId → catalogue `type` for one workout document, from the store's
+ * optional `getExerciseTypesFor(workoutData) → Map<exerciseId, type>`.
+ *
+ * THE bounded I/O boundary for exercise types: the adapter prefetches the
+ * DISTINCT ids a document mentions and caches them, so nothing reads Firestore
+ * per set or per row, and the pure engine (pb_engine) is handed plain data.
+ *
+ * A store without one resolves nothing, which leaves classification exactly
+ * where it was: the rows' own `type` snapshots plus the hard-coded id/name
+ * catalogue.
+ */
+async function exerciseTypesFor(store, workoutData) {
+  if (typeof store.getExerciseTypesFor !== 'function') {
+    return typesFromRows(workoutData);
+  }
+  try {
+    return await store.getExerciseTypesFor(workoutData);
+  } catch (_) {
+    return typesFromRows(workoutData);
+  }
 }
 
 /**
@@ -209,11 +238,15 @@ async function reconcileExercise(store, exerciseId, dateKey, dayOrNull) {
  * @returns {Object} paths by exerciseId (for instrumentation in tests)
  */
 async function applyWorkoutDay(store, dateKey, workoutData) {
+  // Types first: the classification decides whether a weigh-in is needed at
+  // all. Rows that carry their own `type` snapshot cost nothing.
+  const exerciseTypes = await exerciseTypesFor(store, workoutData);
   // Only a day that holds a bodyweight exercise costs a weigh-in lookup.
-  const bodyweightKg = hasBodyweightExercise(workoutData)
+  const bodyweightKg = hasBodyweightExercise(workoutData, exerciseTypes)
     ? (await bodyweightsFor(store, [dateKey])).get(dateKey)
     : null;
-  const after = summarizeWorkoutDay(workoutData || {}, { bodyweightKg });
+  const after = summarizeWorkoutDay(
+    workoutData || {}, { bodyweightKg, exerciseTypes });
   const existing = await store.listExerciseIdsForDate(dateKey);
   const touched = new Set([...Object.keys(after), ...existing]);
 
@@ -237,14 +270,25 @@ async function applyWorkoutDay(store, dateKey, workoutData) {
  */
 async function bulkRebuild(store, entries) {
   const list = [...entries];
+  // One type resolution pass over the whole history. The adapter's resolver
+  // caches per exercise id, so a multi-year rebuild reads each exercise
+  // document at most once — never once per day, and never once per set.
+  const typesByDate = new Map();
+  for (const [dateKey, data] of list) {
+    typesByDate.set(dateKey, await exerciseTypesFor(store, data));
+  }
   const bodyweights = await bodyweightsFor(
     store,
-    list.filter(([, data]) => hasBodyweightExercise(data)).map(([dateKey]) => dateKey),
+    list
+      .filter(([dateKey, data]) =>
+        hasBodyweightExercise(data, typesByDate.get(dateKey)))
+      .map(([dateKey]) => dateKey),
   );
   const histories = {}; // exerciseId -> { dateKey: day }
   for (const [dateKey, data] of list) {
     const summary = summarizeWorkoutDay(data || {}, {
       bodyweightKg: bodyweights.has(dateKey) ? bodyweights.get(dateKey) : null,
+      exerciseTypes: typesByDate.get(dateKey),
     });
     for (const [exerciseId, day] of Object.entries(summary)) {
       (histories[exerciseId] = histories[exerciseId] || {})[dateKey] = day;

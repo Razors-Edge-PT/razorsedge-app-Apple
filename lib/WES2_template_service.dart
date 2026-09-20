@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'WES2_models.dart';
+import 'exercise_type.dart';
 import 'periodization_model_utils.dart';
 
 abstract class Wes2TemplateService {
@@ -72,6 +73,7 @@ class FirestoreWes2TemplateService implements Wes2TemplateService {
         setCount: setCount,
         sets: List.generate(setCount, (j) => Wes2SetState(setIndex: j)),
         source: Wes2RowSource.templateLoaded,
+        exerciseType: ExerciseTypeRegistry.typeOf(exerciseId),
       ));
     }
 

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'WES2_models.dart';
+import 'exercise_type.dart';
 import 'progression_history_store.dart';
 
 // Abstract interface — Phase 3 adds FirestoreWes2Repository below.
@@ -294,8 +295,19 @@ class FirestoreWes2Repository implements Wes2Repository {
       // it back to the planned count, so a set deleted before a reload came
       // back afterwards.
       structureEstablished: storedSetCount > 0 || rawSets.isNotEmpty,
+      // Catalogue type snapshot. A row written before this field existed has
+      // none; the registry and the hard-coded catalogue still classify it.
+      exerciseType: _rowType(raw) ?? ExerciseTypeRegistry.typeOf(exerciseId),
       exerciseExecutionNote: raw['exerciseExecutionNote'] as String?,
     );
+  }
+
+  /// The catalogue `type` stored on a workout row map, trimmed, or null.
+  static String? _rowType(Map<String, dynamic> raw) {
+    final Object? t = raw['type'];
+    if (t is! String) return null;
+    final String trimmed = t.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 
   /// Firestore set decoding, exposed for round-trip tests. The Firestore
@@ -309,6 +321,16 @@ class FirestoreWes2Repository implements Wes2Repository {
   @visibleForTesting
   static Map<String, dynamic> buildRowMapForTest(Wes2ExerciseRow row) =>
       _buildRowMap(row);
+
+  /// Firestore row DECODING, exposed for the tests that pin how a reloaded
+  /// workout row recovers its catalogue type.
+  @visibleForTesting
+  static Wes2ExerciseRow? parseRowForTest(
+    dynamic raw,
+    Wes2RowSource source, [
+    int fallbackOrder = 0,
+  ]) =>
+      _parseRow(raw, source, fallbackOrder);
 
   static List<Wes2SetState> _parseSets(List<dynamic> rawSets, int count) {
     return List.generate(count, (i) {
@@ -535,13 +557,15 @@ class FirestoreWes2Repository implements Wes2Repository {
 
       if (exIdx != -1) {
         // Surgical patch of the one field — preserves all other fields/sets.
-        exercises[exIdx] =
-            _patchSetInRow(exercises[exIdx], setIndex, fieldKey, value);
+        exercises[exIdx] = _withExerciseType(
+            _patchSetInRow(exercises[exIdx], setIndex, fieldKey, value),
+            row.exerciseType);
       } else if (wpIdx != -1) {
         if (value == null) {
           // Clearing a field on a wesPlanned-only row — patch in place.
-          wesPlanned[wpIdx] =
-              _patchSetInRow(wesPlanned[wpIdx], setIndex, fieldKey, value);
+          wesPlanned[wpIdx] = _withExerciseType(
+              _patchSetInRow(wesPlanned[wpIdx], setIndex, fieldKey, value),
+              row.exerciseType);
         } else {
           // Real value typed → promote row to exercises[] using in-memory state.
           exercises.add(_buildRowMap(row));
@@ -568,6 +592,27 @@ class FirestoreWes2Repository implements Wes2Repository {
   }
 
   // ── saveFieldPatch helpers ─────────────────────────────────────────────────
+
+  /// Adds the catalogue `type` snapshot to an existing row map that predates
+  /// the field, so an UPDATED row carries the classification context too.
+  ///
+  /// Never overwrites a type already stored, and never removes one when the
+  /// in-memory row has not resolved it — a surgical patch may only add. Every
+  /// other field of [rowMap] is preserved untouched.
+  @visibleForTesting
+  static Map<String, dynamic> withExerciseTypeForTest(
+          Map<String, dynamic> rowMap, String? exerciseType) =>
+      _withExerciseType(rowMap, exerciseType);
+
+  static Map<String, dynamic> _withExerciseType(
+    Map<String, dynamic> rowMap,
+    String? exerciseType,
+  ) {
+    final String t = (exerciseType ?? '').trim();
+    if (t.isEmpty) return rowMap;
+    if (_rowType(rowMap) != null) return rowMap;
+    return <String, dynamic>{...rowMap, 'type': t};
+  }
 
   /// Patches one field on one set inside an existing Firestore row map.
   /// Locates the set by stored setIndex key (preferred) or array index
@@ -669,6 +714,11 @@ class FirestoreWes2Repository implements Wes2Repository {
       'setCount': row.setCount,
       'isMarkedDone': false,
       'sets': sets,
+      // Catalogue type snapshot, so a reloaded/offline workout and the coach
+      // analytics triggers classify this row without a catalogue lookup.
+      // Written only when known, so rows of exercises with no type serialise
+      // exactly as they always have.
+      if (row.exerciseType != null) 'type': row.exerciseType,
     };
     if (row.exerciseExecutionNote != null) {
       rowMap['exerciseExecutionNote'] = row.exerciseExecutionNote!;
@@ -687,6 +737,7 @@ class FirestoreWes2Repository implements Wes2Repository {
       'orderIndex': row.orderIndex,
       'setCount': row.setCount,
       'sets': <Map<String, dynamic>>[],
+      if (row.exerciseType != null) 'type': row.exerciseType,
     };
   }
 

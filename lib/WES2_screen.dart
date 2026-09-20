@@ -29,6 +29,7 @@ import 'WES2_widgets/WES2_template_picker.dart';
 import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
 import 'exercise_details_screen.dart';
 import 'top_sets_screen.dart';
+import 'exercise_type.dart';
 import 'periodization_model_utils.dart';
 import 'progression_engine.dart';
 import 'progression_history_store.dart';
@@ -1381,7 +1382,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   /// Called after each confirmed weight/reps save.
-  /// Counts qualifying sets (weight > 0 AND reps > 0) across all rows for
+  /// Counts qualifying sets (a valid stored weight AND reps > 0) across all rows for
   /// [date]. If the date reaches ≥ 2 qualifying sets and hasn't been counted
   /// before, records it in the membership doc and increments the count.
   /// When the count reaches 1 (the user's first qualifying day), sets
@@ -1401,14 +1402,22 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     // Already counted for this date → nothing to do.
     if (_qualifiedDatesCached.contains(dateKey)) return;
 
-    // Count sets with both weight > 0 and reps > 0 across all rows.
+    // Count performed sets across all rows, using the shared raw-set rule: a
+    // stored 0 is "0 kg ADDED" on a bodyweight exercise (a real set) and
+    // nothing logged on every other exercise. Negative is never valid.
     int validSets = 0;
     outer:
     for (final r in _controller.rows) {
+      final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+        id: r.exerciseId,
+        name: r.name,
+        type: r.exerciseType,
+      );
       for (final s in r.sets) {
-        final w = s.weight.actualValue;
-        final rep = s.reps.actualValue;
-        if (w != null && w > 0 && rep != null && rep > 0) {
+        if (isRawSetPerformed(
+            weightKg: s.weight.actualValue,
+            reps: s.reps.actualValue,
+            isBodyweight: isBw)) {
           validSets++;
           if (validSets >= 2) break outer;
         }

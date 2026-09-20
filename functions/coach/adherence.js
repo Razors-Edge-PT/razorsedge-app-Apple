@@ -25,6 +25,7 @@
 'use strict';
 
 const cov = require('./coverage');
+const { rowIsBodyweight, isRawSetPerformed } = require('./bodyweight_exercises');
 
 /** Monday-first weekday order. */
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -149,35 +150,52 @@ function plannedForWeek(resolution, templates) {
 /** HomeV2CalendarService._toNum: numbers as-is, numeric strings parsed,
  *  anything else 0. */
 function calendarNum(v) {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  const n = calendarNumOrNull(v);
+  return n === null ? 0 : n;
+}
+
+/** [v] as a number, or null when ABSENT/unparseable — a bodyweight set's
+ *  stored `0` must be distinguishable from a missing weight. */
+function calendarNumOrNull(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (typeof v === 'string') {
     const n = Number(v.trim());
-    return v.trim() !== '' && Number.isFinite(n) ? n : 0;
+    return v.trim() !== '' && Number.isFinite(n) ? n : null;
   }
-  return 0;
+  return null;
 }
 
 /**
  * Completed-workout day detection identical to HomeV2CalendarService
  * (_hasCompletedSets), the rule the planner/calendar shares: any set in the
- * logged `exercises[]` with weight > 0 AND reps > 0, reading the current
- * `weight`/`reps` fields and falling back to legacy `actualWeight`/
- * `actualReps`. Planner/plan fields (wesPlannedExercises, planned days) are
- * never consulted, so a completed workout on a "No exercises planned" day
- * counts and a planned-only or empty placeholder document does not.
+ * logged `exercises[]` whose RAW STORED weight is valid and whose reps are
+ * positive, reading the current `weight`/`reps` fields and falling back to
+ * legacy `actualWeight`/`actualReps`. Planner/plan fields
+ * (wesPlannedExercises, planned days) are never consulted, so a completed
+ * workout on a "No exercises planned" day counts and a planned-only or empty
+ * placeholder document does not.
+ *
+ * "Valid" is the shared raw-set rule (bodyweight_exercises.isRawSetPerformed):
+ * a stored 0 is "0 kg ADDED" on a BODYWEIGHT exercise — a real set at the
+ * athlete's own bodyweight — and nothing logged on every other exercise.
+ * Negative is never valid.
+ *
+ * [exerciseTypes] is the optional exerciseId → catalogue-type map, for
+ * HISTORICAL rows that carry no `type` snapshot of their own. Pure: no I/O.
  */
-function hasCompletedSets(data) {
+function hasCompletedSets(data, exerciseTypes) {
   const exercises = data && data.exercises;
   if (!Array.isArray(exercises)) return false;
   for (const ex of exercises) {
     if (!ex || typeof ex !== 'object') continue;
     const sets = ex.sets;
     if (!Array.isArray(sets)) continue;
+    const isBw = rowIsBodyweight(ex, exerciseTypes || null);
     for (const s of sets) {
       if (!s || typeof s !== 'object') continue;
-      const w = calendarNum(s.weight != null ? s.weight : s.actualWeight);
+      const w = calendarNumOrNull(s.weight != null ? s.weight : s.actualWeight);
       const r = calendarNum(s.reps != null ? s.reps : s.actualReps);
-      if (w > 0 && r > 0) return true;
+      if (isRawSetPerformed(w, r, isBw)) return true;
     }
   }
   return false;

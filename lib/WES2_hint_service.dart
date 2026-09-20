@@ -328,19 +328,21 @@ class Wes2HintServiceImpl implements Wes2HintService {
       // total load. BB3HintService._wHint() already converts weightDisplay back
       // to display-added, so no second conversion is needed on the result.
       final isBw = PeriodizationModelUtils.isBodyweightExercise(
-          id: row.exerciseId, name: row.name);
+          id: row.exerciseId, name: row.name, type: row.exerciseType);
       final constrainedWeightForEngine = isBw && constrainedWeight != null
           ? PeriodizationModelUtils.toAbsoluteWeight(
               uid: uid,
               displayAddedKg: constrainedWeight,
               exerciseId: row.exerciseId,
               exerciseName: row.name,
+              exerciseType: row.exerciseType,
               asOfDate: date,
             )
           : constrainedWeight;
       final hint = BB3HintService.getHintsForSet(
         exerciseId: row.exerciseId,
         exerciseName: row.name,
+        exerciseType: row.exerciseType,
         fullExerciseSettings: exerciseSettings,
         weekIndex: weekIndex,
         sessionIndex: sessionIndex,
@@ -537,7 +539,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
         set.rir.actualValue == null &&
         !_isBb3Locked(set.rir)) {
       final isBw1 = PeriodizationModelUtils.isBodyweightExercise(
-          id: row.exerciseId, name: row.name);
+          id: row.exerciseId, name: row.name, type: row.exerciseType);
 
       // Third fallback: the E1RM of this day's PURE Set 1 — the same Set 1
       // computed with no entries at all, in this same pass.
@@ -566,6 +568,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
               displayAddedKg: set.weight.actualValue!,
               exerciseId: row.exerciseId,
               exerciseName: row.name,
+              exerciseType: row.exerciseType,
               asOfDate: date,
             )
           : set.weight.actualValue!;
@@ -707,6 +710,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final baseline = BB3HintService.getHintsForSet(
       exerciseId: row.exerciseId,
       exerciseName: row.name,
+      exerciseType: row.exerciseType,
       fullExerciseSettings: exerciseSettings,
       weekIndex: weekIndex,
       sessionIndex: sessionIndex,
@@ -802,7 +806,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
 
     // Bodyweight exercises store display-added load; E1RM math needs absolute load.
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
-        id: row.exerciseId, name: row.name);
+        id: row.exerciseId, name: row.name, type: row.exerciseType);
 
     final prevWeightAbs = isBw
         ? PeriodizationModelUtils.toAbsoluteWeight(
@@ -810,6 +814,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
             displayAddedKg: prevWeight,
             exerciseId: row.exerciseId,
             exerciseName: row.name,
+            exerciseType: row.exerciseType,
             asOfDate: date,
           )
         : prevWeight;
@@ -898,6 +903,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
             displayAddedKg: displayWeight,
             exerciseId: row.exerciseId,
             exerciseName: row.name,
+            exerciseType: row.exerciseType,
             asOfDate: date,
           )
         : displayWeight;
@@ -1034,6 +1040,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
               displayAddedKg: set.weight.actualValue!,
               exerciseId: row.exerciseId,
               exerciseName: row.name,
+              exerciseType: row.exerciseType,
               asOfDate: date,
             )
           : set.weight.actualValue!;
@@ -1100,6 +1107,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
                 displayAddedKg: anchorW,
                 exerciseId: row.exerciseId,
                 exerciseName: row.name,
+                exerciseType: row.exerciseType,
                 asOfDate: date,
               )
             : anchorW;
@@ -1126,6 +1134,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
               displayAddedKg: set.weight.actualValue!,
               exerciseId: row.exerciseId,
               exerciseName: row.name,
+              exerciseType: row.exerciseType,
               asOfDate: date,
             )
           : set.weight.actualValue!;
@@ -1277,12 +1286,13 @@ class Wes2HintServiceImpl implements Wes2HintService {
     if (!_isBb3Locked(set.weight) || !_isBb3Locked(set.reps)) return null;
     double absWeight = set.weight.hintValue!;
     if (PeriodizationModelUtils.isBodyweightExercise(
-        id: row.exerciseId, name: row.name)) {
+        id: row.exerciseId, name: row.name, type: row.exerciseType)) {
       absWeight = PeriodizationModelUtils.toAbsoluteWeight(
         uid: uid,
         displayAddedKg: absWeight,
         exerciseId: row.exerciseId,
         exerciseName: row.name,
+        exerciseType: row.exerciseType,
         asOfDate: date,
       );
     }
@@ -1725,12 +1735,13 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
       final int? r = pure.reps.hintValue;
       if (w != null && r != null) {
         final double absW = PeriodizationModelUtils.isBodyweightExercise(
-                id: row.exerciseId, name: row.name)
+                id: row.exerciseId, name: row.name, type: row.exerciseType)
             ? PeriodizationModelUtils.toAbsoluteWeight(
                 uid: uid,
                 displayAddedKg: w,
                 exerciseId: row.exerciseId,
                 exerciseName: row.name,
+                exerciseType: row.exerciseType,
                 asOfDate: date,
               )
             : w;

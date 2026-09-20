@@ -26,6 +26,7 @@ library;
 import 'dart:math' as math;
 
 import '../../bodyweight_load.dart';
+import '../../exercise_type.dart';
 import 'big_five.dart';
 import 'e1rm_spec.dart';
 import 'showcase_models.dart';
@@ -57,11 +58,22 @@ Map<String, Object?> _setMap(ShowcaseSet s) => <String, Object?>{
       if (s.typedAddedKg != null) 'typedAddedKg': s.typedAddedKg,
     };
 
-ShowcaseSet? _readSet(Object? m) {
+/// One persisted candidate set.
+///
+/// [bodyweightLoaded] is the slot's own flag: on a bodyweight-loaded lift a
+/// stored `0` is a WES2 set at "0 kg ADDED" — a real set at the athlete's own
+/// bodyweight — so it must survive the round trip. On every other slot a
+/// stored 0 still means nothing logged, and a NEGATIVE weight is invalid
+/// everywhere.
+ShowcaseSet? _readSet(Object? m, {bool bodyweightLoaded = false}) {
   if (m is! Map) return null;
-  final double w = (m['weight'] as num?)?.toDouble() ?? 0;
+  final num? rawW = m['weight'] as num?;
   final int r = (m['reps'] as num?)?.toInt() ?? 0;
-  if (w <= 0 || r <= 0) return null;
+  if (!isRawSetPerformed(
+      weightKg: rawW, reps: r, isBodyweight: bodyweightLoaded)) {
+    return null;
+  }
+  final double w = rawW!.toDouble();
   final Object? typed = m['typedAddedKg'];
   return ShowcaseSet(
     setKey: (m['setKey'] as String?) ?? '',
@@ -121,8 +133,9 @@ class ShowcaseDayContribution {
     final Object? dateKey = raw['dateKey'];
     if (slot is! String || dateKey is! String) return null;
 
-    final ShowcaseSet? e = _readSet(raw['bestE1rm']);
-    final ShowcaseSet? h = _readSet(raw['heaviest']);
+    final bool bwLoaded = isBodyweightLoadedSlot(slot);
+    final ShowcaseSet? e = _readSet(raw['bestE1rm'], bodyweightLoaded: bwLoaded);
+    final ShowcaseSet? h = _readSet(raw['heaviest'], bodyweightLoaded: bwLoaded);
     if (e == null || h == null) return null;
     final Object? rawSets = raw['sets'];
     return ShowcaseDayContribution(
@@ -134,7 +147,8 @@ class ShowcaseDayContribution {
       sets: rawSets is List
           ? <ShowcaseSet>[
               for (final Object? s in rawSets)
-                if (_readSet(s) != null) _readSet(s)!,
+                if (_readSet(s, bodyweightLoaded: bwLoaded) != null)
+                  _readSet(s, bodyweightLoaded: bwLoaded)!,
             ]
           : null,
       bodyweight: RecordedBodyweight.fromMap(raw['bodyweight']),
@@ -144,8 +158,11 @@ class ShowcaseDayContribution {
 
 /// Extracts every valid completed Big Five set from one workout document.
 ///
-/// A set participates only when `weight > 0` AND `reps > 0` — the app's
-/// completed-set convention. `actualWeight` / `actualReps` are accepted as the
+/// A set participates only when its stored weight is valid AND `reps > 0` —
+/// the app's completed-set convention ([isRawSetPerformed]). On a
+/// bodyweight-loaded lift a stored `0` is a valid WES2 set at 0 kg ADDED;
+/// everywhere else 0 still means nothing logged, and a negative weight is
+/// invalid on every lift. `actualWeight` / `actualReps` are accepted as the
 /// WES2 aliases. RIR is never read here, in any form.
 Map<String, List<ShowcaseSet>> extractBigFiveSets(Object? workoutData) {
   final Map<String, List<ShowcaseSet>> out = <String, List<ShowcaseSet>>{};
@@ -168,9 +185,14 @@ Map<String, List<ShowcaseSet>> extractBigFiveSets(Object? workoutData) {
       final Object? rawW = s['weight'] ?? s['actualWeight'];
       final Object? rawR = s['reps'] ?? s['actualReps'];
       if (rawW is! num || rawR is! num) continue;
+      if (!isRawSetPerformed(
+          weightKg: rawW,
+          reps: rawR,
+          isBodyweight: lift.bodyweightLoaded)) {
+        continue;
+      }
       final double w = rawW.toDouble();
       final double r = rawR.toDouble();
-      if (!w.isFinite || !r.isFinite || w <= 0 || r <= 0) continue;
 
       // The positional fallback counts VALID sets of THIS lift within the day,
       // not the row/set position in the document. Reordering or deleting an

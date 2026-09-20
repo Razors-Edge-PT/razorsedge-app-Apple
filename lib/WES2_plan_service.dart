@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'WES2_models.dart';
+import 'exercise_type.dart';
 import 'exercise_catalog.dart';
 import 'local_cache/block_plan_cache.dart';
 import 'block_exercise_defaults_repository.dart';
@@ -112,6 +114,12 @@ class FirestoreWes2PlanService implements Wes2PlanService {
 
   // ── Parse helpers ─────────────────────────────────────────────────────────
 
+  /// Planned-day row decoding, exposed for the tests that pin how a planned
+  /// exercise picks up its catalogue type.
+  @visibleForTesting
+  static Wes2ExerciseRow? parseRowForTest(dynamic raw, int fallbackOrder) =>
+      _parseRow(raw, fallbackOrder);
+
   static Wes2ExerciseRow? _parseRow(dynamic raw, int fallbackOrder) {
     if (raw is! Map<String, dynamic>) return null;
 
@@ -159,8 +167,19 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       setCount: sets.length,
       sets: sets,
       source: Wes2RowSource.bb3Planned,
+      // The plan doc stores no catalogue type; the registry supplies it when
+      // the catalogue has been read, and loadExerciseTypes fills the rest.
+      exerciseType: _plannedRowType(raw, exerciseId),
       exercisePlanNote: exercisePlanNote?.isNotEmpty == true ? exercisePlanNote : null,
     );
+  }
+
+  /// A planned row's catalogue type: its own snapshot when a planner wrote
+  /// one, otherwise the registry's cached catalogue value.
+  static String? _plannedRowType(Map<String, dynamic> raw, String exerciseId) {
+    final Object? t = raw['type'];
+    if (t is String && t.trim().isNotEmpty) return t.trim();
+    return ExerciseTypeRegistry.typeOf(exerciseId);
   }
 
   static Wes2SetState _parsePerSetHints(Map<String, dynamic> s, int i) {

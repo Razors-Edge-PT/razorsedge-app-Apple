@@ -47,9 +47,10 @@ const admin = require('firebase-admin');
 const { bulkRebuild } = require('./coach/analytics_store');
 const { E1RM_FORMULA_VERSION } = require('./coach/e1rm');
 const { pickBodyweightAsOf, weightEntryOfDoc } = require('./showcase/bodyweight');
+const { makeExerciseTypeResolver } = require('./coach/exercise_types');
 
 // Keep in step with ANALYTICS_VERSION in functions/coach/index.js.
-const ANALYTICS_VERSION = 5;
+const ANALYTICS_VERSION = 6;
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const args = process.argv.slice(2);
@@ -69,6 +70,7 @@ const db = admin.firestore();
 function bufferStore(athleteUid, writes) {
   const base = `coachAnalytics/${athleteUid}`;
   const dayDocId = (exerciseId, dateKey) => `${exerciseId}_${dateKey}`;
+  const typeResolver = makeExerciseTypeResolver(db, athleteUid);
   const store = {
     // A wholesale rebuild always starts from an empty history.
     async getSummary() { return null; },
@@ -101,6 +103,10 @@ function bufferStore(athleteUid, writes) {
       const entries = snap.docs.map(weightEntryOfDoc);
       return new Map(dateKeys.map((d) => [d, pickBodyweightAsOf(entries, d)]));
     },
+    // The same bounded, cached exercise-type boundary the backend uses, so a
+    // rebuild run from here classifies catalogue-typed bodyweight exercises
+    // exactly as the deployed triggers do. Catalogue docs are READ only.
+    getExerciseTypesFor: (workoutData) => typeResolver.forWorkout(workoutData),
   };
   return store;
 }

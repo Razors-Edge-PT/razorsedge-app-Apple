@@ -61,7 +61,7 @@ athlete identity, not the caller-supplied path).
 | field | meaning |
 |---|---|
 | `enabledBy.{coachUid}: true` | which coaches have reporting enabled |
-| `analyticsVersion` (2), `e1rmFormulaVersion` (1) | storage/formula generations |
+| `analyticsVersion` (6), `e1rmFormulaVersion` (1) | storage/formula generations |
 | `bootstrapStatus` | `running` / `complete` / `error` |
 | `bootstrapRunId`, `bootstrapAt`, `bootstrapAtMs`, `bootstrapError` | run ownership + freshness |
 | `dirtyDates: [dateKey]` | workout days written while a bootstrap runs |
@@ -431,6 +431,34 @@ Two casings inside one document (production had this on 2026-04-23) merge.
 > which *deletes* wrong events rather than merely ceasing to create them.
 > Raw workout documents are never modified. Regression fixtures for the
 > incident live in `functions/test/coach_pb_regression.test.js`.
+
+> **v5 → v6 (2026-09-20).** Two changes to how a set is *interpreted*, so the
+> streams must be rebuilt rather than patched forward:
+>
+> 1. **Catalogue-typed bodyweight exercises.** An exercise is bodyweight-loaded
+>    when its catalogue `type` is `Body Weight`, not only when its id or name
+>    is in the hard-coded catalogue (`coach/bodyweight_exercises.js`, mirrored
+>    from `lib/periodization_model_utils.dart`). An exercise added through the
+>    Exercises page with that equipment type is now normalised on total load
+>    like any other; v5 read its WES2 rows' ADDED loads as if they were totals.
+> 2. **A stored weight of `0` on a bodyweight exercise is a real set** — WES2
+>    stores what the athlete typed, so `0` means *0 kg added*, a set at the
+>    athlete's own bodyweight. v5's `weight > 0` participation rule dropped
+>    every such set before it reached normalisation, so a bodyweight-only
+>    session was invisible to PBs, to the coverage count and to adherence.
+>
+> WES2 now snapshots each row's catalogue `type` onto the workout document, so
+> the incremental trigger and offline writes carry it. **Historical** rows
+> carry none, so the type is resolved at ONE bounded Firestore boundary
+> (`coach/exercise_types.js`, reached through the store's
+> `getExerciseTypesFor`): `/exercises/{id}` first, then
+> `/users/{athleteUid}/customExercises/{id}`, prefetched per distinct id and
+> cached — never a read per set. The workout-write trigger, the weigh-in
+> reprocessing trigger, the bulk bootstrap and the operator re-bootstrap script
+> all go through it, so they cannot disagree. The pure engine
+> (`pb_engine.summarizeWorkoutDay`) receives the resolved types as plain data
+> and still performs no I/O. Raw workout documents are never modified.
+> Coverage in `functions/test/coach_bodyweight_type.test.js`.
 
 ### Forcing the rebuild early
 

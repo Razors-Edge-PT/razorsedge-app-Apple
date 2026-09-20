@@ -11,6 +11,7 @@ import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp & Firest
 import 'package:flutter/services.dart'; // for FilteringTextInputFormatter
 import 'periodization_model_utils.dart';
 import 'bodyweight_load.dart';
+import 'exercise_type.dart';
 import 'exercise_catalog.dart';
 import 'analytics_history_loader.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -227,14 +228,30 @@ String _dayKey(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
 /// normalisation needs the athlete's per-date weigh-ins, which the actual
 /// chart-value/tooltip selection applies afterwards via `_chartWeight` on
 /// whichever workout wins here.
-double _rawBestE1rm(List<Exercise> matchingExercises) {
+double _rawBestE1rm(
+  List<Exercise> matchingExercises, {
+  bool isBodyweight = false,
+  double? bodyweightKg,
+}) {
   double best = double.negativeInfinity;
   for (final ex in matchingExercises) {
     for (final s in ex.sets) {
-      final weight = s.weight ?? 0.0;
       final reps = (s.reps ?? 0).toDouble();
       final rir = s.rir ?? 0.0;
-      if (weight <= 0 || reps <= 0) continue;
+      // Shared raw-set rule: on a bodyweight exercise a stored 0 is a real
+      // set at 0 kg ADDED, so the day must not vanish from the chart because
+      // its only set was bodyweight-only. Negative is invalid everywhere.
+      if (!isRawSetPerformed(
+          weightKg: s.weight, reps: reps, isBodyweight: isBodyweight)) {
+        continue;
+      }
+      // Bodyweight exercises score on the TOTAL load when the day's weigh-in
+      // is known; with none, the stored value is used exactly as before,
+      // which invents nothing (the chart value itself is chosen later by
+      // _chartWeight, which omits an unknown total rather than guessing).
+      final double weight = isBodyweight
+          ? (s.bodyweightLoad(bodyweightKg).totalKg ?? s.weight ?? 0.0)
+          : (s.weight ?? 0.0);
       final e1 = PeriodizationModelUtils.calculateE1RM(weight, reps, rir);
       if (e1 > best) best = e1;
     }
@@ -252,6 +269,13 @@ List<Workout> deriveWorkoutsForExercise({
   required List<RawWorkoutDoc> docs,
   required String? targetId,
   String? targetName,
+  /// Bodyweight classification, resolved by the caller (which owns the
+  /// catalogue/registry). This function stays pure and performs no lookup.
+  bool isBodyweight = false,
+
+  /// The bodyweight RECORDED on or before a lift date, or null when none was.
+  /// Never a default — see bodyweight_load.dart.
+  double? Function(DateTime date)? bodyweightKgForDate,
 }) {
   final Map<String, double> bestScoreByDay = {};
   final Map<String, Workout> bestWorkoutByDay = {};
@@ -267,8 +291,12 @@ List<Workout> deriveWorkoutsForExercise({
     }
     if (matching.isEmpty) continue;
 
-    final docBestE1 = _rawBestE1rm(matching);
-    if (!docBestE1.isFinite) continue; // no valid (weight>0, reps>0) set at all
+    final docBestE1 = _rawBestE1rm(
+      matching,
+      isBodyweight: isBodyweight,
+      bodyweightKg: isBodyweight ? bodyweightKgForDate?.call(raw.date) : null,
+    );
+    if (!docBestE1.isFinite) continue; // no performed set at all
 
     final key = _dayKey(raw.date);
     final prev = bestScoreByDay[key];
@@ -288,6 +316,12 @@ List<VelocitySample> deriveVelocitySamplesForExercise({
   required List<RawWorkoutDoc> docs,
   required String? targetId,
   String? targetName,
+  /// Bodyweight classification, resolved by the caller. Pure function: no
+  /// lookup happens here.
+  bool isBodyweight = false,
+
+  /// The bodyweight RECORDED on or before a lift date, or null when none was.
+  double? Function(DateTime date)? bodyweightKgForDate,
 }) {
   final out = <VelocitySample>[];
   for (final raw in docs) {
@@ -312,14 +346,36 @@ List<VelocitySample> deriveVelocitySamplesForExercise({
             : double.tryParse(s['velocity']?.toString() ?? '');
 
         if (reps == null || reps <= 0) continue;
-        if (weight == null || weight <= 0) continue;
+        // Raw stored weight: 0 is "0 kg ADDED" on a bodyweight exercise, and
+        // nothing logged on every other one. Negative is never valid.
+        if (!isRawSetPerformed(
+            weightKg: weight, reps: reps, isBodyweight: isBodyweight)) {
+          continue;
+        }
+        // Velocity is grouped by weight × reps, so a bodyweight exercise's
+        // samples must be grouped on the TOTAL load — otherwise "0 kg" and
+        // "0 kg at a different bodyweight" would share one combination. A set
+        // whose total is unknown is omitted rather than guessed.
+        double? plotWeight = weight;
+        if (isBodyweight) {
+          plotWeight = SetDetails(
+            reps: reps,
+            weight: weight,
+            setIndex:
+                (s['setIndex'] is num && (s['setIndex'] as num).isFinite)
+                    ? (s['setIndex'] as num).toInt()
+                    : null,
+            weightAdded: typedAddedKgOf(s),
+          ).bodyweightLoad(bodyweightKgForDate?.call(raw.date)).totalKg;
+          if (plotWeight == null || plotWeight <= 0) continue;
+        }
         // Valid, finite, positive only — absent/invalid values are
         // excluded outright, never coerced to zero (section 4).
         if (velocity == null || !velocity.isFinite || velocity <= 0) continue;
         out.add(VelocitySample(
           date: raw.date,
           reps: reps,
-          weight: weight,
+          weight: plotWeight!,
           velocity: velocity,
         ));
       }
@@ -731,15 +787,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
   /// (bodyweight_load.dart) — or null when that total is unknown. Every other
   /// exercise: the stored weight, exactly as before.
   double? _chartWeight(SetDetails s, DateTime date) {
-    final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
-      id: _activeExerciseId,
-      name: _activeExerciseName,
-    );
-    if (!isBw) return s.weight ?? 0.0;
-    return s
-        .bodyweightLoad(PeriodizationModelUtils.recordedBodyweightKgOnOrBefore(
-            uid: userId, asOf: date))
-        .totalKg;
+    if (!_activeIsBodyweight) return s.weight ?? 0.0;
+    return s.bodyweightLoad(_recordedBwOn(date)).totalKg;
   }
 
   double calculateE1RM(double weight, double reps, double rir) {
@@ -760,8 +809,22 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
       docs: loader.docs,
       targetId: _activeExerciseId,
       targetName: _activeExerciseName,
+      isBodyweight: _activeIsBodyweight,
+      bodyweightKgForDate: _recordedBwOn,
     );
   }
+
+  /// This screen's bodyweight classification of the active exercise, resolved
+  /// once here — the derivation functions stay pure.
+  bool get _activeIsBodyweight => PeriodizationModelUtils.isBodyweightExercise(
+        id: _activeExerciseId,
+        name: _activeExerciseName,
+      );
+
+  /// The bodyweight RECORDED on or before [date], or null when none was.
+  double? _recordedBwOn(DateTime date) =>
+      PeriodizationModelUtils.recordedBodyweightKgOnOrBefore(
+          uid: userId, asOf: date);
 
   /// The deepest coverage the E1RM trend and rep-target charts currently
   /// need — they share one fetch, so requesting coverage for one must
@@ -964,6 +1027,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
       docs: loader.docs,
       targetId: _activeExerciseId,
       targetName: _activeExerciseName,
+      isBodyweight: _activeIsBodyweight,
+      bodyweightKgForDate: _recordedBwOn,
     );
   }
 
@@ -1176,11 +1241,9 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
 
   void _maybePrimeBodyweight(String uid) {
     if (_bwPrimed) return; // athlete-scoped: needed at most once (section 6)
-    final isBw = PeriodizationModelUtils.isBodyweightExercise(
-      id: _activeExerciseId,
-      name: _activeExerciseName,
-    );
-    if (!isBw) return; // never fetch weigh-ins for a non-BW exercise
+    if (!_activeIsBodyweight) {
+      return; // never fetch weigh-ins for a non-BW exercise
+    }
     _bwPrimed = true;
     _primeBwHistory(uid).then((_) {
       if (mounted) setState(() {});
@@ -2906,18 +2969,12 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
 
           if (exercise.sets.isEmpty) return const SizedBox.shrink();
 
-          final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
-            id: _activeExerciseId,
-            name: _activeExerciseName,
-          );
+          final bool isBw = _activeIsBodyweight;
           // Bodyweight exercises: WES2 stores the added load, the legacy
           // screen stored the total (bodyweight_load.dart). Each set is read
           // at the bodyweight recorded on or before this day and ranked on its
           // TOTAL load.
-          final double? dayBw = isBw
-              ? PeriodizationModelUtils.recordedBodyweightKgOnOrBefore(
-                  uid: userId, asOf: workout.date)
-              : null;
+          final double? dayBw = isBw ? _recordedBwOn(workout.date) : null;
           double rankWeight(SetDetails s) => isBw
               ? (s.bodyweightLoad(dayBw).totalKg ?? 0.0)
               : (s.weight ?? 0.0);

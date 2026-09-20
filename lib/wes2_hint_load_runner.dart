@@ -19,6 +19,7 @@ import 'WES2_controller.dart';
 import 'WES2_hint_service.dart';
 import 'WES2_models.dart';
 import 'WES2_plan_service.dart';
+import 'exercise_type.dart';
 import 'wes2_hint_trace.dart';
 
 /// Identity of one pass. A pass whose token no longer matches the controller
@@ -202,6 +203,14 @@ class Wes2HintLoadRunner {
       }
 
       // ── Exercise types (only for ids we have not seen) ──────────────────
+      //
+      // This is the bounded I/O boundary for exercise types: it reads the
+      // canonical catalogue (global first, then this account's custom pool)
+      // once per unseen id. Whatever it resolves is published to the
+      // app-wide [ExerciseTypeRegistry] and stamped onto the rows, so the
+      // shared bodyweight classifier gives the same answer here, in the saved
+      // workout rows, in the local draft and in every analytics screen — not
+      // only inside this runner's hint context.
       final List<String> uncached = _controller.rows
           .map((Wes2ExerciseRow r) => r.exerciseId)
           .where((String id) => !_types.containsKey(id))
@@ -213,11 +222,21 @@ class Wes2HintLoadRunner {
               .loadExerciseTypes(uncached, uid: token.actingUid);
           if (!current()) return _superseded(token);
           _types = <String, String>{..._types, ...fetched};
+          ExerciseTypeRegistry.registerAll(fetched);
         } catch (_) {
           // Type information is an enhancement; hints work without it.
           if (!current()) return _superseded(token);
         }
       }
+      // Rows loaded before their type was known (reload, offline draft, a
+      // planned day) pick it up here, including types another surface already
+      // cached.
+      _controller.applyExerciseTypes(<String, String>{
+        ..._types,
+        for (final Wes2ExerciseRow r in _controller.rows)
+          if (ExerciseTypeRegistry.typeOf(r.exerciseId) != null)
+            r.exerciseId: ExerciseTypeRegistry.typeOf(r.exerciseId)!,
+      });
 
       // ── Application ─────────────────────────────────────────────────────
       if (!current()) return _superseded(token);

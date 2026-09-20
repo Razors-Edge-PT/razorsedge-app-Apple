@@ -80,19 +80,112 @@ const ID_SET = new Set(BODYWEIGHT_EXERCISE_IDS.map((s) => s.toLowerCase()));
 const NAME_SET = new Set(BODYWEIGHT_EXERCISE_NAMES);
 
 /**
- * True for a bodyweight exercise, by catalogue id (case-folded, as the coach
- * streams are — production briefly wrote lowercased copies of catalogue ids)
- * or by display name.
+ * The canonical catalogue `type`, exactly as the app's Add Exercise dialog
+ * offers it and ExerciseCatalog.addExercise stores it on
+ * `/exercises/{id}` and `/users/{uid}/customExercises/{id}`.
+ *
+ * Pinned mirror of kBodyweightExerciseType in lib/exercise_type.dart —
+ * test/bodyweight_exercises_parity_test.dart reads the marked line below and
+ * holds it to the app's constant.
  */
-function isBodyweightExercise(rawId, rawName) {
+// type:start
+const BODYWEIGHT_EXERCISE_TYPE = 'Body Weight';
+// type:end
+
+const BODYWEIGHT_TYPE_FOLDED = BODYWEIGHT_EXERCISE_TYPE.toLowerCase();
+
+/**
+ * True when a catalogue `type` is the bodyweight type — trimmed and
+ * case-insensitive, because the field is free-form text in Firestore.
+ *
+ * Nothing else about the exercise is consulted: an exercise's NAME, CATEGORY
+ * and BODY PARTS never imply bodyweight status.
+ */
+function isBodyweightType(rawType) {
+  if (typeof rawType !== 'string') return false;
+  const t = rawType.trim();
+  return !!t && t.toLowerCase() === BODYWEIGHT_TYPE_FOLDED;
+}
+
+/**
+ * True for a bodyweight exercise, by catalogue `type` (the canonical,
+ * data-driven rule), by catalogue id (case-folded, as the coach streams are —
+ * production briefly wrote lowercased copies of catalogue ids), or by display
+ * name.
+ *
+ * [rawType] is the exercise's CATALOGUE type: the snapshot WES2 now writes
+ * onto each workout row, or the value resolved from the catalogue for a
+ * historical row that predates the snapshot (see exercise_types.js). The id
+ * and name lists remain as backward-compatible fallbacks, so an exercise with
+ * no type is classified exactly as it always was.
+ */
+function isBodyweightExercise(rawId, rawName, rawType) {
+  if (isBodyweightType(rawType)) return true;
   const id = typeof rawId === 'string' ? rawId.trim().toLowerCase() : '';
   if (id && ID_SET.has(id)) return true;
   const name = typeof rawName === 'string' ? rawName.trim().toLowerCase() : '';
   return !!name && NAME_SET.has(name);
 }
 
+/**
+ * The bodyweight classification of one stored workout row, given
+ * `typesById` — a Map/object of exerciseId → catalogue type for rows that do
+ * not carry their own `type` snapshot.
+ *
+ * Ids are looked up BOTH as stored and case-folded, matching the folding the
+ * PB streams apply.
+ */
+function rowIsBodyweight(ex, typesById) {
+  if (!ex || typeof ex !== 'object') return false;
+  const rawId = typeof ex.exerciseId === 'string' && ex.exerciseId
+    ? ex.exerciseId
+    : (typeof ex.id === 'string' ? ex.id : '');
+  let type = typeof ex.type === 'string' && ex.type.trim() ? ex.type : null;
+  if (!type && typesById) {
+    const get = (k) => (typeof typesById.get === 'function'
+      ? typesById.get(k)
+      : typesById[k]);
+    const id = String(rawId || '').trim();
+    type = get(id) || get(id.toLowerCase()) || null;
+  }
+  return isBodyweightExercise(rawId, ex.name, type);
+}
+
+/**
+ * Whether a set's RAW STORED `weight` represents a performed load.
+ *
+ * Pinned mirror of isStoredWeightPerformed in lib/exercise_type.dart. WES2
+ * stores exactly what the athlete typed, so on a bodyweight exercise a stored
+ * `0` means "0 kg ADDED" — a real set at the athlete's own bodyweight — while
+ * on every other exercise it still means "nothing logged". A NEGATIVE weight
+ * is invalid everywhere, and so is a non-finite one.
+ *
+ * This is about the RAW stored field only: a normalised TOTAL load keeps its
+ * existing positive requirement.
+ */
+function isStoredWeightPerformed(weightKg, isBodyweight) {
+  if (typeof weightKg !== 'number' || !Number.isFinite(weightKg)) return false;
+  if (weightKg < 0) return false;
+  return !!isBodyweight || weightKg > 0;
+}
+
+/**
+ * Whether one raw stored set counts as PERFORMED: a valid stored weight and
+ * strictly positive reps. The ONE rule behind coach adherence, the coverage
+ * counts and the PB engine's set participation.
+ */
+function isRawSetPerformed(weightKg, reps, isBodyweight) {
+  if (!isStoredWeightPerformed(weightKg, isBodyweight)) return false;
+  return typeof reps === 'number' && Number.isFinite(reps) && reps > 0;
+}
+
 module.exports = {
   BODYWEIGHT_EXERCISE_IDS,
   BODYWEIGHT_EXERCISE_NAMES,
+  BODYWEIGHT_EXERCISE_TYPE,
+  isBodyweightType,
   isBodyweightExercise,
+  rowIsBodyweight,
+  isStoredWeightPerformed,
+  isRawSetPerformed,
 };

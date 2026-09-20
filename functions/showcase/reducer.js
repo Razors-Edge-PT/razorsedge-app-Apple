@@ -37,6 +37,7 @@
 const crypto = require('crypto');
 const { matchBigFive, bigFiveBySlot, SLOT_ORDER } = require('./big_five');
 const { showcaseE1rm, SHOWCASE_FORMULA_VERSION } = require('./e1rm_spec');
+const { isRawSetPerformed } = require('../coach/bodyweight_exercises');
 const {
   LoadBasis,
   isBodyweightSlot,
@@ -88,7 +89,12 @@ function recordFingerprint({ slot, exerciseId, dateKey, setKey, weight, reps }) 
 
 /**
  * Extracts every valid completed Big Five set from one workout document.
- * A set participates only when weight > 0 AND reps > 0. RIR is never read.
+ *
+ * A set participates only when its RAW STORED weight is valid and reps > 0.
+ * Valid means positive — or exactly 0 on a BODYWEIGHT-LOADED lift, where WES2
+ * stores the ADDED load and 0 is a real set at the athlete's own bodyweight
+ * (coach/bodyweight_exercises.isRawSetPerformed). A negative weight is never
+ * valid, on any lift. RIR is never read.
  */
 function extractBigFiveSets(workoutData) {
   const out = {};
@@ -111,7 +117,7 @@ function extractBigFiveSets(workoutData) {
       const weight = rawW;
       const reps = rawR;
       if (!Number.isFinite(weight) || !Number.isFinite(reps)) continue;
-      if (!(weight > 0) || !(reps > 0)) continue;
+      if (!isRawSetPerformed(weight, reps, !!lift.bodyweightLoaded)) continue;
 
       // The positional fallback counts VALID sets of THIS lift within the day,
       // not the row/set position in the document. Reordering or deleting an

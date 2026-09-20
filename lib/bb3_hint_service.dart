@@ -1,3 +1,4 @@
+import 'exercise_type.dart';
 import 'periodization_model_utils.dart';
 import 'progression_engine.dart';
 import 'bb3_planned_exercise_service.dart';
@@ -44,6 +45,11 @@ class BB3HintService {
   static BB3SetHint getHintsForSet({
     required String exerciseId,
     required String exerciseName,
+    /// The exercise's CATALOGUE `type`, when the caller knows it. Passed
+    /// straight through to the bodyweight classifier and the display↔absolute
+    /// conversions, so a `Body Weight` exercise hints in ADDED load even
+    /// before the type registry has been filled.
+    String? exerciseType,
     required Map<String, dynamic> fullExerciseSettings,
     required int weekIndex,
     required int sessionIndex,
@@ -87,6 +93,8 @@ class BB3HintService {
       'name': exerciseName,
       'circuitIndex': circuitIndex,
       'id': exerciseId,
+      if (exerciseType != null && exerciseType.trim().isNotEmpty)
+        'type': exerciseType.trim(),
     };
 
     final engineCache = <String, Map<String, dynamic>>{};
@@ -139,7 +147,7 @@ class BB3HintService {
     if (targetE1rm <= 0) return const BB3SetHint();
 
     final isBw = PeriodizationModelUtils.isBodyweightExercise(
-        id: exerciseId, name: exerciseName);
+        id: exerciseId, name: exerciseName, type: exerciseType);
 
     // ── Local increment grid from this exercise's own settings (exerciseId-keyed).
     // The Engine already used this same grid; we must snap the same way here so
@@ -167,10 +175,16 @@ class BB3HintService {
         // load (weight above bodyweight), not the absolute load.  Convert to
         // display weight first, then snap — snapping abs first would introduce
         // a rounding error whenever bodyweight is not a multiple of the step.
+        // Identity must match the `isBw` test above: passing the name alone
+        // left the conversion a no-op for a bodyweight exercise recognised by
+        // its id or its catalogue type, so the hint showed the TOTAL load
+        // where the athlete types the ADDED load.
         final added = PeriodizationModelUtils.toDisplayAddedWeight(
           uid: uid,
           absoluteKg: abs,
+          exerciseId: exerciseId,
           exerciseName: exerciseName,
+          exerciseType: exerciseType,
           asOfDate: selectedDate,
         );
         return _formatWeight(_snapToGrid(added));
@@ -317,11 +331,21 @@ class BB3HintService {
       final sets = ex['sets'];
       if (sets is! List) continue;
 
+      final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
+        id: exId,
+        name: (ex['name'] ?? '').toString(),
+        type: (ex['type'] ?? '').toString(),
+      );
       for (final s in sets) {
         if (s is! Map) continue;
-        final w = (s['weight'] as num?)?.toDouble();
-        final r = (s['reps'] as num?)?.toDouble();
-        if (w != null && w > 0 && r != null && r > 0) return true;
+        // Shared raw-set rule: a stored 0 is "0 kg added" on a bodyweight
+        // exercise and nothing at all on any other one.
+        if (isRawSetPerformed(
+            weightKg: s['weight'] as num?,
+            reps: s['reps'] as num?,
+            isBodyweight: isBw)) {
+          return true;
+        }
       }
     }
     return false;

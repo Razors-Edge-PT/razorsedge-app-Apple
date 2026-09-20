@@ -66,6 +66,19 @@ class ProgressionEngine {
 
   final ProgressionEngineInputs i;
 
+  /// The catalogue `type` carried on the exercise map at [exerciseIndex], when
+  /// a caller stamped one (BB3/WES2 do). The classifier falls back to the type
+  /// registry and then the hard-coded catalogue, so a null here changes
+  /// nothing for exercises that carry no type.
+  static String? _exerciseTypeAt(
+      List<Map<String, dynamic>> rows, int exerciseIndex) {
+    if (exerciseIndex < 0 || exerciseIndex >= rows.length) return null;
+    final Object? t = rows[exerciseIndex]['type'];
+    if (t is! String) return null;
+    final String trimmed = t.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
 
 
   /// Resolves which DUP instance is active today and returns the raw rep-target string.
@@ -199,7 +212,8 @@ class ProgressionEngine {
     if (seed != null) {
       final exName = _selectedExercisesWithCircuits[exerciseIndex]['name']?.toString() ?? '';
       final exId = PeriodizationModelUtils.nameToId[exName] ?? exName;
-      final isBw = PeriodizationModelUtils.isBodyweightExercise(id: exId, name: exName);
+      final isBw = PeriodizationModelUtils.isBodyweightExercise(
+          id: exId, name: exName, type: _exerciseTypeAt(_selectedExercisesWithCircuits, exerciseIndex));
 
       double? absW = (seed['s1_weight'] as num?)?.toDouble();
       final double? addedW = (seed['s1_weight_added'] as num?)?.toDouble();
@@ -565,9 +579,15 @@ class ProgressionEngine {
     // keep variable name `snapped` so nothing else downstream changes
       double snapped;
 
+      // Resolved ONCE for this row, then passed into every conversion below,
+      // so the display↔absolute maths can never disagree with the
+      // classification that selected the bodyweight branch.
+      final String? _exerciseType =
+          _exerciseTypeAt(_selectedExercisesWithCircuits, exerciseIndex);
       final bool _isBwEx = PeriodizationModelUtils.isBodyweightExercise(
         id: exerciseId,
         name: exerciseName,
+        type: _exerciseType,
       );
 
     if (_isBwEx) {
@@ -577,6 +597,7 @@ class ProgressionEngine {
         absoluteKg: target,
         exerciseId: exerciseId,
         exerciseName: exerciseName,
+        exerciseType: _exerciseType,
         asOfDate: _asOfDate,
       );
 
@@ -590,6 +611,7 @@ class ProgressionEngine {
         displayAddedKg: _snappedAdded,
         exerciseId: exerciseId,
         exerciseName: exerciseName,
+        exerciseType: _exerciseType,
         asOfDate: _asOfDate,
       );
 
@@ -657,6 +679,7 @@ class ProgressionEngine {
           displayAddedKg: _snappedAdded,
           exerciseId: exerciseId,
           exerciseName: exerciseName,
+          exerciseType: _exerciseType,
           asOfDate: _asOfDate,
         );
 
@@ -682,6 +705,7 @@ class ProgressionEngine {
           displayAddedKg: _snappedAdded,
           exerciseId: exerciseId,
           exerciseName: exerciseName,
+          exerciseType: _exerciseType,
           asOfDate: _asOfDate,
         );
         _bwSnappedAddedFromWeight = _snappedAdded;
@@ -753,6 +777,7 @@ class ProgressionEngine {
             absoluteKg: _solvedAbs,
             exerciseId: exerciseId,
             exerciseName: exerciseName,
+            exerciseType: _exerciseType,
             asOfDate: _asOfDate,
           );
           double _snappedAdded = incGrid.snap(_targetAdded);
@@ -762,6 +787,7 @@ class ProgressionEngine {
             displayAddedKg: _snappedAdded,
             exerciseId: exerciseId,
             exerciseName: exerciseName,
+            exerciseType: _exerciseType,
             asOfDate: _asOfDate,
           );
           progressed['weightDisplayAdded'] = _snappedAdded;
@@ -819,6 +845,7 @@ class ProgressionEngine {
             absoluteKg: _wAbs,
             exerciseId: exerciseId,
             exerciseName: exerciseName,
+            exerciseType: _exerciseType,
             asOfDate: _asOfDate,
           );
           double _snappedAdded = incGrid.snap(_disp);
@@ -828,6 +855,7 @@ class ProgressionEngine {
             displayAddedKg: _snappedAdded,
             exerciseId: exerciseId,
             exerciseName: exerciseName,
+            exerciseType: _exerciseType,
             asOfDate: _asOfDate,
           );
           progressed['weightDisplayAdded'] = _snappedAdded;

@@ -28,6 +28,7 @@ const {
   dayDocId, applyWorkoutDay, bulkRebuild,
 } = require('./analytics_store');
 const { summarizeWorkoutDay, hasBodyweightExercise } = require('./pb_engine');
+const { makeExerciseTypeResolver } = require('./exercise_types');
 const {
   bodyweightCutoffMillis, pickBodyweightAsOf, weightEntryOfDoc, weighInSinceDateKey,
 } = require('../showcase/bodyweight');
@@ -62,7 +63,18 @@ const db = admin.firestore();
 //     would later turn into totals. v5 reads every set through the showcase's
 //     normalisation boundary at the bodyweight recorded on or before its day,
 //     and the re-bootstrap rebuilds those streams from the raw workouts.
-const ANALYTICS_VERSION = 5;
+// v6: an exercise is bodyweight-loaded when its catalogue `type` is
+//     "Body Weight", not only when its id/name is in the hard-coded catalogue
+//     — and a bodyweight set's RAW STORED weight of 0 is a real set at
+//     "0 kg added", not an unlogged one. v5 dropped every bodyweight-only set
+//     before it reached normalisation and read a catalogue-typed bodyweight
+//     exercise (one added through the Exercises page) as an ordinary lift, so
+//     its stream compared ADDED loads as if they were totals. v6 resolves the
+//     catalogue type for historical rows at the analytics store's boundary and
+//     rebuilds every affected stream, which is why it needs the version bump:
+//     existing summaries/events were derived under the old interpretation and
+//     cannot be patched incrementally into the new one.
+const ANALYTICS_VERSION = 6;
 const VERSIONS = { formulaVersion: E1RM_FORMULA_VERSION, analyticsVersion: ANALYTICS_VERSION };
 const DEFAULT_TZ = 'Pacific/Auckland';
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -269,6 +281,7 @@ async function recordedBodyweights(athleteUid, dateKeys) {
  */
 function firestoreStore(athleteUid) {
   const base = analyticsRef(athleteUid);
+  const typeResolver = makeExerciseTypeResolver(db, athleteUid);
   let batch = db.batch();
   let ops = 0;
 
@@ -344,6 +357,11 @@ function firestoreStore(athleteUid) {
       await db.runTransaction(async (tx) => fn(txStore(tx, base)));
     },
     getBodyweightAsOfMany: (dateKeys) => recordedBodyweights(athleteUid, dateKeys),
+    // THE bounded exercise-type boundary. The resolver caches per exercise id
+    // for this store's lifetime, so a whole-history bulk rebuild reads each
+    // exercise document at most once, and a row that carries its own `type`
+    // snapshot costs no read at all.
+    getExerciseTypesFor: (workoutData) => typeResolver.forWorkout(workoutData),
     flush,
   };
 }
@@ -416,7 +434,19 @@ const coachAnalyticsOnWeightWrite = onDocumentWritten(
         .orderBy(admin.firestore.FieldPath.documentId());
       if (since) q = q.startAt(since);
       const snap = await q.get();
-      const days = snap.docs.filter((d) => DATE_KEY_RE.test(d.id) && hasBodyweightExercise(d.data()));
+      // The same cached type boundary the analytics store uses, so the
+      // weigh-in reprocessing path selects exactly the days the workout path
+      // would treat as bodyweight — including catalogue-typed exercises whose
+      // rows predate the `type` snapshot.
+      const typeResolver = makeExerciseTypeResolver(db, uid);
+      const days = [];
+      for (const d of snap.docs) {
+        if (!DATE_KEY_RE.test(d.id)) continue;
+        const data = d.data();
+        if (hasBodyweightExercise(data, await typeResolver.forWorkout(data))) {
+          days.push(d);
+        }
+      }
       if (days.length === 0) return;
 
       const decision = await db.runTransaction(async (tx) => {
@@ -744,15 +774,22 @@ async function workoutDayStats(athleteUid, dateKeys) {
   const refs = dateKeys.map((k) =>
     db.collection('users').doc(athleteUid).collection('workouts').doc(k));
   const snaps = await db.getAll(...refs);
-  snaps.forEach((snap, i) => {
-    if (!snap.exists) return;
+  // One cached type resolver for this bounded set of days: historical rows
+  // that carry no `type` snapshot get their catalogue type here, ONCE per
+  // distinct exercise id, and the pure rules below are handed plain data.
+  const typeResolver = makeExerciseTypeResolver(db, athleteUid);
+  for (let i = 0; i < snaps.length; i++) {
+    const snap = snaps[i];
+    if (!snap.exists) continue;
     const data = snap.data();
-    if (!hasCompletedSets(data)) return;
+    const exerciseTypes = await typeResolver.forWorkout(data);
+    if (!hasCompletedSets(data, exerciseTypes)) continue;
     stats[dateKeys[i]] = {
       trained: true,
-      exerciseCount: Object.keys(summarizeWorkoutDay(data)).length,
+      exerciseCount:
+        Object.keys(summarizeWorkoutDay(data, { exerciseTypes })).length,
     };
-  });
+  }
   return stats;
 }
 

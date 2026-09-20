@@ -8,6 +8,7 @@ import 'dart:async' show unawaited; // if you use unawaited() here
 import 'package:intl/intl.dart';                 // for y-M-d convenience (optional)
 import 'block_repository.dart';
 import 'app_check_ready.dart';
+import 'exercise_catalog.dart';
 
 import 'local_cache/block_plan_cache.dart'; // BlockPlanCache.getDay/putDay/putWeek
 import 'progression_history_store.dart';
@@ -18,7 +19,9 @@ class WarmupService {
 
   static const _cooldown = Duration(milliseconds: 100); // ~0.1 seconds
   static const int _workoutWarmLimit = 15000;
-  static const int _exerciseWarmLimit = 200000;
+  // _exerciseWarmLimit: the global-exercise warm now goes through
+  // ExerciseCatalog (which reads the whole pool and fills the type registry),
+  // so no page limit applies to it any more.
 
 
   Future<void> warmWES(
@@ -974,14 +977,19 @@ class WarmupService {
       }
 
       if (warmExercises) {
-        // Warm global exercises list
-        unawaited(
-          fs
-              .collection('exercises')
-              .orderBy('name')
-              .limit(_exerciseWarmLimit)
-              .get(const GetOptions(source: Source.server)),
-        );
+        // Warm global exercises list.
+        //
+        // Routed through ExerciseCatalog so the same pass fills the app-wide
+        // ExerciseTypeRegistry: from here on the shared bodyweight classifier
+        // can answer for an exercise it knows only by id — a progression
+        // history row, a Top Sets screen, a calendar day — with no I/O of its
+        // own. Best effort: a failure only means the classifier falls back to
+        // the hard-coded id/name catalogue, exactly as before.
+        unawaited(ExerciseCatalog.loadCombinedExercisesForUser(uid)
+            .catchError((Object e) {
+          print('⚠️ [Warmup] exercise catalogue warm failed: $e');
+          return const <CatalogExercise>[];
+        }));
       }
 
       // Warm planned blocks surface (small list)
@@ -1154,7 +1162,12 @@ class WarmupService {
                 final int?    s1Reps   = _i(s1['actualReps'] ?? s1['reps']);
 
                 final bool isBw = PeriodizationModelUtils.isBodyweightExercise(
-                  id: pId, name: pName,
+                  id: pId,
+                  name: pName,
+                  // The matched row's own catalogue `type` snapshot, when it
+                  // carries one; the registry and the hard-coded catalogue
+                  // still answer for rows that do not.
+                  type: (match['type'] ?? '').toString(),
                 );
 
                 // Normalize all saved sets (S1..Sn) for UI if FastPaint wants to show them directly

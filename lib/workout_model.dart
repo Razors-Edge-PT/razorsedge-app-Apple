@@ -53,11 +53,17 @@ class Exercise {
   final List<SetDetails> sets;
   final int circuitIndex; // ✅ Added for circuit support
 
+  /// The catalogue `type` snapshot stored on the workout row, when it carries
+  /// one. Read-through only: it is preserved on save and handed to the shared
+  /// bodyweight classifier, never inferred and never invented.
+  final String? type;
+
   Exercise({
     this.id,                         // 👈 not required
     required this.name,
     required this.sets,
     this.circuitIndex = 0, // ✅ Default to 0 for backward compatibility
+    this.type,
   });
 
   factory Exercise.fromFirestore(Map<String, dynamic> data) {
@@ -67,11 +73,15 @@ class Exercise {
       return SetDetails.fromFirestore(entry.value as Map<String, dynamic>, entry.key + 1);
     }).toList();
 
+    final rawType = data['type'];
     return Exercise(
       id: data['id']?.toString(),                   // 👈 safely pick up id if present
       name: data['name'] ?? 'Unnamed Exercise',
       sets: sets,
       circuitIndex: data['circuitIndex'] ?? 0, // ✅ Read from Firestore or fallback
+      type: (rawType is String && rawType.trim().isNotEmpty)
+          ? rawType.trim()
+          : null,
     );
   }
 
@@ -80,6 +90,7 @@ class Exercise {
       if (id != null) 'id': id,                     // 👈 only save if present
       'name': name,
       'circuitIndex': circuitIndex, // ✅ Include in save
+      if (type != null) 'type': type,
       'sets': sets.map((s) => s.toMap()).toList(),
     };
   }

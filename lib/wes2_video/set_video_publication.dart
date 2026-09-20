@@ -22,6 +22,7 @@
 /// no change here.
 library;
 
+import '../exercise_type.dart';
 import '../profile/core/big_five.dart';
 import '../profile/core/showcase_models.dart';
 import 'set_video_store.dart';
@@ -140,15 +141,19 @@ SetVideoPublishPlan planSetVideoPublication({
         SetVideoPublishDecision.notCanonical);
   }
 
-  // 5. A fingerprint needs a real performance behind it. The reducers ignore
-  //    non-positive values, so anything they would drop is dropped here too.
+  // 5. A fingerprint needs a real performance behind it. The reducers apply
+  //    the shared raw-set rule, so anything they would drop is dropped here
+  //    too — including, on a bodyweight-loaded lift, accepting a stored 0
+  //    (0 kg ADDED) exactly as they do.
   final String setKey = record.setId.trim();
   if (setKey.isEmpty ||
       weight == null ||
       reps == null ||
-      !weight.isFinite ||
-      weight <= 0 ||
-      reps <= 0) {
+      !isRawSetPerformed(
+        weightKg: weight,
+        reps: reps,
+        isBodyweight: lift.bodyweightLoaded,
+      )) {
     return const SetVideoPublishPlan.reject(SetVideoPublishDecision.incomplete);
   }
 

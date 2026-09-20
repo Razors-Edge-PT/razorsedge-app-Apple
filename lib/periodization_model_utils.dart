@@ -16,6 +16,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'bodyweight_load.dart';
+import 'exercise_type.dart';
 
 
 
@@ -52,7 +53,11 @@ class PeriodizationModelUtils {
   static Map<String, String> nameToId = {};
 
   static final Map<String, String> idToName = {};        // id → name ✅
-  static final Map<String, String> exerciseTypeById = {}; // NEW: exerciseId → type
+  /// exerciseId → catalogue `type`. Backed by [ExerciseTypeRegistry], the one
+  /// cache of the canonical `/exercises` + `/users/{uid}/customExercises`
+  /// catalogue, so every long-standing reader of this map now sees the types
+  /// the catalogue layer resolves.
+  static Map<String, String> get exerciseTypeById => ExerciseTypeRegistry.types;
   static final List<int> linearClassicDefaults = [10, 8, 6];
   static final List<int> linearExposureDefaults = [12, 10, 8, 6, 4, 2];
   static final List<int> dupSignatureDefaults = [6, 10];
@@ -215,10 +220,18 @@ class PeriodizationModelUtils {
     _rebuildHistoryIndex();
   }
 
-  static double _histNum(dynamic v) {
-    if (v == null) return 0.0;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString().trim()) ?? 0.0;
+  static double _histNum(dynamic v) => _histNumOrNull(v) ?? 0.0;
+
+  /// [v] as a number, or null when the field is ABSENT or unparseable.
+  ///
+  /// The distinction matters for a bodyweight exercise's raw stored weight: an
+  /// explicit `0` is "0 kg added" (a performed set), while a missing weight is
+  /// nothing at all. [_histNum] flattens both to 0.0 and must not be used to
+  /// decide whether a set was performed.
+  static double? _histNumOrNull(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.isFinite ? v.toDouble() : null;
+    return double.tryParse(v.toString().trim());
   }
 
   static DateTime? _histDate(dynamic v) {
@@ -312,7 +325,13 @@ class PeriodizationModelUtils {
         // is indexed as its total at the bodyweight recorded on or before this
         // day. A set whose total is unknown (a WES2 set with no weigh-in on or
         // before it) is left out of top-set history rather than guessed.
-        final bool isBwEx = isBodyweightExercise(id: exId, name: exName);
+        // The row's own `type` snapshot (written by WES2 from the catalogue)
+        // classifies a reloaded/offline workout with no network and no
+        // catalogue in memory. Rows written before the snapshot existed fall
+        // back to the registry, then to the hard-coded id/name catalogue.
+        final String exType = (ex['type'] ?? '').toString().trim();
+        final bool isBwEx =
+            isBodyweightExercise(id: exId, name: exName, type: exType);
         double? recordedBw() => recordedBwByDay.putIfAbsent(
               ymd,
               () => activeUid == null
@@ -333,10 +352,18 @@ class PeriodizationModelUtils {
             final rRaw = (s['reps']?.toString() ?? '').trim();
             if (wRaw.isNotEmpty && rRaw.isNotEmpty) anyUsableSet = true;
           }
-          double wKg = _histNum(s['weight'] ?? s['actualWeight']);
+          final double? wRawKg = _histNumOrNull(s['weight'] ?? s['actualWeight']);
           final r = _histNum(s['reps'] ?? s['actualReps']);
           final rir = _histNum(s['rir'] ?? s['actualRir']);
-          if (wKg <= 0 || r <= 0) continue;
+          // Raw stored weight: a logged 0 is "0 kg ADDED" on a bodyweight
+          // exercise (a real set) and "nothing logged" on every other one.
+          // Negative is invalid everywhere. The TOTAL below keeps its own
+          // positive requirement.
+          if (!isRawSetPerformed(
+              weightKg: wRawKg, reps: r, isBodyweight: isBwEx)) {
+            continue;
+          }
+          double wKg = wRawKg!;
           if (isBwEx) {
             final double? total = totalLoadKg(
               basis: BodyweightLoadBasis.ofSetMap(s),
@@ -980,7 +1007,36 @@ class PeriodizationModelUtils {
   static Set<String> get debugBodyweightExerciseNames =>
       _bwByName.keys.toSet();
 
-  static bool isBodyweightExercise({String? id, String? name}) {
+  /// True when this exercise is lifted as the athlete's bodyweight plus an
+  /// added load — the ONE classifier the whole app uses.
+  ///
+  /// An exercise qualifies when EITHER:
+  ///   1. its [id] or [name] is in the hard-coded catalogue above (kept as the
+  ///      backward-compatible fallback for exercises that predate the
+  ///      catalogue's `type` field); or
+  ///   2. its catalogue [type] is `Body Weight`
+  ///      ([isBodyweightExerciseType] — trimmed and case-insensitive).
+  ///
+  /// [type] is the exercise's CATALOGUE type: the value the Exercises page
+  /// stores in `/exercises/{id}.type` or
+  /// `/users/{uid}/customExercises/{id}.type`. Callers that carry one (a WES2
+  /// row, a saved workout row, a resolved `CatalogExercise`) should pass it.
+  /// Callers that do not may omit it: a blank/absent [type] falls back to the
+  /// [ExerciseTypeRegistry] entry for [id], which the catalogue layer fills at
+  /// its own bounded I/O boundaries. An explicitly supplied non-blank [type]
+  /// always wins over the registry, so a caller can never be overruled by a
+  /// stale cache.
+  ///
+  /// The exercise's name, category and body parts NEVER imply bodyweight
+  /// status; only the hard-coded name list above (an exact, closed match) and
+  /// the catalogue type do.
+  static bool isBodyweightExercise({String? id, String? name, String? type}) {
+    final String explicitType = (type ?? '').trim();
+    if (explicitType.isNotEmpty) {
+      if (isBodyweightExerciseType(explicitType)) return true;
+    } else if (isBodyweightExerciseType(ExerciseTypeRegistry.typeOf(id))) {
+      return true;
+    }
     if (id != null && _bwById[id] == true) return true;
     if (name != null) {
       final n = name.trim().toLowerCase();
@@ -1077,9 +1133,11 @@ class PeriodizationModelUtils {
     required double displayAddedKg,
     String? exerciseId,
     String? exerciseName,
+    String? exerciseType,
     DateTime? asOfDate, // ⬅️ new
   }) {
-    if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) {
+    if (!isBodyweightExercise(
+        id: exerciseId, name: exerciseName, type: exerciseType)) {
       return displayAddedKg;
     }
     final bw = bodyweightKgForDate(uid: uid, asOf: asOfDate);
@@ -1092,9 +1150,11 @@ class PeriodizationModelUtils {
     required double absoluteKg,
     String? exerciseId,
     String? exerciseName,
+    String? exerciseType,
     DateTime? asOfDate, // ⬅️ new
   }) {
-    if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) {
+    if (!isBodyweightExercise(
+        id: exerciseId, name: exerciseName, type: exerciseType)) {
       return absoluteKg;
     }
     final bw = bodyweightKgForDate(uid: uid, asOf: asOfDate);
@@ -1111,10 +1171,14 @@ class PeriodizationModelUtils {
     required double rir,
     String? exerciseId,
     String? exerciseName,
+    String? exerciseType,
     DateTime? asOfDate, // ⬅️ new
   }) {
     final e = calculateE1RM(absoluteKg, reps.toDouble(), rir);
-    if (!isBodyweightExercise(id: exerciseId, name: exerciseName)) return e;
+    if (!isBodyweightExercise(
+        id: exerciseId, name: exerciseName, type: exerciseType)) {
+      return e;
+    }
     final bw = bodyweightKgForDate(uid: uid, asOf: asOfDate);
     final addOnly = e - bw;
     return (addOnly < 0) ? 0.0 : addOnly;
