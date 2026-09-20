@@ -468,26 +468,23 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                 },
                               ),
                             ),
-                            // Column 3: Planned Blocks / Week Planner
+                            // Column 3: Block Planner 2 / Week Planner.
+                            // The single planner entry: it opens the shared
+                            // planned-block selection screen, which hands the
+                            // chosen block (or a new draft) to Block Planner 2.
                             _buildQAColumn(
                               _buildQACard(
+                                key: const ValueKey('qa-block-planner-2'),
                                 icon: Icons.track_changes,
-                                label: 'Planned\nBlocks',
+                                label: 'Block\nPlanner 2',
                                 onTap: () {
                                   if (_ctrl.isFirstTimeSetup) {
                                     _showBlockNotReadySnack();
                                     return;
                                   }
-                                  final uc =
-                                      UserContext.of(context, listen: false);
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<
-                                          UserContext>.value(
-                                        value: uc,
-                                        child: const PlannedBlocksScreen(),
-                                      ),
-                                    ),
+                                  openPlannedBlocks(
+                                    context,
+                                    PlannedBlocksDestination.blockPlanner2,
                                   );
                                 },
                               ),
@@ -513,29 +510,6 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   );
                                 },
                               ),
-                            ),
-                            // Column 3b: Planned Blocks 2 — the same planned-
-                            // block selection screen, opening blocks in Block
-                            // Planner 2. Sits between Planned Blocks and
-                            // Settings in the top row.
-                            _buildQAColumn(
-                              _buildQACard(
-                                key: const ValueKey('qa-planned-blocks-2'),
-                                icon: Icons.track_changes_outlined,
-                                label: 'Planned\nBlocks 2',
-                                onTap: () {
-                                  if (_ctrl.isFirstTimeSetup) {
-                                    _showBlockNotReadySnack();
-                                    return;
-                                  }
-                                  openPlannedBlocks(
-                                    context,
-                                    PlannedBlocksDestination.blockPlanner2,
-                                  );
-                                },
-                              ),
-                              const SizedBox(
-                                  width: kFeatureCardWidth, height: 130),
                             ),
                             // Column 4: Settings / Coach Dashboard (coach) or
                             // Analytics (non-coach — directly right of Week
