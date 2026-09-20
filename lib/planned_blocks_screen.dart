@@ -86,14 +86,18 @@ Route<void> defaultPlannedBlockRoute({
 /// given [destination] mode (used by the Home Quick Access cards).
 Future<void> openPlannedBlocks(
   BuildContext context,
-  PlannedBlocksDestination destination,
-) {
+  PlannedBlocksDestination destination, {
+  FirebaseFirestore? firestore,
+}) {
   final uc = UserContext.of(context, listen: false);
   return Navigator.of(context).push(
     MaterialPageRoute<void>(
       builder: (_) => ChangeNotifierProvider<UserContext>.value(
         value: uc,
-        child: PlannedBlocksScreen(destination: destination),
+        child: PlannedBlocksScreen(
+          destination: destination,
+          firestore: firestore,
+        ),
       ),
     ),
   );
@@ -116,9 +120,6 @@ class PlannedBlocksScreen extends StatefulWidget {
   /// Test seam; production uses the app-wide Firestore instance.
   final FirebaseFirestore? firestore;
 
-  String get title => destination == PlannedBlocksDestination.blockPlanner2
-      ? 'Planned Blocks 2'
-      : 'Planned Blocks';
 
   @override
   State<PlannedBlocksScreen> createState() => _PlannedBlocksScreenState();
@@ -741,7 +742,7 @@ class _PlannedBlocksScreenState extends State<PlannedBlocksScreen> {
         .collection('planned_blocks');
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(title: const Text('Planned Blocks')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNewBlock,
         icon: const Icon(Icons.add),

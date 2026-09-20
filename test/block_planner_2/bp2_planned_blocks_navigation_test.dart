@@ -93,13 +93,18 @@ void main() {
       };
 
   group('Planned Blocks 2 screen (shared implementation)', () {
-    testWidgets('shows the selected athlete\'s blocks under its own title',
+    testWidgets('shows the selected athlete\'s blocks under the shared title',
         (tester) async {
       final h = await seeded();
       await pumpList(tester, h,
           destination: PlannedBlocksDestination.blockPlanner2,
           routeFactory: recorder([]));
-      expect(find.text('Planned Blocks 2'), findsOneWidget);
+      expect(find.text('Planned Blocks'), findsOneWidget);
+      expect(
+          tester
+              .widget<PlannedBlocksScreen>(find.byType(PlannedBlocksScreen))
+              .destination,
+          PlannedBlocksDestination.blockPlanner2);
       expect(find.text(custom), findsOneWidget);
       expect(find.text('Upcoming block'), findsOneWidget);
       expect(find.text('Coach own block'), findsNothing);
@@ -170,7 +175,7 @@ void main() {
       await tester.tap(find.byType(BackButton)); // exit autosave
       await tester.pumpAndSettle();
 
-      expect(find.text('Planned Blocks 2'), findsOneWidget);
+      expect(find.text('Planned Blocks'), findsOneWidget);
       expect(find.text('Bench Nationals 2026'), findsOneWidget,
           reason: 'card shows the saved name on return');
       expect(find.text(custom), findsNothing);
@@ -190,7 +195,11 @@ void main() {
           destination: PlannedBlocksDestination.blockPlanner,
           routeFactory: recorder(log));
       expect(find.text('Planned Blocks'), findsOneWidget);
-      expect(find.text('Planned Blocks 2'), findsNothing);
+      expect(
+          tester
+              .widget<PlannedBlocksScreen>(find.byType(PlannedBlocksScreen))
+              .destination,
+          PlannedBlocksDestination.blockPlanner);
       await tester.tap(find.text(custom));
       await tester.pumpAndSettle();
       expect(log.single.destination, PlannedBlocksDestination.blockPlanner);
@@ -260,31 +269,86 @@ void main() {
     });
   });
 
-  group('entry points', () {
-    test(
-        'Home Quick Access order: Planned Blocks, Planned Blocks 2, Settings; '
-        'the original card still opens the unchanged screen', () {
-      // HomeScreen2 needs live Firebase to mount, so its Quick Access row is
-      // checked at source level: card order and each card's destination.
+  group('Home Quick Access entry point', () {
+    // HomeScreen2 needs live Firebase to mount, so the card row itself is
+    // asserted at source level; the behaviour behind the card is a real
+    // widget test below.
+    String quickAccessSource() {
       final src = File('lib/home_screen_2.dart').readAsStringSync();
-      final start = src.indexOf('// ── Quick Access');
-      final qa = src.substring(start, src.indexOf('// ── Calendar', start));
-      final pb = qa.indexOf("label: 'Planned\\nBlocks',");
-      final pb2 = qa.indexOf("label: 'Planned\\nBlocks 2',");
-      final settings = qa.indexOf("label: 'Settings',");
-      expect(pb, greaterThan(0));
-      expect(pb2, greaterThan(pb));
-      expect(settings, greaterThan(pb2));
-      // Nothing else sits between them in the top row.
-      final between = qa.substring(pb, settings);
-      expect(RegExp(r"label: '").allMatches(between).length, 3,
-          reason:
-              'Planned Blocks, Week Planner (bottom row), Planned Blocks 2');
-      expect(qa.substring(pb, pb2), contains('const PlannedBlocksScreen()'));
-      expect(qa.substring(pb2, settings),
-          contains('PlannedBlocksDestination.blockPlanner2'));
-      expect(qa.contains('Bp2Screen'), isFalse,
-          reason: 'no direct Block Planner 2 shortcut');
+      final start = src.indexOf('\u2500\u2500 Quick Access');
+      return src.substring(start, src.indexOf('\u2500\u2500 Calendar', start));
+    }
+
+    test(
+        'exactly one planner entry, labelled Block Planner 2, with Settings '
+        'next and no blank card left behind', () {
+      final qa = quickAccessSource();
+      final labels = RegExp(r"label: '([^']*)'")
+          .allMatches(qa)
+          .map((m) => m.group(1)!.replaceAll(r'\n', ' '))
+          .toList();
+
+      // One planner entry, named exactly "Block Planner 2".
+      final planner =
+          labels.where((l) => l.contains('Planner 2') || l.contains('Planned'));
+      expect(planner, ['Block Planner 2']);
+      expect(labels.where((l) => l == 'Planned Blocks'), isEmpty);
+      expect(labels.where((l) => l == 'Planned Blocks 2'), isEmpty);
+
+      // Settings follows it; Week Planner keeps the slot under the planner.
+      final i = labels.indexOf('Block Planner 2');
+      expect(labels[i + 1], 'Week Planner');
+      expect(labels[i + 2], 'Settings');
+
+      // No empty card position was introduced. The only blank slot is the
+      // pre-existing one that pads the final column, after Settings.
+      final blanks =
+          RegExp(r'SizedBox\(\s*width: kFeatureCardWidth, height: 130\)')
+              .allMatches(qa)
+              .toList();
+      expect(blanks.length, 1, reason: 'no new blank card position');
+      expect(blanks.single.start, greaterThan(qa.indexOf("label: 'Settings'")));
+
+      // The card opens block selection, never an editor draft directly.
+      expect(qa, contains('PlannedBlocksDestination.blockPlanner2'));
+      expect(qa.contains('Bp2Screen'), isFalse);
+      expect(qa.contains('PlannedBlocksScreen('), isFalse);
+    });
+
+    testWidgets(
+        'the entry opens the block-selection screen in Block Planner 2 '
+        'mode, not an editor draft', (tester) async {
+      final h = await seeded();
+      final uc = coachViewingAthlete();
+      tester.view.physicalSize = const Size(412, 915);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      // The exact call the Quick Access card makes.
+      await tester.pumpWidget(ChangeNotifierProvider<UserContext>.value(
+        value: uc,
+        child: MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => openPlannedBlocks(
+                    context, PlannedBlocksDestination.blockPlanner2,
+                    firestore: h.db),
+                child: const Text('Block Planner 2'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.tap(find.text('Block Planner 2'));
+      await tester.pumpAndSettle();
+
+      final screen =
+          tester.widget<PlannedBlocksScreen>(find.byType(PlannedBlocksScreen));
+      expect(screen.destination, PlannedBlocksDestination.blockPlanner2);
+      expect(find.byType(Bp2Screen), findsNothing,
+          reason: 'selection first, never straight into the editor');
+      expect(find.text('Planned Blocks'), findsOneWidget,
+          reason: 'the selector keeps its normal page title');
     });
 
     testWidgets(
