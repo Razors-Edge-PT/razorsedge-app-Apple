@@ -7,18 +7,14 @@ const admin = require('firebase-admin');
 const Stripe = require('stripe');
 
 // -------------------------
-// Stripe init (no functions.config; using env or hardcoded for now)
+// Stripe init
 // -------------------------
 
-// ⚠️ For now, simplest: read from env, with optional fallback literals.
-// In production, you should move the literal keys into env via the new
-// Firebase runtime config / GCP env vars instead of keeping them in code.
-const stripeSecret = process.env.STRIPE_SECRET; 
+// Keys are supplied as Cloud Functions secrets (see the `secrets:` option on
+// each function below). Never commit key literals to this repository.
+const stripeSecret = process.env.STRIPE_SECRET;
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-
-//const stripeSecret = process.env.STRIPE_SECRET || 'sk_test_51PuTPmBoDt989R6zy9h9tkRoV9r9RjGyyJO7G5ukqv7sb8eFQdShoK4vRZ6e5satjZ0d7yzV0ixXWf9g7Ri00upN008Puqquqv'; // test key
-//const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || 'whsec_4tRDzNm2iM9BnpNXAqqkwO0yHMreBQU3'; // test key
 if (!stripeSecret) {
   logger.error('❌ Missing Stripe secret key. Set STRIPE_SECRET env var.');
 }

@@ -45,3 +45,8 @@ app.*.map.json
 android/app/google-services.json
 
 goodlift-play-base.apk
+
+# Local build/analysis dumps (accidental commits)
+full_log.txt
+an.txt
+flutter_*.log
