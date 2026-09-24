@@ -1,10 +1,19 @@
-/// The Big Five achievement showcase, directly beneath the header.
+/// The lifetime showcase, directly beneath the header: five CATEGORY cards.
 ///
-/// Each lift shows two lifetime results side by side:
+/// Each card shows ONE exercise of its category — by default the one with the
+/// highest RE Points (ShowcaseCategorySnapshot.defaultExercise) — and, when
+/// the category offers more than one, an arrow to display another. That choice
+/// is presentation state only: it lives in this widget, is never written, and
+/// reopening the profile shows the highest scorer again. Owner, friend and
+/// cached/offline profiles all render through this same component and the
+/// same selection rule.
+///
+/// For the displayed exercise, two lifetime results side by side:
 ///   BEST E1RM   — the heaviest estimated single the athlete has earned,
 ///                 calculated WITHOUT RIR, with the source set spelled out
 ///                 ("180 kg × 2 → 192 kg E1RM").
 ///   HEAVIEST    — the heaviest absolute load, whatever the rep count.
+/// plus its RE Points, scored from the Best E1RM performance.
 ///
 /// The source performance and its date are always visible, because a record
 /// that does not say where it came from is a claim rather than an achievement.
@@ -14,15 +23,15 @@
 /// Nothing here is ever labelled "verified" — the wording is "Proof attached",
 /// which is what the video actually establishes.
 ///
-/// A bodyweight-loaded lift (the Chin-Up) shows the ADDED load, with the
-/// bodyweight recorded for that lift on its own line — see
+/// A bodyweight-loaded exercise (Chin-Up, Triceps Dip) shows the ADDED load,
+/// with the bodyweight recorded for that lift on its own line — see
 /// record_presentation.dart for the arithmetic and the fallbacks.
 library;
 
 import 'package:flutter/material.dart';
 
-import '../core/big_five.dart';
 import '../core/showcase_models.dart';
+import '../core/showcase_v2_models.dart';
 import '../data/showcase_repository.dart';
 import 'profile_theme.dart';
 import 'record_presentation.dart';
@@ -54,6 +63,7 @@ class BigFiveShowcase extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ProfileShowcaseV2 showcase = view.categories;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -64,26 +74,35 @@ class BigFiveShowcase extends StatelessWidget {
             ProfileSpacing.lg,
             ProfileSpacing.sm,
           ),
-          child:
-              Text('LIFETIME BESTS', style: ProfileText.sectionTitle(context)),
+          child: Text(
+            'LIFETIME BESTS',
+            style: ProfileText.sectionTitle(context),
+          ),
         ),
-        ...BigFiveSlot.ordered.map((String slot) => _LiftCard(
-              snapshot: view.lift(slot),
-              view: view,
-              units: units,
-              isOwner: isOwner,
-              onAddProof: onAddProof,
-              onOpenProof: onOpenProof,
-              onRemoveProof: onRemoveProof,
-            )),
+        ...showcase.categories.map(
+          (ShowcaseCategorySnapshot c) => CategoryCard(
+            key: ValueKey<String>('showcase-category-${c.category.key}'),
+            category: c,
+            showsPoints: showcase.showsPoints,
+            view: view,
+            units: units,
+            isOwner: isOwner,
+            onAddProof: onAddProof,
+            onOpenProof: onOpenProof,
+            onRemoveProof: onRemoveProof,
+          ),
+        ),
       ],
     );
   }
 }
 
-class _LiftCard extends StatelessWidget {
-  const _LiftCard({
-    required this.snapshot,
+/// One category card. Stateful only for the viewer's exercise choice.
+class CategoryCard extends StatefulWidget {
+  const CategoryCard({
+    super.key,
+    required this.category,
+    required this.showsPoints,
     required this.view,
     required this.units,
     required this.isOwner,
@@ -92,7 +111,10 @@ class _LiftCard extends StatelessWidget {
     required this.onRemoveProof,
   });
 
-  final ShowcaseLiftSnapshot snapshot;
+  final ShowcaseCategorySnapshot category;
+
+  /// False for the V1 fallback, whose points are not known.
+  final bool showsPoints;
   final ShowcaseView view;
   final WeightUnits units;
   final bool isOwner;
@@ -101,9 +123,23 @@ class _LiftCard extends StatelessWidget {
   final void Function(ShowcaseRecord record, ProofRecord proof) onRemoveProof;
 
   @override
+  State<CategoryCard> createState() => _CategoryCardState();
+}
+
+class _CategoryCardState extends State<CategoryCard> {
+  /// The viewer's choice, or null for the default (highest scorer). Never
+  /// persisted, never written: presentation state only.
+  String? _chosenExerciseId;
+
+  ShowcaseExerciseSnapshot get _shown =>
+      widget.category.exerciseById(_chosenExerciseId) ??
+      widget.category.defaultExercise;
+
+  @override
   Widget build(BuildContext context) {
-    final BigFiveLift? lift = snapshot.lift;
-    if (lift == null) return const SizedBox.shrink();
+    final ShowcaseCategorySnapshot category = widget.category;
+    final ShowcaseExerciseSnapshot shown = _shown;
+    final String key = category.category.key;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(
@@ -121,13 +157,30 @@ class _LiftCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          Text(
+            category.category.displayName.toUpperCase(),
+            style: ProfileText.recordLabel(context),
+          ),
+          const SizedBox(height: ProfileSpacing.xs),
           Row(
             children: <Widget>[
               Expanded(
-                child: Text(lift.displayName,
-                    style: ProfileText.liftName(context)),
+                child: category.hasChoice
+                    ? _ExercisePicker(
+                        key: ValueKey<String>('showcase-exercise-picker-$key'),
+                        category: category,
+                        shown: shown,
+                        showsPoints: widget.showsPoints,
+                        onSelected: (String id) =>
+                            setState(() => _chosenExerciseId = id),
+                      )
+                    : Text(
+                        shown.exercise.displayName,
+                        key: ValueKey<String>('showcase-exercise-name-$key'),
+                        style: ProfileText.liftName(context),
+                      ),
               ),
-              if (snapshot.sharesOneSource)
+              if (shown.sharesOneSource)
                 const ProfilePill(
                   label: 'ONE SET, BOTH',
                   icon: Icons.bolt_rounded,
@@ -135,9 +188,22 @@ class _LiftCard extends StatelessWidget {
                 ),
             ],
           ),
+          if (widget.showsPoints && shown.hasRecord) ...<Widget>[
+            const SizedBox(height: ProfileSpacing.xs),
+            _PointsLine(
+              key: ValueKey<String>('showcase-points-$key'),
+              points: shown.rePoints,
+            ),
+          ],
           const SizedBox(height: ProfileSpacing.md),
-          if (snapshot.isEmpty)
-            _EmptyLift(lift: lift)
+          if (!shown.hasRecord)
+            Text(
+              category.hasChoice
+                  ? 'No result yet.'
+                  : 'No completed sets logged yet.',
+              style: ProfileText.recordDetail(context)
+                  .copyWith(color: ProfilePalette.textMuted),
+            )
           else
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -145,36 +211,37 @@ class _LiftCard extends StatelessWidget {
                 Expanded(
                   child: _RecordColumn(
                     label: 'BEST E1RM',
-                    record: snapshot.bestE1rm,
-                    units: units,
-                    view: view,
-                    isOwner: isOwner,
+                    record: shown.bestE1rm,
+                    units: widget.units,
+                    view: widget.view,
+                    isOwner: widget.isOwner,
                     isE1rm: true,
-                    onAddProof: onAddProof,
-                    onOpenProof: onOpenProof,
-                    onRemoveProof: onRemoveProof,
+                    onAddProof: widget.onAddProof,
+                    onOpenProof: widget.onOpenProof,
+                    onRemoveProof: widget.onRemoveProof,
                   ),
                 ),
                 Container(
                   width: 1,
-                  // A bodyweight-loaded lift carries one more line per column
-                  // ("at 85 kg BW"); the rule grows with it.
-                  height: lift.bodyweightLoaded ? 94 : 78,
-                  margin:
-                      const EdgeInsets.symmetric(horizontal: ProfileSpacing.md),
+                  // A bodyweight-loaded exercise carries one more line per
+                  // column ("at 85 kg BW"); the rule grows with it.
+                  height: shown.exercise.bodyweightLoaded ? 94 : 78,
+                  margin: const EdgeInsets.symmetric(
+                    horizontal: ProfileSpacing.md,
+                  ),
                   color: ProfilePalette.outline,
                 ),
                 Expanded(
                   child: _RecordColumn(
                     label: 'HEAVIEST',
-                    record: snapshot.heaviest,
-                    units: units,
-                    view: view,
-                    isOwner: isOwner,
+                    record: shown.heaviest,
+                    units: widget.units,
+                    view: widget.view,
+                    isOwner: widget.isOwner,
                     isE1rm: false,
-                    onAddProof: onAddProof,
-                    onOpenProof: onOpenProof,
-                    onRemoveProof: onRemoveProof,
+                    onAddProof: widget.onAddProof,
+                    onOpenProof: widget.onOpenProof,
+                    onRemoveProof: widget.onRemoveProof,
                   ),
                 ),
               ],
@@ -185,21 +252,113 @@ class _LiftCard extends StatelessWidget {
   }
 }
 
-class _EmptyLift extends StatelessWidget {
-  const _EmptyLift({required this.lift});
+/// The displayed exercise's name with an arrow that opens the category's
+/// other exercises.
+class _ExercisePicker extends StatelessWidget {
+  const _ExercisePicker({
+    super.key,
+    required this.category,
+    required this.shown,
+    required this.showsPoints,
+    required this.onSelected,
+  });
 
-  final BigFiveLift lift;
+  final ShowcaseCategorySnapshot category;
+  final ShowcaseExerciseSnapshot shown;
+  final bool showsPoints;
+  final ValueChanged<String> onSelected;
+
+  String _trailing(ShowcaseExerciseSnapshot e) {
+    if (!e.hasRecord) return 'No result yet';
+    if (!showsPoints) return '';
+    final double? p = e.rePoints;
+    return p == null ? 'Points unavailable' : '${formatRePoints(p)} pts';
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      'No completed sets logged yet.',
-      style: ProfileText.recordDetail(context)
-          .copyWith(color: ProfilePalette.textMuted),
+    return PopupMenuButton<String>(
+      tooltip: 'Show another ${category.category.displayName} exercise',
+      color: ProfilePalette.surface,
+      initialValue: shown.exerciseId,
+      onSelected: onSelected,
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        for (final ShowcaseExerciseSnapshot e in category.exercises)
+          PopupMenuItem<String>(
+            key: ValueKey<String>('showcase-option-${e.exerciseId}'),
+            value: e.exerciseId,
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    e.exercise.displayName,
+                    style: ProfileText.recordDetail(context).copyWith(
+                      color: ProfilePalette.textPrimary,
+                      fontWeight: e.exerciseId == shown.exerciseId
+                          ? FontWeight.w700
+                          : FontWeight.w400,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: ProfileSpacing.sm),
+                Text(_trailing(e), style: ProfileText.caption(context)),
+              ],
+            ),
+          ),
+      ],
+      child: Row(
+        children: <Widget>[
+          Flexible(
+            child: Text(
+              shown.exercise.displayName,
+              style: ProfileText.liftName(context),
+            ),
+          ),
+          const SizedBox(width: ProfileSpacing.xs),
+          const Icon(
+            Icons.keyboard_arrow_down_rounded,
+            size: 22,
+            color: ProfilePalette.action,
+            semanticLabel: 'Choose exercise',
+          ),
+        ],
+      ),
     );
   }
 }
 
+/// "RE POINTS 123.45", or why there are none. Unavailable is not zero.
+class _PointsLine extends StatelessWidget {
+  const _PointsLine({super.key, required this.points});
+
+  final double? points;
+
+  @override
+  Widget build(BuildContext context) {
+    final double? p = points;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: <Widget>[
+        Text('RE POINTS', style: ProfileText.recordLabel(context)),
+        const SizedBox(width: ProfileSpacing.sm),
+        Text(
+          p == null ? '—' : formatRePoints(p),
+          style: ProfileText.recordValue(context),
+        ),
+        if (p == null) ...<Widget>[
+          const SizedBox(width: ProfileSpacing.sm),
+          Flexible(
+            child: Text(
+              'No bodyweight recorded for this lift',
+              style: ProfileText.caption(context),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
 class _RecordColumn extends StatelessWidget {
   const _RecordColumn({
     required this.label,

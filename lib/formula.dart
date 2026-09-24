@@ -104,7 +104,7 @@ class Formula {
     if (lift == keys.squat)     return ReWeights.defaults.squat;      // 0.8
     if (lift == keys.deadlift)  return ReWeights.defaults.deadlift;   // 0.74
     if (lift == keys.chinUp)    return ReWeights.defaults.chinUp;     // 1.0
-    if (lift == keys.dbShoulder)return ReWeights.defaults.dbShoulder; // 2.85
+    if (lift == keys.dbShoulder)return ReWeights.defaults.dbShoulder; // 2.61
     // Unknown lift: no weighting (treat as 1.0)
     return 1.0;
   }
@@ -134,13 +134,13 @@ class ReWeights {
   final double squat;      // 0.8
   final double deadlift;   // 0.74
   final double chinUp;     // 1.0
-  final double dbShoulder; // 2.85 (unilateral)
+  final double dbShoulder; // 2.61 (unilateral)
   const ReWeights({
     this.bench = 1.0,
     this.squat = 0.8,
     this.deadlift = 0.74,
     this.chinUp = 1.0,
-    this.dbShoulder = 2.85,
+    this.dbShoulder = 2.61,
   });
   static const defaults = ReWeights();
 }

@@ -21,6 +21,8 @@
 /// Ids verified 2026-08-29 against assets/exercise_dump_20251109_112626.json.
 library;
 
+import 're_catalog.dart';
+
 /// Stable slot keys. Persisted in Firestore — never renumber or rename.
 class BigFiveSlot {
   static const String bench = 'bench';
@@ -128,8 +130,12 @@ final Map<String, BigFiveLift> _byFoldedAlias = <String, BigFiveLift>{
 BigFiveLift? bigFiveBySlot(String slot) => _bySlot[slot];
 
 /// True for a slot whose stored loads include the athlete's bodyweight.
+///
+/// Driven by the exercise definition: a Big Five lift or an RE catalogue
+/// exercise (re_catalog.dart — the Chin-Up and the Triceps Dip). Slot keys are
+/// unique across both registries, so every Big Five answer is unchanged.
 bool isBodyweightLoadedSlot(String slot) =>
-    _bySlot[slot]?.bodyweightLoaded ?? false;
+    _bySlot[slot]?.bodyweightLoaded ?? isReBodyweightLoadedSlot(slot);
 
 /// Case-folds an exercise id the way every showcase stream key is folded.
 /// Returns null for a blank / non-string id.

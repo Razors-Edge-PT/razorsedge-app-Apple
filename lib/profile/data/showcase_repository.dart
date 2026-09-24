@@ -24,6 +24,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/big_five.dart';
 import '../core/showcase_models.dart';
+import '../core/showcase_v2_models.dart';
 
 /// A proof video attached to one record fingerprint.
 @immutable
@@ -79,11 +80,21 @@ class ProofRecord {
 class ShowcaseView {
   const ShowcaseView({
     required this.showcase,
+    this.showcaseV2,
     this.proofsByFingerprint = const <String, ProofRecord>{},
   });
 
   final ProfileShowcase showcase;
+
+  /// profileShowcaseV2 when the server has published a valid one.
+  final ProfileShowcaseV2? showcaseV2;
+
   final Map<String, ProofRecord> proofsByFingerprint;
+
+  /// The categories the profile renders: V2 when present, otherwise the V1
+  /// snapshot through the same component. Identical for every viewer.
+  ProfileShowcaseV2 get categories =>
+      showcaseV2 ?? ProfileShowcaseV2.fromV1(showcase);
 
   static const ShowcaseView empty =
       ShowcaseView(showcase: ProfileShowcase.empty);
@@ -100,12 +111,19 @@ class ShowcaseView {
   /// True when one video covers BOTH achievements for a lift, because both
   /// came from the same set.
   bool oneVideoCoversBoth(String slot) =>
+      categories.exerciseBySlot(slot)?.sharesOneSource ??
       showcase.forSlot(slot).sharesOneSource;
+
+  /// Every fingerprint standing as a live record in V1 or V2.
+  Set<String> get liveFingerprints => <String>{
+        ...showcase.liveFingerprints,
+        ...categories.liveFingerprints,
+      };
 
   /// Proofs whose records no longer exist. Their media stays in the gallery;
   /// this is only used to stop displaying them as proof.
   Iterable<ProofRecord> get staleProofs {
-    final Set<String> live = showcase.liveFingerprints;
+    final Set<String> live = liveFingerprints;
     return proofsByFingerprint.values
         .where((ProofRecord p) => !live.contains(p.fingerprint));
   }

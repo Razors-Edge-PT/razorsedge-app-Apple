@@ -435,4 +435,7 @@ module.exports = {
   candidateRecords,
   sameDay,
   bigFiveBySlot,
+  resolveBodyweights,
+  canResolveBodyweight,
+  canonicalJson,
 };

@@ -29,6 +29,7 @@ import '../social/buddy_repository.dart';
 import '../user_context.dart';
 import 'core/media_models.dart';
 import 'core/showcase_models.dart';
+import 'core/showcase_v2_models.dart';
 import 'data/identity_repository.dart';
 import 'data/media_staging.dart';
 import 'data/showcase_repository.dart';
@@ -594,16 +595,20 @@ class _ProfileScreenState extends State<ProfileScreen>
 
   /// Describes exactly which performance a proof is attached to.
   String? _proofBadgeText(ProfileController c, String fingerprint) {
-    for (final ShowcaseLiftSnapshot lift
-        in ShowcaseRepository.orderedLifts(c.showcase.showcase)) {
-      for (final ShowcaseRecord? r in <ShowcaseRecord?>[
-        lift.bestE1rm,
-        lift.heaviest,
-      ]) {
-        if (r != null && r.fingerprint == fingerprint) {
-          return '${lift.lift?.displayName ?? ''} · '
-              '${_units.format(r.weight)} × ${r.reps} · '
-              '${_units.formatDate(r.dateKey)}';
+    // Every exercise in every category (V2, or the V1 fallback), so a proof
+    // attached to any approved exercise is described, not only the Big Five.
+    for (final ShowcaseCategorySnapshot category
+        in c.showcase.categories.categories) {
+      for (final ShowcaseExerciseSnapshot e in category.exercises) {
+        for (final ShowcaseRecord? r in <ShowcaseRecord?>[
+          e.bestE1rm,
+          e.heaviest,
+        ]) {
+          if (r != null && r.fingerprint == fingerprint) {
+            return '${e.exercise.displayName} · '
+                '${_units.format(r.weight)} × ${r.reps} · '
+                '${_units.formatDate(r.dateKey)}';
+          }
         }
       }
     }

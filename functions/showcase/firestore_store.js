@@ -6,6 +6,12 @@
 //   users/{uid}/showcaseDays/{slot}__{dateKey}
 //   users_public/{uid}.profileShowcaseV1
 //
+// V2 — categories and RE Points (see showcase/store_v2.js), maintained BESIDE
+// V1 by the same triggers:
+//   users/{uid}/showcase/stateV2
+//   users/{uid}/showcase/v2/days/{category}__{slot}__{dateKey}
+//   users_public/{uid}.profileShowcaseV2
+//
 // The mirror onto users_public writes ONE key with { merge: true }. It cannot
 // disturb rePoints*, avatar, bio or any other field, which is what keeps the
 // rolling 12-month RE / GoodLift calculation and this lifetime projection from
@@ -13,12 +19,21 @@
 
 'use strict';
 
-const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { onDocumentWritten, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
 const { applyWorkoutDay, rebuildAll, refreshBodyweight, dayDocId } = require('./store');
+const {
+  applyWorkoutDayV2,
+  rebuildAllV2,
+  refreshV2,
+  memoryStoreV2,
+  dayDocIdV2,
+} = require('./store_v2');
 const { PROFILE_SHOWCASE_SCHEMA } = require('./reducer');
+const { PROFILE_SHOWCASE_V2_SCHEMA, RE_SLOT_ORDER } = require('./reducer_v2');
+const { scoringSexOf } = require('./re_points');
 const { SLOT_ORDER } = require('./big_five');
 const {
   BODYWEIGHT_QUERY_LIMIT,
@@ -30,6 +45,7 @@ const {
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const SNAPSHOT_FIELD = 'profileShowcaseV1';
+const SNAPSHOT_V2_FIELD = 'profileShowcaseV2';
 
 function db() {
   return admin.firestore();
@@ -50,6 +66,35 @@ function daysCol(uid) {
 function publicRef(uid) {
   return db().collection('users_public').doc(uid);
 }
+
+function stateV2Ref(uid) {
+  return userRef(uid).collection('showcase').doc('stateV2');
+}
+
+function daysV2Col(uid) {
+  return userRef(uid).collection('showcase').doc('v2').collection('days');
+}
+
+/**
+ * Where one projection lives. The V1 layout is the original one; the V2
+ * layout nests its days under showcase/, which the rules already reserve for
+ * the server.
+ */
+const LAYOUT_V1 = {
+  snapshotField: SNAPSHOT_FIELD,
+  stateRef,
+  daysCol,
+  dayDocId,
+  slots: SLOT_ORDER,
+};
+
+const LAYOUT_V2 = {
+  snapshotField: SNAPSHOT_V2_FIELD,
+  stateRef: stateV2Ref,
+  daysCol: daysV2Col,
+  dayDocId: dayDocIdV2,
+  slots: RE_SLOT_ORDER,
+};
 
 /**
  * The few most recent weigh-ins that could be the bodyweight for a lift on
@@ -88,7 +133,9 @@ function bodyweightQuery(uid, dateKey) {
  * its setDay() writes immediately — which is exactly why the divergence was
  * invisible to them. The overlay makes both adapters behave identically.
  */
-function bufferedStore(uid, reader) {
+function bufferedStore(uid, reader, layout) {
+  const L = layout || LAYOUT_V1;
+  const FIELD = L.snapshotField;
   const pending = new Map(); // ref path -> { ref, data, op }
   // dayDocId -> contribution, or null for a queued delete.
   const dayOverlay = new Map();
@@ -107,7 +154,7 @@ function bufferedStore(uid, reader) {
   return {
     async getState() {
       if (!stateLoaded) {
-        const snap = await reader.get(stateRef(uid));
+        const snap = await reader.get(L.stateRef(uid));
         stateCache = snap.exists ? snap.data() : null;
         stateLoaded = true;
       }
@@ -117,7 +164,7 @@ function bufferedStore(uid, reader) {
       stateCache = Object.assign({}, next);
       stateLoaded = true;
       queueSet(
-        stateRef(uid),
+        L.stateRef(uid),
         Object.assign({}, next, {
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }),
@@ -127,7 +174,7 @@ function bufferedStore(uid, reader) {
       if (!snapshotLoaded) {
         const snap = await reader.get(publicRef(uid));
         const data = snap.exists ? snap.data() : null;
-        snapshotCache = data && data[SNAPSHOT_FIELD] ? data[SNAPSHOT_FIELD] : null;
+        snapshotCache = data && data[FIELD] ? data[FIELD] : null;
         snapshotLoaded = true;
       }
       return snapshotCache;
@@ -136,7 +183,7 @@ function bufferedStore(uid, reader) {
       snapshotCache = next;
       snapshotLoaded = true;
       const payload = {};
-      payload[SNAPSHOT_FIELD] = Object.assign({}, next, {
+      payload[FIELD] = Object.assign({}, next, {
         updatedAtMs: Date.now(),
       });
       // mergeFields, NOT merge.
@@ -151,18 +198,18 @@ function bufferedStore(uid, reader) {
       // mergeFields replaces the WHOLE value at profileShowcaseV1 while
       // leaving every neighbouring field — rePoints*, avatar, bio, username —
       // completely untouched, which is the exact semantic this mirror needs.
-      queueSet(publicRef(uid), payload, { mergeFields: [SNAPSHOT_FIELD] });
+      queueSet(publicRef(uid), payload, { mergeFields: [FIELD] });
     },
     async getDaysForDate(dateKey) {
-      const refs = SLOT_ORDER.map((slot) => daysCol(uid).doc(dayDocId(slot, dateKey)));
+      const refs = L.slots.map((slot) => L.daysCol(uid).doc(L.dayDocId(slot, dateKey)));
       const snaps = await reader.getAll(refs);
       const out = {};
       snaps.forEach((snap, i) => {
-        if (snap.exists) out[SLOT_ORDER[i]] = snap.data();
+        if (snap.exists) out[L.slots[i]] = snap.data();
       });
       // Queued writes win over what is still stored.
-      for (const slot of SLOT_ORDER) {
-        const id = dayDocId(slot, dateKey);
+      for (const slot of L.slots) {
+        const id = L.dayDocId(slot, dateKey);
         if (!dayOverlay.has(id)) continue;
         const queued = dayOverlay.get(id);
         if (queued === null) delete out[slot];
@@ -171,13 +218,15 @@ function bufferedStore(uid, reader) {
       return out;
     },
     async listDaysForSlot(slot) {
-      const q = await reader.query(daysCol(uid).where('slot', '==', slot));
+      const q = await reader.query(L.daysCol(uid).where('slot', '==', slot));
       const byDate = new Map();
       for (const d of q.docs) byDate.set(d.id, d.data());
       for (const [id, queued] of dayOverlay) {
-        if (!id.startsWith(`${slot}__`)) continue;
-        if (queued === null) byDate.delete(id);
-        else byDate.set(id, queued);
+        if (queued === null) {
+          if (byDate.has(id)) byDate.delete(id);
+        } else if (queued.slot === slot) {
+          byDate.set(id, queued);
+        }
       }
       const out = [...byDate.values()];
       // Deterministic order so the fold cannot depend on Firestore read order.
@@ -185,12 +234,26 @@ function bufferedStore(uid, reader) {
       return out;
     },
     async setDay(slot, dateKey, day) {
-      dayOverlay.set(dayDocId(slot, dateKey), day);
-      queueSet(daysCol(uid).doc(dayDocId(slot, dateKey)), day);
+      dayOverlay.set(L.dayDocId(slot, dateKey), day);
+      queueSet(L.daysCol(uid).doc(L.dayDocId(slot, dateKey)), day);
     },
     async deleteDay(slot, dateKey) {
-      dayOverlay.set(dayDocId(slot, dateKey), null);
-      queueDelete(daysCol(uid).doc(dayDocId(slot, dateKey)));
+      dayOverlay.set(L.dayDocId(slot, dateKey), null);
+      queueDelete(L.daysCol(uid).doc(L.dayDocId(slot, dateKey)));
+    },
+    // The raw users/{uid}.sex value (V2 scoring input; never published).
+    async getScoringSex() {
+      const snap = await reader.get(userRef(uid));
+      const data = snap.exists ? snap.data() : null;
+      return data && data.sex !== undefined ? data.sex : null;
+    },
+    // Every date-keyed workout document, read-only. Used once per athlete by
+    // the V2 first-write bootstrap (store_v2.applyWorkoutDayV2).
+    async listWorkoutEntries() {
+      const q = await reader.query(userRef(uid).collection('workouts'));
+      return q.docs
+        .filter((d) => DATE_KEY_RE.test(d.id))
+        .map((d) => [d.id, d.data()]);
     },
     async getBodyweightAsOf(dateKey) {
       const q = await reader.query(bodyweightQuery(uid, dateKey));
@@ -275,6 +338,39 @@ function transactionalStore(uid, tx) {
   return bufferedStore(uid, transactionReader(tx));
 }
 
+/** The batched V2 store. Used by the offline V2 backfill. */
+function firestoreStoreV2(uid) {
+  return bufferedStore(uid, plainReader(), LAYOUT_V2);
+}
+
+/** The transactional V2 store. Used by the always-on triggers. */
+function transactionalStoreV2(uid, tx) {
+  return bufferedStore(uid, transactionReader(tx), LAYOUT_V2);
+}
+
+/**
+ * Runs [fn] against a transactional V2 store, then hands its buffered writes
+ * to the transaction — every read happens first, exactly as for V1.
+ */
+async function runV2Transactionally(uid, fn) {
+  return db().runTransaction(async (tx) => {
+    const store = transactionalStoreV2(uid, tx);
+    const result = await fn(store);
+    await store.flush();
+    return result;
+  });
+}
+
+/** V2 counterpart of applyWorkoutDayTransactionally (its own transaction). */
+async function applyWorkoutDayV2Transactionally(uid, dateKey, workoutData) {
+  return runV2Transactionally(uid, (store) => applyWorkoutDayV2(store, dateKey, workoutData));
+}
+
+/** Runs store_v2.refreshV2 for one athlete inside a transaction. */
+async function refreshV2Transactionally(uid, options) {
+  return runV2Transactionally(uid, (store) => refreshV2(store, options));
+}
+
 /**
  * Applies ONE workout day to ONE athlete's projection inside a single
  * Firestore transaction.
@@ -326,10 +422,11 @@ const showcaseOnWorkoutWrite = onDocumentWritten(
     const workoutId = event.params.workoutId;
     if (!DATE_KEY_RE.test(workoutId)) return; // only date-keyed workout docs
 
+    const after = event.data && event.data.after && event.data.after.exists
+      ? event.data.after.data()
+      : null;
+    let failure = null;
     try {
-      const after = event.data && event.data.after && event.data.after.exists
-        ? event.data.after.data()
-        : null;
       const result = await applyWorkoutDayTransactionally(uid, workoutId, after);
       if (result.changed) {
         logger.info('showcase updated', {
@@ -341,8 +438,27 @@ const showcaseOnWorkoutWrite = onDocumentWritten(
       }
     } catch (err) {
       logger.error('showcaseOnWorkoutWrite failed', { uid, workoutId, error: err });
-      throw err;
+      failure = failure || err;
     }
+    // V2 (categories + RE Points) beside V1, in its own transaction so neither
+    // projection's contention or failure can hold the other back. Both are
+    // idempotent, so the retry a failure triggers is a no-op for the one that
+    // succeeded.
+    try {
+      const result = await applyWorkoutDayV2Transactionally(uid, workoutId, after);
+      if (result.changed) {
+        logger.info('showcase V2 updated', {
+          uid,
+          dateKey: workoutId,
+          path: result.path,
+          slots: result.slots,
+        });
+      }
+    } catch (err) {
+      logger.error('showcaseOnWorkoutWrite V2 failed', { uid, workoutId, error: err });
+      failure = failure || err;
+    }
+    if (failure) throw failure;
   },
 );
 
@@ -378,8 +494,9 @@ const showcaseOnWeightWrite = onDocumentWritten(
   { document: 'users/{uid}/weights/{weightId}', retry: true },
   async (event) => {
     const uid = event.params.uid;
+    const since = weighInSinceDateKey(event);
+    let failure = null;
     try {
-      const since = weighInSinceDateKey(event);
       const result = await refreshBodyweightTransactionally(
         uid,
         since ? { sinceDateKey: since } : undefined,
@@ -393,6 +510,57 @@ const showcaseOnWeightWrite = onDocumentWritten(
         weightId: event.params.weightId,
         error: err,
       });
+      failure = failure || err;
+    }
+    // V2: a weigh-in moves the bodyweight EVERY exercise is scored at, for
+    // each record dated on or after it — not only the bodyweight-loaded ones.
+    try {
+      const result = await refreshV2Transactionally(uid, {
+        bodyweight: true,
+        sinceDateKey: since || '',
+      });
+      if (result.changed) {
+        logger.info('showcase V2 bodyweight refreshed', { uid, slots: result.slots });
+      }
+    } catch (err) {
+      logger.error('showcaseOnWeightWrite V2 failed', {
+        uid,
+        weightId: event.params.weightId,
+        error: err,
+      });
+      failure = failure || err;
+    }
+    if (failure) throw failure;
+  },
+);
+
+/**
+ * Re-scores V2 RE Points when the athlete's scoring sex changes.
+ *
+ * users/{uid} is written often (preferences, identity), so this returns
+ * before any read unless `sex` changed in a way that changes the coefficient
+ * (re_points.scoringSexOf). It writes only under users/{uid}/showcase and
+ * users_public, never users/{uid} itself, so it cannot re-trigger itself.
+ */
+const showcaseOnSexChange = onDocumentUpdated(
+  { document: 'users/{uid}', retry: true },
+  async (event) => {
+    const uid = event.params.uid;
+    const before = event.data && event.data.before && event.data.before.exists
+      ? event.data.before.data() || {}
+      : {};
+    const after = event.data && event.data.after && event.data.after.exists
+      ? event.data.after.data() || {}
+      : null;
+    if (!after) return;
+    if (scoringSexOf(before.sex) === scoringSexOf(after.sex)) return;
+    try {
+      const result = await refreshV2Transactionally(uid, { sex: true });
+      if (result.changed) {
+        logger.info('showcase V2 re-scored for sex change', { uid, slots: result.slots });
+      }
+    } catch (err) {
+      logger.error('showcaseOnSexChange failed', { uid, error: err });
       throw err;
     }
   },
@@ -449,6 +617,65 @@ async function rebuildAthlete(uid, { apply = true, store } = {}) {
   return { snapshot, workoutDays: entries.length };
 }
 
+/**
+ * Deterministic full V2 rebuild for ONE athlete. Reads every date-keyed
+ * workout document (paged), and the athlete's weigh-ins and sex; never
+ * mutates a workout, a weigh-in or users/{uid}.
+ *
+ * `apply: false` computes without writing (dry run / verify).
+ * Returns { snapshot, dayIds, workoutDays }.
+ */
+async function rebuildAthleteV2(uid, { apply = true, store } = {}) {
+  const entries = [];
+  const PAGE = 300;
+  let last = null;
+  for (;;) {
+    let q = userRef(uid)
+      .collection('workouts')
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(PAGE);
+    if (last) q = q.startAfter(last);
+    const page = await q.get();
+    if (page.empty) break;
+    for (const doc of page.docs) {
+      if (DATE_KEY_RE.test(doc.id)) entries.push([doc.id, doc.data()]);
+    }
+    last = page.docs[page.docs.length - 1];
+    if (page.size < PAGE) break;
+  }
+
+  let target = store;
+  if (!target && apply) target = firestoreStoreV2(uid);
+  if (!target) {
+    const userSnap = await userRef(uid).get();
+    const sex = userSnap.exists ? (userSnap.data() || {}).sex : null;
+    target = memoryStoreV2({ bodyweightAsOf: bodyweightResolver(uid), sex });
+  }
+  const { snapshot, dayIds } = await rebuildAllV2(target, entries);
+  if (target.flush) await target.flush();
+  return { snapshot, dayIds, workoutDays: entries.length };
+}
+
+/** Reads the V2 snapshot currently mirrored onto users_public/{uid}. */
+async function readPublishedSnapshotV2(uid) {
+  const snap = await publicRef(uid).get();
+  const data = snap.exists ? snap.data() : null;
+  return data && data[SNAPSHOT_V2_FIELD] ? data[SNAPSHOT_V2_FIELD] : null;
+}
+
+/** Removes every stale V2 day document for an athlete (rebuild hygiene). */
+async function pruneStaleDaysV2(uid, keepIds) {
+  const q = await daysV2Col(uid).get();
+  const stale = q.docs.filter((d) => !keepIds.has(d.id));
+  const CHUNK = 400;
+  for (let i = 0; i < stale.length; i += CHUNK) {
+    const batch = db().batch();
+    for (const d of stale.slice(i, i + CHUNK)) batch.delete(d.ref);
+    await batch.commit();
+  }
+  return stale.length;
+}
+
 /** Reads the snapshot currently mirrored onto users_public/{uid}. */
 async function readPublishedSnapshot(uid) {
   const snap = await publicRef(uid).get();
@@ -472,6 +699,20 @@ async function pruneStaleDays(uid, keepIds) {
 module.exports = {
   showcaseOnWorkoutWrite,
   showcaseOnWeightWrite,
+  showcaseOnSexChange,
+  applyWorkoutDayV2Transactionally,
+  refreshV2Transactionally,
+  firestoreStoreV2,
+  transactionalStoreV2,
+  rebuildAthleteV2,
+  readPublishedSnapshotV2,
+  pruneStaleDaysV2,
+  daysV2Col,
+  stateV2Ref,
+  SNAPSHOT_V2_FIELD,
+  PROFILE_SHOWCASE_V2_SCHEMA,
+  LAYOUT_V1,
+  LAYOUT_V2,
   applyWorkoutDayTransactionally,
   refreshBodyweightTransactionally,
   weighInSinceDateKey,

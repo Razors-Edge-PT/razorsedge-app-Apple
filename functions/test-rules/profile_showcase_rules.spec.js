@@ -201,6 +201,35 @@ test('the projection is not readable by friends, strangers or the coach', async 
   }
 });
 
+// ── V2 (categories + RE Points) is server-owned in exactly the same way ─────
+
+test('not even the owner may forge their own V2 snapshot', async () => {
+  await assertFails(
+    as(OWNER).doc(`users_public/${OWNER}`).set(
+      { profileShowcaseV2: { schema: 'profileShowcaseV2', categories: {} } },
+      { merge: true },
+    ),
+  );
+  await assertFails(
+    as(OWNER).doc(`users_public/${OWNER}`).set(
+      { bio: 'smuggled', profileShowcaseV2: { categories: { hipHinge: {} } } },
+      { merge: true },
+    ),
+  );
+});
+
+test('the V2 projection documents are owner-readable and unwritable by anyone but the server', async () => {
+  const stateV2 = `users/${OWNER}/showcase/stateV2`;
+  const dayV2 = `users/${OWNER}/showcase/v2/days/hipHinge__deadliftSumo__2026-01-01`;
+  await assertSucceeds(as(OWNER).doc(stateV2).get());
+  await assertSucceeds(as(OWNER).doc(dayV2).get());
+  await assertFails(as(OWNER).doc(stateV2).set({ schema: 'forged' }));
+  await assertFails(as(OWNER).doc(dayV2).set({ slot: 'deadliftSumo', forged: true }));
+  for (const uid of [FRIEND, STRANGER, COACH]) {
+    await assertFails(as(uid).doc(dayV2).get());
+  }
+});
+
 // ── Social media: owner, confirmed friend, super admin ──────────────────────
 
 test('a confirmed friend can read gallery posts, proofs and stories', async () => {

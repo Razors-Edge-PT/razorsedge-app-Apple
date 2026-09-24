@@ -839,6 +839,11 @@ exports.showcaseOnWorkoutWrite = showcase.showcaseOnWorkoutWrite;
 // at the bodyweight recorded on or before its date (showcase/bodyweight.js),
 // so a weigh-in re-ranks the Chin-Up days it can affect.
 exports.showcaseOnWeightWrite = showcase.showcaseOnWeightWrite;
+// Both triggers above also maintain profileShowcaseV2 (categories + RE Points,
+// showcase/store_v2.js) beside V1. RE Points depend on the athlete's sex, so a
+// change of users/{uid}.sex re-scores V2; any other users/{uid} write returns
+// before reading anything.
+exports.showcaseOnSexChange = showcase.showcaseOnSexChange;
 
 const identity = require('./identity');
 exports.profileChangeUsername = identity.profileChangeUsername;

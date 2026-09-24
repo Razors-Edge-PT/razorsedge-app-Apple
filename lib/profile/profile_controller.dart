@@ -344,6 +344,7 @@ class ProfileController extends ChangeNotifier {
             (Map<String, ProofRecord> proofs) {
               _showcaseView = ShowcaseView(
                 showcase: _identityState.showcase,
+                showcaseV2: _identityState.showcaseV2,
                 proofsByFingerprint: proofs,
               );
               notifyListeners();
@@ -456,6 +457,7 @@ class ProfileController extends ChangeNotifier {
   void _refreshShowcase() {
     _showcaseView = ShowcaseView(
       showcase: _identityState.showcase,
+      showcaseV2: _identityState.showcaseV2,
       proofsByFingerprint: _showcaseView.proofsByFingerprint,
     );
   }

@@ -97,6 +97,15 @@ function recordFingerprint({ slot, exerciseId, dateKey, setKey, weight, reps }) 
  * valid, on any lift. RIR is never read.
  */
 function extractBigFiveSets(workoutData) {
+  return extractSetsWith(workoutData, matchBigFive);
+}
+
+/**
+ * [extractBigFiveSets] for any exercise registry. [match] resolves
+ * `(rawId, rawName)` to a definition carrying `slot` and `bodyweightLoaded`
+ * (big_five.matchBigFive, re_catalog.matchReExercise), or null.
+ */
+function extractSetsWith(workoutData, match) {
   const out = {};
   const ordinal = {}; // slot -> next positional index for that lift, that day
   const exercises = Array.isArray(workoutData && workoutData.exercises)
@@ -105,7 +114,7 @@ function extractBigFiveSets(workoutData) {
   for (const row of exercises) {
     if (!row || typeof row !== 'object') continue;
     const rawId = row.exerciseId != null ? row.exerciseId : row.id;
-    const lift = matchBigFive(rawId, row.name);
+    const lift = match(rawId, row.name);
     if (!lift) continue;
 
     const sets = Array.isArray(row.sets) ? row.sets : [];
@@ -151,7 +160,7 @@ function extractBigFiveSets(workoutData) {
 }
 
 /** Best-known original casing of each slot's catalogue id within a document. */
-function casingForDay(workoutData) {
+function casingForDay(workoutData, match) {
   const casing = {};
   const exercises = Array.isArray(workoutData && workoutData.exercises)
     ? workoutData.exercises
@@ -159,7 +168,7 @@ function casingForDay(workoutData) {
   for (const row of exercises) {
     if (!row || typeof row !== 'object') continue;
     const rawId = row.exerciseId != null ? row.exerciseId : row.id;
-    const lift = matchBigFive(rawId, row.name);
+    const lift = match(rawId, row.name);
     if (!lift) continue;
     if (typeof rawId === 'string' && rawId.trim()) {
       const id = rawId.trim();
@@ -278,17 +287,25 @@ function summarizeSlotDay(slot, dateKey, exerciseId, sets, bodyweight) {
  * [dateKey] (or null). Only bodyweight-loaded lifts read it.
  */
 function summarizeWorkoutDay(dateKey, workoutData, options) {
+  return summarizeWorkoutDayWith(dateKey, workoutData, options, matchBigFive, bigFiveBySlot);
+}
+
+/**
+ * [summarizeWorkoutDay] for any exercise registry: [match] as in
+ * [extractSetsWith], [bySlot] resolving a slot back to its definition.
+ */
+function summarizeWorkoutDayWith(dateKey, workoutData, options, match, bySlot) {
   const bodyweight = (options && options.bodyweight) || null;
-  const bySlot = extractBigFiveSets(workoutData);
-  const casing = casingForDay(workoutData);
+  const setsBySlot = extractSetsWith(workoutData, match);
+  const casing = casingForDay(workoutData, match);
   const out = {};
-  for (const slot of Object.keys(bySlot)) {
-    const sets = bySlot[slot];
+  for (const slot of Object.keys(setsBySlot)) {
+    const sets = setsBySlot[slot];
     if (!sets.length) continue;
     out[slot] = summarizeSlotDay(
       slot,
       dateKey,
-      casing[slot] || bigFiveBySlot(slot).exerciseId,
+      casing[slot] || bySlot(slot).exerciseId,
       sets,
       bodyweight,
     );
@@ -362,8 +379,11 @@ function recordOf(slot, day, set) {
   return record;
 }
 
-/** Folds day contributions for ONE slot into that slot's lifetime snapshot. */
-function foldSlot(slot, days) {
+/**
+ * The day contributions holding ONE slot's lifetime best E1RM and heaviest,
+ * or nulls when the slot has no surviving day.
+ */
+function foldSlotDays(slot, days) {
   let bestE = null;
   let bestH = null;
   for (const d of days) {
@@ -371,6 +391,12 @@ function foldSlot(slot, days) {
     if (!bestE || betterE1rmAcrossDays(d, bestE)) bestE = d;
     if (!bestH || betterHeaviestAcrossDays(d, bestH)) bestH = d;
   }
+  return { bestE, bestH };
+}
+
+/** Folds day contributions for ONE slot into that slot's lifetime snapshot. */
+function foldSlot(slot, days) {
+  const { bestE, bestH } = foldSlotDays(slot, days);
   if (!bestE || !bestH) return { slot };
   return {
     slot,
@@ -437,9 +463,13 @@ module.exports = {
   SHOWCASE_FORMULA_VERSION,
   recordFingerprint,
   extractBigFiveSets,
+  extractSetsWith,
   summarizeWorkoutDay,
+  summarizeWorkoutDayWith,
+  summarizeSlotDay,
   resummarizeDay,
   foldSlot,
+  foldSlotDays,
   recordOf,
   e1rmKeyOfRecord,
   heaviestKeyOfRecord,

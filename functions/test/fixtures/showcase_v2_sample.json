@@ -1,0 +1,350 @@
+{
+  "schema": "profileShowcaseV2",
+  "e1rmFormulaVersion": 1,
+  "rePointsFormulaVersion": 1,
+  "categories": {
+    "horizontalPress": {
+      "bestExerciseId": "kTs5fLSTKjUkUZL10iii",
+      "exercises": {
+        "AmfUWbF1DH3I7qPAdh5k": {
+          "slot": "bench",
+          "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+          "displayName": "Bench Press, Barbell",
+          "factor": 1,
+          "rePoints": 66.3924,
+          "e1rm": {
+            "slot": "bench",
+            "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+            "dateKey": "2026-01-05",
+            "setKey": "b1",
+            "weight": 100,
+            "reps": 1,
+            "e1rm": 100,
+            "formulaVersion": 1,
+            "fingerprint": "f3fd87a95c82215500a5ebe34bef5a45"
+          },
+          "heaviest": {
+            "slot": "bench",
+            "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+            "dateKey": "2026-01-05",
+            "setKey": "b1",
+            "weight": 100,
+            "reps": 1,
+            "e1rm": 100,
+            "formulaVersion": 1,
+            "fingerprint": "f3fd87a95c82215500a5ebe34bef5a45"
+          }
+        },
+        "kTs5fLSTKjUkUZL10iii": {
+          "slot": "dbBenchFlat",
+          "exerciseId": "kTs5fLSTKjUkUZL10iii",
+          "displayName": "Flat Bench Dumbbell Press",
+          "factor": 2.35,
+          "rePoints": 78.0111,
+          "e1rm": {
+            "slot": "dbBenchFlat",
+            "exerciseId": "kTs5fLSTKjUkUZL10iii",
+            "dateKey": "2026-01-05",
+            "setKey": "s0",
+            "weight": 50,
+            "reps": 1,
+            "e1rm": 50,
+            "formulaVersion": 1,
+            "fingerprint": "d62cfc061ca04c80ee8523b9f79c7d1f"
+          },
+          "heaviest": {
+            "slot": "dbBenchFlat",
+            "exerciseId": "kTs5fLSTKjUkUZL10iii",
+            "dateKey": "2026-01-05",
+            "setKey": "s0",
+            "weight": 50,
+            "reps": 1,
+            "e1rm": 50,
+            "formulaVersion": 1,
+            "fingerprint": "d62cfc061ca04c80ee8523b9f79c7d1f"
+          }
+        }
+      }
+    },
+    "verticalPull": {
+      "bestExerciseId": "XM9026peNIu0R8qh7UqY",
+      "exercises": {
+        "XM9026peNIu0R8qh7UqY": {
+          "slot": "chinUp",
+          "exerciseId": "XM9026peNIu0R8qh7UqY",
+          "displayName": "Chin-Up",
+          "factor": 1,
+          "rePoints": 66.3924,
+          "e1rm": {
+            "slot": "chinUp",
+            "exerciseId": "XM9026peNIu0R8qh7UqY",
+            "dateKey": "2026-01-05",
+            "setKey": "s0",
+            "weight": 20,
+            "reps": 1,
+            "e1rm": 100,
+            "formulaVersion": 1,
+            "fingerprint": "0c9fa3ba211cbb3477bcf67793a29fee",
+            "loadBasis": "added",
+            "addedKg": 20,
+            "totalKg": 100,
+            "totalE1rm": 100,
+            "addedE1rm": 20,
+            "bodyweightKg": 80,
+            "bodyweightDateKey": "2026-01-01"
+          },
+          "heaviest": {
+            "slot": "chinUp",
+            "exerciseId": "XM9026peNIu0R8qh7UqY",
+            "dateKey": "2026-01-05",
+            "setKey": "s0",
+            "weight": 20,
+            "reps": 1,
+            "e1rm": 100,
+            "formulaVersion": 1,
+            "fingerprint": "0c9fa3ba211cbb3477bcf67793a29fee",
+            "loadBasis": "added",
+            "addedKg": 20,
+            "totalKg": 100,
+            "totalE1rm": 100,
+            "addedE1rm": 20,
+            "bodyweightKg": 80,
+            "bodyweightDateKey": "2026-01-01"
+          }
+        },
+        "1XOIXxeLFhgmgjZS9Cyq": {
+          "slot": "latPulldownSupinated",
+          "exerciseId": "1XOIXxeLFhgmgjZS9Cyq",
+          "displayName": "Lat Pull Down, Supinated",
+          "factor": 0.85,
+          "rePoints": 50.7902,
+          "e1rm": {
+            "slot": "latPulldownSupinated",
+            "exerciseId": "1XOIXxeLFhgmgjZS9Cyq",
+            "dateKey": "2026-01-05",
+            "setKey": "s0",
+            "weight": 90,
+            "reps": 1,
+            "e1rm": 90,
+            "formulaVersion": 1,
+            "fingerprint": "2135ebd82278fad0e53d56f68e4c5a4a"
+          },
+          "heaviest": {
+            "slot": "latPulldownSupinated",
+            "exerciseId": "1XOIXxeLFhgmgjZS9Cyq",
+            "dateKey": "2026-01-05",
+            "setKey": "s0",
+            "weight": 90,
+            "reps": 1,
+            "e1rm": 90,
+            "formulaVersion": 1,
+            "fingerprint": "2135ebd82278fad0e53d56f68e4c5a4a"
+          }
+        }
+      }
+    },
+    "overheadPress": {
+      "bestExerciseId": "RdsGazgdH0xgpjek0n3u",
+      "exercises": {
+        "RdsGazgdH0xgpjek0n3u": {
+          "slot": "ohpUnilateral",
+          "exerciseId": "RdsGazgdH0xgpjek0n3u",
+          "displayName": "Overhead Dumbbell Press, Unilateral",
+          "factor": 2.61,
+          "rePoints": 51.9853,
+          "e1rm": {
+            "slot": "ohpUnilateral",
+            "exerciseId": "RdsGazgdH0xgpjek0n3u",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 30,
+            "reps": 1,
+            "e1rm": 30,
+            "formulaVersion": 1,
+            "fingerprint": "a780d5c44cc127ea041c2c9966abe06c"
+          },
+          "heaviest": {
+            "slot": "ohpUnilateral",
+            "exerciseId": "RdsGazgdH0xgpjek0n3u",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 30,
+            "reps": 1,
+            "e1rm": 30,
+            "formulaVersion": 1,
+            "fingerprint": "a780d5c44cc127ea041c2c9966abe06c"
+          }
+        },
+        "FtayDmR5BVnGS1FXlXLL": {
+          "slot": "tricepsDip",
+          "exerciseId": "FtayDmR5BVnGS1FXlXLL",
+          "displayName": "Triceps Dip",
+          "factor": 0.73,
+          "rePoints": 38.7732,
+          "e1rm": {
+            "slot": "tricepsDip",
+            "exerciseId": "FtayDmR5BVnGS1FXlXLL",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 0,
+            "reps": 1,
+            "e1rm": 80,
+            "formulaVersion": 1,
+            "fingerprint": "f5b663f26d04b6302867e4bcba2ebf62",
+            "loadBasis": "added",
+            "addedKg": 0,
+            "totalKg": 80,
+            "totalE1rm": 80,
+            "addedE1rm": 0,
+            "bodyweightKg": 80,
+            "bodyweightDateKey": "2026-01-01"
+          },
+          "heaviest": {
+            "slot": "tricepsDip",
+            "exerciseId": "FtayDmR5BVnGS1FXlXLL",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 0,
+            "reps": 1,
+            "e1rm": 80,
+            "formulaVersion": 1,
+            "fingerprint": "f5b663f26d04b6302867e4bcba2ebf62",
+            "loadBasis": "added",
+            "addedKg": 0,
+            "totalKg": 80,
+            "totalE1rm": 80,
+            "addedE1rm": 0,
+            "bodyweightKg": 80,
+            "bodyweightDateKey": "2026-01-01"
+          }
+        }
+      }
+    },
+    "hipHinge": {
+      "bestExerciseId": "MsGl7e9yanDeEnYX0e4X",
+      "exercises": {
+        "MsGl7e9yanDeEnYX0e4X": {
+          "slot": "deadlift",
+          "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+          "displayName": "Deadlift, Conventional",
+          "factor": 0.74,
+          "rePoints": 98.2608,
+          "e1rm": {
+            "slot": "deadlift",
+            "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 200,
+            "reps": 1,
+            "e1rm": 200,
+            "formulaVersion": 1,
+            "fingerprint": "2be661f37e7f9dda91549686aa58d6ae"
+          },
+          "heaviest": {
+            "slot": "deadlift",
+            "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 200,
+            "reps": 1,
+            "e1rm": 200,
+            "formulaVersion": 1,
+            "fingerprint": "2be661f37e7f9dda91549686aa58d6ae"
+          }
+        },
+        "10pEctikt6PP8eAg9Eip": {
+          "slot": "deadliftSumo",
+          "exerciseId": "10pEctikt6PP8eAg9Eip",
+          "displayName": "Deadlift, Sumo",
+          "factor": 0.74,
+          "rePoints": 98.2608,
+          "e1rm": {
+            "slot": "deadliftSumo",
+            "exerciseId": "10pEctikt6PP8eAg9Eip",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 200,
+            "reps": 1,
+            "e1rm": 200,
+            "formulaVersion": 1,
+            "fingerprint": "42490b67323889fba21442ee698979ea"
+          },
+          "heaviest": {
+            "slot": "deadliftSumo",
+            "exerciseId": "10pEctikt6PP8eAg9Eip",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 200,
+            "reps": 1,
+            "e1rm": 200,
+            "formulaVersion": 1,
+            "fingerprint": "42490b67323889fba21442ee698979ea"
+          }
+        },
+        "LGhFj8o0sG3X12296UAh": {
+          "slot": "hipThrustBarbell",
+          "exerciseId": "LGhFj8o0sG3X12296UAh",
+          "displayName": "Hip Thrust, Barbell",
+          "factor": 0.55,
+          "rePoints": null,
+          "e1rm": {
+            "slot": "hipThrustBarbell",
+            "exerciseId": "LGhFj8o0sG3X12296UAh",
+            "dateKey": "2025-12-01",
+            "setKey": "s0",
+            "weight": 140,
+            "reps": 8,
+            "e1rm": 173.79310344827587,
+            "formulaVersion": 1,
+            "fingerprint": "53e6215b95a6362376e85213a29e35b3"
+          },
+          "heaviest": {
+            "slot": "hipThrustBarbell",
+            "exerciseId": "LGhFj8o0sG3X12296UAh",
+            "dateKey": "2025-12-01",
+            "setKey": "s0",
+            "weight": 140,
+            "reps": 8,
+            "e1rm": 173.79310344827587,
+            "formulaVersion": 1,
+            "fingerprint": "53e6215b95a6362376e85213a29e35b3"
+          }
+        }
+      }
+    },
+    "squatPattern": {
+      "bestExerciseId": "VUEvvjuo4cxBghNuux66",
+      "exercises": {
+        "VUEvvjuo4cxBghNuux66": {
+          "slot": "bulgarianSplitSquatBarbell",
+          "exerciseId": "VUEvvjuo4cxBghNuux66",
+          "displayName": "Bulgarian Split Squat, Barbell",
+          "factor": 1.25,
+          "rePoints": 87.8723,
+          "e1rm": {
+            "slot": "bulgarianSplitSquatBarbell",
+            "exerciseId": "VUEvvjuo4cxBghNuux66",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 100,
+            "reps": 3,
+            "e1rm": 105.88235294117648,
+            "formulaVersion": 1,
+            "fingerprint": "ef3c6dbbe553983ded3a0e20ae83698e"
+          },
+          "heaviest": {
+            "slot": "bulgarianSplitSquatBarbell",
+            "exerciseId": "VUEvvjuo4cxBghNuux66",
+            "dateKey": "2026-01-12",
+            "setKey": "s0",
+            "weight": 100,
+            "reps": 3,
+            "e1rm": 105.88235294117648,
+            "formulaVersion": 1,
+            "fingerprint": "ef3c6dbbe553983ded3a0e20ae83698e"
+          }
+        }
+      }
+    }
+  }
+}

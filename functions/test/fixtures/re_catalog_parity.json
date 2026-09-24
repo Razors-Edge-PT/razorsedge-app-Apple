@@ -1,0 +1,326 @@
+{
+  "_comment": "Pinned parity fixture for functions/showcase/re_catalog.js + re_points.js and lib/profile/core/re_catalog.dart + lib/formula.dart. Asserted by functions/test/showcase_re_catalog.test.js and test/profile_re_catalog_test.dart. Edit deliberately, on both sides.",
+  "categories": [
+    {
+      "key": "horizontalPress",
+      "displayName": "Horizontal Press",
+      "exercises": [
+        {
+          "slot": "bench",
+          "exerciseId": "AmfUWbF1DH3I7qPAdh5k",
+          "displayName": "Bench Press, Barbell",
+          "legacyNameAliases": [
+            "Bench Press, Barbell",
+            "Bench Press"
+          ],
+          "factor": 1,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        },
+        {
+          "slot": "dbBenchFlat",
+          "exerciseId": "kTs5fLSTKjUkUZL10iii",
+          "displayName": "Flat Bench Dumbbell Press",
+          "legacyNameAliases": [
+            "Flat Bench Dumbbell Press"
+          ],
+          "factor": 2.35,
+          "bodyweightLoaded": false,
+          "loadSemantics": "perDumbbell"
+        }
+      ]
+    },
+    {
+      "key": "verticalPull",
+      "displayName": "Vertical Pull",
+      "exercises": [
+        {
+          "slot": "chinUp",
+          "exerciseId": "XM9026peNIu0R8qh7UqY",
+          "displayName": "Chin-Up",
+          "legacyNameAliases": [
+            "Chin-Up",
+            "Chin Up"
+          ],
+          "factor": 1,
+          "bodyweightLoaded": true,
+          "loadSemantics": "bodyweightPlusAdded"
+        },
+        {
+          "slot": "latPulldownSupinated",
+          "exerciseId": "1XOIXxeLFhgmgjZS9Cyq",
+          "displayName": "Lat Pull Down, Supinated",
+          "legacyNameAliases": [
+            "Lat Pull Down, Supinated"
+          ],
+          "factor": 0.85,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        }
+      ]
+    },
+    {
+      "key": "overheadPress",
+      "displayName": "Overhead Press / Dip",
+      "exercises": [
+        {
+          "slot": "ohpUnilateral",
+          "exerciseId": "RdsGazgdH0xgpjek0n3u",
+          "displayName": "Overhead Dumbbell Press, Unilateral",
+          "legacyNameAliases": [
+            "Overhead Dumbbell Press, Unilateral"
+          ],
+          "factor": 2.61,
+          "bodyweightLoaded": false,
+          "loadSemantics": "perDumbbell"
+        },
+        {
+          "slot": "ohpBarbell",
+          "exerciseId": "lVDG90yN6Z8aPjRNV2wc",
+          "displayName": "Overhead Barbell Press",
+          "legacyNameAliases": [
+            "Overhead Barbell Press"
+          ],
+          "factor": 1.53,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        },
+        {
+          "slot": "tricepsDip",
+          "exerciseId": "FtayDmR5BVnGS1FXlXLL",
+          "displayName": "Triceps Dip",
+          "legacyNameAliases": [
+            "Triceps Dip"
+          ],
+          "factor": 0.73,
+          "bodyweightLoaded": true,
+          "loadSemantics": "bodyweightPlusAdded"
+        }
+      ]
+    },
+    {
+      "key": "hipHinge",
+      "displayName": "Hip Hinge",
+      "exercises": [
+        {
+          "slot": "deadlift",
+          "exerciseId": "MsGl7e9yanDeEnYX0e4X",
+          "displayName": "Deadlift, Conventional",
+          "legacyNameAliases": [
+            "Deadlift, Conventional",
+            "Deadlift"
+          ],
+          "factor": 0.74,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        },
+        {
+          "slot": "deadliftSumo",
+          "exerciseId": "10pEctikt6PP8eAg9Eip",
+          "displayName": "Deadlift, Sumo",
+          "legacyNameAliases": [
+            "Sumo Deadlift",
+            "Deadlift, Sumo"
+          ],
+          "factor": 0.74,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        },
+        {
+          "slot": "hipThrustBarbell",
+          "exerciseId": "LGhFj8o0sG3X12296UAh",
+          "displayName": "Hip Thrust, Barbell",
+          "legacyNameAliases": [
+            "Hip Thrust, Barbell"
+          ],
+          "factor": 0.55,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        }
+      ]
+    },
+    {
+      "key": "squatPattern",
+      "displayName": "Squat Pattern",
+      "exercises": [
+        {
+          "slot": "squat",
+          "exerciseId": "heeBViVINHO6tUScSd6y",
+          "displayName": "Back Squat, Barbell",
+          "legacyNameAliases": [
+            "Back Squat, Barbell",
+            "Back Squat"
+          ],
+          "factor": 0.8,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        },
+        {
+          "slot": "bulgarianSplitSquatDumbbell",
+          "exerciseId": "ISXQqOEXLjMrPEs0xjgJ",
+          "displayName": "Bulgarian Split Squat, Dumbbell",
+          "legacyNameAliases": [
+            "Bulgarian Split Squat"
+          ],
+          "factor": 2.5,
+          "bodyweightLoaded": false,
+          "loadSemantics": "perDumbbell"
+        },
+        {
+          "slot": "bulgarianSplitSquatBarbell",
+          "exerciseId": "VUEvvjuo4cxBghNuux66",
+          "displayName": "Bulgarian Split Squat, Barbell",
+          "legacyNameAliases": [
+            "Bulgarian Split Squat, Barbell"
+          ],
+          "factor": 1.25,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
+        }
+      ]
+    }
+  ],
+  "coefficients": [
+    {
+      "sex": "male",
+      "bodyweightKg": 45,
+      "coefficient": 1.1214143328118436
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 57.5,
+      "coefficient": 0.8630108688706071
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 63,
+      "coefficient": 0.7941883747635375
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 72.4,
+      "coefficient": 0.7106345365004301
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 85,
+      "coefficient": 0.6402353980433833
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 93.1,
+      "coefficient": 0.6106039005150447
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 105,
+      "coefficient": 0.5811208338450107
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 120,
+      "coefficient": 0.5591110544452238
+    },
+    {
+      "sex": "male",
+      "bodyweightKg": 140,
+      "coefficient": 0.5434394928060317
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 45,
+      "coefficient": 1.3110637939180558
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 57.5,
+      "coefficient": 1.089559224665871
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 63,
+      "coefficient": 1.015319359724247
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 72.4,
+      "coefficient": 0.9193674104749069
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 85,
+      "coefficient": 0.8381582303364128
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 93.1,
+      "coefficient": 0.8060554201159562
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 105,
+      "coefficient": 0.7768671627633867
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 120,
+      "coefficient": 0.7559951107945996
+    },
+    {
+      "sex": "female",
+      "bodyweightKg": 140,
+      "coefficient": 0.7351674836482529
+    }
+  ],
+  "points": [
+    {
+      "e1rmKg": 150,
+      "factor": 1,
+      "bodyweightKg": 85,
+      "sex": "male",
+      "rePoints": 96.0353
+    },
+    {
+      "e1rmKg": 40,
+      "factor": 2.61,
+      "bodyweightKg": 85,
+      "sex": "male",
+      "rePoints": 66.8406
+    },
+    {
+      "e1rmKg": 220,
+      "factor": 0.74,
+      "bodyweightKg": 93.1,
+      "sex": "male",
+      "rePoints": 99.4063
+    },
+    {
+      "e1rmKg": 90,
+      "factor": 0.85,
+      "bodyweightKg": 63,
+      "sex": "female",
+      "rePoints": 77.6719
+    },
+    {
+      "e1rmKg": 105.3,
+      "factor": 0.73,
+      "bodyweightKg": 72.4,
+      "sex": "female",
+      "rePoints": 70.6709
+    },
+    {
+      "e1rmKg": 36.7,
+      "factor": 2.35,
+      "bodyweightKg": 57.5,
+      "sex": "female",
+      "rePoints": 93.969
+    },
+    {
+      "e1rmKg": 150,
+      "factor": 1,
+      "bodyweightKg": null,
+      "sex": "male",
+      "rePoints": null
+    }
+  ]
+}

@@ -29,6 +29,7 @@
 
 const { localDateKey } = require('../coach/coverage');
 const { bigFiveBySlot } = require('./big_five');
+const { reExerciseBySlot } = require('./re_catalog');
 const { showcaseE1rm } = require('./e1rm_spec');
 
 /** How a stored set weight relates to the athlete's bodyweight. */
@@ -73,10 +74,18 @@ const ANNOTATION_FIELDS = [
   'addedE1rm',
 ];
 
-/** True for a slot whose stored loads include the athlete's bodyweight. */
+/**
+ * True for a slot whose stored loads include the athlete's bodyweight.
+ *
+ * Driven by the exercise DEFINITION, not by a hard-coded lift: a slot is
+ * bodyweight-loaded when its Big Five lift or its RE catalogue exercise
+ * (re_catalog.js — the Chin-Up and the Triceps Dip) says so. The two
+ * registries share the V1 slot keys, and every slot key is unique across
+ * both, so the Big Five answers are unchanged.
+ */
 function isBodyweightSlot(slot) {
-  const lift = bigFiveBySlot(slot);
-  return !!(lift && lift.bodyweightLoaded);
+  const def = bigFiveBySlot(slot) || reExerciseBySlot(slot);
+  return !!(def && def.bodyweightLoaded);
 }
 
 /** The load basis of one stored set map (see the header). */

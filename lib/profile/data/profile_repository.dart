@@ -25,6 +25,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/showcase_models.dart';
+import '../core/showcase_v2_models.dart';
 
 /// The maximum length of a bio, in characters.
 const int kBioMaxLength = 150;
@@ -56,6 +57,7 @@ class ProfileIdentity {
     this.bio,
     this.photoURL,
     this.showcase = ProfileShowcase.empty,
+    this.showcaseV2,
     this.isFromCache = false,
     this.hasPendingWrites = false,
     this.exists = false,
@@ -68,6 +70,10 @@ class ProfileIdentity {
 
   /// The Big Five snapshot mirrored by the server. Never written from a client.
   final ProfileShowcase showcase;
+
+  /// The categories + RE Points snapshot (profileShowcaseV2), or null when it
+  /// is absent or malformed — the UI then falls back to [showcase].
+  final ProfileShowcaseV2? showcaseV2;
 
   /// True when this snapshot came from the local cache rather than the server.
   final bool isFromCache;
@@ -86,6 +92,7 @@ class ProfileIdentity {
       bio: bio ?? this.bio,
       photoURL: photoURL ?? this.photoURL,
       showcase: showcase,
+      showcaseV2: showcaseV2,
       isFromCache: isFromCache,
       hasPendingWrites: hasPendingWrites,
       exists: exists,
@@ -109,6 +116,7 @@ class ProfileIdentity {
       bio: (d['bio'] is String) ? d['bio'] as String : null,
       photoURL: str('photoURL') ?? str('photoUrl'),
       showcase: ProfileShowcase.fromMap(d['profileShowcaseV1']),
+      showcaseV2: ProfileShowcaseV2.fromMap(d['profileShowcaseV2']),
       isFromCache: snap.metadata.isFromCache,
       hasPendingWrites: snap.metadata.hasPendingWrites,
       exists: snap.exists,
