@@ -47,6 +47,7 @@ class BuddyFeedView extends StatefulWidget {
     this.onOpenPost,
     this.scrollController,
     this.shrinkWrap = false,
+    this.pagingActive = true,
     this.now,
   });
 
@@ -66,6 +67,11 @@ class BuddyFeedView extends StatefulWidget {
   /// True when embedded in a host scroll view. Implied by [scrollController]
   /// but stated separately so a host can shrink-wrap without paging.
   final bool shrinkWrap;
+
+  /// False while the view is kept alive but hidden (the home page's
+  /// Leaderboard tab). The host's scroll controller keeps moving then, and a
+  /// hidden feed must not page from it; its loaded rows and cursor are kept.
+  final bool pagingActive;
 
   /// Injectable clock for the relative timestamps. For tests.
   final DateTime? now;
@@ -118,7 +124,15 @@ class _BuddyFeedViewState extends State<BuddyFeedView> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant BuddyFeedView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Shown again: a short page may need topping up now it has a viewport.
+    if (widget.pagingActive && !oldWidget.pagingActive) _fillViewportIfNeeded();
+  }
+
   void _onScroll() {
+    if (!widget.pagingActive) return;
     if (!_scroll.hasClients || _loading || !_hasMore) return;
     final ScrollPosition pos = _scroll.position;
     if (pos.maxScrollExtent - pos.pixels < kFeedPrefetchExtent) {
@@ -139,7 +153,7 @@ class _BuddyFeedViewState extends State<BuddyFeedView> {
   void _fillViewportIfNeeded() {
     if (!mounted || _loading || !_hasMore) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _loading || !_hasMore) return;
+      if (!mounted || _loading || !_hasMore || !widget.pagingActive) return;
       if (!_scroll.hasClients) return;
       if (_scroll.position.maxScrollExtent > 0) return;
       unawaited(_loadNextPage());

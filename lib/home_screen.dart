@@ -20,7 +20,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:path_provider/path_provider.dart';
 import 'feed_post_card.dart';
 import 'main.dart';
-import 'leaderboard_page.dart';
+import 'leaderboard/leaderboard_view.dart';
 import 'template_bootstrapper.dart';
 import 'block_exercise_defaults_repository.dart';
 import 'block_creation_helper.dart';
@@ -2249,8 +2249,16 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
                     const SizedBox(height: 2),
                     const SizedBox(height: 8),
 
-                    // Inline leaderboard widget (no Scaffold inside this page)
-                    const LeaderboardEmbedded(),
+                    // The RE Points leaderboard (lib/leaderboard/), the same
+                    // view HomeScreen2 shows; it does not scroll on its own.
+                    LeaderboardView(
+                      onOpenProfile: (String uid) => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              ProfileScreen(viewedUid: uid, readOnly: true),
+                        ),
+                      ),
+                    ),
 
                     // Give short leaderboards some scrollable breathing room
                     const SizedBox(height: 140),

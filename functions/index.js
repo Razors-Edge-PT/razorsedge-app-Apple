@@ -84,8 +84,13 @@ function num(v) {
 }
 
 // -------------------------
-// RE Points Aggregator (unchanged)
+// Legacy RE daily aggregator
 // -------------------------
+// Fires only on users/{uid}/re_daily, which current app builds no longer write
+// (older installed builds may). Kept because it still produces the re_daily
+// Home feed posts and users_public.rePoints, which the buddy list in
+// approve_requests_screen.dart reads. The RE Points leaderboard does NOT use
+// anything here — see leaderboard/.
 exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (event) => {
   const uid = event.params?.uid;
   const dayKey = event.params?.dayKey;
@@ -114,8 +119,11 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
     }
 
     // 2) Transaction: update this day in month doc + recompute totals.
-    // Also atomically write monthly totals to users_public to prevent race conditions
-    // where two concurrent invocations overwrite each other with stale partial sums.
+    // The monthly totals it used to mirror onto users_public
+    // (rePointsMonthlyCurrent / rePointsMonthlyByLiftCurrent / currentMonthKey)
+    // fed only the old leaderboard, which leaderboard/ now replaces; they are
+    // no longer written. re_monthly is still kept: the all-time
+    // rePointsByLift scan below reads it.
     const publicRef = db.collection('users_public').doc(uid);
     let monthTotal = 0;
     let savedDays = {};
@@ -135,23 +143,10 @@ exports.repointsMonthlyAggregator = onDocumentWritten(RE_DAILY_PATH, async (even
         }
       }
 
-      const perLiftMonthly = {};
-      for (const lift of CANONICAL_LIFTS) {
-        let liftTotal = 0;
-        for (const d of Object.values(days)) liftTotal += num(d[lift]);
-        perLiftMonthly[lift] = liftTotal;
-      }
-
       tx.set(monthlyRef, {
         days,
         totalPoints: total,
         recomputedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-
-      tx.set(publicRef, {
-        rePointsMonthlyCurrent: total,
-        rePointsMonthlyByLiftCurrent: perLiftMonthly,
-        currentMonthKey: monthKey,
       }, { merge: true });
 
       monthTotal = total;
@@ -844,6 +839,18 @@ exports.showcaseOnWeightWrite = showcase.showcaseOnWeightWrite;
 // change of users/{uid}.sex re-scores V2; any other users/{uid} write returns
 // before reading anything.
 exports.showcaseOnSexChange = showcase.showcaseOnSexChange;
+
+// ====================================
+// RE Points leaderboard (This Month / All Time)
+// ====================================
+// Derived from the profile V2 engine above — no second formula. The workout,
+// weigh-in and sex triggers above update the per-day scores and the monthly
+// entries; this trigger keeps the all-time entry and the visible identity in
+// step with users_public; the daily job retries queued work, re-queues stale
+// entries and closes finished months. See leaderboard/firestore_store.js.
+const leaderboard = require('./leaderboard/firestore_store');
+exports.leaderboardOnPublicProfileWrite = leaderboard.leaderboardOnPublicProfileWrite;
+exports.leaderboardReconcileDaily = leaderboard.leaderboardReconcileDaily;
 
 const identity = require('./identity');
 exports.profileChangeUsername = identity.profileChangeUsername;

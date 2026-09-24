@@ -44,6 +44,16 @@ const {
 } = require('./bodyweight');
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The RE Points leaderboard module, required lazily: it builds on this one
+ * (its store reads V2 through bufferedStore), so a top-level require would be
+ * circular.
+ */
+function leaderboard() {
+  return require('../leaderboard/firestore_store');
+}
+
 const SNAPSHOT_FIELD = 'profileShowcaseV1';
 const SNAPSHOT_V2_FIELD = 'profileShowcaseV2';
 
@@ -444,19 +454,33 @@ const showcaseOnWorkoutWrite = onDocumentWritten(
     // projection's contention or failure can hold the other back. Both are
     // idempotent, so the retry a failure triggers is a no-op for the one that
     // succeeded.
+    let v2Result = null;
     try {
-      const result = await applyWorkoutDayV2Transactionally(uid, workoutId, after);
-      if (result.changed) {
+      v2Result = await applyWorkoutDayV2Transactionally(uid, workoutId, after);
+      if (v2Result.changed) {
         logger.info('showcase V2 updated', {
           uid,
           dateKey: workoutId,
-          path: result.path,
-          slots: result.slots,
+          path: v2Result.path,
+          slots: v2Result.slots,
         });
       }
     } catch (err) {
       logger.error('showcaseOnWorkoutWrite V2 failed', { uid, workoutId, error: err });
       failure = failure || err;
+    }
+    // The RE Points leaderboard is derived from the V2 day contributions, so it
+    // has work to do only when V2 changed — autosaves that change nothing cost
+    // nothing. A failure here is queued for the daily reconciliation.
+    if (v2Result && v2Result.changed) {
+      try {
+        await leaderboard().applyForWorkout(uid, workoutId, {
+          full: v2Result.path === 'bootstrap',
+        });
+      } catch (err) {
+        logger.error('showcaseOnWorkoutWrite leaderboard failed', { uid, workoutId, error: err });
+        failure = failure || err;
+      }
     }
     if (failure) throw failure;
   },
@@ -530,6 +554,17 @@ const showcaseOnWeightWrite = onDocumentWritten(
       });
       failure = failure || err;
     }
+    // Leaderboard: every date whose as-of bodyweight the weigh-in can change —
+    // for every exercise, not only the bodyweight-loaded ones. Runs after the
+    // V2 refresh so bodyweight-loaded days are already re-ranked.
+    if (!failure) {
+      try {
+        await leaderboard().applyForWeighIn(uid, event);
+      } catch (err) {
+        logger.error('showcaseOnWeightWrite leaderboard failed', { uid, error: err });
+        failure = failure || err;
+      }
+    }
     if (failure) throw failure;
   },
 );
@@ -559,6 +594,8 @@ const showcaseOnSexChange = onDocumentUpdated(
       if (result.changed) {
         logger.info('showcase V2 re-scored for sex change', { uid, slots: result.slots });
       }
+      // Every leaderboard day is scored with the coefficient for this sex.
+      await leaderboard().applyForSexChange(uid);
     } catch (err) {
       logger.error('showcaseOnSexChange failed', { uid, error: err });
       throw err;
@@ -713,6 +750,10 @@ module.exports = {
   PROFILE_SHOWCASE_V2_SCHEMA,
   LAYOUT_V1,
   LAYOUT_V2,
+  bufferedStore,
+  plainReader,
+  transactionReader,
+  userRef,
   applyWorkoutDayTransactionally,
   refreshBodyweightTransactionally,
   weighInSinceDateKey,

@@ -18,7 +18,7 @@ import 'planned_blocks_screen.dart';
 import 'profile/profile_screen.dart';
 import 'profile_page.dart';
 import 'social/feed_repository.dart';
-import 'social/home_feed_section.dart';
+import 'home/home_community_section.dart';
 import 'social/open_feed_post.dart';
 import 'templates.dart';
 import 'user_context.dart';
@@ -690,19 +690,19 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
 
                     const SizedBox(height: 8),
 
-                    // ── Buddy feed ────────────────────────────────────────────
-                    // Directly beneath the calendar, with no switcher, tab or
-                    // heading in front of it. The three-icon selector that sat
-                    // here drove three empty stubs and has been removed; a
-                    // leaderboard toggle can come back when there is a
-                    // leaderboard to toggle to.
+                    // ── Feed | Leaderboard ────────────────────────────────────
+                    // Directly beneath the calendar: a switch between the
+                    // buddy feed (the default on every launch) and the RE
+                    // Points leaderboard. Both own their state and networking
+                    // (lib/home/home_community_section.dart); nothing about
+                    // either lives in this page.
                     //
-                    // It is the Buddy Hub's feed — the same BuddyFeedView,
-                    // repository, paging and cached cards — paging from this
-                    // page's scroll controller. It is always the SIGNED-IN
-                    // account's feed; when a coach is viewing an athlete the
-                    // section says so.
-                    HomeBuddyFeedSection(
+                    // The feed is the Buddy Hub's feed — the same
+                    // BuddyFeedView, repository, paging and cached cards —
+                    // paging from this page's scroll controller. It is always
+                    // the SIGNED-IN account's feed; when a coach is viewing an
+                    // athlete the section says so.
+                    HomeCommunitySection(
                       scrollController: _homeScrollCtrl,
                       actingAsOtherAccount:
                           !context.watch<UserContext>().isActingAsSelf,

@@ -179,7 +179,10 @@ void main() {
           reason: 'nothing sits between the calendar and the first card');
     });
 
-    testWidgets('no selector, no tab and no "Feed" label',
+    // The Feed/Leaderboard switch belongs to HomeCommunitySection (see
+    // test/home_community_section_test.dart); the feed section itself stays
+    // a bare feed.
+    testWidgets('the feed section itself has no selector, tab or label',
         (WidgetTester tester) async {
       final FakeFirebaseFirestore db = FakeFirebaseFirestore();
       await seedFeedRow(db, ownerUid: 'f', postId: 'p1', createdAt: base);
@@ -196,22 +199,23 @@ void main() {
       expect(find.byType(Tab), findsNothing);
     });
 
-    test('HomeScreen2 itself: the selector is gone and the section follows '
-        'the calendar', () {
+    test('HomeScreen2 itself: the Feed/Leaderboard section follows the '
+        'calendar and holds no selector of its own', () {
       // Normalised: the working tree may hold CRLF line endings.
       final String src = File('lib/home_screen_2.dart')
           .readAsStringSync()
           .replaceAll('\r\n', '\n');
+      // The switch lives in HomeCommunitySection, not in the page.
       expect(src.contains('SegmentedButton'), isFalse);
       expect(src.contains('_HomeV2Feed'), isFalse);
-      expect(src.contains('Icons.leaderboard_outlined'), isFalse);
-      expect(src.contains('Icons.emoji_events_outlined'), isFalse);
+      expect(src.contains('LeaderboardController'), isFalse);
+      expect(src.contains("collection('leaderboards')"), isFalse);
 
       final int calendar = src.indexOf('TableCalendar(');
-      final int section = src.indexOf('HomeBuddyFeedSection(');
+      final int section = src.indexOf('HomeCommunitySection(');
       expect(calendar, greaterThan(0));
       expect(section, greaterThan(calendar),
-          reason: 'the feed section is placed after the calendar');
+          reason: 'the section is placed after the calendar');
       // Between the end of the calendar and the section: spacing and comments
       // only — no widget, no label.
       final String between = src.substring(
@@ -420,7 +424,7 @@ void main() {
       final String src = File('lib/home_screen_2.dart')
           .readAsStringSync()
           .replaceAll('\r\n', '\n');
-      final int start = src.indexOf('HomeBuddyFeedSection(');
+      final int start = src.indexOf('HomeCommunitySection(');
       final String call = src.substring(start, src.indexOf('),\n                  ],', start));
       expect(call.contains('isActingAsSelf'), isTrue);
       expect(call.contains('actingAsUid'), isFalse,

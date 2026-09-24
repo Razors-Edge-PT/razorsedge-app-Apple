@@ -36,6 +36,7 @@ class HomeBuddyFeedSection extends StatelessWidget {
     required this.onOpenProfile,
     required this.onOpenPost,
     this.actingAsOtherAccount = false,
+    this.pagingActive = true,
     this.feed,
     this.search,
   });
@@ -51,6 +52,10 @@ class HomeBuddyFeedSection extends StatelessWidget {
   /// change which account's feed is read.
   final bool actingAsOtherAccount;
 
+  /// False while the section is kept alive but hidden behind the Leaderboard
+  /// (see HomeCommunitySection): no paging from the shared scroll controller.
+  final bool pagingActive;
+
   /// Injectable for tests. Production uses the default repositories, which
   /// resolve the AUTHENTICATED account.
   final FeedRepository? feed;
@@ -64,6 +69,7 @@ class HomeBuddyFeedSection extends StatelessWidget {
         if (actingAsOtherAccount) const _OwnFeedNotice(),
         BuddyFeedView(
           scrollController: scrollController,
+          pagingActive: pagingActive,
           feed: feed,
           search: search,
           onOpenProfile: onOpenProfile,

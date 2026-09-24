@@ -202,7 +202,7 @@ service cloud.firestore {
     function hasOwnWriteRule(subcoll) {
       return subcoll in [
         'showcase', 'showcaseDays', 'stories', 'feed', 'buddyInvites',
-        'socialNotifications', 'socialActivity',
+        'socialNotifications', 'socialActivity', 'rePointDays',
       ];
     }
 
@@ -327,6 +327,30 @@ service cloud.firestore {
                               .hasAny(['profileShowcaseV1', 'profileShowcaseV2'])
                         && identityWriteAllowed()
                       );
+    }
+
+
+    // ======================================================
+    // RE POINTS LEADERBOARD (server-derived projections)
+    // ======================================================
+    // leaderboards/{periodKey} ('YYYY-MM' or 'all_time') and its ranked
+    // entries: readable by any signed-in user — they carry only uid, username,
+    // avatar URL and derived points, the same public identity users_public
+    // already exposes. Written ONLY by the leaderboard functions and scripts
+    // (Admin SDK); no client, not even the owner, may write a total.
+    match /leaderboards/{periodKey} {
+      allow read: if isSignedIn();
+      allow write: if false;
+
+      match /entries/{entryUid} {
+        allow read: if isSignedIn();
+        allow write: if false;
+      }
+    }
+
+    // Private retry queue of the leaderboard functions. No client access.
+    match /leaderboardRecalcQueue/{queueUid} {
+      allow read, write: if false;
     }
 
 
@@ -593,6 +617,17 @@ service cloud.firestore {
         allow write: if false;
       }
       match /showcaseDays/{doc=**} {
+        allow read: if isSelf(userId) || isSuperAdmin();
+        allow write: if false;
+      }
+
+      // ---- Server-owned RE Points leaderboard day scores ----
+      // users/{userId}/rePointDays/{dateKey}: derived by the leaderboard
+      // functions from the profile projection, weigh-ins and sex. Private to
+      // the owner; nobody but the Admin SDK (and the super admin, through the
+      // catch-all below) writes it — a client that could would set its own
+      // leaderboard total.
+      match /rePointDays/{doc=**} {
         allow read: if isSelf(userId) || isSuperAdmin();
         allow write: if false;
       }
