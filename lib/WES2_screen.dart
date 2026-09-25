@@ -22,6 +22,7 @@ import 'WES2_widgets/WES2_day_header.dart';
 import 'WES2_widgets/WES2_empty_state.dart';
 import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
+import 'units/exercise_unit_registry.dart';
 import 'WES2_widgets/WES2_exercise_picker.dart';
 import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
@@ -305,6 +306,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // Each exercise's kg/lb display unit (block setting → published choice);
+    // a unit saved from the cog or elsewhere re-renders the rows at once.
+    ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     WidgetsBinding.instance.addObserver(this);
     final raw = widget.initialDate ?? DateTime.now();
     _controller = Wes2SessionController(raw);
@@ -376,8 +380,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
+  void _onUnitsChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     _timerTicker?.cancel();
     _hintRunner.dispose();
     _pauseWorkoutDurationSegment();
@@ -1885,6 +1894,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           final combinedNote = _buildCombinedPlanNote(row);
           items.add(Wes2ExerciseCard(
             row: row,
+            weightUnit: ExerciseUnitRegistry.shared
+                .unitsFor(controller.actingUid,
+                    blockSettings: controller.exerciseSettings)
+                .unitFor(row.exerciseId),
             onFieldUnfocused: _onFieldUnfocused,
             onToggleMarkedDone: (isDone) =>
                 _onToggleMarkedDone(row.exerciseId, isDone),

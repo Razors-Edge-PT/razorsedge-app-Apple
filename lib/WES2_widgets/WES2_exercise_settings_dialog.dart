@@ -1,3 +1,5 @@
+import '../units/exercise_unit_registry.dart';
+import '../units/weight_unit.dart';
 import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
 import '../block_exercise_defaults_repository.dart';
@@ -58,6 +60,16 @@ class _Wes2ExerciseSettingsDialogState
 
   // The full exerciseSettings map from the block doc (for merging on save).
   Map<String, dynamic> _existingSettings = {};
+
+  // The exercise's display unit and the unit it had when the dialog opened.
+  // Increments are canonical kilograms; the fields show and accept this unit.
+  ExerciseWeightUnit _weightUnit = ExerciseWeightUnit.kg;
+  ExerciseWeightUnit _initialWeightUnit = ExerciseWeightUnit.kg;
+  // Canonical kg increments as loaded — an increment field whose text still
+  // shows exactly this value (in the current unit) is unchanged, so an
+  // untouched value is never rewritten and can never drift.
+  double? _incPrimaryKg;
+  double? _incSecondaryKg;
 
   // Dropdown state
   String? _periodizationModel;
@@ -275,10 +287,17 @@ class _Wes2ExerciseSettingsDialogState
       final wf = settings['weeklyFrequency'];
       _weeklyFrequencyCtrl.text = wf != null ? '$wf' : '';
 
+      _weightUnit = ExerciseUnitRegistry.shared.unitsFor(widget.uid,
+          blockSettings: <String, dynamic>{widget.exerciseId: settings}).unitFor(
+          widget.exerciseId);
+      _initialWeightUnit = _weightUnit;
       final increments = settings['increments'] as Map<String, dynamic>?;
-      _incrementsPrimaryCtrl.text = increments?['primary']?.toString() ?? '';
-      _incrementsSecondaryCtrl.text =
-          increments?['secondary']?.toString() ?? '';
+      _incPrimaryKg = (increments?['primary'] as num?)?.toDouble();
+      _incSecondaryKg = (increments?['secondary'] as num?)?.toDouble();
+      _incrementsPrimaryCtrl.text = _incrementText(
+          _incPrimaryKg, increments?['primary']);
+      _incrementsSecondaryCtrl.text = _incrementText(
+          _incSecondaryKg, increments?['secondary']);
 
       _defaultSetsCtrl.text = settings['defaultSets']?.toString() ?? '';
 
@@ -424,6 +443,62 @@ class _Wes2ExerciseSettingsDialogState
     return null;
   }
 
+  /// A stored increment as the field shows it in the current unit. A
+  /// non-numeric legacy value is shown as stored.
+  String _incrementText(double? kg, Object? raw) {
+    // Kilograms read exactly as they always did.
+    if (kg != null && _weightUnit != ExerciseWeightUnit.kg) {
+      return formatWeightNumber(_weightUnit.fromKg(kg));
+    }
+    return raw?.toString() ?? '';
+  }
+
+  /// "Primary Increment" in kg (unchanged); "Primary Increment (lb)" in lb.
+  String _unitLabel(String label) =>
+      _weightUnit == ExerciseWeightUnit.kg ? label : '$label (lb)';
+
+  /// The increment a field now holds, as a patch value: unchanged (null
+  /// result, [changed] false) when the text still shows the loaded value;
+  /// otherwise canonical kg (or the raw text / null for a clear).
+  (bool changed, Object? value) _incrementPatch(
+      String text, double? baseKg, Object? baseRaw) {
+    final String t = text.trim();
+    if (t == _incrementText(baseKg, baseRaw)) return (false, null);
+    if (t.isEmpty) return (baseRaw != null, null);
+    final double? kg = parseDisplayToKg(t, _weightUnit);
+    return (true, kg ?? t);
+  }
+
+  /// Switching kg ⇄ lb re-expresses what the increment fields show; the
+  /// canonical values underneath do not change.
+  void _onWeightUnitChanged(ExerciseWeightUnit next) {
+    if (next == _weightUnit) return;
+    String reexpress(String text, double? baseKg, Object? baseRaw) {
+      final String t = text.trim();
+      if (t == _incrementText(baseKg, baseRaw)) {
+        // Untouched: show the stored value in the new unit (kg as stored).
+        if (baseKg == null) return t;
+        return next == ExerciseWeightUnit.kg
+            ? (baseRaw?.toString() ?? t)
+            : formatWeightNumber(next.fromKg(baseKg));
+      }
+      final double? kg = parseDisplayToKg(t, _weightUnit);
+      return kg == null ? t : formatWeightNumber(next.fromKg(kg));
+    }
+
+    final Map<String, dynamic> inc =
+        (_existingSettings['increments'] as Map<String, dynamic>?) ?? const {};
+    final String p =
+        reexpress(_incrementsPrimaryCtrl.text, _incPrimaryKg, inc['primary']);
+    final String q = reexpress(
+        _incrementsSecondaryCtrl.text, _incSecondaryKg, inc['secondary']);
+    setState(() {
+      _weightUnit = next;
+      _incrementsPrimaryCtrl.text = p;
+      _incrementsSecondaryCtrl.text = q;
+    });
+  }
+
   /// Builds an explicit dirty-field patch by diffing the live controllers
   /// against the snapshot captured at load (after repair). Only leaves the user
   /// actually changed are included — the dialog never submits a reconstructed
@@ -465,22 +540,21 @@ class _Wes2ExerciseSettingsDialogState
       scalarChanges['showVelocityField'] = _showVelocityField;
     }
 
-    // ── Increments (merge only changed sub-keys) ───────────────────────────────
+    // ── Weight unit (display only; no stored number is touched) ────────────────
+    if (_weightUnit != _initialWeightUnit) {
+      scalarChanges[kWeightUnitField] = _weightUnit.storageValue;
+    }
+
+    // ── Increments (merge only changed sub-keys; entered in the exercise's
+    // unit, stored as canonical kg) ────────────────────────────────────────
     final existingInc =
         (_existingSettings['increments'] as Map<String, dynamic>?) ?? const {};
-    final primText = _incrementsPrimaryCtrl.text.trim();
-    final secText = _incrementsSecondaryCtrl.text.trim();
-    final primParsed = primText.isEmpty
-        ? null
-        : (double.tryParse(primText) ?? primText);
-    final secParsed =
-        secText.isEmpty ? null : (double.tryParse(secText) ?? secText);
-    if ('${primParsed ?? ''}' != '${existingInc['primary'] ?? ''}') {
-      incrementChanges['primary'] = primParsed;
-    }
-    if ('${secParsed ?? ''}' != '${existingInc['secondary'] ?? ''}') {
-      incrementChanges['secondary'] = secParsed;
-    }
+    final (primChanged, primValue) = _incrementPatch(
+        _incrementsPrimaryCtrl.text, _incPrimaryKg, existingInc['primary']);
+    if (primChanged) incrementChanges['primary'] = primValue;
+    final (secChanged, secValue) = _incrementPatch(
+        _incrementsSecondaryCtrl.text, _incSecondaryKg, existingInc['secondary']);
+    if (secChanged) incrementChanges['secondary'] = secValue;
 
     // ── Rep targets ────────────────────────────────────────────────────────────
     for (final entry in _repTargetCtrls.entries) {
@@ -552,6 +626,12 @@ class _Wes2ExerciseSettingsDialogState
           exerciseId: widget.exerciseId,
           patch: patch,
         );
+        if (patch.scalarChanges.containsKey(kWeightUnitField)) {
+          // Every screen shows the new unit at once (and offline); the server
+          // publishes it for friends in the background.
+          ExerciseUnitRegistry.shared
+              .noteLocalChoice(widget.uid, widget.exerciseId, _weightUnit);
+        }
       }
 
       if (!mounted) return;
@@ -630,16 +710,21 @@ class _Wes2ExerciseSettingsDialogState
                   style: const TextStyle(color: Colors.red, fontSize: 12),
                 ),
               ),
+            _WeightUnitDropdown(
+              value: _weightUnit,
+              onChanged: _onWeightUnitChanged,
+            ),
+            const SizedBox(height: 8),
             _settingsRow(
               left: _buildTextField(
                 controller: _incrementsPrimaryCtrl,
-                label: 'Primary Increment',
+                label: _unitLabel('Primary Increment'),
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
               ),
               right: _buildTextField(
                 controller: _incrementsSecondaryCtrl,
-                label: 'Secondary Increment',
+                label: _unitLabel('Secondary Increment'),
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
               ),
@@ -1174,5 +1259,37 @@ class _Wes2ExerciseSettingsDialogState
             : const Text('Save'),
       ),
     ];
+  }
+}
+
+/// Kilograms (kg) / Pounds (lb) for one exercise. The same
+/// `exerciseSettings.weightUnit` leaf Block Planner 2 edits.
+class _WeightUnitDropdown extends StatelessWidget {
+  const _WeightUnitDropdown({required this.value, required this.onChanged});
+
+  final ExerciseWeightUnit value;
+  final ValueChanged<ExerciseWeightUnit> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<ExerciseWeightUnit>(
+      key: const ValueKey('wes2-weight-unit'),
+      initialValue: value,
+      isDense: true,
+      decoration: const InputDecoration(
+        labelText: 'Weight unit',
+        isDense: true,
+      ),
+      items: <DropdownMenuItem<ExerciseWeightUnit>>[
+        for (final ExerciseWeightUnit u in ExerciseWeightUnit.values)
+          DropdownMenuItem<ExerciseWeightUnit>(
+            value: u,
+            child: Text(u.choiceLabel),
+          ),
+      ],
+      onChanged: (ExerciseWeightUnit? u) {
+        if (u != null) onChanged(u);
+      },
+    );
   }
 }

@@ -17,6 +17,8 @@
 /// gallery — it just no longer stands as proof of a record it did not produce.
 library;
 
+import '../../units/exercise_unit_registry.dart';
+import '../ui/units.dart';
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -82,6 +84,7 @@ class ShowcaseView {
     required this.showcase,
     this.showcaseV2,
     this.proofsByFingerprint = const <String, ProofRecord>{},
+    this.exerciseUnits = ExerciseUnits.kilograms,
   });
 
   final ProfileShowcase showcase;
@@ -90,6 +93,13 @@ class ShowcaseView {
   final ProfileShowcaseV2? showcaseV2;
 
   final Map<String, ProofRecord> proofsByFingerprint;
+
+  /// The OWNER's per-exercise display units — the same for every viewer.
+  final ExerciseUnits exerciseUnits;
+
+  /// How [exerciseId]'s loads are shown on this profile.
+  WeightUnits unitsFor(String? exerciseId) =>
+      WeightUnits.of(exerciseUnits.unitFor(exerciseId));
 
   /// The categories the profile renders: V2 when present, otherwise the V1
   /// snapshot through the same component. Identical for every viewer.

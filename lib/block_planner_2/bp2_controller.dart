@@ -7,6 +7,8 @@
 /// classifier / date utils.
 library;
 
+import '../units/exercise_unit_registry.dart';
+import '../units/weight_unit.dart';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -468,8 +470,24 @@ class Bp2Controller extends ChangeNotifier {
   }
 
   void edit(String exerciseId, String field, String? value) {
-    final cur = draftFor(exerciseId);
+    var cur = draftFor(exerciseId);
     if (cur.has(field) && cur[field] == value) return;
+    if (field == Bp2Field.weightUnit) {
+      // Switching kg ⇄ lb re-expresses any increment being edited; the
+      // canonical values underneath do not change.
+      final from = resolvedFor(exerciseId).weightUnit;
+      final to = ExerciseWeightUnit.parseOrNull(value) ?? from;
+      for (final key in const [
+        Bp2Field.incrementPrimary,
+        Bp2Field.incrementSecondary
+      ]) {
+        if (!cur.has(key)) continue;
+        final kg = parseDisplayToKg(cur[key] ?? '', from);
+        if (kg != null) {
+          cur = cur.withEdit(key, formatWeightNumber(to.fromKg(kg)));
+        }
+      }
+    }
     _drafts[exerciseId] = cur.withEdit(field, value);
     _scheduleDraftPersist();
     notifyListeners();
@@ -492,18 +510,28 @@ class Bp2Controller extends ChangeNotifier {
         defaultsFor(exerciseId),
       );
 
+  /// The unit an exercise without an explicit block setting is shown in: the
+  /// owner's own choice made here this session, else their published choice.
+  ExerciseWeightUnit fallbackUnitFor(String exerciseId) {
+    final uid = _uid;
+    if (uid == null || uid.isEmpty) return ExerciseWeightUnit.kg;
+    return ExerciseUnitRegistry.shared.unitsFor(uid).unitFor(exerciseId);
+  }
+
   Bp2ResolvedSettings resolvedFor(String exerciseId) =>
       Bp2SettingsResolver.resolve(
         exerciseId: exerciseId,
         base: baseFor(exerciseId),
         draft: draftFor(exerciseId),
         totalBlockWeeks: totalWeeks,
+        fallbackUnit: fallbackUnitFor(exerciseId),
       );
 
   bool isExerciseDirty(String exerciseId) => !Bp2SettingsResolver.buildPatch(
         base: baseFor(exerciseId),
         draft: draftFor(exerciseId),
         totalBlockWeeks: totalWeeks,
+        fallbackUnit: fallbackUnitFor(exerciseId),
       ).isEmpty;
 
   Set<String> get dirtyExerciseIds => {
@@ -650,8 +678,11 @@ class Bp2Controller extends ChangeNotifier {
           base: baseFor(id),
           draft: draftFor(id),
           totalBlockWeeks: range.weeks,
+          fallbackUnit: fallbackUnitFor(id),
         );
         if (patch.isEmpty) continue;
+        final unitChoice = ExerciseWeightUnit.parseOrNull(
+            patch.scalarChanges[Bp2Field.weightUnit]);
         Map<String, dynamic> merged;
         try {
           merged = await _withTimeout(repo.saveExerciseSettings(
@@ -675,6 +706,11 @@ class Bp2Controller extends ChangeNotifier {
         }
         settings[id] = merged;
         _drafts.remove(id); // only the successfully persisted exercise
+        if (unitChoice != null) {
+          // Every screen shows the new unit at once (and offline); the
+          // server publishes it for friends in the background.
+          ExerciseUnitRegistry.shared.noteLocalChoice(uid, id, unitChoice);
+        }
       }
       b = b.copyWith(exerciseSettings: settings);
       if (!_live(gen)) return Bp2SaveOutcome.ok(offline: offline);

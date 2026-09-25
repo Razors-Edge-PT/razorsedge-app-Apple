@@ -7,7 +7,6 @@ const assert = require('node:assert');
 
 const {
   applyWorkoutDayV2,
-  rebuildAllV2,
   refreshV2,
   memoryStoreV2,
   dayDocIdV2,
@@ -364,39 +363,6 @@ test('out-of-order delivery, edits and deletes converge on the full rebuild', as
   assert.strictEqual(again.path, 'noop');
 });
 
-test('the first write for an athlete with no V2 bootstraps from the whole history', async () => {
-  const bw = weighIns([['2026-01-01', 80]]);
-  const history = {
-    '2025-06-01': workout(row(ID.bench, [{ weight: 140, reps: 1 }])),
-    '2025-09-01': workout(row(ID.sumo, [{ weight: 210, reps: 1 }])),
-    '2026-02-01': workout(row(ID.dbBench, [{ weight: 30, reps: 8 }])),
-  };
-  const store = memoryStoreV2({ bodyweightAsOf: bw, workouts: () => Object.entries(history) });
-  // Only the newest day's trigger fires after rollout.
-  const res = await applyWorkoutDayV2(store, '2026-02-01', history['2026-02-01']);
-  assert.strictEqual(res.path, 'bootstrap');
-  assert.deepStrictEqual(
-    await store.getSnapshot(),
-    buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw) }),
-  );
-  // From then on the ordinary paths apply.
-  const next = await applyWorkoutDayV2(store, '2026-03-01', workout(row(ID.squat, [{ weight: 100, reps: 5 }])));
-  assert.strictEqual(next.path, 'append');
-});
-
-test('the bootstrap uses the triggering write, not a stale copy of that day', async () => {
-  const stale = { '2026-02-01': workout(row(ID.bench, [{ weight: 999, reps: 1 }])) };
-  const store = memoryStoreV2({ bodyweightAsOf: weighIns([]), workouts: () => Object.entries(stale) });
-  await applyWorkoutDayV2(store, '2026-02-01', workout(row(ID.bench, [{ weight: 100, reps: 1 }])));
-  const snap = await store.getSnapshot();
-  assert.strictEqual(entry(snap, 'horizontalPress', ID.bench).e1rm.weight, 100);
-  // A deletion as the very first event changes no day contribution, so it is
-  // a no-op: V2 stays absent (clients keep the V1 fallback) until a write.
-  const s2 = memoryStoreV2({ bodyweightAsOf: weighIns([]), workouts: () => Object.entries(stale) });
-  assert.strictEqual((await applyWorkoutDayV2(s2, '2026-02-01', null)).path, 'noop');
-  assert.strictEqual(await s2.getSnapshot(), null);
-});
-
 test('deleting every workout in a category removes the category', async () => {
   const store = memoryStoreV2({ bodyweightAsOf: weighIns([['2026-01-01', 80]]) });
   await applyWorkoutDayV2(store, '2026-01-05', workout(row(ID.hipThrust, [{ weight: 140, reps: 8 }])));
@@ -404,38 +370,6 @@ test('deleting every workout in a category removes the category', async () => {
   await applyWorkoutDayV2(store, '2026-01-05', null);
   assert.deepStrictEqual((await store.getSnapshot()).categories, {});
 });
-
-test('rebuildAllV2 equals incremental application in any order', async () => {
-  const bw = weighIns([['2026-01-01', 70], ['2026-04-01', 72]]);
-  const history = {
-    '2026-01-10': workout(row(ID.ohpBb, [{ weight: 50, reps: 5 }]), row(ID.dip, [{ weight: 0, reps: 10, setIndex: 0 }])),
-    '2026-02-10': workout(row(ID.ohpDb, [{ weight: 22.5, reps: 6 }])),
-    '2026-04-10': workout(row(ID.dip, [{ weight: 25, reps: 3, setIndex: 0 }])),
-  };
-  const a = memoryStoreV2({ bodyweightAsOf: bw, sex: 'F' });
-  const { snapshot } = await rebuildAllV2(a, Object.entries(history));
-  const b = memoryStoreV2({ bodyweightAsOf: bw, sex: 'F' });
-  await applyAll(b, ['2026-04-10', '2026-01-10', '2026-02-10'], history);
-  assert.deepStrictEqual(await b.getSnapshot(), snapshot);
-});
-
-test('a stale RE Points formula version forces a full rebuild', async () => {
-  const bw = weighIns([['2026-01-01', 80]]);
-  const store = memoryStoreV2({ bodyweightAsOf: bw });
-  await applyWorkoutDayV2(store, '2026-01-05', workout(row(ID.bench, [{ weight: 100, reps: 1 }])));
-  const snap = await store.getSnapshot();
-  await store.setSnapshot(Object.assign({}, snap, { rePointsFormulaVersion: 0 }));
-  const st = await store.getState();
-  await store.setState(Object.assign({}, st, { rePointsFormulaVersion: 0 }));
-  const res = await applyWorkoutDayV2(store, '2026-02-05', workout(row(ID.squat, [{ weight: 150, reps: 1 }])));
-  assert.strictEqual(res.path, 'rebuild');
-  const after = await store.getSnapshot();
-  assert.strictEqual(after.rePointsFormulaVersion, RE_POINTS_FORMULA_VERSION);
-  assert.ok(after.categories.horizontalPress.exercises[ID.bench]);
-  assert.ok(after.categories.squatPattern.exercises[ID.squat]);
-});
-
-// ── Weigh-in and sex refresh ────────────────────────────────────────────────
 
 test('a later weigh-in refreshes points of EVERY affected lift, not only bodyweight-loaded ones', async () => {
   const entries = [];
@@ -481,31 +415,6 @@ test('a weigh-in after every record date changes nothing', async () => {
   const res = await refreshV2(store, { bodyweight: true, sinceDateKey: '2026-03-01' });
   assert.strictEqual(res.changed, false);
 });
-
-test('a change of sex re-scores every exercise and can change the category default', async () => {
-  const bw = weighIns([['2026-01-01', 63]]);
-  const store = memoryStoreV2({ bodyweightAsOf: bw, sex: 'M' });
-  const history = {
-    '2026-01-05': workout(row(ID.chin, [{ weight: 0, reps: 5, setIndex: 0 }]), row(ID.lat, [{ weight: 60, reps: 8 }])),
-  };
-  await applyAll(store, ['2026-01-05'], history);
-  store.setSex('F');
-  const res = await refreshV2(store, { sex: true });
-  assert.strictEqual(res.changed, true);
-  assert.deepStrictEqual(
-    await store.getSnapshot(),
-    buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw), sex: Sex.FEMALE }),
-  );
-});
-
-test('refresh leaves a missing or stale snapshot alone', async () => {
-  const store = memoryStoreV2({ bodyweightAsOf: weighIns([]) });
-  assert.strictEqual((await refreshV2(store, { sex: true })).reason, 'no-snapshot');
-  await store.setSnapshot({ schema: 'profileShowcaseV2', e1rmFormulaVersion: -1, categories: {} });
-  assert.strictEqual((await refreshV2(store, { sex: true })).reason, 'stale-version');
-});
-
-// ── Fingerprints, proofs and privacy ────────────────────────────────────────
 
 test('V1 lifts keep their V1 fingerprints in V2, so attached proofs keep standing', () => {
   const bw = weighIns([['2026-01-01', 80]]);

@@ -6,7 +6,10 @@
 
 const w = (exerciseId, sets) => ({ exerciseId, name: 'x', sets });
 
-const SAMPLE_WEIGH_INS = [['2026-01-01', 80]];
+// The 2026-02-01 weigh-in makes a LIGHTER bench (95 kg, 5 Feb) outscore the
+// heavier one (100 kg, 5 Jan): Best RE Points and Best E1RM are different
+// sets, which the Dart suite must parse and show separately.
+const SAMPLE_WEIGH_INS = [['2026-01-01', 80], ['2026-02-01', 65]];
 
 const SAMPLE_HISTORY = {
   // Before any weigh-in: recorded, but points unavailable.
@@ -27,6 +30,9 @@ const SAMPLE_HISTORY = {
       w('10pEctikt6PP8eAg9Eip', [{ weight: 200, reps: 1 }]),
       w('VUEvvjuo4cxBghNuux66', [{ weight: 100, reps: 3 }]),
     ],
+  },
+  '2026-02-05': {
+    exercises: [w('AmfUWbF1DH3I7qPAdh5k', [{ weight: 95, reps: 1, id: 'b2' }])],
   },
 };
 

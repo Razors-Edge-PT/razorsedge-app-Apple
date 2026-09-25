@@ -108,9 +108,8 @@ async function main() {
   const db = admin.firestore();
 
   const showcaseFs = require('../showcase/firestore_store');
-  const lbFs = require('../leaderboard/firestore_store');
-  const { rebuildUser, memoryLeaderboardStore } = require('../leaderboard/store');
-  const { memoryStoreV2 } = require('../showcase/store_v2');
+  const { dryRunUser } = require('../showcase/rebuild_dry_run');
+  const { isBuiltV2 } = require('../showcase/store_v2');
 
   const mode = options.apply ? 'apply' : 'dry-run';
   process.stdout.write(`RE Points leaderboard backfill — mode: ${mode}\n`);
@@ -131,54 +130,47 @@ async function main() {
     errors: 0,
   };
   const failures = [];
+  const samples = [];
 
   async function dryRun(uid) {
-    // Everything computed in memory from read-only sources.
+    // Everything computed in memory — the same job and reducers — from
+    // read-only sources.
+    const res = await dryRunUser(db, uid, showcaseFs.bodyweightResolver);
     const v2StateSnap = await showcaseFs.stateV2Ref(uid).get();
-    const userSnap = await db.collection('users').doc(uid).get();
-    const sex = userSnap.exists ? (userSnap.data() || {}).sex : null;
-    const publicSnap = await db.collection('users_public').doc(uid).get();
-    const publicData = publicSnap.exists ? publicSnap.data() : {};
-    const bodyweightAsOf = showcaseFs.bodyweightResolver(uid);
-
-    let v2Days;
-    let v2Snapshot = publicData.profileShowcaseV2 || null;
-    if (!v2StateSnap.exists) {
-      counts.needsV2 += 1;
-      const v2 = memoryStoreV2({ bodyweightAsOf, sex });
-      const res = await showcaseFs.rebuildAthleteV2(uid, { apply: false, store: v2 });
-      v2Days = [...v2._days.values()];
-      v2Snapshot = res.snapshot;
-    } else {
-      v2Days = (await showcaseFs.daysV2Col(uid).get()).docs.map((d) => d.data());
-    }
-    const entries = new Map();
-    const lb = memoryLeaderboardStore(uid, {
-      v2Days: () => v2Days,
-      bodyweightAsOf,
-      sex,
-      publicProfile: Object.assign({}, publicData, { profileShowcaseV2: v2Snapshot }),
-      entries,
-    });
-    const res = await rebuildUser(lb);
-    counts.dayDocs += res.days;
-    const months = [...entries.keys()].filter((k) => !k.startsWith('all_time/'));
+    if (!v2StateSnap.exists) counts.needsV2 += 1;
+    counts.dayDocs += res.dayScores.length;
+    const months = [...res.entries.keys()].filter((k) => !k.startsWith('all_time/'));
     counts.monthEntries += months.length;
     if (months.length) counts.withMonthlyEntries += 1;
-    if (entries.has(`all_time/${uid}`)) counts.withAllTimeEntry += 1;
+    const at = res.entries.get(`all_time/${uid}`);
+    if (at) {
+      counts.withAllTimeEntry += 1;
+      if (samples.length < 5) {
+        samples.push(`${uid} all-time ${(at.totalPointsUnits / 10000).toFixed(2)} ` +
+          `(${Object.entries(at.categoryBestUnits).map(([k, v]) => `${k}=${(v / 10000).toFixed(2)}`).join(' ')})`);
+      }
+    }
   }
 
   async function apply(uid) {
-    const v2StateSnap = await showcaseFs.stateV2Ref(uid).get();
-    if (!v2StateSnap.exists) {
+    // Built FROM the corrected profile V2: an athlete whose V2 is not built
+    // (or stale) is left for the showcase backfill, which continues into the
+    // leaderboard itself.
+    const state = (await showcaseFs.stateV2Ref(uid).get()).data() || null;
+    const pub = (await db.collection('users_public').doc(uid).get()).data() || {};
+    if (!isBuiltV2(state, pub.profileShowcaseV2 || null)) {
       counts.needsV2 += 1;
       return false;
     }
-    const res = await lbFs.applyRequestForUser(uid, { full: true });
-    counts.dayDocs += res.days || 0;
-    counts.monthEntries += (res.periods || []).length;
-    if ((res.periods || []).length) counts.withMonthlyEntries += 1;
-    if (res.allTime === 'set') counts.withAllTimeEntry += 1;
+    await showcaseFs.requestRebuildFor(uid, { mode: 'leaderboard', reason: 'backfill' });
+    const run = await showcaseFs.runRebuildFor(uid);
+    if (!run.job || run.job.status !== 'done') {
+      throw new Error(`job ${run.job && run.job.status}: ${run.job && run.job.lastError}`);
+    }
+    const days = await db.collection('users').doc(uid).collection('rePointDays').select().get();
+    counts.dayDocs += days.size;
+    const at = await db.collection('leaderboards').doc('all_time').collection('entries').doc(uid).get();
+    if (at.exists) counts.withAllTimeEntry += 1;
     counts.applied += 1;
     return true;
   }
@@ -245,6 +237,10 @@ async function main() {
 
   process.stdout.write('\nCOUNTS\n');
   for (const [k, v] of Object.entries(counts)) process.stdout.write(`  ${k}: ${v}\n`);
+  if (samples.length) {
+    process.stdout.write('\nSAMPLES\n');
+    for (const x of samples) process.stdout.write(`  ${x}\n`);
+  }
   if (failures.length) {
     process.stdout.write('\nFAILURES\n');
     for (const f of failures) process.stdout.write(`  ${f.uid}: ${f.error}\n`);

@@ -31,6 +31,7 @@
 /// closed.
 library;
 
+import '../units/exercise_unit_registry.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -322,6 +323,7 @@ class ProfileController extends ChangeNotifier {
   /// anywhere says it will never update again. A gallery in that state is
   /// indistinguishable from a profile that has no media.
   void start() {
+    ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     _identityState = ProfileIdentity.empty(targetUid);
 
     _bind(
@@ -346,6 +348,7 @@ class ProfileController extends ChangeNotifier {
                 showcase: _identityState.showcase,
                 showcaseV2: _identityState.showcaseV2,
                 proofsByFingerprint: proofs,
+                exerciseUnits: _ownerUnits(),
               );
               notifyListeners();
             },
@@ -453,12 +456,21 @@ class ProfileController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The OWNER's per-exercise units: what they published (on this very
+  /// users_public document), plus — on their own device — a choice they just
+  /// made that the server has not published yet.
+  ExerciseUnits _ownerUnits() => ExerciseUnits(
+        published: _identityState.exerciseUnits,
+        local: ExerciseUnitRegistry.shared.unitsFor(targetUid).local,
+      );
+
   /// The showcase view has to be rebuilt whenever EITHER half changes.
   void _refreshShowcase() {
     _showcaseView = ShowcaseView(
       showcase: _identityState.showcase,
       showcaseV2: _identityState.showcaseV2,
       proofsByFingerprint: _showcaseView.proofsByFingerprint,
+      exerciseUnits: _ownerUnits(),
     );
   }
 
@@ -674,8 +686,14 @@ class ProfileController extends ChangeNotifier {
     unawaited(processOutbox());
   }
 
+  void _onUnitsChanged() {
+    _refreshShowcase();
+    notifyListeners();
+  }
+
   @override
   void dispose() {
+    ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     _storyExpiryTimer?.cancel();
     for (final StreamSubscription<Object?> sub in _subs.values) {
       unawaited(sub.cancel());

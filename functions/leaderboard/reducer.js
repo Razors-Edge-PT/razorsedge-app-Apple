@@ -31,8 +31,11 @@
 'use strict';
 
 const { RE_CATEGORIES, RE_EXERCISES, reExerciseBySlot } = require('../showcase/re_catalog');
-const { recordOf } = require('../showcase/reducer');
-const { scoreRecord, isCurrentSnapshotV2 } = require('../showcase/reducer_v2');
+const {
+  pointsRecordOf,
+  isCurrentSnapshotV2,
+  SHOWCASE_V2_AGGREGATION_VERSION,
+} = require('../showcase/reducer_v2');
 const { SHOWCASE_FORMULA_VERSION } = require('../showcase/e1rm_spec');
 const { RE_POINTS_FORMULA_VERSION } = require('../showcase/re_points');
 
@@ -44,9 +47,12 @@ const POINT_UNITS = 10000;
  * Points (factor table) and E1RM versions, so a change to either makes every
  * document written under the old one detectably stale.
  */
-const LEADERBOARD_VERSION = 1;
+//   1 — daily winners from each exercise's Best E1RM set (retired)
+//   2 — daily winners and all time from the Best RE Points sets
+const LEADERBOARD_VERSION = 2;
 const LEADERBOARD_FORMULA_VERSION =
-  `lb${LEADERBOARD_VERSION}-re${RE_POINTS_FORMULA_VERSION}-e1rm${SHOWCASE_FORMULA_VERSION}`;
+  `lb${LEADERBOARD_VERSION}-agg${SHOWCASE_V2_AGGREGATION_VERSION}` +
+  `-re${RE_POINTS_FORMULA_VERSION}-e1rm${SHOWCASE_FORMULA_VERSION}`;
 
 /** Period key of the all-time leaderboard. Never a YYYY-MM key. */
 const ALL_TIME_PERIOD = 'all_time';
@@ -108,14 +114,15 @@ function betterWinner(a, b) {
  * The derived score for ONE training date.
  *
  * [v2Days] are that date's V2 day contributions (showcase/store_v2) — one per
- * exercise, each holding that exercise's best-E1RM set of the day, already
- * merged across every workout document and row of the date. [bodyweight] is
- * the `{ weightKg, dateKey }` recorded on or before the date (null when none);
- * [sex] is re_points.Sex.
+ * exercise, already merged across every workout document and row of the
+ * date. Each carries its day's highest-scoring set (`bestPoints`, chosen by
+ * scoring EVERY set through the approved path) and the bodyweight recorded on
+ * or before the date. [bodyweight] is only a fallback for a contribution
+ * stored without one. [sex] is re_points.Sex.
  *
- * Returns null when the date holds no eligible exercise (the day document
- * should not exist). An exercise without a bodyweight scores nothing, exactly
- * as on the profile.
+ * Per category the highest-scoring exercise wins (equal → catalogue order).
+ * Returns null when the date holds no eligible exercise. An exercise without
+ * a bodyweight scores nothing, exactly as on the profile.
  */
 function scoreDay(dateKey, v2Days, bodyweight, sex) {
   const days = (v2Days || []).filter((d) => d && d.dateKey === dateKey && reExerciseBySlot(d.slot));
@@ -123,9 +130,10 @@ function scoreDay(dateKey, v2Days, bodyweight, sex) {
   const winners = {};
   for (const day of days) {
     const def = reExerciseBySlot(day.slot);
-    if (!day.bestE1rm) continue;
-    const record = recordOf(def.slot, day, day.bestE1rm);
-    const units = toUnits(scoreRecord(def, record, bodyweight, sex));
+    if (!day.bestPoints) continue;
+    const scoredDay = 'bodyweight' in day ? day : Object.assign({}, day, { bodyweight });
+    const record = pointsRecordOf(def, scoredDay, day.bestPoints, sex);
+    const units = toUnits(record.rePoints);
     if (units === null || units <= 0) continue;
     const cand = {
       slot: def.slot,
@@ -219,7 +227,8 @@ function allTimeEntryFromSnapshot(uid, snapshot, identity) {
     categoryBestUnits[k] = units;
     winningExerciseIds[k] = best.exerciseId;
     total += units;
-    const d = best.e1rm && best.e1rm.dateKey;
+    // Reached on the Best RE Points record's own date.
+    const d = best.points && best.points.dateKey;
     if (d && (!tieBreakDateKey || d > tieBreakDateKey)) tieBreakDateKey = d;
   }
   if (total <= 0) return { entry: null };

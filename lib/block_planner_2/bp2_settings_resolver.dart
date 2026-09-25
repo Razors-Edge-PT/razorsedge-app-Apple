@@ -12,6 +12,7 @@
 /// system defines one — e.g. the 3-set fallback WES2 already uses).
 library;
 
+import '../units/weight_unit.dart';
 import '../block_exercise_defaults_repository.dart';
 import '../exercise_model_registry.dart';
 import '../settings_merge.dart';
@@ -29,6 +30,9 @@ class Bp2Field {
   static const showVelocityField = 'showVelocityField';
   static const incrementPrimary = 'increments.primary';
   static const incrementSecondary = 'increments.secondary';
+  /// The exercise's display unit ('kg' | 'lb') — exerciseSettings.weightUnit,
+  /// the same leaf the WES2 settings cog edits.
+  static const weightUnit = 'weightUnit';
   static const repMin = 'rep.min';
   static const repMax = 'rep.max';
 
@@ -108,8 +112,12 @@ class Bp2ResolvedSettings {
   final int? weeklyFrequency;
   final int? defaultSets;
   final bool showVelocity;
+  /// Increments as shown: in [weightUnit] (they are stored as canonical kg).
   final String incrementPrimary;
   final String incrementSecondary;
+
+  /// The exercise's display unit.
+  final ExerciseWeightUnit weightUnit;
   final RepTargetShape repShape;
   final int? repMin;
   final int? repMax;
@@ -127,6 +135,7 @@ class Bp2ResolvedSettings {
     required this.showVelocity,
     required this.incrementPrimary,
     required this.incrementSecondary,
+    this.weightUnit = ExerciseWeightUnit.kg,
     required this.repShape,
     required this.repMin,
     required this.repMax,
@@ -278,7 +287,9 @@ class Bp2SettingsResolver {
     required Map<String, dynamic> base,
     required Bp2ExerciseDraft draft,
     required int totalBlockWeeks,
+    ExerciseWeightUnit fallbackUnit = ExerciseWeightUnit.kg,
   }) {
+    final unit = unitOf(base: base, draft: draft, fallbackUnit: fallbackUnit);
     final scalars = <String, dynamic>{};
     final cleared = <String>{};
     final inc = <String, dynamic>{};
@@ -311,15 +322,27 @@ class Bp2SettingsResolver {
           final current = base[key];
           if (current is! bool || current != v) scalars[key] = v;
           return;
+        case Bp2Field.weightUnit:
+          // Only an explicit change of the unit in effect is written; no
+          // stored number is touched by it.
+          final chosen = ExerciseWeightUnit.parseOrNull(text);
+          final current = ExerciseWeightUnit.parse(base[Bp2Field.weightUnit],
+              fallback: fallbackUnit);
+          if (chosen != null && chosen != current) {
+            scalars[Bp2Field.weightUnit] = chosen.storageValue;
+          }
+          return;
         case Bp2Field.incrementPrimary:
         case Bp2Field.incrementSecondary:
           final sub =
               key == Bp2Field.incrementPrimary ? 'primary' : 'secondary';
+          // Entered in the exercise's unit; stored as canonical kg. A field
+          // still showing the stored value is unchanged — never rewritten, so
+          // an untouched pound value can never drift.
+          if (text == incrementText(baseInc[sub], unit)) return;
           final parsed = text.isEmpty ? null : doubleOf(text);
           if (text.isNotEmpty && parsed == null) return; // invalid → validation
-          if (numberText(parsed) != numberText(baseInc[sub])) {
-            inc[sub] = parsed;
-          }
+          inc[sub] = parsed == null ? null : unit.toKg(parsed);
           return;
         case Bp2Field.repMin:
         case Bp2Field.repMax:
@@ -374,9 +397,13 @@ class Bp2SettingsResolver {
     required Map<String, dynamic> base,
     required Bp2ExerciseDraft draft,
     required int totalBlockWeeks,
+    ExerciseWeightUnit fallbackUnit = ExerciseWeightUnit.kg,
   }) {
-    final patch =
-        buildPatch(base: base, draft: draft, totalBlockWeeks: totalBlockWeeks);
+    final patch = buildPatch(
+        base: base,
+        draft: draft,
+        totalBlockWeeks: totalBlockWeeks,
+        fallbackUnit: fallbackUnit);
     final merged = patch.isEmpty
         ? SettingsMerge.deepCopyMap(base)
         : SettingsMerge.applyPatch(base, patch);
@@ -392,14 +419,42 @@ class Bp2SettingsResolver {
 
   // ── Resolve for display ───────────────────────────────────────────────────
 
+  /// The unit in effect: the draft's choice, else the block's explicit value,
+  /// else [fallbackUnit] (the owner's published / local choice), else kg.
+  static ExerciseWeightUnit unitOf({
+    required Map<String, dynamic> base,
+    required Bp2ExerciseDraft draft,
+    ExerciseWeightUnit fallbackUnit = ExerciseWeightUnit.kg,
+  }) {
+    final chosen = draft.has(Bp2Field.weightUnit)
+        ? ExerciseWeightUnit.parseOrNull(draft[Bp2Field.weightUnit])
+        : null;
+    return chosen ??
+        ExerciseWeightUnit.parse(base[Bp2Field.weightUnit],
+            fallback: fallbackUnit);
+  }
+
+  /// A stored increment (canonical kg) as shown in [unit].
+  static String incrementText(dynamic storedKg, ExerciseWeightUnit unit) {
+    final kg = doubleOf(storedKg);
+    // Kilograms read exactly as they always did.
+    if (kg == null || unit == ExerciseWeightUnit.kg) return numberText(storedKg);
+    return formatWeightNumber(unit.fromKg(kg));
+  }
+
   static Bp2ResolvedSettings resolve({
     required String exerciseId,
     required Map<String, dynamic> base,
     required Bp2ExerciseDraft draft,
     required int totalBlockWeeks,
+    ExerciseWeightUnit fallbackUnit = ExerciseWeightUnit.kg,
   }) {
-    final p =
-        project(base: base, draft: draft, totalBlockWeeks: totalBlockWeeks);
+    final p = project(
+        base: base,
+        draft: draft,
+        totalBlockWeeks: totalBlockWeeks,
+        fallbackUnit: fallbackUnit);
+    final unit = unitOf(base: base, draft: draft, fallbackUnit: fallbackUnit);
     final repModel = p['periodizationModel'] as String?;
     final shape = ExerciseModelRegistry.repTargetShape(repModel);
     final wf = _weeklyFrequency(p);
@@ -460,9 +515,10 @@ class Bp2SettingsResolver {
       defaultSets: intOf(p['defaultSets']),
       showVelocity: showVelocity,
       incrementPrimary:
-          text(Bp2Field.incrementPrimary, numberText(inc['primary'])),
-      incrementSecondary:
-          text(Bp2Field.incrementSecondary, numberText(inc['secondary'])),
+          text(Bp2Field.incrementPrimary, incrementText(inc['primary'], unit)),
+      incrementSecondary: text(
+          Bp2Field.incrementSecondary, incrementText(inc['secondary'], unit)),
+      weightUnit: unit,
       repShape: shape,
       repMin: intOf(text(Bp2Field.repMin, range['min']?.toString() ?? '')),
       repMax: intOf(text(Bp2Field.repMax, range['max']?.toString() ?? '')),

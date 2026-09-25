@@ -106,6 +106,10 @@ function leaderboardStore(uid, reader) {
       queueSet(stateRef(uid), Object.assign({}, next, { builtAtMs: Date.now() }));
     },
     getV2State: () => v2.getState(),
+    // A whole-history rebuild is never done here: it is requested as the
+    // bounded rebuild job (showcase/rebuild_job.js).
+    getRebuildJob: () => v2.getRebuildJob(),
+    requestRebuild: (request) => v2.requestRebuild(request),
     async getV2DaysForDates(dateKeys) {
       const out = new Map();
       for (const d of dateKeys) out.set(d, Object.values(await v2.getDaysForDate(d)));
@@ -162,6 +166,7 @@ function leaderboardStore(uid, reader) {
       const ops = [...pending.values()];
       pending.clear();
       await reader.commit(ops);
+      await v2.flush();
     },
   };
 }
@@ -197,31 +202,25 @@ async function ensurePeriods(periodKeys, nowMs) {
 }
 
 /**
- * Applies one request for one athlete. A full rebuild (first build, stale
- * formula, change of sex) can touch hundreds of documents and runs batched;
- * an ordinary date/range recomputation runs in ONE transaction so two changes
- * to the same month re-sum it one after the other.
+ * Applies one date/range request for one athlete in ONE transaction, so two
+ * changes to the same month re-sum it one after the other. A full rebuild —
+ * first build, stale formula — is never run here: applyRequest hands it to
+ * the bounded rebuild job. While that job is active this does nothing (the job
+ * re-scores every date itself).
  */
 async function applyRequestForUser(uid, request) {
   const req = request || {};
-  const stateSnap = await stateRef(uid).get();
-  const needsFull = req.full || !isBuilt(stateSnap.exists ? stateSnap.data() : null);
-  let result;
   let periods = [];
-  if (needsFull) {
-    const store = leaderboardStore(uid, showcaseFs.plainReader());
-    result = await applyRequest(store, Object.assign({}, req, { full: true }));
+  const result = await db().runTransaction(async (tx) => {
+    const store = leaderboardStore(uid, showcaseFs.transactionReader(tx));
+    const job = await store.getRebuildJob();
+    const { isActive } = require('../showcase/rebuild_job');
+    if (isActive(job)) return { path: 'job-active', days: [], periods: [] };
+    const r = await applyRequest(store, req);
     await store.flush();
     periods = store.periodsNoted();
-  } else {
-    result = await db().runTransaction(async (tx) => {
-      const store = leaderboardStore(uid, showcaseFs.transactionReader(tx));
-      const r = await applyRequest(store, req);
-      await store.flush();
-      periods = store.periodsNoted();
-      return r;
-    });
-  }
+    return r;
+  });
   await ensurePeriods(periods);
   return result;
 }
@@ -253,13 +252,9 @@ async function applyOrEnqueue(uid, request, reason) {
   }
 }
 
-/**
- * Workout trigger hook: the workout's own date — or everything, when the
- * profile V2 was just bootstrapped from the whole history.
- */
-async function applyForWorkout(uid, dateKey, options) {
-  const full = !!(options && options.full);
-  return applyOrEnqueue(uid, full ? { full: true } : { dateKeys: [dateKey] }, 'workout');
+/** Workout trigger hook: the workout's own date. */
+async function applyForWorkout(uid, dateKey) {
+  return applyOrEnqueue(uid, { dateKeys: [dateKey] }, 'workout');
 }
 
 /**
@@ -297,15 +292,16 @@ async function weighInRange(uid, event) {
   return until ? { sinceDateKey: since, untilDateKey: until } : { sinceDateKey: since };
 }
 
-/** Weigh-in trigger hook. */
-async function applyForWeighIn(uid, event) {
-  const range = await weighInRange(uid, event);
-  return applyOrEnqueue(uid, range, 'weigh-in');
+/** Range hook (a weigh-in): [sinceDateKey, untilDateKey) — bounds preserved. */
+async function applyForRange(uid, range, reason) {
+  const req = { sinceDateKey: (range && range.sinceDateKey) || '' };
+  if (range && typeof range.untilDateKey === 'string') req.untilDateKey = range.untilDateKey;
+  return applyOrEnqueue(uid, req, reason || 'range');
 }
 
-/** Sex-change hook: every date is re-scored. */
-async function applyForSexChange(uid) {
-  return applyOrEnqueue(uid, { full: true }, 'sex');
+/** Weigh-in trigger hook (kept for callers holding the event). */
+async function applyForWeighIn(uid, event) {
+  return applyForRange(uid, await weighInRange(uid, event), 'weigh-in');
 }
 
 function showcaseCategoriesOf(publicData) {
@@ -416,6 +412,39 @@ function reconcileDeps(nowMs) {
     async processItem(item) {
       for (const req of requestsOfItem(item)) await applyRequestForUser(item.uid, req);
     },
+    async kickStalledJobs(limit) {
+      // Queued/running jobs that stopped advancing (a lost worker invocation)
+      // are nudged; jobs in error are re-queued once a day. Bounded.
+      const stale = (nowMs || Date.now()) - 15 * 60 * 1000;
+      const dayAgo = (nowMs || Date.now()) - 24 * 60 * 60 * 1000;
+      const jobs = db().collection('profileRebuildJobs');
+      let kicked = 0;
+      let requeued = 0;
+      const active = await jobs
+        .where('status', 'in', ['queued', 'running'])
+        .where('updatedAtMs', '<', stale)
+        .limit(limit)
+        .get();
+      for (const d of active.docs) {
+        await d.ref.update({ kick: admin.firestore.FieldValue.increment(1), updatedAtMs: Date.now() });
+        kicked += 1;
+      }
+      const failed = await jobs
+        .where('status', '==', 'error')
+        .where('updatedAtMs', '<', dayAgo)
+        .limit(limit)
+        .get();
+      for (const d of failed.docs) {
+        await d.ref.update({
+          status: 'queued',
+          attempts: 0,
+          kick: admin.firestore.FieldValue.increment(1),
+          updatedAtMs: Date.now(),
+        });
+        requeued += 1;
+      }
+      return { kicked, requeued };
+    },
     async markDone(item) {
       try {
         // Only if nothing was queued for this athlete while it ran.
@@ -465,7 +494,7 @@ module.exports = {
   applyRequestForUser,
   applyForWorkout,
   applyForWeighIn,
-  applyForSexChange,
+  applyForRange,
   enqueueRecalc,
   ensurePeriods,
   currentPeriodKey,

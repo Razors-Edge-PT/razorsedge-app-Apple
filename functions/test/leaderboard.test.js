@@ -143,19 +143,21 @@ test('multiple workouts on one date still give one category winner', () => {
   // into ONE V2 contribution per exercise; two exercises of one category on
   // the date still yield one winner.
   const bw = { weightKg: 80, dateKey: '2026-09-01' };
+  const set = (w) => ({ setKey: 's0', weight: w, reps: 1 });
   const v2Days = [
-    { slot: 'deadlift', category: 'hipHinge', dateKey: '2026-09-02', exerciseId: ID.deadlift, bestE1rm: { setKey: 's0', weight: 200, reps: 1 }, heaviest: { setKey: 's0', weight: 200, reps: 1 } },
-    { slot: 'deadliftSumo', category: 'hipHinge', dateKey: '2026-09-02', exerciseId: ID.sumo, bestE1rm: { setKey: 's0', weight: 210, reps: 1 }, heaviest: { setKey: 's0', weight: 210, reps: 1 } },
+    { slot: 'deadlift', category: 'hipHinge', dateKey: '2026-09-02', exerciseId: ID.deadlift, bestE1rm: set(200), heaviest: set(200), bestPoints: set(200), sets: [set(200)], bodyweight: bw },
+    { slot: 'deadliftSumo', category: 'hipHinge', dateKey: '2026-09-02', exerciseId: ID.sumo, bestE1rm: set(210), heaviest: set(210), bestPoints: set(210), sets: [set(210)], bodyweight: bw },
   ];
-  const day = scoreDay('2026-09-02', v2Days, bw, Sex.MALE);
+  const day = scoreDay('2026-09-02', v2Days, null, Sex.MALE);
   assert.deepStrictEqual(Object.keys(day.categories), ['hipHinge']);
   assert.strictEqual(day.categories.hipHinge.exerciseId, ID.sumo);
 });
 
 test('equal scores in a category tie-break to catalogue order', () => {
   const bw = { weightKg: 80, dateKey: '2026-09-01' };
-  const mk = (slot, id) => ({ slot, dateKey: '2026-09-02', exerciseId: id, bestE1rm: { setKey: 's0', weight: 200, reps: 1 }, heaviest: { setKey: 's0', weight: 200, reps: 1 } });
-  const day = scoreDay('2026-09-02', [mk('deadliftSumo', ID.sumo), mk('deadlift', ID.deadlift)], bw, Sex.MALE);
+  const set = { setKey: 's0', weight: 200, reps: 1 };
+  const mk = (slot, id) => ({ slot, dateKey: '2026-09-02', exerciseId: id, bestE1rm: set, heaviest: set, bestPoints: set, sets: [set], bodyweight: bw });
+  const day = scoreDay('2026-09-02', [mk('deadliftSumo', ID.sumo), mk('deadlift', ID.deadlift)], null, Sex.MALE);
   assert.strictEqual(day.categories.hipHinge.exerciseId, ID.deadlift);
 });
 

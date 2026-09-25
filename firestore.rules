@@ -314,6 +314,11 @@ service cloud.firestore {
       // meant to make meaningful. The super admin keeps full access, matching
       // the existing hard-coded super-admin behaviour elsewhere in this file.
       //
+      // exerciseWeightUnits (each exercise's 'kg' | 'lb' display unit) is
+      // published by showcaseOnExerciseUnitWrite from the owner's own
+      // exerciseSettings.weightUnit — the owner edits it THERE — so it is
+      // server-owned here too, and can only ever hold a validated unit.
+      //
       // username / usernameLower / displayName are EXCLUDED on the same
       // principle: they are owned by the profileChangeUsername callable and
       // its reservation index, not by the client. See identityWriteAllowed()
@@ -324,7 +329,8 @@ service cloud.firestore {
                         && !request.resource.data
                               .diff(resource == null ? {} : resource.data)
                               .affectedKeys()
-                              .hasAny(['profileShowcaseV1', 'profileShowcaseV2'])
+                              .hasAny(['profileShowcaseV1', 'profileShowcaseV2',
+                                       'exerciseWeightUnits'])
                         && identityWriteAllowed()
                       );
     }
@@ -350,6 +356,13 @@ service cloud.firestore {
 
     // Private retry queue of the leaderboard functions. No client access.
     match /leaderboardRecalcQueue/{queueUid} {
+      allow read, write: if false;
+    }
+
+    // Per-athlete bounded rebuild jobs (functions/showcase/rebuild_job.js).
+    // Server-only: a client that could write one could stall or restart
+    // another athlete's rebuild.
+    match /profileRebuildJobs/{jobUid} {
       allow read, write: if false;
     }
 

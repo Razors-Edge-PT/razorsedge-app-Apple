@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localtest222/units/exercise_unit_registry.dart';
 import 'package:localtest222/profile/core/big_five.dart';
 import 'package:localtest222/profile/core/re_catalog.dart';
 import 'package:localtest222/profile/core/showcase_models.dart';
@@ -291,12 +292,52 @@ void main() {
         await choose(tester, 'horizontalPress', kBench);
         expect(inCard('horizontalPress', find.text('Bench Press, Barbell')),
             findsOneWidget);
-        expect(inCard('horizontalPress', find.text('66.39')), findsOneWidget);
+        // Best RE Points is the LIGHTER 95 kg set at 65 kg bodyweight, not the
+        // 100 kg Best E1RM set: its own score, its own source line.
+        expect(inCard('horizontalPress', find.text('73.47')), findsOneWidget);
         expect(inCard('horizontalPress', find.text('100 kg')), findsWidgets);
+        expect(
+            inCard('horizontalPress',
+                find.textContaining('from 95 kg × 1 · 5 Feb 2026')),
+            findsOneWidget);
         // Every other card is untouched.
         expect(inCard('verticalPull', find.text('Chin-Up')), findsOneWidget);
         expect(inCard('hipHinge', find.text('Deadlift, Conventional')),
             findsOneWidget);
+      });
+
+      testWidgets(
+          '$who: loads show in the owner-chosen per-exercise unit; points never change',
+          (WidgetTester tester) async {
+        // The owner chose pounds for Bench Press and Chin-Up only. The same
+        // published choice is what a friend's view is built from.
+        final ShowcaseView view = ShowcaseView(
+          showcase: ProfileShowcase.empty,
+          showcaseV2: ProfileShowcaseV2.fromMap(golden),
+          exerciseUnits: ExerciseUnits(
+            published: ExerciseUnits.parsePublished(
+                <String, Object?>{kBench: 'lb', kChin: 'lb'}),
+          ),
+        );
+        await pump(tester, view, isOwner: isOwner);
+        // Bodyweight-loaded: +20 kg added load shown as +44.1 lb.
+        expect(inCard('verticalPull', find.textContaining('lb')), findsWidgets);
+        expect(inCard('verticalPull', find.textContaining('+44.1 lb')),
+            findsWidgets);
+        expect(inCard('verticalPull', find.textContaining('kg')), findsNothing);
+        expect(inCard('verticalPull', find.text('66.39')), findsOneWidget);
+        // An exercise left in kilograms stays in kilograms.
+        expect(inCard('hipHinge', find.textContaining(' kg')), findsWidgets);
+        expect(inCard('hipHinge', find.textContaining(' lb')), findsNothing);
+
+        await choose(tester, 'horizontalPress', kBench);
+        expect(inCard('horizontalPress', find.text('220.5 lb')), findsWidgets);
+        expect(
+            inCard('horizontalPress',
+                find.textContaining('from 209.4 lb × 1 · 5 Feb 2026')),
+            findsOneWidget);
+        expect(inCard('horizontalPress', find.text('73.47')), findsOneWidget,
+            reason: 'RE Points are scored in kg whatever the display unit');
       });
     }
 

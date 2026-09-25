@@ -1,3 +1,5 @@
+import 'units/exercise_unit_registry.dart';
+import 'units/weight_unit.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -42,9 +44,19 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
   String get userId => UserContext.of(context, listen: false).currentUid;
 
+  /// This exercise's display unit; top sets stay canonical kilograms.
+  ExerciseWeightUnit get _unit =>
+      ExerciseUnitRegistry.shared.unitsFor(userId).unitFor(widget.exerciseId);
+
+  void _onUnitsChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
+    // Loads are shown in each exercise's unit; rebuild when a unit arrives.
+    ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     _loadInitialWorkouts();
     _scrollController.addListener(_onScroll);
     final uid = userId;
@@ -89,6 +101,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
   @override
   void dispose() {
+    ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
@@ -419,19 +432,19 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                   final double? added = load.addedKg;
                   final double? total = load.totalKg;
                   weightLabel = added != null
-                      ? '+${(added < 0 ? 0.0 : added).toStringAsFixed(1)} kg'
-                      : '${(total ?? 0.0).toStringAsFixed(1)} kg total';
+                      ? '+${formatWeightKg(added < 0 ? 0.0 : added, _unit)}'
+                      : '${formatWeightKg(total ?? 0.0, _unit)} total';
                   if (total != null && dayBw != null) {
                     final double e = calculateE1RM(total,
                             (topSet!.reps ?? 0).toDouble(), topSet!.rir ?? 0.0) -
                         dayBw;
-                    e1rmLabel = '+${(e < 0 ? 0.0 : e).toStringAsFixed(1)} kg';
+                    e1rmLabel = '+${formatWeightKg(e < 0 ? 0.0 : e, _unit)}';
                   } else {
                     e1rmLabel = '— (BW not recorded)';
                   }
                 } else {
-                  weightLabel = '${(topSet!.weight ?? 0.0).toStringAsFixed(1)} kg';
-                  e1rmLabel = '${highestE1RM.toStringAsFixed(1)} kg';
+                  weightLabel = formatWeightKg(topSet!.weight ?? 0.0, _unit);
+                  e1rmLabel = formatWeightKg(highestE1RM, _unit);
                 }
 
                 return Card(

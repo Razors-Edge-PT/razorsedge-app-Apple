@@ -1,6 +1,7 @@
 /// One catalogue row of Block Planner 2 and its inline settings panel.
 library;
 
+import '../units/weight_unit.dart';
 import 'package:flutter/material.dart';
 
 import '../exercise_catalog.dart';
@@ -107,8 +108,16 @@ class Bp2ExerciseSettingsPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _WeightUnitField(
+          key: ValueKey('bp2-weight-unit-$id'),
+          value: r.weightUnit,
+          onChanged: (u) =>
+              controller.edit(id, Bp2Field.weightUnit, u.storageValue),
+        ),
+        const SizedBox(height: 10),
         _twoUp(
           left: _IncrementsField(
+            unit: r.weightUnit,
             primary: r.incrementPrimary,
             secondary: r.incrementSecondary,
             errorText: errors[Bp2Field.incrementPrimary] ??
@@ -257,12 +266,14 @@ class _Labelled extends StatelessWidget {
 }
 
 class _IncrementsField extends StatelessWidget {
+  final ExerciseWeightUnit unit;
   final String primary;
   final String secondary;
   final String? errorText;
   final ValueChanged<String> onPrimary;
   final ValueChanged<String> onSecondary;
   const _IncrementsField({
+    this.unit = ExerciseWeightUnit.kg,
     required this.primary,
     required this.secondary,
     required this.errorText,
@@ -273,7 +284,8 @@ class _IncrementsField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _Labelled(
-      label: 'Increments',
+      label:
+          unit == ExerciseWeightUnit.kg ? 'Increments' : 'Increments (lb)',
       errorText: errorText,
       child: Row(
         children: [
@@ -399,6 +411,42 @@ class _SummaryTile extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Kilograms (kg) / Pounds (lb) for one exercise — the same
+/// `exerciseSettings.weightUnit` leaf the WES2 settings cog edits.
+class _WeightUnitField extends StatelessWidget {
+  final ExerciseWeightUnit value;
+  final ValueChanged<ExerciseWeightUnit> onChanged;
+  const _WeightUnitField({super.key, required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return _Labelled(
+      label: 'Weight unit',
+      child: SizedBox(
+        height: 48,
+        child: DropdownButtonFormField<ExerciseWeightUnit>(
+          key: ValueKey('bp2-unit-dropdown-${value.storageValue}'),
+          initialValue: value,
+          isExpanded: true,
+          isDense: true,
+          decoration: const InputDecoration(
+            isDense: true,
+            border: OutlineInputBorder(),
+            contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          ),
+          items: [
+            for (final u in ExerciseWeightUnit.values)
+              DropdownMenuItem(value: u, child: Text(u.choiceLabel)),
+          ],
+          onChanged: (u) {
+            if (u != null) onChanged(u);
+          },
         ),
       ),
     );

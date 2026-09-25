@@ -92,8 +92,10 @@ async function recomputeDates(store, dateKeys, v2ByDate) {
 
   // Reads first (transaction contract): sources, then the months' days.
   const byDate = v2ByDate || (await store.getV2DaysForDates(keys));
-  const scoredDates = keys.filter((d) => (byDate.get(d) || []).length > 0);
-  const bwByDate = await bodyweightsFor(store, scoredDates);
+  // V2 day contributions carry the bodyweight recorded for their date; only a
+  // contribution stored without one needs a lookup.
+  const needBw = keys.filter((d) => (byDate.get(d) || []).some((x) => !('bodyweight' in x)));
+  const bwByDate = await bodyweightsFor(store, needBw);
   const sex = scoringSexOf(await store.getScoringSex());
   const identity = await store.getPublicProfile();
   const monthDays = new Map();
@@ -127,6 +129,17 @@ async function recomputeDates(store, dateKeys, v2ByDate) {
   return { days: changedDays, periods };
 }
 
+/** Re-sums ONE month's entry from all of that month's day documents. */
+async function recomputeMonth(store, periodKey) {
+  const days = await store.listRePointDaysForPeriod(periodKey);
+  const identity = await store.getPublicProfile();
+  const entry = monthEntryFromDays(store.uid, periodKey, days, identity);
+  if (entry) await store.setEntry(periodKey, entry);
+  else await store.deleteEntry(periodKey);
+  if (typeof store.notePeriods === 'function') store.notePeriods([periodKey]);
+  return entry;
+}
+
 /**
  * Rewrites the all-time entry from the published profileShowcaseV2.
  * Returns 'set' | 'deleted' | 'stale' (left alone: another formula version).
@@ -154,7 +167,8 @@ async function refreshAllTime(store) {
 async function rebuildUser(store) {
   const byDate = groupByDate(await store.listAllV2Days());
   const existing = await store.listAllRePointDays();
-  const bwByDate = await resolveBodyweights(store, [...byDate.keys()]);
+  const needBw = [...byDate.keys()].filter((d) => byDate.get(d).some((x) => !('bodyweight' in x)));
+  const bwByDate = await resolveBodyweights(store, needBw);
   const sex = scoringSexOf(await store.getScoringSex());
   const identity = await store.getPublicProfile();
 
@@ -202,6 +216,12 @@ async function applyRequest(store, request) {
   const req = request || {};
   const state = await store.getState();
   if (req.full || !isBuilt(state)) {
+    // Production stores hand a whole-history rebuild to the bounded rebuild
+    // job (showcase/rebuild_job.js); the in-memory store rebuilds in place.
+    if (typeof store.requestRebuild === 'function') {
+      await store.requestRebuild({ mode: 'leaderboard', reason: req.reason || (req.full ? 'full' : 'unbuilt') });
+      return { path: 'queued', days: [], periods: [] };
+    }
     return Object.assign({ path: 'rebuild' }, await rebuildUser(store));
   }
   if (req.sinceDateKey !== undefined) {
@@ -295,6 +315,8 @@ function memoryLeaderboardStore(uid, options) {
 
 module.exports = {
   isBuilt,
+  sameDoc,
+  recomputeMonth,
   recomputeDates,
   refreshAllTime,
   rebuildUser,

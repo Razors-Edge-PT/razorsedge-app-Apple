@@ -63,7 +63,7 @@ class _ProfileScreenState extends State<ProfileScreen>
     with WidgetsBindingObserver {
   ProfileController? _controller;
   final ImagePicker _picker = ImagePicker();
-  WeightUnits _units = WeightUnits.kilograms;
+  final WeightUnits _units = WeightUnits.kilograms;
   String? _startupError;
 
   @override
@@ -128,8 +128,8 @@ class _ProfileScreenState extends State<ProfileScreen>
   }
 
   Future<void> _loadUnits(String uid, ProfileServices services) async {
-    final WeightUnits units = await services.weightUnitsFor(uid);
-    if (mounted) setState(() => _units = units);
+    // Loads are shown per exercise in the OWNER's unit (ShowcaseView
+    // .unitsFor, from their public profile) — the same for every viewer.
   }
 
   @override
@@ -603,10 +603,11 @@ class _ProfileScreenState extends State<ProfileScreen>
         for (final ShowcaseRecord? r in <ShowcaseRecord?>[
           e.bestE1rm,
           e.heaviest,
+          e.pointsRecord,
         ]) {
           if (r != null && r.fingerprint == fingerprint) {
             return '${e.exercise.displayName} · '
-                '${_units.format(r.weight)} × ${r.reps} · '
+                '${c.showcase.unitsFor(e.exerciseId).format(r.weight)} × ${r.reps} · '
                 '${_units.formatDate(r.dateKey)}';
           }
         }

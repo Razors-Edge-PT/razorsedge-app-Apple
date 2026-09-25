@@ -1,3 +1,5 @@
+import 'units/exercise_unit_registry.dart';
+import 'units/weight_unit.dart';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -741,6 +743,16 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
   /// both null and the picker below fills them in — restored from this
   /// athlete's last selection when one exists, or chosen from the dropdown.
   String? _activeExerciseId;
+
+  /// The exercise's display unit (the athlete's exerciseSettings.weightUnit).
+  /// History stays canonical kilograms; every load, E1RM and chart value this
+  /// screen shows is converted once, here, for display.
+  ExerciseWeightUnit get _unit =>
+      ExerciseUnitRegistry.shared.unitsFor(userId).unitFor(_activeExerciseId);
+
+  void _onUnitsChanged() {
+    if (mounted) setState(() {});
+  }
   String? _activeExerciseName;
 
   bool get _hasExercise => _activeExerciseId != null || _activeExerciseName != null;
@@ -1527,8 +1539,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
     );
   }
 
-  String _formatKg(double w) =>
-      '${w.toStringAsFixed(w == w.truncateToDouble() ? 0 : 1)} kg';
+  String _formatKg(double weightKg) => formatWeightKg(weightKg, _unit);
 
   /// Builds the velocity title row, dropdowns, and chart (or its loading /
   /// empty / one-point / error states). Returns a flat widget list so the
@@ -2026,6 +2037,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
   @override
   void initState() {
     super.initState();
+    ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     WidgetsBinding.instance.addObserver(this);
     _onRepTargetChanged(_repTargetCtrl.text); // seed groups from "5"
     final selectedUid = UserContext.of(context, listen: false).currentUid;
@@ -2076,6 +2088,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
 
   @override
   void dispose() {
+    ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     WidgetsBinding.instance.removeObserver(this);
     _repTargetCtrl.dispose();
     _loader?.removeListener(_onLoaderChanged);
@@ -2246,7 +2259,8 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
       final spots = <FlSpot>[];
       for (final p in pts) {
         final x = dateToX2[p.date]!;
-        spots.add(FlSpot(x, p.value));
+        // Plotted in the exercise's unit (axis, ticks and tooltip agree).
+        spots.add(FlSpot(x, _unit.fromKg(p.value)));
       }
       spotsByGroup.add(spots);
     }
@@ -2310,7 +2324,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
 
     final List<FlSpot> spots = [
       for (var i = 0; i < filtered.length; i++)
-        FlSpot(i.toDouble(), filtered[i].value)
+        FlSpot(i.toDouble(), _unit.fromKg(filtered[i].value))
     ];
 
     final xTickSet = computeXTickIndices(filtered.length);
@@ -2657,7 +2671,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
                           if (date != null) {
                             final meta = _metaAllTop[date];
                             if (meta != null) {
-                              weightRepsLine = '${meta.weight.toStringAsFixed(1)} kg × ${meta.reps}';
+                              weightRepsLine = '${formatWeightKg(meta.weight, _unit)} × ${meta.reps}';
                               if (meta.rir.abs() > 1e-6) {
                                 rirLine = 'RIR ${meta.rir.toStringAsFixed(1)}';
                               }
@@ -2668,7 +2682,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
                           final dateStr = (date != null) ? DateFormat('d MMMM').format(date) : '';
 
                           final text = [
-                            'E1RM: $e1rm kg',
+                            'E1RM: $e1rm ${_unit.suffix}',
                             if (weightRepsLine.isNotEmpty) weightRepsLine,
                             if (rirLine.isNotEmpty) rirLine,
                             if (dateStr.isNotEmpty) dateStr,
@@ -2904,7 +2918,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
                           if (date != null && gi >= 0 && gi < metaByGroup.length) {
                             final meta = metaByGroup[gi][date];
                             if (meta != null) {
-                              weightRepsLine = '${meta.weight.toStringAsFixed(1)} kg × ${meta.reps}';
+                              weightRepsLine = '${formatWeightKg(meta.weight, _unit)} × ${meta.reps}';
                               if (meta.rir.abs() > 1e-6) {
                                 rirLine = 'RIR ${meta.rir.toStringAsFixed(1)}';
                               }
@@ -2915,7 +2929,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
                           final dateStr = (date != null) ? DateFormat('d MMMM').format(date) : '';
 
                           final text = [
-                            'E1RM: $e1rm kg',
+                            'E1RM: $e1rm ${_unit.suffix}',
                             if (weightRepsLine.isNotEmpty) weightRepsLine,
                             if (rirLine.isNotEmpty) rirLine,
                             if (dateStr.isNotEmpty) dateStr,
@@ -2992,21 +3006,21 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen>
             final double? added = load.addedKg;
             final double? total = load.totalKg;
             weightLabel = added != null
-                ? '+${(added < 0 ? 0.0 : added).toStringAsFixed(1)} kg'
-                : '${(total ?? 0.0).toStringAsFixed(1)} kg total';
+                ? '+${formatWeightKg(added < 0 ? 0.0 : added, _unit)}'
+                : '${formatWeightKg(total ?? 0.0, _unit)} total';
             if (total != null && dayBw != null) {
               final double e = calculateE1RM(
                       total, (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0) -
                   dayBw;
-              e1rmLabel = '+${(e < 0 ? 0.0 : e).toStringAsFixed(1)} kg';
+              e1rmLabel = '+${formatWeightKg(e < 0 ? 0.0 : e, _unit)}';
             } else {
               e1rmLabel = '— (BW not recorded)';
             }
           } else {
             final double e1rm = calculateE1RM(topSet.weight ?? 0.0,
                 (topSet.reps ?? 0).toDouble(), topSet.rir ?? 0.0);
-            weightLabel = '${(topSet.weight ?? 0.0).toStringAsFixed(1)} kg';
-            e1rmLabel = '${e1rm.toStringAsFixed(1)} kg';
+            weightLabel = formatWeightKg(topSet.weight ?? 0.0, _unit);
+            e1rmLabel = formatWeightKg(e1rm, _unit);
           }
 
           return ListTile(

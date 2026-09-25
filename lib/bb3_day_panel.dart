@@ -1,3 +1,5 @@
+import 'units/exercise_unit_registry.dart';
+import 'units/weight_unit.dart';
 import 'package:flutter/material.dart';
 import 'app_theme.dart';
 import 'package:intl/intl.dart';
@@ -96,6 +98,75 @@ class BB3DayPanel extends StatefulWidget {
 }
 
 class _BB3DayPanelState extends State<BB3DayPanel> {
+  // ── Per-exercise weight units ──────────────────────────────────────────────
+  // Planned and completed loads are canonical KILOGRAMS; each exercise's are
+  // shown and entered in its unit (exerciseSettings.weightUnit). The hint
+  // strings the cascade passes around stay in kilograms — only what a person
+  // sees or types is converted, here.
+
+  ExerciseWeightUnit _unitFor(String exId) =>
+      ExerciseUnitRegistry.shared.unitsFor(widget.uid).unitFor(exId);
+
+  /// A canonical kg load as the weight field shows it.
+  String _wText(double kg, String exId) =>
+      formatWeightNumber(_unitFor(exId).fromKg(kg));
+
+  /// The canonical kg each weight field was filled with, per exercise/set. A
+  /// field whose text still shows exactly that value is UNCHANGED and keeps
+  /// that exact kg — so re-saving a set never re-derives it from rounded
+  /// display text and can never drift.
+  final Map<String, List<double?>> _weightBaseKg = {};
+
+  /// Weight-field text → canonical kg (null when empty or not a number).
+  double? _wKg(String exId, int setIndex, String text) {
+    final String t = text.trim();
+    if (t.isEmpty) return null;
+    final List<double?>? bases = _weightBaseKg[exId];
+    final double? base =
+        (bases != null && setIndex < bases.length) ? bases[setIndex] : null;
+    if (base != null && t == _wText(base, exId)) return base;
+    return parseDisplayToKg(t, _unitFor(exId));
+  }
+
+  /// A kilogram hint display ("80" or "80–85") in the exercise's unit.
+  String _hintText(String kgDisplay, String exId) {
+    if (_unitFor(exId) == ExerciseWeightUnit.kg) return kgDisplay;
+    return kgDisplay.split('–').map((String part) {
+      final double? kg = double.tryParse(part.trim());
+      return kg == null ? part : _wText(kg, exId);
+    }).join('–');
+  }
+
+  void _onUnitsChanged() {
+    if (!mounted) return;
+    // Re-express every untouched field in its (possibly new) unit.
+    _weightBaseKg.forEach((String exId, List<double?> bases) {
+      final List<TextEditingController>? ctrls = _weightCtrl[exId];
+      if (ctrls == null) return;
+      for (int i = 0; i < ctrls.length && i < bases.length; i++) {
+        final double? base = bases[i];
+        if (base == null) continue;
+        final String shown = _wText(base, exId);
+        if (ctrls[i].text != shown &&
+            double.tryParse(ctrls[i].text.trim()) != null &&
+            _looksUnchanged(exId, i)) {
+          ctrls[i].text = shown;
+        }
+      }
+    });
+    setState(() {});
+  }
+
+  /// True when field [i] of [exId] still holds its base value in SOME unit.
+  bool _looksUnchanged(String exId, int i) {
+    final double? base = _weightBaseKg[exId]?[i];
+    final String t = _weightCtrl[exId]![i].text.trim();
+    if (base == null) return false;
+    for (final ExerciseWeightUnit u in ExerciseWeightUnit.values) {
+      if (t == formatWeightNumber(u.fromKg(base))) return true;
+    }
+    return false;
+  }
   // Controllers keyed by exerciseId → set index (never row index)
   final Map<String, List<TextEditingController>> _weightCtrl = {};
   final Map<String, List<TextEditingController>> _repsCtrl = {};
@@ -125,6 +196,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
   @override
   void initState() {
     super.initState();
+    ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     _rebuildControllers(widget.plannedExercises);
   }
 
@@ -146,6 +218,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
 
   @override
   void dispose() {
+    ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     // Best-effort flush: snapshot current controller state before controllers are
     // disposed. Calls savePlannedDay directly — no setState — so this is safe even
     // after the parent (BB3WeekPlanner) has been deactivated. The returned Future is
@@ -270,8 +343,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         final s = si < ex.sets.length ? ex.sets[si] : const BB3Set();
 
         _weightCtrl[id]!.add(TextEditingController(
-          text: s.weight != null ? _fmtNum(s.weight!) : '',
+          text: s.weight != null ? _wText(s.weight!, id) : '',
         ));
+        (_weightBaseKg[id] ??= <double?>[]).add(s.weight);
         _repsCtrl[id]!.add(TextEditingController(
           text: s.reps != null ? s.reps.toString() : '',
         ));
@@ -304,6 +378,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       // Trim if shrunk
       while (_weightCtrl[id]!.length > setCount) {
         _weightCtrl[id]!.removeLast().dispose();
+        final List<double?>? bases = _weightBaseKg[id];
+        if (bases != null && bases.length > _weightCtrl[id]!.length) {
+          bases.removeLast();
+        }
         _repsCtrl[id]!.removeLast().dispose();
         _rirCtrl[id]!.removeLast().dispose();
         _notesCtrl[id]!.removeLast().dispose();
@@ -395,7 +473,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       final setCount = wList.length;
 
       final sets = List<BB3Set>.generate(setCount, (si) {
-        final w = double.tryParse(wList[si].text.trim());
+        final w = _wKg(exId, si, wList[si].text);
         final r = int.tryParse(rList[si].text.trim());
         final rir = double.tryParse(rirList[si].text.trim());
         final notes = nList.length > si ? nList[si].text.trim() : null;
@@ -850,7 +928,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
                           ),
                         ),
                         if (w != null)
-                          Text('${w}kg  ',
+                          Text('${formatWeightKg(w, _unitFor(exerciseId), maxDecimals: 3, withSuffix: false)}${_unitFor(exerciseId).suffix}  ',
                               style: theme.textTheme.bodySmall
                                   ?.copyWith(fontStyle: FontStyle.italic)),
                         if (r != null)
@@ -1107,7 +1185,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final rCtrls = _repsCtrl[exId];
     final rirCtrls = _rirCtrl[exId];
     final double? userW0 = (wCtrls != null && wCtrls.isNotEmpty)
-        ? double.tryParse(wCtrls[0].text.trim())
+        ? _wKg(exId, 0, wCtrls[0].text)
         : null;
     final int? userR0 = (rCtrls != null && rCtrls.isNotEmpty)
         ? int.tryParse(rCtrls[0].text.trim())
@@ -1640,7 +1718,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final rirFn = fns[setIndex * 3 + 2];
 
     final double? userWeight =
-        locked ? null : double.tryParse(wCtrl.text.trim());
+        locked ? null : _wKg(exId, setIndex, wCtrl.text);
     final int? userReps = locked ? null : int.tryParse(rCtrl.text.trim());
     final double? userRir =
         locked ? null : double.tryParse(rirCtrl.text.trim());
@@ -1665,7 +1743,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     if (dispW != null && dispW > 0 && dispRRaw != null && dispRRaw > 0) {
       final e1rm =
           PeriodizationModelUtils.calculateE1RM(dispW, dispRRaw, dispRir);
-      if (e1rm > 0) e1rmLabel = _fmtNum(e1rm);
+      if (e1rm > 0) e1rmLabel = _fmtNum(_unitFor(exId).fromKg(e1rm));
     }
 
     final velCtrls = _velocityCtrl[exId];
@@ -1691,9 +1769,11 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           ctrl: wCtrl,
           focusNode: wFn,
           hint: completedSet != null
-              ? (completedSet['weight']?.toString() ?? '')
-              : hint.weightDisplay,
-          label: 'kg',
+              ? ((completedSet['weight'] as num?) == null
+                  ? ''
+                  : _wText((completedSet['weight'] as num).toDouble(), exId))
+              : _hintText(hint.weightDisplay, exId),
+          label: _unitFor(exId).suffix,
           locked: locked,
           hasUserValue: completedSet != null
               ? (completedSet['weight'] != null)
@@ -1833,7 +1913,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     String e1rmLabel = '';
     if (dispW != null && dispW > 0 && dispR != null && dispR > 0) {
       final e1rm = PeriodizationModelUtils.calculateE1RM(dispW, dispR, dispRir);
-      if (e1rm > 0) e1rmLabel = _fmtNum(e1rm);
+      if (e1rm > 0) e1rmLabel = _fmtNum(_unitFor(exId).fromKg(e1rm));
     }
     final String velValue =
         _fmtVelocity((completedSet['velocity'] as num?)?.toDouble());
@@ -1841,8 +1921,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     return [
       _lockedReadOnlyCell(
           theme: theme,
-          value: completedSet['weight']?.toString() ?? '',
-          label: 'kg',
+          value: (completedSet['weight'] as num?) == null
+              ? ''
+              : _wText((completedSet['weight'] as num).toDouble(), exId),
+          label: _unitFor(exId).suffix,
           width: wWidth),
       const SizedBox(width: 3),
       _lockedReadOnlyCell(
@@ -2142,8 +2224,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     _focusNodes[id] = [];
     _velocityCtrl[id] = [];
     _velocityFocusNodes[id] = [];
+    _weightBaseKg[id] = <double?>[];
     for (int si = 0; si < setCount; si++) {
       _weightCtrl[id]!.add(TextEditingController());
+      _weightBaseKg[id]!.add(null);
       _repsCtrl[id]!.add(TextEditingController());
       _rirCtrl[id]!.add(TextEditingController());
       _notesCtrl[id]!.add(TextEditingController());

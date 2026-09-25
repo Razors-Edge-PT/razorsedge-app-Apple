@@ -140,6 +140,8 @@ class _CategoryCardState extends State<CategoryCard> {
     final ShowcaseCategorySnapshot category = widget.category;
     final ShowcaseExerciseSnapshot shown = _shown;
     final String key = category.category.key;
+    // Loads are shown in the OWNER's unit for this exercise, for every viewer.
+    final WeightUnits units = widget.view.unitsFor(shown.exerciseId);
 
     return Container(
       margin: const EdgeInsets.fromLTRB(
@@ -194,6 +196,20 @@ class _CategoryCardState extends State<CategoryCard> {
               key: ValueKey<String>('showcase-points-$key'),
               points: shown.rePoints,
             ),
+            // Best RE Points is its own set. When it is not the Best E1RM or
+            // Heaviest set, say which set it was — and let a proof attach to
+            // THAT set, never to another one.
+            if (shown.pointsSetIsDistinct)
+              _PointsSource(
+                key: ValueKey<String>('showcase-points-source-$key'),
+                record: shown.pointsRecord!,
+                units: units,
+                view: widget.view,
+                isOwner: widget.isOwner,
+                onAddProof: widget.onAddProof,
+                onOpenProof: widget.onOpenProof,
+                onRemoveProof: widget.onRemoveProof,
+              ),
           ],
           const SizedBox(height: ProfileSpacing.md),
           if (!shown.hasRecord)
@@ -212,7 +228,7 @@ class _CategoryCardState extends State<CategoryCard> {
                   child: _RecordColumn(
                     label: 'BEST E1RM',
                     record: shown.bestE1rm,
-                    units: widget.units,
+                    units: units,
                     view: widget.view,
                     isOwner: widget.isOwner,
                     isE1rm: true,
@@ -235,7 +251,7 @@ class _CategoryCardState extends State<CategoryCard> {
                   child: _RecordColumn(
                     label: 'HEAVIEST',
                     record: shown.heaviest,
-                    units: widget.units,
+                    units: units,
                     view: widget.view,
                     isOwner: widget.isOwner,
                     isE1rm: false,
@@ -320,6 +336,59 @@ class _ExercisePicker extends StatelessWidget {
             size: 22,
             color: ProfilePalette.action,
             semanticLabel: 'Choose exercise',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The Best RE Points set when it differs from the two other records:
+/// "from 140 kg × 1 · 10 Mar 2026", and its own proof control.
+class _PointsSource extends StatelessWidget {
+  const _PointsSource({
+    super.key,
+    required this.record,
+    required this.units,
+    required this.view,
+    required this.isOwner,
+    required this.onAddProof,
+    required this.onOpenProof,
+    required this.onRemoveProof,
+  });
+
+  final ShowcaseRecord record;
+  final WeightUnits units;
+  final ShowcaseView view;
+  final bool isOwner;
+  final void Function(ShowcaseRecord record) onAddProof;
+  final void Function(ProofRecord proof) onOpenProof;
+  final void Function(ShowcaseRecord record, ProofRecord proof) onRemoveProof;
+
+  @override
+  Widget build(BuildContext context) {
+    final RecordPresentation shown =
+        presentShowcaseRecord(record: record, isE1rm: false, units: units);
+    final String note =
+        shown.bodyweightNote == null ? '' : ' (${shown.bodyweightNote})';
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: ProfileSpacing.sm,
+        runSpacing: ProfileSpacing.xs,
+        children: <Widget>[
+          Text(
+            'from ${shown.source}$note · ${units.formatDate(record.dateKey)}',
+            style: ProfileText.caption(context),
+          ),
+          _ProofControl(
+            record: record,
+            proof: view.proofFor(record),
+            isOwner: isOwner,
+            onAddProof: onAddProof,
+            onOpenProof: onOpenProof,
+            onRemoveProof: onRemoveProof,
           ),
         ],
       ),

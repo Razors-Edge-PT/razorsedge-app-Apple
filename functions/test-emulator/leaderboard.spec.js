@@ -47,6 +47,7 @@ async function wipe(uid) {
     await lb.entryRef(p, uid).delete().catch(() => {});
   }
   await lb.queueRef(uid).delete().catch(() => {});
+  await showcase.jobRef(uid).delete().catch(() => {});
 }
 
 async function weighIn(uid, dateKey, weight) {
@@ -61,7 +62,9 @@ async function logWorkout(uid, dateKey, data) {
   if (data) await ref.set(data);
   else await ref.delete();
   const v2 = await showcase.applyWorkoutDayV2Transactionally(uid, dateKey, data);
-  if (v2.changed) await lb.applyForWorkout(uid, dateKey, { full: v2.path === 'bootstrap' });
+  if (v2.changed && v2.path !== 'queued') await lb.applyForWorkout(uid, dateKey);
+  // The worker: finish any job the athlete now has (first leaderboard build).
+  await showcase.runRebuildFor(uid);
   return v2;
 }
 
@@ -155,7 +158,8 @@ test('a back-dated weigh-in re-scores only the dates it governs', async () => {
     const event = { data: { before: { exists: false }, after: snap } };
     const range = await lb.weighInRange(uid, event);
     assert.deepEqual(range, { sinceDateKey: '2026-09-10', untilDateKey: '2026-09-18' });
-    await lb.applyForWeighIn(uid, event);
+    await showcase.refreshV2Transactionally(uid, Object.assign({ bodyweight: true }, range));
+    await lb.applyForRange(uid, range, 'weigh-in');
     const d = async (k) => (await lb.daysCol(uid).doc(k).get()).data().totalPointsUnits;
     assert.equal(await d('2026-09-05'), units(100, 1, 80));
     assert.equal(await d('2026-09-12'), units(100, 1, 90));

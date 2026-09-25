@@ -464,6 +464,8 @@ module.exports = {
   recordFingerprint,
   extractBigFiveSets,
   extractSetsWith,
+  casingForDay,
+  candidateSet,
   summarizeWorkoutDay,
   summarizeWorkoutDayWith,
   summarizeSlotDay,

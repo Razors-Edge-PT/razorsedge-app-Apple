@@ -7,6 +7,7 @@
 /// which set holds a record.
 library;
 
+import '../../units/weight_unit.dart';
 import 'package:intl/intl.dart';
 
 /// The unit a profile is displayed in.
@@ -22,7 +23,13 @@ class WeightUnits {
 
   final WeightUnit unit;
 
-  static const double _kgPerLb = 0.45359237;
+  /// The display for one exercise's [ExerciseWeightUnit] — the profile shows
+  /// every exercise in its OWNER's unit, for every viewer.
+  static WeightUnits of(ExerciseWeightUnit unit) =>
+      unit == ExerciseWeightUnit.lb ? pounds : kilograms;
+
+  ExerciseWeightUnit get exerciseUnit =>
+      unit == WeightUnit.lb ? ExerciseWeightUnit.lb : ExerciseWeightUnit.kg;
 
   /// Reads the preference from a user document. Anything unrecognised — and
   /// the overwhelmingly common case of the field being absent — is kilograms.
@@ -40,7 +47,7 @@ class WeightUnits {
   String get suffix => unit == WeightUnit.lb ? 'lb' : 'kg';
 
   /// Converts a canonical kilogram value for display.
-  double convert(double kg) => unit == WeightUnit.lb ? kg / _kgPerLb : kg;
+  double convert(double kg) => exerciseUnit.fromKg(kg);
 
   /// "180 kg", "182.5 kg", "400 lb". Trailing ".0" is dropped so whole numbers
   /// read as whole numbers.

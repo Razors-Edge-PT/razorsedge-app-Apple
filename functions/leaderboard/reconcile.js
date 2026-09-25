@@ -9,7 +9,8 @@
 //      select the period by its key, so a late scheduler changes nothing.
 //   2. enqueues athletes whose visible entries (current month, all time) were
 //      written under another formula version — bounded by staleScanLimit.
-//   3. works the queue in pages, oldest first, up to maxUsers items: each item
+//   3. nudges stalled profile rebuild jobs and re-queues failed ones (bounded)
+//   4. works the queue in pages, oldest first, up to maxUsers items: each item
 //      is recomputed from its sources (idempotent), then removed; a failure
 //      increments its attempt count and leaves it for the next run. Items that
 //      exhausted maxAttempts are skipped (and counted) so they cannot starve
@@ -66,6 +67,14 @@ async function runReconciliation(deps, limits) {
     counts.staleEnqueued += 1;
   }
 
+  // Rebuild jobs (showcase/rebuild_job.js) that stopped advancing are nudged,
+  // and jobs in error are re-queued — bounded, never a scan of every athlete.
+  if (typeof deps.kickStalledJobs === 'function') {
+    const k = await deps.kickStalledJobs(L.staleScanLimit);
+    counts.jobsKicked = (k && k.kicked) || 0;
+    counts.jobsRequeued = (k && k.requeued) || 0;
+  }
+
   let after = null;
   let seen = 0;
   while (seen < L.maxUsers) {
@@ -97,16 +106,42 @@ async function runReconciliation(deps, limits) {
 }
 
 /**
- * The request a queue item stands for. `full` wins; otherwise the range (from
- * the earliest queued weigh-in change) and the explicit dates.
+ * The request(s) a queue item stands for. `full` wins; otherwise the range —
+ * kept BOUNDED when it was queued bounded (untilDateKey) — and the explicit
+ * dates.
  */
 function requestsOfItem(item) {
   if (!item || item.full) return [{ full: true }];
   const out = [];
-  if (typeof item.sinceDateKey === 'string') out.push({ sinceDateKey: item.sinceDateKey });
+  if (typeof item.sinceDateKey === 'string') {
+    const r = { sinceDateKey: item.sinceDateKey };
+    if (typeof item.untilDateKey === 'string') r.untilDateKey = item.untilDateKey;
+    out.push(r);
+  }
   const dates = Array.isArray(item.dates) ? item.dates.filter((d) => typeof d === 'string') : [];
   if (dates.length) out.push({ dateKeys: dates });
   return out.length ? out : [{ full: true }];
+}
+
+/** A range as { since, until } — until null means open-ended. */
+function rangeOf(x) {
+  if (!x || typeof x.sinceDateKey !== 'string') return null;
+  return { since: x.sinceDateKey, until: typeof x.untilDateKey === 'string' ? x.untilDateKey : null };
+}
+
+/**
+ * The smallest single range covering both (pure). Open-ended only if either
+ * input is open-ended; two bounded ranges — overlapping or disjoint — give
+ * their bounded hull (the gap between disjoint ones is recomputed too, which
+ * is always safe: every recomputation is idempotent).
+ */
+function mergeRanges(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    since: a.since < b.since ? a.since : b.since,
+    until: a.until === null || b.until === null ? null : a.until > b.until ? a.until : b.until,
+  };
 }
 
 /**
@@ -122,14 +157,18 @@ function mergeQueueItem(existing, request, reason, maxDates) {
     reasons: [...new Set([...(prev.reasons || []), reason].filter(Boolean))].slice(-10),
     attempts: 0,
   };
-  const sinces = [prev.sinceDateKey, request && request.sinceDateKey].filter((d) => typeof d === 'string');
-  if (sinces.length) next.sinceDateKey = sinces.sort()[0];
+  const range = mergeRanges(rangeOf(prev), rangeOf(request));
+  if (range) {
+    next.sinceDateKey = range.since;
+    next.untilDateKey = range.until;
+  }
   if (next.full || next.dates.length > cap) {
     next.full = true;
     next.dates = [];
     delete next.sinceDateKey;
+    delete next.untilDateKey;
   }
   return next;
 }
 
-module.exports = { DEFAULT_LIMITS, runReconciliation, requestsOfItem, mergeQueueItem };
+module.exports = { DEFAULT_LIMITS, runReconciliation, requestsOfItem, mergeQueueItem, mergeRanges };

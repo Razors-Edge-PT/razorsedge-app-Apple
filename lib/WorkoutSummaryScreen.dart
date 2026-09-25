@@ -1,3 +1,5 @@
+import 'units/exercise_unit_registry.dart';
+import 'units/weight_unit.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -23,13 +25,31 @@ class WorkoutSummaryScreen extends StatefulWidget {
 }
 
 class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
+  /// An exercise row's display unit (the signed-in athlete's own workout).
+  ExerciseWeightUnit _unitOf(Map<String, dynamic> ex) => ExerciseUnitRegistry
+      .shared
+      .unitsFor(FirebaseAuth.instance.currentUser?.uid ?? '')
+      .unitFor((ex['exerciseId'] ?? ex['id'])?.toString());
+
   late List<Map<String, dynamic>> editableExercises;
   bool isEditable = false;
   final Set<int> _expandedCards = {};
 
   @override
+  void dispose() {
+    ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
+    super.dispose();
+  }
+
+  void _onUnitsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void initState() {
     super.initState();
+    // Loads are shown in each exercise's unit; rebuild when a unit arrives.
+    ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     editableExercises = (widget.exercises ?? []).map((e) => Map<String, dynamic>.from(e)).toList();
     loadAllWorkoutsForDay();
 
@@ -248,7 +268,7 @@ class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
 
                     if (topSet != null)
                       Text(
-                        '${topSet['weight']?.toStringAsFixed(1) ?? '0'} kg × ${topSet['reps'] ?? '0'} @ RIR ${topSet['rir'] ?? '0'}',
+                        '${formatWeightKg(((topSet['weight'] ?? 0) as num).toDouble(), _unitOf(ex))} × ${topSet['reps'] ?? '0'} @ RIR ${topSet['rir'] ?? '0'}',
                         style: const TextStyle(fontSize: 13, color: Colors.white70),
                       ),
 
@@ -272,10 +292,11 @@ class _WorkoutSummaryScreenState extends State<WorkoutSummaryScreen> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text('${weight.toStringAsFixed(1)} kg'),
+                              Text(formatWeightKg(weight, _unitOf(ex))),
                               Text('${reps.toStringAsFixed(0)}'),
                               Text('${rir.toStringAsFixed(1)}'),
-                              Text(e1rm.toStringAsFixed(1)),
+                              Text(formatWeightKg(e1rm, _unitOf(ex),
+                                  withSuffix: false)),
                             ],
                           ),
                         );

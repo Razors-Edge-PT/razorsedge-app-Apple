@@ -101,3 +101,50 @@ test('the owner keeps writing their ordinary subcollections (catch-all intact)',
     as(OWNER).doc(`users/${OWNER}/workouts/2026-09-02`).set({ exercises: [] }),
   );
 });
+
+// ── Profile rebuild jobs and per-exercise unit metadata ─────────────────────
+
+test('profile rebuild jobs are closed to every client', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc(`profileRebuildJobs/${OWNER}`).set({ status: 'running', generation: 1 });
+  });
+  for (const uid of [OWNER, OTHER, SUPER]) {
+    await assertFails(as(uid).doc(`profileRebuildJobs/${OWNER}`).get());
+    await assertFails(as(uid).doc(`profileRebuildJobs/${uid}`).set({ status: 'queued' }));
+    await assertFails(as(uid).doc(`profileRebuildJobs/${OWNER}`).update({ kick: 1 }));
+  }
+});
+
+test('the owner edits weightUnit in their own exerciseSettings (the settings path)', async () => {
+  const block = `users/${OWNER}/planned_blocks/b1`;
+  await assertSucceeds(as(OWNER).doc(block).set({
+    exerciseSettings: { AmfUWbF1DH3I7qPAdh5k: { weightUnit: 'lb' } },
+  }, { merge: true }));
+  // Settings are free-form by design; an invalid unit is ACCEPTED here and
+  // safely ignored everywhere it is read (the app parses it as kg, and the
+  // publication trigger never copies it).
+  await assertSucceeds(as(OWNER).doc(block).set({
+    exerciseSettings: { AmfUWbF1DH3I7qPAdh5k: { weightUnit: 'stone' } },
+  }, { merge: true }));
+  await assertFails(as(OTHER).doc(block).set({
+    exerciseSettings: { AmfUWbF1DH3I7qPAdh5k: { weightUnit: 'lb' } },
+  }, { merge: true }));
+});
+
+test('public unit metadata is readable by signed-in users and writable by no client', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc(`users_public/${OWNER}`).set({
+      username: 'owner',
+      exerciseWeightUnits: { AmfUWbF1DH3I7qPAdh5k: 'lb' },
+    }, { merge: true });
+  });
+  const snap = await assertSucceeds(as(OTHER).doc(`users_public/${OWNER}`).get());
+  if (snap.data().exerciseWeightUnits.AmfUWbF1DH3I7qPAdh5k !== 'lb') throw new Error('unit not readable');
+  await assertFails(as(OWNER).doc(`users_public/${OWNER}`).set(
+    { exerciseWeightUnits: { AmfUWbF1DH3I7qPAdh5k: 'kg' } },
+    { merge: true },
+  ));
+  await assertFails(as(OWNER).doc(`users_public/${OWNER}`).update({ 'exerciseWeightUnits.x': 'lb' }));
+  // Every other public field stays owner-editable.
+  await assertSucceeds(as(OWNER).doc(`users_public/${OWNER}`).set({ bio: 'hi' }, { merge: true }));
+});

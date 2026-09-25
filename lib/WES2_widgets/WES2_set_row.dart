@@ -1,3 +1,4 @@
+import '../units/weight_unit.dart';
 import 'dart:async';
 import 'WES2_tap_target.dart';
 
@@ -61,11 +62,18 @@ class Wes2SetColumnHeaders extends StatelessWidget {
   final bool showVelocity;
   final Wes2ExerciseEntryMode entryMode;
 
+  /// The exercise's display unit. Kilograms keep the long-standing "Weight".
+  final ExerciseWeightUnit weightUnit;
+
   const Wes2SetColumnHeaders({
     super.key,
     required this.showVelocity,
     this.entryMode = Wes2ExerciseEntryMode.normal,
+    this.weightUnit = ExerciseWeightUnit.kg,
   });
+
+  String get _weightLabel =>
+      weightUnit == ExerciseWeightUnit.kg ? 'Weight' : 'Weight (lb)';
 
   @override
   Widget build(BuildContext context) {
@@ -85,6 +93,8 @@ class Wes2SetColumnHeaders extends StatelessWidget {
             width: 90,
             child: Padding(
               padding: EdgeInsets.only(left: 3),
+              // The bodyweight column: shown in the account's bodyweight
+              // unit, never the exercise's.
               child: Text('Weight', style: _kHeaderStyle),
             ),
           ),
@@ -107,11 +117,11 @@ class Wes2SetColumnHeaders extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           const SizedBox(width: 40),
-          const SizedBox(
+          SizedBox(
             width: 76,
             child: Padding(
-              padding: EdgeInsets.only(left: 3),
-              child: Text('Weight', style: _kHeaderStyle),
+              padding: const EdgeInsets.only(left: 3),
+              child: Text(_weightLabel, style: _kHeaderStyle),
             ),
           ),
           const SizedBox(width: 4),
@@ -138,11 +148,11 @@ class Wes2SetColumnHeaders extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(width: 40), // aligns with set-label column
-        const SizedBox(
+        SizedBox(
           width: 76,
           child: Padding(
-            padding: EdgeInsets.only(left: 3),
-            child: Text('Weight', style: _kHeaderStyle),
+            padding: const EdgeInsets.only(left: 3),
+            child: Text(_weightLabel, style: _kHeaderStyle),
           ),
         ),
         const SizedBox(width: 4),
@@ -217,6 +227,12 @@ class Wes2SetRow extends StatefulWidget {
   /// was filled). Only wired on the first set row when tutorial is at reps step.
   final VoidCallback? onTutorialRepsAccepted;
 
+  /// The exercise's display unit. The model — and everything this row reports
+  /// through [onFieldChanged] / [onFieldUnfocused] — is canonical KILOGRAMS;
+  /// the weight field shows and accepts [weightUnit], converting once at this
+  /// boundary.
+  final ExerciseWeightUnit weightUnit;
+
   const Wes2SetRow({
     super.key,
     required this.set,
@@ -234,6 +250,7 @@ class Wes2SetRow extends StatefulWidget {
     this.selectedDate,
     this.tutorialStep = 0,
     this.onTutorialRepsAccepted,
+    this.weightUnit = ExerciseWeightUnit.kg,
   });
 
   @override
@@ -266,6 +283,24 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   /// "the athlete accepted what they saw" is decided with exactly the text
   /// this row renders.
   static String _fmtWeight(double v) => Wes2HintFormat.weight(v);
+
+  /// A canonical kilogram value as the weight field shows it.
+  String _fmtWeightKg(double weightKg) =>
+      _fmtWeight(widget.weightUnit.fromKg(weightKg));
+
+  /// Weight text as typed (in [Wes2SetRow.weightUnit]) → the canonical
+  /// kilogram text the save path parses. Kilograms pass through untouched;
+  /// empty and non-numeric text is passed on as-is for the parser to judge.
+  String _weightTextToKgText(String text) {
+    if (widget.weightUnit == ExerciseWeightUnit.kg) return text;
+    final String t = text.trim();
+    if (t.isEmpty) return text;
+    final double? kg = parseDisplayToKg(t, widget.weightUnit);
+    return kg == null ? text : kg.toString();
+  }
+
+  String _reportText(Wes2FieldKey key, String text) =>
+      key == Wes2FieldKey.weight ? _weightTextToKgText(text) : text;
   static String _fmtInt(int v) => Wes2HintFormat.reps(v);
   static String _fmtDouble(double v) => Wes2HintFormat.rir(v);
   static String _fmtVelocity(double v) => Wes2HintFormat.velocity(v);
@@ -282,7 +317,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   void initState() {
     super.initState();
     _weightCtrl = TextEditingController(
-      text: _fromActual(widget.set.weight, _fmtWeight),
+      text: _fromActual(widget.set.weight, _fmtWeightKg),
     );
     _repsCtrl = TextEditingController(
       text: _fromActual(widget.set.reps, _fmtInt),
@@ -302,7 +337,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   void _onWeightFocusChange() {
     if (!_weightFocus.hasFocus) {
       _leaveField(_weightCtrl, Wes2FieldKey.weight, widget.set.weight,
-          _fmtWeight);
+          _fmtWeightKg);
     }
   }
 
@@ -346,7 +381,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   ) {
     if (!Wes2FieldParser.isInvalidEntry(key, ctrl.text)) {
       _edited.remove(key);
-      widget.onFieldUnfocused(key, ctrl.text);
+      widget.onFieldUnfocused(key, _reportText(key, ctrl.text));
       return;
     }
 
@@ -377,8 +412,14 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
       _weightFocus,
       old.set.weight.actualValue,
       widget.set.weight.actualValue,
-      _fmtWeight,
+      _fmtWeightKg,
     );
+    // The exercise's unit changed while the row is on screen: show the SAME
+    // canonical value in the new unit (never while the athlete is typing).
+    if (old.weightUnit != widget.weightUnit && !_weightFocus.hasFocus) {
+      final String t = _fromActual(widget.set.weight, _fmtWeightKg);
+      if (_weightCtrl.text != t) _weightCtrl.text = t;
+    }
     _sync(
       _repsCtrl,
       _repsFocus,
@@ -451,7 +492,8 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     final isActual = set.weight.actualValue != null &&
         set.reps.actualValue != null &&
         set.rir.actualValue != null;
-    return _E1rmDisplay(e1rm.toStringAsFixed(1), isActual: isActual, isHint: !isActual);
+    return _E1rmDisplay(widget.weightUnit.fromKg(e1rm).toStringAsFixed(1),
+        isActual: isActual, isHint: !isActual);
   }
 
   _E1rmDisplay _resolveTimedWeightedE1rmDisplay(Wes2SetState set) {
@@ -481,7 +523,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     final isActual =
         set.weight.actualValue != null && set.reps.actualValue != null;
     return _E1rmDisplay(
-      '+${displayAdded.toStringAsFixed(1)}',
+      '+${widget.weightUnit.fromKg(displayAdded).toStringAsFixed(1)}',
       isActual: isActual,
       isHint: !isActual,
     );
@@ -623,8 +665,15 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     if (hint == null || hint.isEmpty) return;
     ctrl.text = hint;
     ctrl.selection = TextSelection.collapsed(offset: hint.length);
-    widget.onFieldChanged(fieldKey, hint);
-    widget.onFieldUnfocused(fieldKey, hint);
+    // An accepted WEIGHT hint is reported as the hint's own canonical kg, not
+    // re-derived from its rounded display text, so accepting a hint shown in
+    // pounds stores exactly the load that was hinted.
+    final double? hintKg = widget.set.weight.hintValue;
+    final String reported = fieldKey == Wes2FieldKey.weight && hintKg != null
+        ? hintKg.toString()
+        : _reportText(fieldKey, hint);
+    widget.onFieldChanged(fieldKey, reported);
+    widget.onFieldUnfocused(fieldKey, reported);
     // Notify tutorial logic of a genuine reps double-tap accept (after save).
     if (fieldKey == Wes2FieldKey.reps) widget.onTutorialRepsAccepted?.call();
   }
@@ -668,7 +717,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             if (!Wes2FieldParser.isInvalidEntry(fieldKey, v)) {
               _edited.add(fieldKey);
             }
-            widget.onFieldChanged(fieldKey, v);
+            widget.onFieldChanged(fieldKey, _reportText(fieldKey, v));
           },
           style: _kFieldStyle,
         ),
@@ -893,7 +942,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
   Widget _buildRow(BuildContext context, bool bounded) {
     final s = widget.set;
     final weightHint =
-        s.weight.hintValue != null ? _fmtWeight(s.weight.hintValue!) : null;
+        s.weight.hintValue != null ? _fmtWeightKg(s.weight.hintValue!) : null;
 
     if (widget.entryMode == Wes2ExerciseEntryMode.timedBodyweight) {
       return _buildTimedBodyweightRow(s);

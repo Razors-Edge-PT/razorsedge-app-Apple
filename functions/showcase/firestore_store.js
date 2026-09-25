@@ -20,17 +20,22 @@
 'use strict';
 
 const { onDocumentWritten, onDocumentUpdated } = require('firebase-functions/v2/firestore');
+const { parseWeightUnit, WEIGHT_UNIT_FIELD } = require('./weight_unit');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
 const { applyWorkoutDay, rebuildAll, refreshBodyweight, dayDocId } = require('./store');
 const {
   applyWorkoutDayV2,
-  rebuildAllV2,
   refreshV2,
-  memoryStoreV2,
   dayDocIdV2,
 } = require('./store_v2');
+const {
+  rebuildStep,
+  runRebuildToCompletion,
+  isActive: isJobActive,
+  Status: JobStatus,
+} = require('./rebuild_job');
 const { PROFILE_SHOWCASE_SCHEMA } = require('./reducer');
 const { PROFILE_SHOWCASE_V2_SCHEMA, RE_SLOT_ORDER } = require('./reducer_v2');
 const { scoringSexOf } = require('./re_points');
@@ -75,6 +80,11 @@ function daysCol(uid) {
 
 function publicRef(uid) {
   return db().collection('users_public').doc(uid);
+}
+
+/** The athlete's rebuild job (server-only, see rebuild_job.js). */
+function jobRef(uid) {
+  return db().collection('profileRebuildJobs').doc(uid);
 }
 
 function stateV2Ref(uid) {
@@ -153,6 +163,8 @@ function bufferedStore(uid, reader, layout) {
   let snapshotLoaded = false;
   let stateCache;
   let stateLoaded = false;
+  let jobCache;
+  let jobLoaded = false;
 
   function queueSet(ref, data, options) {
     pending.set(ref.path, { ref, data, op: 'set', options: options || { merge: true } });
@@ -227,10 +239,17 @@ function bufferedStore(uid, reader, layout) {
       }
       return out;
     },
-    async listDaysForSlot(slot) {
-      const q = await reader.query(L.daysCol(uid).where('slot', '==', slot));
+    /**
+     * Every day contribution of [slot] (deterministic order). With [limit]
+     * at most that many are read — enough for a caller to detect "more than
+     * it may fold in place".
+     */
+    async listDaysForSlot(slot, limit) {
+      let q = L.daysCol(uid).where('slot', '==', slot);
+      if (limit) q = q.limit(limit);
+      const snap = await reader.query(q);
       const byDate = new Map();
-      for (const d of q.docs) byDate.set(d.id, d.data());
+      for (const d of snap.docs) byDate.set(d.id, d.data());
       for (const [id, queued] of dayOverlay) {
         if (queued === null) {
           if (byDate.has(id)) byDate.delete(id);
@@ -243,9 +262,27 @@ function bufferedStore(uid, reader, layout) {
       out.sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
       return out;
     },
+    /** Day contributions with since <= dateKey < until (until null = open). */
+    async listDaysInRange(since, until, limit) {
+      let q = L.daysCol(uid).where('dateKey', '>=', since || '');
+      if (until) q = q.where('dateKey', '<', until);
+      q = q.orderBy('dateKey');
+      if (limit) q = q.limit(limit);
+      const snap = await reader.query(q);
+      const byId = new Map();
+      for (const d of snap.docs) byId.set(d.id, d.data());
+      for (const [id, queued] of dayOverlay) {
+        if (queued === null) byId.delete(id);
+        else if (queued.dateKey >= (since || '') && (!until || queued.dateKey < until)) byId.set(id, queued);
+      }
+      const out = [...byId.values()];
+      out.sort((a, b) =>
+        a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : a.slot < b.slot ? -1 : 1);
+      return limit ? out.slice(0, limit) : out;
+    },
     async setDay(slot, dateKey, day) {
       dayOverlay.set(L.dayDocId(slot, dateKey), day);
-      queueSet(L.daysCol(uid).doc(L.dayDocId(slot, dateKey)), day);
+      queueSet(L.daysCol(uid).doc(L.dayDocId(slot, dateKey)), day, {});
     },
     async deleteDay(slot, dateKey) {
       dayOverlay.set(L.dayDocId(slot, dateKey), null);
@@ -257,36 +294,85 @@ function bufferedStore(uid, reader, layout) {
       const data = snap.exists ? snap.data() : null;
       return data && data.sex !== undefined ? data.sex : null;
     },
-    // Every date-keyed workout document, read-only. Used once per athlete by
-    // the V2 first-write bootstrap (store_v2.applyWorkoutDayV2).
-    async listWorkoutEntries() {
-      const q = await reader.query(userRef(uid).collection('workouts'));
-      return q.docs
-        .filter((d) => DATE_KEY_RE.test(d.id))
-        .map((d) => [d.id, d.data()]);
+    /** True when a date-keyed workout other than [dateKey] exists (≤ 2 reads). */
+    async hasOtherWorkouts(dateKey) {
+      const snap = await reader.query(
+        userRef(uid)
+          .collection('workouts')
+          .where(admin.firestore.FieldPath.documentId(), '>=', '0000-00-00')
+          .where(admin.firestore.FieldPath.documentId(), '<=', '9999-99-99')
+          .limit(2),
+      );
+      return snap.docs.some((d) => d.id !== dateKey && DATE_KEY_RE.test(d.id));
+    },
+    /**
+     * Up to [limit] date-keyed workouts with id >= [fromDateKey], in date
+     * order, as [[dateKey, data]]. The rebuild job's page source.
+     */
+    async listWorkoutsFrom(fromDateKey, limit) {
+      const snap = await reader.query(
+        userRef(uid)
+          .collection('workouts')
+          .where(admin.firestore.FieldPath.documentId(), '>=', fromDateKey || '0000-00-00')
+          .where(admin.firestore.FieldPath.documentId(), '<=', '9999-99-99')
+          .orderBy(admin.firestore.FieldPath.documentId())
+          .limit(limit),
+      );
+      return snap.docs.filter((d) => DATE_KEY_RE.test(d.id)).map((d) => [d.id, d.data()]);
+    },
+    // ── Rebuild job (profileRebuildJobs/{uid}; see rebuild_job.js) ──
+    async getRebuildJob() {
+      if (!jobLoaded) {
+        const snap = await reader.get(jobRef(uid));
+        jobCache = snap.exists ? snap.data() : null;
+        jobLoaded = true;
+      }
+      return jobCache;
+    },
+    async requestRebuild(request) {
+      const { mergeRebuildRequest } = require('./rebuild_job');
+      const next = mergeRebuildRequest(await this.getRebuildJob(), request, Date.now());
+      jobCache = next;
+      queueSet(jobRef(uid), next, {});
+    },
+    async noteRebuildTouch(touch) {
+      const { noteTouch } = require('./rebuild_job');
+      const next = noteTouch(await this.getRebuildJob(), touch, Date.now());
+      jobCache = next;
+      if (next) queueSet(jobRef(uid), next, {});
     },
     async getBodyweightAsOf(dateKey) {
       const q = await reader.query(bodyweightQuery(uid, dateKey));
       return pickBodyweightAsOf(q.docs.map(weightEntryOf), dateKey);
     },
-    // Many lift dates at once (a weigh-in refresh re-ranks every Chin-Up day
-    // it can affect): ONE read of the weigh-ins before the latest cutoff.
+    /**
+     * As-of bodyweights for many dates with a BOUNDED window read: the few
+     * weigh-ins just before the earliest date, plus every weigh-in between the
+     * earliest and the latest date. Every weigh-in that can be the as-of value
+     * of one of the dates is in one of the two reads.
+     */
     async getBodyweightAsOfMany(dateKeys) {
       const out = new Map();
       if (!dateKeys.length) return out;
-      const latest = dateKeys.reduce((a, b) => (a > b ? a : b));
-      const q = await reader.query(
-        userRef(uid)
-          .collection('weights')
-          .where(
-            'timestamp',
-            '<',
-            admin.firestore.Timestamp.fromMillis(bodyweightCutoffMillis(latest)),
-          ),
-      );
-      const entries = q.docs.map(weightEntryOf);
-      for (const d of dateKeys) out.set(d, pickBodyweightAsOf(entries, d));
+      const sorted = [...new Set(dateKeys)].sort();
+      const first = sorted[0];
+      const last = sorted[sorted.length - 1];
+      const before = await reader.query(bodyweightQuery(uid, first));
+      let within = { docs: [] };
+      if (last > first) {
+        within = await reader.query(
+          userRef(uid)
+            .collection('weights')
+            .where('timestamp', '>=', admin.firestore.Timestamp.fromMillis(bodyweightCutoffMillis(first)))
+            .where('timestamp', '<', admin.firestore.Timestamp.fromMillis(bodyweightCutoffMillis(last))),
+        );
+      }
+      const entries = [...before.docs, ...within.docs].map(weightEntryOf);
+      for (const d of sorted) out.set(d, pickBodyweightAsOf(entries, d));
       return out;
+    },
+    async bodyweightsForDates(dateKeys) {
+      return this.getBodyweightAsOfMany(dateKeys);
     },
     async flush() {
       const ops = [...pending.values()];
@@ -472,11 +558,11 @@ const showcaseOnWorkoutWrite = onDocumentWritten(
     // The RE Points leaderboard is derived from the V2 day contributions, so it
     // has work to do only when V2 changed — autosaves that change nothing cost
     // nothing. A failure here is queued for the daily reconciliation.
-    if (v2Result && v2Result.changed) {
+    // A 'queued' result means a rebuild job owns this athlete right now; the
+    // job re-scores the leaderboard itself, so nothing is done here.
+    if (v2Result && v2Result.changed && v2Result.path !== 'queued') {
       try {
-        await leaderboard().applyForWorkout(uid, workoutId, {
-          full: v2Result.path === 'bootstrap',
-        });
+        await leaderboard().applyForWorkout(uid, workoutId);
       } catch (err) {
         logger.error('showcaseOnWorkoutWrite leaderboard failed', { uid, workoutId, error: err });
         failure = failure || err;
@@ -520,6 +606,14 @@ const showcaseOnWeightWrite = onDocumentWritten(
     const uid = event.params.uid;
     const since = weighInSinceDateKey(event);
     let failure = null;
+    // The dates this weigh-in can re-score: [since, until) where until is the
+    // next recorded weigh-in day after it (open-ended when there is none).
+    let range = { sinceDateKey: since || '' };
+    try {
+      range = await leaderboard().weighInRange(uid, event);
+    } catch (err) {
+      logger.warn('showcaseOnWeightWrite range lookup failed; using open range', { uid, error: err });
+    }
     try {
       const result = await refreshBodyweightTransactionally(
         uid,
@@ -537,14 +631,12 @@ const showcaseOnWeightWrite = onDocumentWritten(
       failure = failure || err;
     }
     // V2: a weigh-in moves the bodyweight EVERY exercise is scored at, for
-    // each record dated on or after it — not only the bodyweight-loaded ones.
+    // each day in its range — not only the bodyweight-loaded ones.
+    let v2Weigh = null;
     try {
-      const result = await refreshV2Transactionally(uid, {
-        bodyweight: true,
-        sinceDateKey: since || '',
-      });
-      if (result.changed) {
-        logger.info('showcase V2 bodyweight refreshed', { uid, slots: result.slots });
+      v2Weigh = await refreshV2Transactionally(uid, Object.assign({ bodyweight: true }, range));
+      if (v2Weigh.changed) {
+        logger.info('showcase V2 bodyweight refreshed', { uid, slots: v2Weigh.slots });
       }
     } catch (err) {
       logger.error('showcaseOnWeightWrite V2 failed', {
@@ -557,9 +649,9 @@ const showcaseOnWeightWrite = onDocumentWritten(
     // Leaderboard: every date whose as-of bodyweight the weigh-in can change —
     // for every exercise, not only the bodyweight-loaded ones. Runs after the
     // V2 refresh so bodyweight-loaded days are already re-ranked.
-    if (!failure) {
+    if (!failure && !(v2Weigh && v2Weigh.path === 'queued')) {
       try {
-        await leaderboard().applyForWeighIn(uid, event);
+        await leaderboard().applyForRange(uid, range, 'weigh-in');
       } catch (err) {
         logger.error('showcaseOnWeightWrite leaderboard failed', { uid, error: err });
         failure = failure || err;
@@ -590,12 +682,10 @@ const showcaseOnSexChange = onDocumentUpdated(
     if (!after) return;
     if (scoringSexOf(before.sex) === scoringSexOf(after.sex)) return;
     try {
+      // Every record and every leaderboard day is scored with the coefficient
+      // for this sex: one bounded rebuild job (fold + leaderboard) does both.
       const result = await refreshV2Transactionally(uid, { sex: true });
-      if (result.changed) {
-        logger.info('showcase V2 re-scored for sex change', { uid, slots: result.slots });
-      }
-      // Every leaderboard day is scored with the coefficient for this sex.
-      await leaderboard().applyForSexChange(uid);
+      logger.info('showcase re-score requested for sex change', { uid, reason: result.reason });
     } catch (err) {
       logger.error('showcaseOnSexChange failed', { uid, error: err });
       throw err;
@@ -655,62 +745,186 @@ async function rebuildAthlete(uid, { apply = true, store } = {}) {
 }
 
 /**
- * Deterministic full V2 rebuild for ONE athlete. Reads every date-keyed
- * workout document (paged), and the athlete's weigh-ins and sex; never
- * mutates a workout, a weigh-in or users/{uid}.
- *
- * `apply: false` computes without writing (dry run / verify).
- * Returns { snapshot, dayIds, workoutDays }.
+ * The rebuild job I/O for one athlete (rebuild_job.rebuildStep): plain stores
+ * for the reads made outside a unit, and a transactional unit that commits a
+ * step's writes together with the job — only if the job's generation and step
+ * are still the ones the step read.
  */
-async function rebuildAthleteV2(uid, { apply = true, store } = {}) {
-  const entries = [];
-  const PAGE = 300;
-  let last = null;
-  for (;;) {
-    let q = userRef(uid)
-      .collection('workouts')
-      .orderBy(admin.firestore.FieldPath.documentId())
-      .limit(PAGE);
-    if (last) q = q.startAfter(last);
-    const page = await q.get();
-    if (page.empty) break;
-    for (const doc of page.docs) {
-      if (DATE_KEY_RE.test(doc.id)) entries.push([doc.id, doc.data()]);
-    }
-    last = page.docs[page.docs.length - 1];
-    if (page.size < PAGE) break;
-  }
-
-  let target = store;
-  if (!target && apply) target = firestoreStoreV2(uid);
-  if (!target) {
-    const userSnap = await userRef(uid).get();
-    const sex = userSnap.exists ? (userSnap.data() || {}).sex : null;
-    target = memoryStoreV2({ bodyweightAsOf: bodyweightResolver(uid), sex });
-  }
-  const { snapshot, dayIds } = await rebuildAllV2(target, entries);
-  if (target.flush) await target.flush();
-  return { snapshot, dayIds, workoutDays: entries.length };
+function rebuildIo(uid) {
+  const lbFs = leaderboard();
+  const L = require('../leaderboard/store');
+  const R = require('../leaderboard/reducer');
+  const v2Plain = bufferedStore(uid, plainReader(), LAYOUT_V2);
+  return {
+    now: () => Date.now(),
+    async getJob() {
+      const snap = await jobRef(uid).get();
+      return snap.exists ? snap.data() : null;
+    },
+    v2: Object.assign(Object.create(v2Plain), {
+      // An unlimited listing for the job (not a trigger): one exercise, paged.
+      async listDaysForSlot(slot) {
+        const out = [];
+        let last = null;
+        for (;;) {
+          let q = daysV2Col(uid).where('slot', '==', slot).orderBy('dateKey').limit(500);
+          if (last) q = q.startAfter(last);
+          const page = await q.get();
+          for (const d of page.docs) out.push(d.data());
+          if (page.size < 500) break;
+          last = page.docs[page.docs.length - 1];
+        }
+        return out;
+      },
+    }),
+    lb: lbFs.leaderboardStore(uid, plainReader()),
+    leaderboard: {
+      scoreDay: R.scoreDay,
+      sameDoc: L.sameDoc,
+      recomputeMonth: L.recomputeMonth,
+      recomputeDates: L.recomputeDates,
+      refreshAllTime: L.refreshAllTime,
+      LEADERBOARD_FORMULA_VERSION: R.LEADERBOARD_FORMULA_VERSION,
+    },
+    async unit(expect, fn) {
+      let periods = [];
+      const committed = await db().runTransaction(async (tx) => {
+        const reader = transactionReader(tx);
+        const snap = await tx.get(jobRef(uid));
+        const job = snap.exists ? snap.data() : null;
+        if (!isJobActive(job) || job.generation !== expect.generation || job.step !== expect.step) {
+          return false;
+        }
+        const v2 = bufferedStore(uid, reader, LAYOUT_V2);
+        const lb = lbFs.leaderboardStore(uid, reader);
+        const patch = await fn({ v2, lb, job });
+        if (!patch) return false;
+        tx.set(jobRef(uid), Object.assign({}, job, patch, {
+          step: job.step + 1,
+          status: patch.status || JobStatus.RUNNING,
+          updatedAtMs: Date.now(),
+        }));
+        await v2.flush();
+        await lb.flush();
+        periods = lb.periodsNoted();
+        return true;
+      });
+      if (committed && periods.length) await lbFs.ensurePeriods(periods);
+      return committed;
+    },
+  };
 }
+
+/**
+ * The bounded rebuild worker: ONE step per invocation. Each committed step
+ * bumps the job's `step`, whose write fires the next invocation, until the job
+ * is done or in error. A duplicate or overlapping invocation cannot commit
+ * twice (see rebuildIo.unit); a lost one is re-kicked by the daily
+ * reconciliation. Runs outside every other trigger's transaction.
+ */
+const showcaseRebuildWorker = onDocumentWritten(
+  { document: 'profileRebuildJobs/{uid}', retry: true, timeoutSeconds: 300, memory: '512MiB' },
+  async (event) => {
+    const uid = event.params.uid;
+    const after = event.data && event.data.after && event.data.after.exists
+      ? event.data.after.data()
+      : null;
+    if (!isJobActive(after)) return;
+    const before = event.data && event.data.before && event.data.before.exists
+      ? event.data.before.data()
+      : null;
+    // A touch-only write (a trigger noting a change) does not start a step on
+    // its own; a new or advanced step, or a reconciliation kick, does.
+    const advanced = !before || before.step !== after.step || before.kick !== after.kick;
+    if (!advanced) return;
+    const r = await rebuildStep(rebuildIo(uid));
+    if (r.error) {
+      logger.warn('showcase rebuild step failed', {
+        uid,
+        phase: r.phase,
+        error: String((r.error && r.error.message) || r.error),
+      });
+    } else if (r.done) {
+      logger.info('showcase rebuild finished', { uid });
+    }
+  },
+);
+
+/** Requests a rebuild for [uid] (backfill / admin). Returns the job. */
+async function requestRebuildFor(uid, request) {
+  return db().runTransaction(async (tx) => {
+    const store = bufferedStore(uid, transactionReader(tx), LAYOUT_V2);
+    await store.requestRebuild(request);
+    const job = await store.getRebuildJob();
+    await store.flush();
+    return job;
+  });
+}
+
+/**
+ * Drives [uid]'s job to completion from this process (the backfill), with the
+ * exact step function the worker runs.
+ */
+async function runRebuildFor(uid, maxSteps) {
+  return runRebuildToCompletion(rebuildIo(uid), maxSteps);
+}
+
+/**
+ * Publishes the owner's per-exercise weight unit — the ONLY value copied out of
+ * their private exerciseSettings — to users_public/{uid}.exerciseWeightUnits,
+ * so friends see each exercise in the owner's unit.
+ *
+ * Only EXPLICIT, valid values that CHANGED in this block write are published
+ * ('kg' | 'lb'; anything else is ignored), as one small update, so the owner's
+ * last explicit choice per exercise survives a new block that has none. A unit
+ * never changes points: nothing is rescored.
+ */
+function explicitUnitsOf(side) {
+  const out = {};
+  const d = side && side.exists ? side.data() : null;
+  const settings = d && d.exerciseSettings;
+  if (!settings || typeof settings !== 'object') return out;
+  for (const id of Object.keys(settings)) {
+    const s = settings[id];
+    if (!s || typeof s !== 'object' || !(WEIGHT_UNIT_FIELD in s)) continue;
+    const u = parseWeightUnit(s[WEIGHT_UNIT_FIELD], null);
+    if (u && /^[A-Za-z0-9_-]{1,64}$/.test(id)) out[id] = u;
+  }
+  return out;
+}
+
+/** The users_public update for a planned-block write, or null (pure). */
+function exerciseUnitUpdate(before, after) {
+  const b = explicitUnitsOf(before);
+  const a = explicitUnitsOf(after);
+  const update = {};
+  for (const id of Object.keys(a)) {
+    if (b[id] !== a[id]) update[`exerciseWeightUnits.${id}`] = a[id];
+  }
+  return Object.keys(update).length ? update : null;
+}
+
+const showcaseOnExerciseUnitWrite = onDocumentWritten(
+  { document: 'users/{uid}/planned_blocks/{blockId}', retry: true },
+  async (event) => {
+    const uid = event.params.uid;
+    const update = exerciseUnitUpdate(event.data && event.data.before, event.data && event.data.after);
+    if (!update) return;
+    try {
+      await publicRef(uid).set({}, { merge: true });
+      await publicRef(uid).update(update);
+    } catch (err) {
+      logger.error('showcaseOnExerciseUnitWrite failed', { uid, error: err });
+      throw err;
+    }
+  },
+);
 
 /** Reads the V2 snapshot currently mirrored onto users_public/{uid}. */
 async function readPublishedSnapshotV2(uid) {
   const snap = await publicRef(uid).get();
   const data = snap.exists ? snap.data() : null;
   return data && data[SNAPSHOT_V2_FIELD] ? data[SNAPSHOT_V2_FIELD] : null;
-}
-
-/** Removes every stale V2 day document for an athlete (rebuild hygiene). */
-async function pruneStaleDaysV2(uid, keepIds) {
-  const q = await daysV2Col(uid).get();
-  const stale = q.docs.filter((d) => !keepIds.has(d.id));
-  const CHUNK = 400;
-  for (let i = 0; i < stale.length; i += CHUNK) {
-    const batch = db().batch();
-    for (const d of stale.slice(i, i + CHUNK)) batch.delete(d.ref);
-    await batch.commit();
-  }
-  return stale.length;
 }
 
 /** Reads the snapshot currently mirrored onto users_public/{uid}. */
@@ -741,9 +955,14 @@ module.exports = {
   refreshV2Transactionally,
   firestoreStoreV2,
   transactionalStoreV2,
-  rebuildAthleteV2,
+  showcaseRebuildWorker,
+  showcaseOnExerciseUnitWrite,
+  rebuildIo,
+  requestRebuildFor,
+  runRebuildFor,
+  jobRef,
   readPublishedSnapshotV2,
-  pruneStaleDaysV2,
+  exerciseUnitUpdate,
   daysV2Col,
   stateV2Ref,
   SNAPSHOT_V2_FIELD,

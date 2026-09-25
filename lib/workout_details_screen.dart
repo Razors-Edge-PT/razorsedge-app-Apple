@@ -1,3 +1,5 @@
+import 'units/exercise_unit_registry.dart';
+import 'units/weight_unit.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'workout_model.dart'; // Import Workout and Exercise models
@@ -28,11 +30,28 @@ double calculateE1RM(double? weight, int? reps, double? rir) {
 
 
 class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
+  /// An exercise's display unit (the signed-in athlete's own history).
+  ExerciseWeightUnit _unitOf(String? exerciseId) => ExerciseUnitRegistry.shared
+      .unitsFor(FirebaseAuth.instance.currentUser?.uid ?? '')
+      .unitFor(exerciseId);
+
   List<Workout> allWorkouts = [];
+
+  @override
+  void dispose() {
+    ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
+    super.dispose();
+  }
+
+  void _onUnitsChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
+    // Loads are shown in each exercise's unit; rebuild when a unit arrives.
+    ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     _fetchAllWorkouts(); // Fetch all workouts when the screen is initialized
   }
 
@@ -169,8 +188,8 @@ class _WorkoutDetailsScreenState extends State<WorkoutDetailsScreen> {
                           child: ListTile(
                             title: Text('Set $setIndex'),
                             subtitle: Text(
-                              'W:${set.weight}kg X ${set.reps} Reps, RIR: ${set.rir} | '
-                                  'E1RM: ${e1rm.toStringAsFixed(1)}kg',
+                              'W:${formatWeightKg(set.weight ?? 0.0, _unitOf(exercise.id), maxDecimals: 3)} X ${set.reps} Reps, RIR: ${set.rir} | '
+                                  'E1RM: ${formatWeightKg(e1rm, _unitOf(exercise.id))}',
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: e1rm == highestE1RM ? FontWeight.bold : FontWeight.normal, // ✅ Bold for highest E1RM

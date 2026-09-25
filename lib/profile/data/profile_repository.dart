@@ -19,6 +19,8 @@
 /// Firestore will deliver it when the connection returns.
 library;
 
+import '../../units/exercise_unit_registry.dart';
+import '../../units/weight_unit.dart';
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -58,6 +60,7 @@ class ProfileIdentity {
     this.photoURL,
     this.showcase = ProfileShowcase.empty,
     this.showcaseV2,
+    this.exerciseUnits = const <String, ExerciseWeightUnit>{},
     this.isFromCache = false,
     this.hasPendingWrites = false,
     this.exists = false,
@@ -74,6 +77,11 @@ class ProfileIdentity {
   /// The categories + RE Points snapshot (profileShowcaseV2), or null when it
   /// is absent or malformed — the UI then falls back to [showcase].
   final ProfileShowcaseV2? showcaseV2;
+
+  /// The owner's published per-exercise display units
+  /// (users_public.exerciseWeightUnits). Absent — every legacy profile — is
+  /// kilograms for every exercise.
+  final Map<String, ExerciseWeightUnit> exerciseUnits;
 
   /// True when this snapshot came from the local cache rather than the server.
   final bool isFromCache;
@@ -93,6 +101,7 @@ class ProfileIdentity {
       photoURL: photoURL ?? this.photoURL,
       showcase: showcase,
       showcaseV2: showcaseV2,
+      exerciseUnits: exerciseUnits,
       isFromCache: isFromCache,
       hasPendingWrites: hasPendingWrites,
       exists: exists,
@@ -117,6 +126,8 @@ class ProfileIdentity {
       photoURL: str('photoURL') ?? str('photoUrl'),
       showcase: ProfileShowcase.fromMap(d['profileShowcaseV1']),
       showcaseV2: ProfileShowcaseV2.fromMap(d['profileShowcaseV2']),
+      exerciseUnits:
+          ExerciseUnits.parsePublished(d[kPublicExerciseUnitsField]),
       isFromCache: snap.metadata.isFromCache,
       hasPendingWrites: snap.metadata.hasPendingWrites,
       exists: snap.exists,

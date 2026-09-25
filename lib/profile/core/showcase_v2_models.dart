@@ -26,6 +26,7 @@ class ShowcaseExerciseSnapshot {
     required this.exercise,
     required this.records,
     this.rePoints,
+    this.pointsRecord,
   });
 
   /// A configured exercise with no result yet.
@@ -41,10 +42,23 @@ class ShowcaseExerciseSnapshot {
   /// exactly as V1 records are keyed by their lift slot.
   final ShowcaseLiftSnapshot records;
 
-  /// RE Points of the Best E1RM record. Null when unavailable — no bodyweight
-  /// recorded on or before that date, or a V1 fallback — which is NOT zero.
+  /// The exercise's lifetime Best RE Points. Null when unavailable — no
+  /// bodyweight recorded on or before any of its sets, or a V1 fallback —
+  /// which is NOT zero.
   final double? rePoints;
 
+  /// The set that scored [rePoints] — selected INDEPENDENTLY of Best E1RM:
+  /// every set is scored, so a lighter set at a lower bodyweight can hold it.
+  /// Carries its own date, set identity and fingerprint (for its proof).
+  final ShowcaseRecord? pointsRecord;
+
+  /// True when the points set is a different set from both other records, so
+  /// the card shows its source and proof separately.
+  bool get pointsSetIsDistinct {
+    final String? fp = pointsRecord?.fingerprint;
+    if (fp == null) return false;
+    return fp != bestE1rm?.fingerprint && fp != heaviest?.fingerprint;
+  }
   String get exerciseId => exercise.exerciseId;
   bool get hasRecord => !records.isEmpty;
   ShowcaseRecord? get bestE1rm => records.bestE1rm;
@@ -132,6 +146,7 @@ class ProfileShowcaseV2 {
           for (final ShowcaseExerciseSnapshot e in c.exercises) ...<String>[
             if (e.bestE1rm != null) e.bestE1rm!.fingerprint,
             if (e.heaviest != null) e.heaviest!.fingerprint,
+            if (e.pointsRecord != null) e.pointsRecord!.fingerprint,
           ],
       };
 
@@ -183,12 +198,18 @@ class ProfileShowcaseV2 {
         records.bestE1rm?.slot == def.slot ? records.bestE1rm : null;
     final ShowcaseRecord? heavy =
         records.heaviest?.slot == def.slot ? records.heaviest : null;
+    final ShowcaseRecord? pointsRaw = ShowcaseRecord.fromMap(e['points']);
+    final ShowcaseRecord? pointsRec =
+        pointsRaw?.slot == def.slot ? pointsRaw : null;
     final Object? p = e['rePoints'];
     return ShowcaseExerciseSnapshot(
       exercise: def,
       records:
           ShowcaseLiftSnapshot(slot: def.slot, bestE1rm: best, heaviest: heavy),
-      rePoints: (p is num && p.isFinite && best != null) ? p.toDouble() : null,
+      // Points belong to their own record; without one they are unavailable.
+      rePoints:
+          (p is num && p.isFinite && pointsRec != null) ? p.toDouble() : null,
+      pointsRecord: pointsRec,
     );
   }
 

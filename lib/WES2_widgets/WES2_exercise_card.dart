@@ -1,3 +1,4 @@
+import '../units/weight_unit.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -93,6 +94,10 @@ class Wes2ExerciseCard extends StatelessWidget {
   /// above the settings cog icon. Default false — no visual change.
   final bool showCogCue;
 
+  /// This exercise's display unit (exerciseSettings.weightUnit). Loads stay
+  /// canonical kilograms; only the set rows' weight and E1RM show this unit.
+  final ExerciseWeightUnit weightUnit;
+
   const Wes2ExerciseCard({
     super.key,
     required this.row,
@@ -117,6 +122,7 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.tutorialStep = 0,
     this.onTutorialRepsAccepted,
     this.showCogCue = false,
+    this.weightUnit = ExerciseWeightUnit.kg,
   });
 
   static bool _isCompletedEligible(
@@ -345,7 +351,9 @@ class Wes2ExerciseCard extends StatelessWidget {
                 children: [
                   const SizedBox(height: 2),
                   Wes2SetColumnHeaders(
-                      showVelocity: showVelocity, entryMode: entryMode),
+                      showVelocity: showVelocity,
+                      entryMode: entryMode,
+                      weightUnit: weightUnit),
                   ...paddedSets.map((s) {
                     return Wes2SetRow(
                       key: ValueKey('${row.exerciseId}_${s.setIndex}'),
@@ -353,6 +361,7 @@ class Wes2ExerciseCard extends StatelessWidget {
                       showVelocity: showVelocity,
                       entryMode: entryMode,
                       bwDisplayText: bwDisplayText,
+                      weightUnit: weightUnit,
                       uid: wes2Ctrl.actingUid,
                       selectedDate: wes2Ctrl.selectedDate,
                       onFieldChanged: (fieldKey, rawText) =>

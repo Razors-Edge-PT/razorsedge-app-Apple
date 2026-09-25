@@ -839,6 +839,12 @@ exports.showcaseOnWeightWrite = showcase.showcaseOnWeightWrite;
 // change of users/{uid}.sex re-scores V2; any other users/{uid} write returns
 // before reading anything.
 exports.showcaseOnSexChange = showcase.showcaseOnSexChange;
+// The bounded, resumable profile/leaderboard rebuild (showcase/rebuild_job.js):
+// one step per invocation, driven by writes to profileRebuildJobs/{uid}.
+exports.showcaseRebuildWorker = showcase.showcaseRebuildWorker;
+// Publishes each exercise's kg/lb display unit (and nothing else) from the
+// owner's planned blocks to users_public for friends' profile views.
+exports.showcaseOnExerciseUnitWrite = showcase.showcaseOnExerciseUnitWrite;
 
 // ====================================
 // RE Points leaderboard (This Month / All Time)
