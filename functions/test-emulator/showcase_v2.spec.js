@@ -168,6 +168,42 @@ test('an athlete with history gets a bounded rebuild job, never an in-trigger hi
   }
 });
 
+test('legacy auto-id workouts (digit-prefixed) never end the job early', async () => {
+  // Production regression: auto-ids such as "0RmEOT…" / "4b40…" sort INSIDE
+  // the documentId date range, so a limit(n) page returned < n date-keyed
+  // rows and the job mistook it for the end of history.
+  const uid = freshUid();
+  const db = admin.firestore();
+  try {
+    await db.collection('users').doc(uid).set({ sex: 'M' });
+    await weighIn(uid, '2025-01-01', 80);
+    const col = db.collection('users').doc(uid).collection('workouts');
+    for (const id of ['0RmEOTjTFORCVeBLMG0i', '1cQcBIk4rVhrL1rYFcC6', '2025-01-0x', '3QrnMED1JStRCmhpvE9d', '4b400kbc6qYRLbanV98s']) {
+      await col.doc(id).set(workout([BENCH, [{ weight: 300, reps: 1 }]])); // never counted
+    }
+    const history = {};
+    for (let i = 0; i < 70; i += 1) {
+      const d = new Date(Date.UTC(2025, 0, 2) + i * 2 * 86400000).toISOString().slice(0, 10);
+      history[d] = workout([BENCH, [{ weight: 60 + i, reps: 1 }]]);
+      await col.doc(d).set(history[d]);
+    }
+    const last = Object.keys(history).sort().pop();
+    await store.requestRebuildFor(uid, { mode: 'full', reason: 'test' });
+    const job = await settle(uid);
+    assert.equal(job.status, 'done');
+    assert.equal(job.latestDateKey, last, 'every page was read');
+    const days = await db.collection('users').doc(uid).collection('showcase').doc('v2').collection('days').get();
+    assert.equal(days.size, 70);
+    const published = await store.readPublishedSnapshotV2(uid);
+    const bench = published.categories.horizontalPress.exercises[BENCH];
+    assert.equal(bench.e1rm.dateKey, last, 'the heaviest (latest) set is found');
+    assert.equal(bench.e1rm.weight, 129);
+  } finally {
+    await wipe(uid);
+    await admin.firestore().collection('leaderboards').doc('all_time').collection('entries').doc(uid).delete();
+  }
+});
+
 test('workouts written while the job runs are part of its result (real adapter)', async () => {
   const uid = freshUid();
   const db = admin.firestore();

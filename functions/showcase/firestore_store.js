@@ -51,6 +51,40 @@ const {
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * Up to [limit] DATE-KEYED workouts with id >= [fromDateKey], in id order, as
+ * [[dateKey, data]].
+ *
+ * Workout ids are mostly date keys, but legacy auto-ids ("0RmEOT…", "4b40…")
+ * share the collection and sort INSIDE any documentId range starting with a
+ * digit. A single `.limit(n)` query therefore returns fewer than n date-keyed
+ * rows while more remain — which a caller paging by "short page = end" reads
+ * as the end of history. This scans raw ids (startAfter the last raw id) until
+ * it has [limit] date-keyed rows or the collection is exhausted.
+ */
+async function dateKeyedWorkouts(reader, uid, fromDateKey, limit) {
+  const out = [];
+  const RAW_PAGE = Math.max(limit, 25);
+  let after = null;
+  for (;;) {
+    let q = userRef(uid)
+      .collection('workouts')
+      .where(admin.firestore.FieldPath.documentId(), '>=', fromDateKey || '0000-00-00')
+      .where(admin.firestore.FieldPath.documentId(), '<=', '9999-99-99')
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(RAW_PAGE);
+    if (after) q = q.startAfter(after);
+    const snap = await reader.query(q);
+    for (const d of snap.docs) {
+      if (!DATE_KEY_RE.test(d.id)) continue;
+      out.push([d.id, d.data()]);
+      if (out.length >= limit) return out;
+    }
+    if (snap.size < RAW_PAGE) return out;
+    after = snap.docs[snap.docs.length - 1].id;
+  }
+}
+
+/**
  * The RE Points leaderboard module, required lazily: it builds on this one
  * (its store reads V2 through bufferedStore), so a top-level require would be
  * circular.
@@ -296,29 +330,15 @@ function bufferedStore(uid, reader, layout) {
     },
     /** True when a date-keyed workout other than [dateKey] exists (≤ 2 reads). */
     async hasOtherWorkouts(dateKey) {
-      const snap = await reader.query(
-        userRef(uid)
-          .collection('workouts')
-          .where(admin.firestore.FieldPath.documentId(), '>=', '0000-00-00')
-          .where(admin.firestore.FieldPath.documentId(), '<=', '9999-99-99')
-          .limit(2),
-      );
-      return snap.docs.some((d) => d.id !== dateKey && DATE_KEY_RE.test(d.id));
+      const rows = await dateKeyedWorkouts(reader, uid, '', 2);
+      return rows.some(([id]) => id !== dateKey);
     },
     /**
      * Up to [limit] date-keyed workouts with id >= [fromDateKey], in date
      * order, as [[dateKey, data]]. The rebuild job's page source.
      */
     async listWorkoutsFrom(fromDateKey, limit) {
-      const snap = await reader.query(
-        userRef(uid)
-          .collection('workouts')
-          .where(admin.firestore.FieldPath.documentId(), '>=', fromDateKey || '0000-00-00')
-          .where(admin.firestore.FieldPath.documentId(), '<=', '9999-99-99')
-          .orderBy(admin.firestore.FieldPath.documentId())
-          .limit(limit),
-      );
-      return snap.docs.filter((d) => DATE_KEY_RE.test(d.id)).map((d) => [d.id, d.data()]);
+      return dateKeyedWorkouts(reader, uid, fromDateKey, limit);
     },
     // ── Rebuild job (profileRebuildJobs/{uid}; see rebuild_job.js) ──
     async getRebuildJob() {
