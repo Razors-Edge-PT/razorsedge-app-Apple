@@ -21,6 +21,7 @@ const {
   monthEntryFromDays,
   allTimeEntryFromSnapshot,
   identityOf,
+  sameIdentity,
   LEADERBOARD_FORMULA_VERSION,
   ALL_TIME_PERIOD,
 } = require('../leaderboard/reducer');
@@ -371,6 +372,27 @@ test('leaderboard is not marked built before the profile V2 exists', async () =>
   const lb = memoryLeaderboardStore('u', { v2Built: false });
   await applyRequest(lb, { dateKeys: ['2026-09-01'] });
   assert.strictEqual(await lb.getState(), null);
+});
+
+test('identity display fallback: username → displayName → fullName → null', () => {
+  // Username stays preferred over everything.
+  assert.deepStrictEqual(identityOf({ username: 'NZBench', displayName: 'Other', fullName: 'Full Name' }).username, 'NZBench');
+  // displayName is second.
+  assert.strictEqual(identityOf({ displayName: 'Dyl', fullName: 'Dylan Gale' }).username, 'Dyl');
+  // fullName only when neither exists; empty and whitespace values are skipped.
+  assert.strictEqual(identityOf({ fullName: ' Julien Powell ' }).username, 'Julien Powell');
+  assert.strictEqual(identityOf({ username: '  ', displayName: '', fullName: 'Ann Lee' }).username, 'Ann Lee');
+  assert.strictEqual(identityOf({ username: ' ', displayName: '	', fullName: '  ' }).username, null);
+  assert.strictEqual(identityOf({}).username, null);
+  assert.strictEqual(identityOf(null).username, null);
+  // Nothing private is ever copied, whatever the document carries.
+  const id = identityOf({ fullName: 'Ann Lee', email: 'ann@example.com', emailLower: 'ann@example.com', dob: '1990-01-01', uid: 'x' });
+  assert.deepStrictEqual(Object.keys(id).sort(), ['photoURL', 'username']);
+  assert.ok(!JSON.stringify(id).includes('@'));
+  // A fullName change is an identity change (so the entry refreshes); a
+  // username-bearing profile is unaffected by it.
+  assert.strictEqual(sameIdentity({ fullName: 'A B' }, { fullName: 'A C' }), false);
+  assert.strictEqual(sameIdentity({ username: 'u', fullName: 'A B' }, { username: 'u', fullName: 'A C' }), true);
 });
 
 test('monthEntryFromDays is order-independent and exact in integers', () => {

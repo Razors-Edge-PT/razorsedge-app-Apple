@@ -85,14 +85,20 @@ function zeroByCategory() {
 }
 
 /**
- * The minimal public identity an entry carries: username (or display name)
- * and avatar URL. Nothing else from the profile is ever copied.
+ * The minimal public identity an entry carries: a display name and avatar URL.
+ * Nothing else from the profile is ever copied.
+ *
+ * The name resolves username → displayName → fullName → null. fullName is a
+ * DISPLAY fallback only, for legacy public profiles that never received a
+ * username; it is never reserved or treated as a username anywhere. Every
+ * source is the public profile (users_public), so no private field — email
+ * included — can reach an entry.
  */
 function identityOf(publicData) {
   const d = publicData && typeof publicData === 'object' ? publicData : {};
   const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
   return {
-    username: str(d.username) || str(d.displayName),
+    username: str(d.username) || str(d.displayName) || str(d.fullName),
     photoURL: str(d.photoURL) || str(d.photoUrl),
   };
 }
