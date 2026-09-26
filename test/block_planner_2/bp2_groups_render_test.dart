@@ -166,14 +166,23 @@ void main() {
   });
 
   testWidgets(
-      'All other exercises uses the top-level heading style, not the '
-      'blue subgroup style', (tester) async {
+      'All other exercises is a top-level heading in the Other blocks colour',
+      (tester) async {
     final h = await baseline();
     await h.seedShared('a', 'Alpha');
     await pump(tester, h, bottomInset: 0);
     TextStyle? style(String t) => tester.widget<Text>(find.text(t)).style;
-    expect(style('All other exercises'), style('Exercises in templates'));
-    expect(style('All other exercises'), isNot(style('Other blocks')));
+    final allOther = style('All other exercises')!;
+    final templates = style('Exercises in templates')!;
+    final otherBlocks = style('Other blocks')!;
+    // Top-level heading size and weight, like the templates heading…
+    expect(allOther.fontSize, templates.fontSize);
+    expect(allOther.fontWeight, templates.fontWeight);
+    expect(allOther.fontSize, isNot(otherBlocks.fontSize),
+        reason: 'not the smaller subgroup label');
+    // …in the same colour as "Other blocks".
+    expect(allOther.color, isNotNull);
+    expect(allOther.color, otherBlocks.color);
     // Order: templates heading → Current → Other → All other.
     double y(String t) => tester.getTopLeft(find.text(t)).dy;
     expect(y('Exercises in templates'), lessThan(y('Current block')));

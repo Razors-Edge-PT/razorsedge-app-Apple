@@ -14,6 +14,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localtest222/home_screen_2.dart';
 import 'package:localtest222/profile/core/media_models.dart';
 import 'package:localtest222/profile/ui/cached_network_image.dart';
 import 'package:localtest222/social/feed_repository.dart';
@@ -127,10 +128,9 @@ void main() {
                 availableCalendarFormats: const <CalendarFormat, String>{
                   CalendarFormat.month: 'Month',
                 },
-                headerStyle: const HeaderStyle(
-                  formatButtonVisible: false,
-                  titleCentered: true,
-                ),
+                // The page's own calendar configuration, not a copy.
+                headerStyle: HomeScreen2.kCalendarHeaderStyle,
+                availableGestures: HomeScreen2.kCalendarGestures,
                 onDaySelected: (DateTime selected, DateTime _) =>
                     onDaySelected?.call(selected),
                 onPageChanged: (DateTime focused) =>
@@ -268,9 +268,9 @@ void main() {
       );
       final int firstScreen = cardIds(tester).length;
       expect(host.position.maxScrollExtent, greaterThan(0));
-      // Real drags, started below the calendar: TableCalendar keeps its own
-      // vertical-swipe gesture, so a drag that begins on it never reaches the
-      // page — on the home page as much as here.
+      // Real drags. The calendar no longer claims vertical drags (see
+      // test/home_screen_2_layout_test.dart), so these could begin on it too;
+      // starting low simply pages the feed in fewer drags.
       for (int i = 0; i < 20; i += 1) {
         await tester.dragFrom(const Offset(200, 820), const Offset(0, -700));
         await tester.pumpAndSettle();

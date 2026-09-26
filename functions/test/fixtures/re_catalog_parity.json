@@ -24,7 +24,7 @@
           "legacyNameAliases": [
             "Flat Bench Dumbbell Press"
           ],
-          "factor": 2.35,
+          "factor": 2.11,
           "bodyweightLoaded": false,
           "loadSemantics": "perDumbbell"
         }
@@ -92,7 +92,7 @@
           "legacyNameAliases": [
             "Triceps Dip"
           ],
-          "factor": 0.73,
+          "factor": 0.63,
           "bodyweightLoaded": true,
           "loadSemantics": "bodyweightPlusAdded"
         }
@@ -303,17 +303,17 @@
     },
     {
       "e1rmKg": 105.3,
-      "factor": 0.73,
+      "factor": 0.63,
       "bodyweightKg": 72.4,
       "sex": "female",
-      "rePoints": 70.6709
+      "rePoints": 60.9899
     },
     {
       "e1rmKg": 36.7,
-      "factor": 2.35,
+      "factor": 2.11,
       "bodyweightKg": 57.5,
       "sex": "female",
-      "rePoints": 93.969
+      "rePoints": 84.3722
     },
     {
       "e1rmKg": 150,

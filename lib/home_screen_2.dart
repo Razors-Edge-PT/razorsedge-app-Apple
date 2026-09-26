@@ -31,6 +31,33 @@ import 'startup_trace.dart';
 class HomeScreen2 extends StatefulWidget {
   const HomeScreen2({super.key});
 
+  // ── Layout / gesture contract (shared with the widget tests) ──────────────
+
+  /// One Quick Access card.
+  static const double kQuickAccessCardHeight = 120;
+
+  /// The Quick Access strip: two cards + the 8px gap + 12px of slack.
+  static const double kQuickAccessHeight = 260;
+
+  /// …plus room for a first-time "Tap here …" cue label above a card.
+  static const double kQuickAccessCueHeight = 276;
+
+  /// Page padding: 14px under the app bar, 16px elsewhere.
+  static const EdgeInsets kPagePadding = EdgeInsets.fromLTRB(16, 14, 16, 16);
+
+  /// The calendar header, with 4px (not the package's 8px) above it.
+  static const HeaderStyle kCalendarHeaderStyle = HeaderStyle(
+    formatButtonVisible: false,
+    titleCentered: true,
+    headerPadding: EdgeInsets.only(top: 4, bottom: 8),
+  );
+
+  /// Horizontal swipes page months; vertical drags are NOT claimed by the
+  /// calendar (its vertical swipe only switches formats, and there is one), so
+  /// a vertical drag begun anywhere on it scrolls the Home page.
+  static const AvailableGestures kCalendarGestures =
+      AvailableGestures.horizontalSwipe;
+
   @override
   State<HomeScreen2> createState() => _HomeScreen2State();
 }
@@ -155,48 +182,13 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     Color? iconColor,
     Widget? iconWidget,
   }) {
-    return SizedBox(
+    return HomeQuickAccessCard(
       key: key,
-      width: kFeatureCardWidth,
-      height: 130,
-      child: GestureDetector(
-        onTap: onTap,
-        child: Card(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Stack(
-              children: [
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  child: iconWidget ??
-                      Icon(icon,
-                          size: 44,
-                          color: iconColor ??
-                              Theme.of(context).colorScheme.secondary),
-                ),
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  left: 44,
-                  child: Text(
-                    label,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          height: 1.3,
-                          fontWeight: FontWeight.bold,
-                        ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+      icon: icon,
+      label: label,
+      onTap: onTap,
+      iconColor: iconColor,
+      iconWidget: iconWidget,
     );
   }
 
@@ -342,7 +334,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
             ? _buildSetupBody()
             : SingleChildScrollView(
                 controller: _homeScrollCtrl,
-                padding: const EdgeInsets.all(16),
+                padding: HomeScreen2.kPagePadding,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -354,7 +346,9 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
 
                     // ── Quick Access ──────────────────────────────────────────
                     SizedBox(
-                      height: (!_ctrl.wpDone || !_ctrl.wesDone) ? 296.0 : 280.0,
+                      height: (!_ctrl.wpDone || !_ctrl.wesDone)
+                          ? HomeScreen2.kQuickAccessCueHeight
+                          : HomeScreen2.kQuickAccessHeight,
                       child: SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: Row(
@@ -612,7 +606,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                       ),
                                     ),
                               const SizedBox(
-                                  width: kFeatureCardWidth, height: 130),
+                                  width: kFeatureCardWidth,
+                                  height: HomeScreen2.kQuickAccessCardHeight),
                             ),
                           ],
                         ),
@@ -630,10 +625,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                       availableCalendarFormats: const {
                         CalendarFormat.month: 'Month',
                       },
-                      headerStyle: const HeaderStyle(
-                        formatButtonVisible: false,
-                        titleCentered: true,
-                      ),
+                      headerStyle: HomeScreen2.kCalendarHeaderStyle,
+                      availableGestures: HomeScreen2.kCalendarGestures,
                       selectedDayPredicate: (day) =>
                           isSameDay(_selectedDay, day),
                       onDaySelected: (selectedDay, focusedDay) {
@@ -912,6 +905,71 @@ class _GlowingCueWrapperState extends State<_GlowingCueWrapper>
           ],
         );
       },
+    );
+  }
+}
+
+/// One Quick Access card (Home). Public so the widget tests render the real
+/// card at [HomeScreen2.kQuickAccessCardHeight].
+class HomeQuickAccessCard extends StatelessWidget {
+  const HomeQuickAccessCard({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.iconColor,
+    this.iconWidget,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color? iconColor;
+  final Widget? iconWidget;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: _HomeScreen2State.kFeatureCardWidth,
+      height: HomeScreen2.kQuickAccessCardHeight,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Card(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Stack(
+              children: [
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  child: iconWidget ??
+                      Icon(icon,
+                          size: 44,
+                          color: iconColor ??
+                              Theme.of(context).colorScheme.secondary),
+                ),
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  left: 44,
+                  child: Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          height: 1.3,
+                          fontWeight: FontWeight.bold,
+                        ),
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

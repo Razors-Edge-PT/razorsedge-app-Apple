@@ -54,12 +54,12 @@ test('exact ids, factors and category membership', () => {
   const table = RE_EXERCISES.map((e) => [e.category, e.exerciseId, e.displayName, e.factor]);
   assert.deepStrictEqual(table, [
     ['horizontalPress', 'AmfUWbF1DH3I7qPAdh5k', 'Bench Press, Barbell', 1.0],
-    ['horizontalPress', 'kTs5fLSTKjUkUZL10iii', 'Flat Bench Dumbbell Press', 2.35],
+    ['horizontalPress', 'kTs5fLSTKjUkUZL10iii', 'Flat Bench Dumbbell Press', 2.11],
     ['verticalPull', 'XM9026peNIu0R8qh7UqY', 'Chin-Up', 1.0],
     ['verticalPull', '1XOIXxeLFhgmgjZS9Cyq', 'Lat Pull Down, Supinated', 0.85],
     ['overheadPress', 'RdsGazgdH0xgpjek0n3u', 'Overhead Dumbbell Press, Unilateral', 2.61],
     ['overheadPress', 'lVDG90yN6Z8aPjRNV2wc', 'Overhead Barbell Press', 1.53],
-    ['overheadPress', 'FtayDmR5BVnGS1FXlXLL', 'Triceps Dip', 0.73],
+    ['overheadPress', 'FtayDmR5BVnGS1FXlXLL', 'Triceps Dip', 0.63],
     ['hipHinge', 'MsGl7e9yanDeEnYX0e4X', 'Deadlift, Conventional', 0.74],
     ['hipHinge', '10pEctikt6PP8eAg9Eip', 'Deadlift, Sumo', 0.74],
     ['hipHinge', 'LGhFj8o0sG3X12296UAh', 'Hip Thrust, Barbell', 0.55],

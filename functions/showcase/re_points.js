@@ -18,8 +18,9 @@
  * Version of the RE Points arithmetic AND the factor table. Bump when either
  * changes, so every stored V2 snapshot is rebuilt rather than mixing values.
  *   1 — first release (DB overhead press 2.61, lat pull down 0.85).
+ *   2 — Flat Bench Dumbbell Press 2.35 → 2.11, Triceps Dip 0.73 → 0.63.
  */
-const RE_POINTS_FORMULA_VERSION = 1;
+const RE_POINTS_FORMULA_VERSION = 2;
 
 const Sex = { MALE: 'male', FEMALE: 'female' };
 

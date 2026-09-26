@@ -96,7 +96,7 @@ void main() {
     });
 
     test('the highest scorer is the default in every category', () {
-      expect(cat(ReCategoryKey.horizontalPress).defaultExerciseId, kDbBench);
+      expect(cat(ReCategoryKey.horizontalPress).defaultExerciseId, kBench);
       expect(cat(ReCategoryKey.verticalPull).defaultExerciseId, kChin);
       expect(cat(ReCategoryKey.overheadPress).defaultExerciseId, kOhpDb);
       // Conventional and sumo tie exactly: catalogue order decides.
@@ -208,11 +208,11 @@ void main() {
       final Map<String, dynamic> broken =
           jsonDecode(jsonEncode(golden)) as Map<String, dynamic>;
       ((broken['categories'] as Map<String, dynamic>)['horizontalPress']
-          as Map<String, dynamic>)['exercises'][kDbBench] = 'nope';
+          as Map<String, dynamic>)['exercises'][kBench] = 'nope';
       final ProfileShowcaseV2 v2 = ProfileShowcaseV2.fromMap(broken)!;
       final ShowcaseCategorySnapshot hp = v2.categories.first;
-      expect(hp.exerciseById(kDbBench)!.hasRecord, isFalse);
-      expect(hp.defaultExerciseId, kBench);
+      expect(hp.exerciseById(kBench)!.hasRecord, isFalse);
+      expect(hp.defaultExerciseId, kDbBench);
     });
   });
 
@@ -268,9 +268,16 @@ void main() {
           (WidgetTester tester) async {
         await pump(tester, goldenView(), isOwner: isOwner);
         expect(
-            inCard('horizontalPress', find.text('Flat Bench Dumbbell Press')),
+            inCard('horizontalPress', find.text('Bench Press, Barbell')),
             findsOneWidget);
-        expect(inCard('horizontalPress', find.text('78.01')), findsOneWidget);
+        expect(inCard('horizontalPress', find.text('73.47')), findsOneWidget);
+        // Best RE Points is the LIGHTER 95 kg set at 65 kg bodyweight, not the
+        // 100 kg Best E1RM set: its own score, its own source line.
+        expect(inCard('horizontalPress', find.text('100 kg')), findsWidgets);
+        expect(
+            inCard('horizontalPress',
+                find.textContaining('from 95 kg × 1 · 5 Feb 2026')),
+            findsOneWidget);
         expect(inCard('verticalPull', find.text('Chin-Up')), findsOneWidget);
         expect(
             inCard('overheadPress',
@@ -289,17 +296,13 @@ void main() {
           '$who: the dropdown changes only that card\'s displayed exercise',
           (WidgetTester tester) async {
         await pump(tester, goldenView(), isOwner: isOwner);
-        await choose(tester, 'horizontalPress', kBench);
-        expect(inCard('horizontalPress', find.text('Bench Press, Barbell')),
-            findsOneWidget);
-        // Best RE Points is the LIGHTER 95 kg set at 65 kg bodyweight, not the
-        // 100 kg Best E1RM set: its own score, its own source line.
-        expect(inCard('horizontalPress', find.text('73.47')), findsOneWidget);
-        expect(inCard('horizontalPress', find.text('100 kg')), findsWidgets);
+        await choose(tester, 'horizontalPress', kDbBench);
         expect(
-            inCard('horizontalPress',
-                find.textContaining('from 95 kg × 1 · 5 Feb 2026')),
+            inCard('horizontalPress', find.text('Flat Bench Dumbbell Press')),
             findsOneWidget);
+        expect(inCard('horizontalPress', find.text('70.04')), findsOneWidget);
+        expect(inCard('horizontalPress', find.text('Bench Press, Barbell')),
+            findsNothing);
         // Every other card is untouched.
         expect(inCard('verticalPull', find.text('Chin-Up')), findsOneWidget);
         expect(inCard('hipHinge', find.text('Deadlift, Conventional')),
@@ -346,14 +349,14 @@ void main() {
         (WidgetTester tester) async {
       final ShowcaseView view = goldenView();
       await pump(tester, view, isOwner: true, key: const ValueKey<int>(1));
-      await choose(tester, 'horizontalPress', kBench);
-      expect(inCard('horizontalPress', find.text('Bench Press, Barbell')),
+      await choose(tester, 'horizontalPress', kDbBench);
+      expect(inCard('horizontalPress', find.text('Flat Bench Dumbbell Press')),
           findsOneWidget);
       // The underlying data still names the server's best.
-      expect(view.categories.categories.first.defaultExerciseId, kDbBench);
+      expect(view.categories.categories.first.defaultExerciseId, kBench);
       // Reopen: a fresh widget tree.
       await pump(tester, view, isOwner: true, key: const ValueKey<int>(2));
-      expect(inCard('horizontalPress', find.text('Flat Bench Dumbbell Press')),
+      expect(inCard('horizontalPress', find.text('Bench Press, Barbell')),
           findsOneWidget);
     });
 
@@ -395,7 +398,7 @@ void main() {
           findsOneWidget);
       expect(find.text('No result yet'), findsOneWidget);
       expect(find.text('51.99 pts'), findsOneWidget);
-      expect(find.text('38.77 pts'), findsOneWidget);
+      expect(find.text('33.46 pts'), findsOneWidget);
     });
 
     testWidgets(

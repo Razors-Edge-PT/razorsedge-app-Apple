@@ -303,7 +303,8 @@ void main() {
       // No empty card position was introduced. The only blank slot is the
       // pre-existing one that pads the final column, after Settings.
       final blanks =
-          RegExp(r'SizedBox\(\s*width: kFeatureCardWidth, height: 130\)')
+          RegExp(r'SizedBox\(\s*width: kFeatureCardWidth,\s*'
+                  r'height: HomeScreen2\.kQuickAccessCardHeight\)')
               .allMatches(qa)
               .toList();
       expect(blanks.length, 1, reason: 'no new blank card position');

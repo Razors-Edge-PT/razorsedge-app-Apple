@@ -433,8 +433,9 @@ class _Body extends StatelessWidget {
         SliverMainAxisGroup(
           key: const ValueKey('bp2-group-all-other'),
           slivers: [
-            const _SectionSliver('All other exercises',
-                key: ValueKey('bp2-section-all-other')),
+            _SectionSliver('All other exercises',
+                key: const ValueKey('bp2-section-all-other'),
+                color: Theme.of(context).colorScheme.primary),
             ..._group(c, g.allOther,
                 loaded ? 'No exercises outside planned blocks.' : null),
           ],
@@ -476,12 +477,13 @@ class _Body extends StatelessWidget {
 
 class _SectionSliver extends StatelessWidget {
   final String title;
-  const _SectionSliver(this.title, {super.key});
+  final Color? color;
+  const _SectionSliver(this.title, {super.key, this.color});
   @override
   Widget build(BuildContext context) => PinnedHeaderSliver(
         child: ColoredBox(
           color: Theme.of(context).scaffoldBackgroundColor,
-          child: _Header(title, primary: true),
+          child: _Header(title, primary: true, color: color),
         ),
       );
 }
@@ -535,7 +537,8 @@ class _BlockLoading extends StatelessWidget {
 class _Header extends StatelessWidget {
   final String title;
   final bool primary;
-  const _Header(this.title, {required this.primary});
+  final Color? color;
+  const _Header(this.title, {required this.primary, this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -545,7 +548,7 @@ class _Header extends StatelessWidget {
       child: Text(
         title,
         style: primary
-            ? theme.textTheme.titleMedium
+            ? theme.textTheme.titleMedium?.copyWith(color: color)
             : theme.textTheme.labelLarge
                 ?.copyWith(color: theme.colorScheme.primary),
       ),

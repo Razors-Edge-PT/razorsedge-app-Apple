@@ -77,7 +77,7 @@ test('a lower E1RM at a lower bodyweight holds Best RE Points; Best E1RM stays t
 
 for (const [label, id, cat, factor] of [
   ['Chin-Up', ID.chin, 'verticalPull', 1.0],
-  ['Triceps Dip', ID.dip, 'overheadPress', 0.73],
+  ['Triceps Dip', ID.dip, 'overheadPress', 0.63],
 ]) {
   test(`${label}: the best added-load E1RM is not the best combined-load RE Points`, () => {
     const bw = weighIns([['2026-01-01', 60], ['2026-05-01', 110]]);
@@ -120,10 +120,10 @@ test('the category default follows lifetime Best RE Points', () => {
   const bw = weighIns([['2026-01-01', 110], ['2026-03-01', 65]]);
   const history = {
     '2026-01-10': workout(row(ID.bench, [{ weight: 150, reps: 1 }])),
-    '2026-03-10': workout(row(ID.dbBench, [{ weight: 50, reps: 1 }])),
+    '2026-03-10': workout(row(ID.dbBench, [{ weight: 55, reps: 1 }])),
   };
   const snap = buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw) });
-  assert.ok(pts(50, 2.35, 65) > pts(150, 1, 110));
+  assert.ok(pts(55, 2.11, 65) > pts(150, 1, 110));
   assert.strictEqual(snap.categories.horizontalPress.bestExerciseId, ID.dbBench);
 });
 

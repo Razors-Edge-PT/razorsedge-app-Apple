@@ -119,7 +119,7 @@ const List<ReExercise> kReExercises = <ReExercise>[
     exerciseId: 'kTs5fLSTKjUkUZL10iii',
     displayName: 'Flat Bench Dumbbell Press',
     legacyNameAliases: <String>['Flat Bench Dumbbell Press'],
-    factor: 2.35,
+    factor: 2.11,
     loadSemantics: ReLoadSemantics.perDumbbell,
   ),
   // ── Vertical Pull ──
@@ -168,7 +168,7 @@ const List<ReExercise> kReExercises = <ReExercise>[
     displayName: 'Triceps Dip',
     // "Triceps Dip Machine" is a different exercise and is deliberately absent.
     legacyNameAliases: <String>['Triceps Dip'],
-    factor: 0.73,
+    factor: 0.63,
     bodyweightLoaded: true,
     loadSemantics: ReLoadSemantics.bodyweightPlusAdded,
   ),

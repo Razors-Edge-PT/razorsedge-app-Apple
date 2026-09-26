@@ -81,7 +81,7 @@ const RE_EXERCISES = [
     exerciseId: 'kTs5fLSTKjUkUZL10iii',
     displayName: 'Flat Bench Dumbbell Press',
     legacyNameAliases: ['Flat Bench Dumbbell Press'],
-    factor: 2.35,
+    factor: 2.11,
     bodyweightLoaded: false,
     loadSemantics: LoadSemantics.PER_DUMBBELL,
   },
@@ -136,7 +136,7 @@ const RE_EXERCISES = [
     displayName: 'Triceps Dip',
     // "Triceps Dip Machine" is a different exercise and is deliberately absent.
     legacyNameAliases: ['Triceps Dip'],
-    factor: 0.73,
+    factor: 0.63,
     bodyweightLoaded: true,
     loadSemantics: LoadSemantics.BODYWEIGHT_PLUS_ADDED,
   },

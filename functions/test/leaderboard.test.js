@@ -136,7 +136,7 @@ test('best exercise in a category wins the day; only one score per category', as
   const day = a.day('2026-09-02');
   assert.deepStrictEqual(Object.keys(day.categories), ['horizontalPress']);
   assert.strictEqual(day.categories.horizontalPress.exerciseId, ID.dbBench);
-  assert.strictEqual(day.totalPointsUnits, units(50, 2.35, 80));
+  assert.strictEqual(day.totalPointsUnits, units(50, 2.11, 80));
 });
 
 test('multiple workouts on one date still give one category winner', () => {
@@ -187,7 +187,7 @@ test('Chin-Up and Triceps Dip score the combined bodyweight + added load', async
   ));
   const day = a.day('2026-09-02');
   assert.strictEqual(day.categories.verticalPull.pointsUnits, units(100, 1, 80));
-  assert.strictEqual(day.categories.overheadPress.pointsUnits, units(80, 0.73, 80));
+  assert.strictEqual(day.categories.overheadPress.pointsUnits, units(80, 0.63, 80));
 });
 
 test('dumbbell loads are not doubled', async () => {
@@ -238,7 +238,7 @@ test('an edit replaces the prior winner with the next-best surviving set', async
   assert.strictEqual(a.day('2026-09-02').categories.horizontalPress.exerciseId, ID.bench);
   await a.log('2026-09-02', workout(row(ID.bench, [{ weight: 60, reps: 1 }]), row(ID.dbBench, [{ weight: 45, reps: 1 }])));
   assert.strictEqual(a.day('2026-09-02').categories.horizontalPress.exerciseId, ID.dbBench);
-  assert.strictEqual(a.month('2026-09').totalPointsUnits, units(45, 2.35, 80));
+  assert.strictEqual(a.month('2026-09').totalPointsUnits, units(45, 2.11, 80));
 });
 
 test('deletion removes the contribution; deleting the only scored day zeroes the month', async () => {

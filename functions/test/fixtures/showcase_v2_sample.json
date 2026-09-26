@@ -1,11 +1,11 @@
 {
   "schema": "profileShowcaseV2",
   "e1rmFormulaVersion": 1,
-  "rePointsFormulaVersion": 1,
+  "rePointsFormulaVersion": 2,
   "aggregationVersion": 2,
   "categories": {
     "horizontalPress": {
-      "bestExerciseId": "kTs5fLSTKjUkUZL10iii",
+      "bestExerciseId": "AmfUWbF1DH3I7qPAdh5k",
       "exercises": {
         "AmfUWbF1DH3I7qPAdh5k": {
           "slot": "bench",
@@ -52,8 +52,8 @@
           "slot": "dbBenchFlat",
           "exerciseId": "kTs5fLSTKjUkUZL10iii",
           "displayName": "Flat Bench Dumbbell Press",
-          "factor": 2.35,
-          "rePoints": 78.0111,
+          "factor": 2.11,
+          "rePoints": 70.044,
           "e1rm": {
             "slot": "dbBenchFlat",
             "exerciseId": "kTs5fLSTKjUkUZL10iii",
@@ -86,7 +86,7 @@
             "e1rm": 50,
             "formulaVersion": 1,
             "fingerprint": "d62cfc061ca04c80ee8523b9f79c7d1f",
-            "rePoints": 78.0111
+            "rePoints": 70.044
           }
         }
       }
@@ -247,8 +247,8 @@
           "slot": "tricepsDip",
           "exerciseId": "FtayDmR5BVnGS1FXlXLL",
           "displayName": "Triceps Dip",
-          "factor": 0.73,
-          "rePoints": 38.7732,
+          "factor": 0.63,
+          "rePoints": 33.4618,
           "e1rm": {
             "slot": "tricepsDip",
             "exerciseId": "FtayDmR5BVnGS1FXlXLL",
@@ -302,7 +302,7 @@
             "addedE1rm": 0,
             "bodyweightKg": 80,
             "bodyweightDateKey": "2026-01-01",
-            "rePoints": 38.7732
+            "rePoints": 33.4618
           }
         }
       }

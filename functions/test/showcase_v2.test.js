@@ -82,7 +82,7 @@ test('flat DB bench and DB Bulgarian split squat do NOT double the stored load',
   const db = entry(snap, 'horizontalPress', ID.dbBench);
   assert.strictEqual(db.e1rm.weight, 40);
   assert.strictEqual(db.e1rm.e1rm, 40);
-  assert.strictEqual(db.rePoints, pts(40, 2.35, 80));
+  assert.strictEqual(db.rePoints, pts(40, 2.11, 80));
   const bss = entry(snap, 'squatPattern', ID.bssDb);
   assert.strictEqual(bss.e1rm.e1rm, 30);
   assert.strictEqual(bss.rePoints, pts(30, 2.5, 80));
@@ -113,7 +113,7 @@ test('unilateral DB OHP scores with 2.61; E1RM uses the existing curve, RIR igno
 
 for (const [label, id, category, factor] of [
   ['Chin-Up', ID.chin, 'verticalPull', 1.0],
-  ['Triceps Dip', ID.dip, 'overheadPress', 0.73],
+  ['Triceps Dip', ID.dip, 'overheadPress', 0.63],
 ]) {
   test(`${label}: weighted WES2 set scores the combined bodyweight + added load`, () => {
     const bw = weighIns([['2026-01-01', 80]]);
@@ -241,7 +241,7 @@ test('the highest-scoring alternative becomes the category default', () => {
   const history = {
     '2026-01-02': workout(
       row(ID.bench, [{ weight: 100, reps: 1 }]), // 100 × 1.00
-      row(ID.dbBench, [{ weight: 50, reps: 1 }]), // 50 × 2.35 = 117.5
+      row(ID.dbBench, [{ weight: 50, reps: 1 }]), // 50 × 2.11 = 105.5
     ),
   };
   const snap = buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw) });

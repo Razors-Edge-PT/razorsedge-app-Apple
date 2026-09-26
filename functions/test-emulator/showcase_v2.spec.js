@@ -107,7 +107,7 @@ test('V2 is published beside V1 without touching V1 or neighbouring fields', asy
     assert.equal(hp.bestExerciseId, DB_BENCH);
     assert.equal(hp.exercises[BENCH].rePoints, pts(100, 1, 80));
     assert.equal(hp.exercises[BENCH].points.setKey, hp.exercises[BENCH].e1rm.setKey);
-    assert.equal(hp.exercises[DB_BENCH].rePoints, pts(50, 2.35, 80));
+    assert.equal(hp.exercises[DB_BENCH].rePoints, pts(50, 2.11, 80));
     assert.equal(hp.exercises[BENCH].e1rm.fingerprint, pub.profileShowcaseV1.lifts.bench.e1rm.fingerprint);
 
     const days = await store.daysV2Col(uid).get();
@@ -266,7 +266,7 @@ test('a weigh-in re-scores through the real trigger path; a Triceps Dip uses com
     v2 = await store.readPublishedSnapshotV2(uid);
     const dip = v2.categories.overheadPress.exercises[DIP];
     assert.equal(dip.points.totalKg, 70);
-    assert.equal(dip.rePoints, pts(70, 0.73, 60, 'female'));
+    assert.equal(dip.rePoints, pts(70, 0.63, 60, 'female'));
     assert.equal(v2.categories.horizontalPress.exercises[BENCH].rePoints, pts(60, 1, 60, 'female'));
 
     // A change of sex is a job (fold + leaderboard), not an in-trigger rescore.
