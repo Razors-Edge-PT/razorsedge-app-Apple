@@ -222,7 +222,10 @@ void main() {
         buddies: BuddyRepository(firestore: db, overrideUid: kMe),
       )));
       await tester.pump();
-      expect(find.byIcon(Icons.person_add_alt_1), findsOneWidget);
+      expect(find.byIcon(Icons.groups_outlined), findsOneWidget);
+      expect(find.byIcon(Icons.person_add_alt_1), findsNothing);
+      expect(tester.widget<IconButton>(find.byType(IconButton)).tooltip,
+          'Social hub');
       expect(find.textContaining(RegExp(r'^\d')), findsNothing);
     });
 

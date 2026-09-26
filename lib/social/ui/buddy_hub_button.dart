@@ -90,7 +90,7 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
   }
 
   static String _tooltipFor(BuddyBadge badge) {
-    if (badge.total == 0) return 'Buddies';
+    if (badge.total == 0) return 'Social hub';
     if (badge.accepted == 0) {
       return '${badge.incoming} buddy '
           '${badge.incoming == 1 ? 'request' : 'requests'}';
@@ -153,7 +153,7 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
           onPressed: _openHub,
           tooltip: _tooltipFor(badge),
           icon: Icon(
-            Icons.person_add_alt_1,
+            Icons.groups_outlined,
             size: widget.iconSize,
             color: color,
           ),

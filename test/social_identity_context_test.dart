@@ -145,7 +145,7 @@ void main() {
         ),
       ));
       await tester.pump();
-      await tester.tap(find.byIcon(Icons.person_add_alt_1));
+      await tester.tap(find.byIcon(Icons.groups_outlined));
       await tester.pumpAndSettle();
 
       expect(find.byType(BuddyHubScreen), findsOneWidget);
@@ -168,7 +168,7 @@ void main() {
         ),
       ));
       await tester.pump();
-      await tester.tap(find.byIcon(Icons.person_add_alt_1));
+      await tester.tap(find.byIcon(Icons.groups_outlined));
       await tester.pumpAndSettle();
 
       // Everything else on HomeScreen2 is showing the athlete, so the Hub says

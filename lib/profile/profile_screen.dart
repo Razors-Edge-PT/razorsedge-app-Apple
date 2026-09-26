@@ -26,6 +26,7 @@ import 'package:provider/provider.dart';
 import '../post_media.dart';
 import '../post_service.dart';
 import '../social/buddy_repository.dart';
+import '../social/ui/profile_social_actions.dart';
 import '../user_context.dart';
 import 'core/media_models.dart';
 import 'core/showcase_models.dart';
@@ -209,6 +210,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                 onEditUsername: () => _editUsername(c),
                 onViewStories: () => _openStories(c),
               ),
+            ),
+            // Add friend / request states / Message — for the SIGNED-IN
+            // account and another athlete only (never on one's own profile).
+            SliverToBoxAdapter(
+              child: ProfileSocialActions(
+                  key: ValueKey<String>('social-actions:${c.targetUid}'),
+                  targetUid: c.targetUid),
             ),
             SliverToBoxAdapter(
               child: BigFiveShowcase(

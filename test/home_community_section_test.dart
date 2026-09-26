@@ -17,6 +17,7 @@ import 'package:localtest222/profile/core/media_models.dart';
 import 'package:localtest222/profile/ui/cached_network_image.dart';
 import 'package:localtest222/social/feed_repository.dart';
 import 'package:localtest222/social/ui/feed_card.dart';
+import 'package:localtest222/social/buddy_repository.dart';
 import 'package:localtest222/social/user_search_repository.dart';
 
 const String kMe = 'me-uid';
@@ -112,6 +113,7 @@ void main() {
     required UserSearchRepository search,
     required LeaderboardRepository board,
     void Function(String uid)? onOpenProfile,
+    BuddyRepository? buddies,
   }) async {
     tester.view.physicalSize = const Size(400, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -128,6 +130,10 @@ void main() {
             feed: feed,
             search: search,
             leaderboard: board,
+            // The signed-in account's social state (friend gating).
+            buddies: buddies ??
+                BuddyRepository(
+                    firestore: FakeFirebaseFirestore(), overrideUid: kMe),
             onOpenProfile: onOpenProfile ?? (_) {},
             onOpenPost: (_) {},
           ),
@@ -208,20 +214,30 @@ void main() {
     expect(find.text('Total RE Points · All time'), findsOneWidget);
   });
 
-  testWidgets('tapping a row opens that athlete\'s profile',
+  testWidgets("tapping a FRIEND's row opens that athlete's profile",
       (WidgetTester tester) async {
     final FakeFirebaseFirestore db = FakeFirebaseFirestore();
     await seedBoard(db);
+    await db.collection('socialGraph').doc(kMe).set(<String, Object?>{
+      'friends': <String>['amy'],
+    });
     final List<String> opened = <String>[];
     await pump(tester,
         feed: FeedRepository(firestore: db, overrideUid: kMe),
         search: UserSearchRepository(firestore: db),
         board: LeaderboardRepository(firestore: db, clock: () => kNow),
+        buddies: BuddyRepository(firestore: db, overrideUid: kMe),
         onOpenProfile: opened.add);
     await tapTab(tester, 'home-tab-leaderboard');
     await tester.tap(find.byKey(const ValueKey<String>('leaderboard-row-amy')));
     await tester.pumpAndSettle();
     expect(opened, <String>['amy']);
+    // A non-friend's row stays public but does not open.
+    await tester.tap(find.byKey(const ValueKey<String>('leaderboard-row-bob')));
+    await tester.pumpAndSettle();
+    expect(opened, <String>['amy']);
+    expect(find.byKey(const ValueKey<String>('leaderboard-add-bob')),
+        findsOneWidget);
   });
 
   testWidgets('the feed keeps its rows and never refetches across switches',

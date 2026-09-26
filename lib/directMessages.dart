@@ -31,6 +31,43 @@ String convIdFor(String a, String b) {
   return '${list[0]}_${list[1]}';
 }
 
+/// Makes sure the one-to-one conversation between [myUid] (the SIGNED-IN
+/// account) and [otherUid] exists, and returns its id ([convIdFor]).
+///
+/// The established creation flow, shared by every "message this person"
+/// entry point: an existing thread is only touched (`updatedAt`), never
+/// overwritten; a missing one is created with the initial shape the rules
+/// expect. Only a confirmed friend may be messaged — callers offer this only
+/// for friends, and the rules enforce it regardless.
+Future<String> ensureDirectConversation({
+  required String myUid,
+  required String otherUid,
+  FirebaseFirestore? firestore,
+}) async {
+  final convId = convIdFor(myUid, otherUid);
+  final convRef =
+      (firestore ?? FirebaseFirestore.instance).collection('conversations').doc(convId);
+  final now = FieldValue.serverTimestamp();
+  try {
+    // If it exists, just touch updatedAt (won't overwrite lastMessage/participantState)
+    await convRef.update({'updatedAt': now});
+  } catch (_) {
+    // If missing, create with the same initial shape as always.
+    await convRef.set({
+      'participants': {myUid: true, otherUid: true},
+      'participantList': ([myUid, otherUid]..sort()),
+      'createdAt': now,
+      'updatedAt': now,
+      'lastMessage': null,
+      'participantState': {
+        myUid: {'unreadCount': 0},
+        otherUid: {'unreadCount': 0},
+      },
+    }, SetOptions(merge: false));
+  }
+  return convId;
+}
+
 class BuddyPickerPage extends StatelessWidget {
   const BuddyPickerPage({super.key});
 
@@ -88,30 +125,9 @@ class BuddyPickerPage extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   onTap: () async {
-                    final convId = convIdFor(uid, buddyUid);
-                    final convRef = FirebaseFirestore.instance
-                        .collection('conversations')
-                        .doc(convId);
-
                     // ⚡ Bootstrap/touch conversation without a transaction (snappier local echo)
-                    final now = FieldValue.serverTimestamp();
-                    try {
-                      // If it exists, just touch updatedAt (won't overwrite lastMessage/participantState)
-                      await convRef.update({'updatedAt': now});
-                    } catch (_) {
-                      // If missing, create with the same initial shape you had before
-                      await convRef.set({
-                        'participants': {uid: true, buddyUid: true},
-                        'participantList': ([uid, buddyUid]..sort()),
-                        'createdAt': now,
-                        'updatedAt': now,
-                        'lastMessage': null,
-                        'participantState': {
-                          uid: {'unreadCount': 0},
-                          buddyUid: {'unreadCount': 0},
-                        },
-                      }, SetOptions(merge: false));
-                    }
+                    final convId = await ensureDirectConversation(
+                        myUid: uid, otherUid: buddyUid);
 
                     if (!context.mounted) return;
                     Navigator.of(context).pushReplacement(

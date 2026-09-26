@@ -25,6 +25,7 @@ import '../leaderboard/leaderboard_controller.dart';
 import '../leaderboard/leaderboard_repository.dart';
 import '../leaderboard/leaderboard_view.dart';
 import '../profile/ui/profile_theme.dart';
+import '../social/buddy_repository.dart';
 import '../social/feed_repository.dart';
 import '../social/home_feed_section.dart';
 import '../social/user_search_repository.dart';
@@ -41,6 +42,7 @@ class HomeCommunitySection extends StatefulWidget {
     this.feed,
     this.search,
     this.leaderboard,
+    this.buddies,
   });
 
   /// The home page's scroll controller. The feed pages from it.
@@ -53,6 +55,10 @@ class HomeCommunitySection extends StatefulWidget {
   final FeedRepository? feed;
   final UserSearchRepository? search;
   final LeaderboardRepository? leaderboard;
+
+  /// The signed-in account's social state, for the leaderboard's friend
+  /// gating. For tests; production uses FirebaseAuth's account.
+  final BuddyRepository? buddies;
 
   @override
   State<HomeCommunitySection> createState() => _HomeCommunitySectionState();
@@ -112,6 +118,7 @@ class _HomeCommunitySectionState extends State<HomeCommunitySection> {
               child: LeaderboardView(
                 controller: board,
                 onOpenProfile: widget.onOpenProfile,
+                buddies: widget.buddies,
               ),
             ),
           ),
