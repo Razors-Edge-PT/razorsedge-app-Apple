@@ -359,6 +359,20 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Category medals of one leaderboard period ('YYYY-MM' or 'all_time'):
+    // up to three uids per RE category with their derived category points and
+    // achievement dates — nothing a public entry does not already expose.
+    // Written ONLY by the leaderboard functions and scripts (Admin SDK).
+    match /leaderboardMedals/{periodKey} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Private dirty-board marker of the medal refresh. No client access.
+    match /leaderboardMedalQueue/{periodKey} {
+      allow read, write: if false;
+    }
+
     // Per-athlete bounded rebuild jobs (functions/showcase/rebuild_job.js).
     // Server-only: a client that could write one could stall or restart
     // another athlete's rebuild.

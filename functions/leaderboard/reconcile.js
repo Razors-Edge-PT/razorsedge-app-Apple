@@ -15,6 +15,11 @@
 //      increments its attempt count and leaves it for the next run. Items that
 //      exhausted maxAttempts are skipped (and counted) so they cannot starve
 //      the rest.
+//   5. refreshes the category medals (medals_firestore.js) of every board left
+//      dirty by a failed refresh — bounded by maxMedalBoards — and, as a
+//      safety net, of the current month and all time. Each refresh is one
+//      idempotent transaction; a dirty marker is cleared only if nothing
+//      re-marked the board meanwhile.
 // The queue itself is the checkpoint, so an interrupted run simply resumes.
 
 'use strict';
@@ -26,6 +31,7 @@ const DEFAULT_LIMITS = {
   pageSize: 50,
   maxAttempts: 5,
   staleScanLimit: 100,
+  maxMedalBoards: 50,
 };
 
 /**
@@ -101,6 +107,36 @@ async function runReconciliation(deps, limits) {
       }
     }
     if (page.length < L.pageSize) break;
+  }
+
+  // Medals last, so they see the entries the queue just recomputed.
+  if (typeof deps.refreshMedals === 'function') {
+    counts.medalBoardsRefreshed = 0;
+    counts.medalBoardsFailed = 0;
+    const done = new Set();
+    const refresh = async (periodKey) => {
+      done.add(periodKey);
+      await deps.refreshMedals(periodKey);
+      counts.medalBoardsRefreshed += 1;
+    };
+    for (const item of await deps.listDirtyMedalBoards(L.maxMedalBoards)) {
+      try {
+        await refresh(item.periodKey);
+        await deps.clearMedalBoard(item);
+      } catch (err) {
+        counts.medalBoardsFailed += 1;
+        if (failures.length < 20) failures.push({ periodKey: item.periodKey, error: String(err && err.message) });
+      }
+    }
+    for (const p of [current, deps.allTimePeriodKey || 'all_time']) {
+      if (done.has(p)) continue;
+      try {
+        await refresh(p);
+      } catch (err) {
+        counts.medalBoardsFailed += 1;
+        if (failures.length < 20) failures.push({ periodKey: p, error: String(err && err.message) });
+      }
+    }
   }
   return { counts, failures };
 }

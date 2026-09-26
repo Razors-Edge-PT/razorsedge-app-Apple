@@ -12,6 +12,11 @@
 /// offers Add friend (or shows the pending request) and does not open — their
 /// profile is not readable to the viewer, and the leaderboard never loosens
 /// that.
+///
+/// Category medals (leaderboard_medals.dart) sit beneath the name of the row
+/// they were awarded to, matched by uid from the board's server snapshot.
+/// Tapping a medal opens its detail and never the profile; the rest of the
+/// row keeps opening the profile exactly as before.
 library;
 
 import 'dart:async';
@@ -23,8 +28,10 @@ import '../profile/ui/profile_theme.dart';
 import '../social/buddy_repository.dart';
 import '../social/ui/user_row.dart' show BuddyAvatar, kMinTouchTarget;
 import 'leaderboard_controller.dart';
+import 'leaderboard_medals.dart';
 import 'leaderboard_models.dart';
 import 'leaderboard_repository.dart';
+import 'medal_badge.dart';
 
 class LeaderboardView extends StatefulWidget {
   const LeaderboardView({
@@ -133,6 +140,13 @@ class _LeaderboardViewState extends State<LeaderboardView> {
       key: ValueKey<String>('leaderboard-row-${e.uid}'),
       entry: e,
       onTap: opens ? () => widget.onOpenProfile(e.uid) : null,
+      medals: _c.medalsFor(e.uid),
+      onMedalTap: (LeaderboardMedal m) => showMedalDetail(
+        context,
+        medal: m,
+        athleteName: e.displayName,
+        recordSource: _c.medalRecordSource,
+      ),
       action: action,
       busy: _busy.contains(e.uid),
       onAction: switch (action) {
@@ -280,9 +294,17 @@ class LeaderboardRow extends StatelessWidget {
     this.action = LeaderboardRowAction.none,
     this.onAction,
     this.busy = false,
+    this.medals = const <LeaderboardMedal>[],
+    this.onMedalTap,
   });
 
   final LeaderboardEntry entry;
+
+  /// This athlete's medals on the shown board, in category order.
+  final List<LeaderboardMedal> medals;
+
+  /// Opens a medal's detail. Never the profile.
+  final void Function(LeaderboardMedal medal)? onMedalTap;
 
   /// Opens the profile. Null when the viewer may not open it: the row and its
   /// avatar then do nothing on tap.
@@ -303,13 +325,42 @@ class LeaderboardRow extends StatelessWidget {
       LeaderboardRowAction.accept => ', sent you a friend request',
       LeaderboardRowAction.none => '',
     };
+    final bool hasMedals = medals.isNotEmpty;
+    final String medalLabel = hasMedals
+        ? ', ${medals.length} medal${medals.length == 1 ? '' : 's'}'
+        : '';
+    // With medals, the row's visible texts are left out of the tree (the
+    // row label says them) so each medal stays its own reachable button.
+    Widget plain(Widget w) => hasMedals ? ExcludeSemantics(child: w) : w;
+    final Widget nameText = Text(entry.displayName,
+        maxLines: 1, overflow: TextOverflow.ellipsis, style: name);
+    // Bounded, and scaled down only when it could not otherwise fit (very
+    // large accessibility text on a narrow phone), so the row never
+    // overflows; at ordinary sizes it is exactly as before.
+    final Widget points = ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 112),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerRight,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(entry.pointsLabel, style: ProfileText.recordValue(context)),
+            Text('RE pts', style: ProfileText.caption(context)),
+          ],
+        ),
+      ),
+    );
+    final Widget rowAction = _RowAction(
+        uid: entry.uid, action: action, onPressed: onAction, busy: busy);
     final Widget standing = Semantics(
       button: onTap != null,
       label: 'Rank ${entry.rank}, ${entry.displayName}, '
-          '${entry.pointsLabel} RE Points$actionLabel',
-      // The row's own label; the relationship control keeps its semantics so
-      // it stays reachable with a screen reader.
-      excludeSemantics: action == LeaderboardRowAction.none,
+          '${entry.pointsLabel} RE Points$medalLabel$actionLabel',
+      // The row's own label; the relationship control and the medals keep
+      // their semantics so they stay reachable with a screen reader.
+      excludeSemantics: action == LeaderboardRowAction.none && !hasMedals,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(ProfileSpacing.radiusSmall),
@@ -320,51 +371,55 @@ class LeaderboardRow extends StatelessWidget {
                 horizontal: ProfileSpacing.xs, vertical: ProfileSpacing.xs),
             child: Row(
               children: <Widget>[
-                SizedBox(
+                plain(SizedBox(
                   width: 36,
                   child: Text('${entry.rank}',
                       textAlign: TextAlign.center,
                       style:
                           name.copyWith(color: ProfilePalette.textSecondary)),
-                ),
+                )),
                 const SizedBox(width: ProfileSpacing.sm),
                 BuddyAvatar(photoURL: entry.photoURL ?? '', size: 40),
                 const SizedBox(width: ProfileSpacing.md),
-                Expanded(
-                  child: action == LeaderboardRowAction.none
-                      ? Text(entry.displayName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: name)
-                      // The relationship control sits under the name, so
-                      // rank, photo and points keep their full width on
-                      // narrow phones.
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Text(entry.displayName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: name),
-                            _RowAction(
-                                uid: entry.uid,
-                                action: action,
-                                onPressed: onAction,
-                                busy: busy),
-                          ],
+                if (!hasMedals) ...<Widget>[
+                  Expanded(
+                    child: action == LeaderboardRowAction.none
+                        ? nameText
+                        // The relationship control sits under the name, so
+                        // rank, photo and points keep their full width on
+                        // narrow phones.
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[nameText, rowAction],
+                          ),
+                  ),
+                  const SizedBox(width: ProfileSpacing.sm),
+                  points,
+                ] else
+                  // With medals, name and points share the top line and the
+                  // medals run beneath the name across the row's full width
+                  // (never under the rank or photo), so five fit on phones.
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Row(children: <Widget>[
+                          Expanded(child: plain(nameText)),
+                          const SizedBox(width: ProfileSpacing.sm),
+                          plain(points),
+                        ]),
+                        MedalStrip(
+                          key: ValueKey<String>(
+                              'leaderboard-medals-${entry.uid}'),
+                          medals: medals,
+                          onTap: (LeaderboardMedal m) => onMedalTap?.call(m),
                         ),
-                ),
-                const SizedBox(width: ProfileSpacing.sm),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text(entry.pointsLabel,
-                        style: ProfileText.recordValue(context)),
-                    Text('RE pts', style: ProfileText.caption(context)),
-                  ],
-                ),
+                        if (action != LeaderboardRowAction.none) rowAction,
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),

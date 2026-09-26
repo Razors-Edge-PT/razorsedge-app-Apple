@@ -217,6 +217,76 @@
       ]
     },
     {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "formulaVersion",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "medalRankKeys.horizontalPress",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "formulaVersion",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "medalRankKeys.verticalPull",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "formulaVersion",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "medalRankKeys.overheadPress",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "formulaVersion",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "medalRankKeys.hipHinge",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "formulaVersion",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "medalRankKeys.squatPattern",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "days",
       "queryScope": "COLLECTION",
       "fields": [

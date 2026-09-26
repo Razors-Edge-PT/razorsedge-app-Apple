@@ -42,6 +42,7 @@ const {
 } = require('./reducer');
 const { isBuilt, applyRequest, refreshAllTime } = require('./store');
 const { runReconciliation, requestsOfItem, mergeQueueItem } = require('./reconcile');
+const medalsFs = require('./medals_firestore');
 
 const QUEUE_COLLECTION = 'leaderboardRecalcQueue';
 
@@ -463,6 +464,10 @@ function reconcileDeps(nowMs) {
         { merge: true },
       );
     },
+    allTimePeriodKey: ALL_TIME_PERIOD,
+    refreshMedals: (periodKey) => medalsFs.refreshMedals(periodKey),
+    listDirtyMedalBoards: (limit) => medalsFs.listDirtyMedalBoards(limit),
+    clearMedalBoard: (item) => medalsFs.clearMedalBoard(item),
   };
 }
 

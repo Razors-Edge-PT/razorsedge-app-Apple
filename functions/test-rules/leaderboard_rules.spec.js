@@ -148,3 +148,60 @@ test('public unit metadata is readable by signed-in users and writable by no cli
   // Every other public field stays owner-editable.
   await assertSucceeds(as(OWNER).doc(`users_public/${OWNER}`).set({ bio: 'hi' }, { merge: true }));
 });
+
+// ── Category medal snapshots ────────────────────────────────────────────────
+
+test('medal snapshots: readable by any signed-in user, never by a visitor', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('leaderboardMedals/2026-09').set({
+      schema: 'leaderboardMedals', schemaVersion: 1, periodKey: '2026-09', boardType: 'month', revision: 1,
+      categories: { horizontalPress: [{ uid: OWNER, place: 1, pointsUnits: 1000000, achievedDateKey: '2026-09-02' }] },
+    });
+    await ctx.firestore().doc('leaderboardMedals/all_time').set({ schema: 'leaderboardMedals', periodKey: 'all_time', categories: {} });
+    await ctx.firestore().doc('leaderboardMedalQueue/2026-09').set({ periodKey: '2026-09', dirty: true });
+  });
+  for (const uid of [OWNER, OTHER, SUPER]) {
+    await assertSucceeds(as(uid).doc('leaderboardMedals/2026-09').get());
+    await assertSucceeds(as(uid).doc('leaderboardMedals/all_time').get());
+    await assertSucceeds(as(uid).doc('leaderboardMedals/2031-01').get());
+  }
+  await assertFails(anon().doc('leaderboardMedals/2026-09').get());
+});
+
+test('no client — not even a medallist or the super admin — may create, edit or delete a medal snapshot', async () => {
+  for (const uid of [OWNER, OTHER, SUPER]) {
+    await assertFails(as(uid).doc('leaderboardMedals/2026-09').set({ categories: {} }));
+    await assertFails(as(uid).doc('leaderboardMedals/2026-09').update({ revision: 99 }));
+    await assertFails(as(uid).doc('leaderboardMedals/2026-09').delete());
+    await assertFails(as(uid).doc('leaderboardMedals/2027-01').set({ categories: {} }));
+  }
+});
+
+test('the private medal refresh queue is closed to every client', async () => {
+  for (const uid of [OWNER, OTHER, SUPER]) {
+    await assertFails(as(uid).doc('leaderboardMedalQueue/2026-09').get());
+    await assertFails(as(uid).collection('leaderboardMedalQueue').get());
+    await assertFails(as(uid).doc('leaderboardMedalQueue/2026-10').set({ dirty: true }));
+    await assertFails(as(uid).doc('leaderboardMedalQueue/2026-09').delete());
+  }
+});
+
+test('old app versions: the unchanged ranked entry query still works beside the medal fields', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc(`leaderboards/2026-09/entries/${OTHER}`).set({
+      uid: OTHER, username: 'other', totalPointsUnits: 500000, tieBreakDateKey: '2026-09-03',
+      categoryTotalsUnits: { horizontalPress: 500000 }, categoryDateKeys: { horizontalPress: '2026-09-03' },
+      medalRankKeys: { horizontalPress: '0000999999500000~2026-09-03~x' }, formulaVersion: 'v',
+    });
+  });
+  await assertSucceeds(
+    as(OWNER)
+      .collection('leaderboards/2026-09/entries')
+      .where('totalPointsUnits', '>', 0)
+      .orderBy('totalPointsUnits', 'desc')
+      .orderBy('tieBreakDateKey')
+      .orderBy('uid')
+      .limit(50)
+      .get(),
+  );
+});

@@ -15,6 +15,12 @@ library;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../profile/core/showcase_v2_models.dart';
+import '../profile/ui/record_presentation.dart';
+import '../profile/ui/units.dart';
+import '../units/exercise_unit_registry.dart';
+import '../units/weight_unit.dart';
+import 'leaderboard_medals.dart';
 import 'leaderboard_models.dart';
 
 class LeaderboardRepository {
@@ -67,5 +73,46 @@ class LeaderboardRepository {
       cursor: snap.docs.isEmpty ? after : snap.docs.last,
       isFromCache: snap.metadata.isFromCache,
     );
+  }
+
+  /// The category medals of [period]: ONE small server-written document per
+  /// board. Like the entries it goes through Firestore's persistence, so a
+  /// board's medals seen once are still shown offline.
+  Future<LeaderboardMedals> fetchMedals(LeaderboardPeriod period) async {
+    final String key = periodKey(period);
+    final DocumentSnapshot<Map<String, dynamic>> snap =
+        await _db.collection(kLeaderboardMedalsCollection).doc(key).get();
+    return LeaderboardMedals.fromMap(key, snap.data(),
+        isFromCache: snap.metadata.isFromCache);
+  }
+
+  /// "Bench Press, Barbell — 158.5 kg × 9" for an all-time [medal], from the
+  /// medallist's PUBLIC profile showcase (in the owner's unit) — or null when
+  /// that record is not published or no longer the one the medal names.
+  Future<String?> fetchMedalRecordSource(LeaderboardMedal medal) async {
+    final String? exerciseId = medal.exerciseId;
+    if (!medal.isAllTime || exerciseId == null) return null;
+    final Map<String, dynamic>? pub =
+        (await _db.collection('users_public').doc(medal.uid).get()).data();
+    final ProfileShowcaseV2? showcase =
+        ProfileShowcaseV2.fromMap(pub?['profileShowcaseV2']);
+    if (showcase == null) return null;
+    for (final category in showcase.categories) {
+      for (final e in category.exercises) {
+        if (e.exercise.exerciseId != exerciseId) continue;
+        final record = e.pointsRecord;
+        final double? points = e.rePoints;
+        if (record == null || points == null) return null;
+        // The medal's own record only — never a newer, different one.
+        if ((points * kRePointUnits).round() != medal.pointsUnits) return null;
+        final ExerciseWeightUnit unit = ExerciseUnits.parsePublished(
+                pub?['exerciseWeightUnits'])[exerciseId] ??
+            ExerciseWeightUnit.kg;
+        return presentShowcaseRecord(
+                record: record, isE1rm: false, units: WeightUnits.of(unit))
+            .source;
+      }
+    }
+    return null;
   }
 }

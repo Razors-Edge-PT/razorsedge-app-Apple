@@ -269,6 +269,50 @@ void main() {
     expect(find.text('name-bob'), findsOneWidget);
   });
 
+  testWidgets(
+      'with medals: the feed stays loaded and paused, and is not refetched',
+      (WidgetTester tester) async {
+    final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+    await seedFeed(db);
+    await seedBoard(db);
+    await db.collection('leaderboardMedals').doc('2026-09').set(
+      <String, Object?>{
+        'schema': 'leaderboardMedals',
+        'periodKey': '2026-09',
+        'categories': <String, Object?>{
+          'horizontalPress': <Object?>[
+            <String, Object?>{'uid': 'bob', 'place': 1, 'pointsUnits': 5},
+          ],
+        },
+      },
+    );
+    final _CountingFeed feed = _CountingFeed(db);
+    await pump(tester,
+        feed: feed,
+        search: UserSearchRepository(firestore: db),
+        board: LeaderboardRepository(firestore: db, clock: () => kNow));
+    final int loadsBefore = feed.loads;
+    final int cards = find.byType(FeedCard).evaluate().length;
+
+    await tapTab(tester, 'home-tab-leaderboard');
+    expect(
+        find.byKey(const ValueKey<String>('leaderboard-medal-bob-horizontalPress')),
+        findsOneWidget);
+    // The feed is still mounted, hidden, and its tickers are paused.
+    expect(find.byType(FeedCard, skipOffstage: false).evaluate().length, cards);
+    expect(visible(tester, find.byType(FeedCard)), isFalse);
+    final TickerMode mode = tester.widget<TickerMode>(find
+        .ancestor(
+            of: find.byType(FeedCard, skipOffstage: false).first,
+            matching: find.byType(TickerMode, skipOffstage: false))
+        .first);
+    expect(mode.enabled, isFalse);
+
+    await tapTab(tester, 'home-tab-feed');
+    expect(feed.loads, loadsBefore);
+    expect(visible(tester, find.byType(FeedCard)), isTrue);
+  });
+
   testWidgets('loading, then empty', (WidgetTester tester) async {
     final FakeFirebaseFirestore db = FakeFirebaseFirestore();
     await pump(tester,

@@ -5,10 +5,18 @@
 /// Each period keeps its own loaded rows, so switching This Month ⇄ All Time
 /// and back does not refetch. Stale responses (a slow page for a period the
 /// user has already left, or superseded by a retry) are discarded.
+///
+/// Each period also keeps its board's category medals, loaded BESIDE the
+/// first page and never blocking it: rows show as soon as they arrive and
+/// gain their medals when the (one-document) snapshot lands. A failed medal
+/// load keeps whatever medals were last shown.
 library;
+
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import 'leaderboard_medals.dart';
 import 'leaderboard_models.dart';
 import 'leaderboard_repository.dart';
 
@@ -23,6 +31,8 @@ class _PeriodState {
   bool isFromCache = false;
   Object? error;
   int generation = 0;
+  LeaderboardMedals? medals;
+  int medalGeneration = 0;
 }
 
 class LeaderboardController extends ChangeNotifier {
@@ -49,6 +59,17 @@ class LeaderboardController extends ChangeNotifier {
   bool get loadingMore => _s.loadingMore;
   bool get isFromCache => _s.isFromCache;
   Object? get error => _s.error;
+
+  /// The shown board's medals; null until its snapshot has loaded.
+  LeaderboardMedals? get medals => _s.medals;
+
+  /// [uid]'s medals on the shown board, in category order (none until loaded).
+  List<LeaderboardMedal> medalsFor(String uid) =>
+      _s.medals?.forUid(uid) ?? const <LeaderboardMedal>[];
+
+  /// Reads the all-time record line for a medal's detail.
+  Future<String?> medalRecordSource(LeaderboardMedal medal) =>
+      _repo.fetchMedalRecordSource(medal);
 
   /// The key of the period being shown ('YYYY-MM' or 'all_time').
   String get periodKey => _repo.periodKey(_period);
@@ -108,6 +129,7 @@ class LeaderboardController extends ChangeNotifier {
     s.error = null;
     s.loadingMore = false;
     _notify();
+    unawaited(_loadMedals(p));
     try {
       final LeaderboardPageResult page = await _repo.fetchPage(p);
       if (gen != s.generation) return;
@@ -124,6 +146,19 @@ class LeaderboardController extends ChangeNotifier {
       s.status = LeaderboardStatus.error;
     }
     _notify();
+  }
+
+  Future<void> _loadMedals(LeaderboardPeriod p) async {
+    final _PeriodState s = _states[p]!;
+    final int gen = ++s.medalGeneration;
+    try {
+      final LeaderboardMedals m = await _repo.fetchMedals(p);
+      if (gen != s.medalGeneration) return;
+      s.medals = m;
+      _notify();
+    } catch (_) {
+      // Keep the last medals shown; the board itself is unaffected.
+    }
   }
 
   void _notify() {

@@ -857,6 +857,10 @@ exports.showcaseOnExerciseUnitWrite = showcase.showcaseOnExerciseUnitWrite;
 const leaderboard = require('./leaderboard/firestore_store');
 exports.leaderboardOnPublicProfileWrite = leaderboard.leaderboardOnPublicProfileWrite;
 exports.leaderboardReconcileDaily = leaderboard.leaderboardReconcileDaily;
+// Category medals (gold/silver/bronze per RE category, per board): every entry
+// write refreshes its board's public snapshot leaderboardMedals/{periodKey}
+// when it can change the podium. See leaderboard/medals_firestore.js.
+exports.leaderboardMedalsOnEntryWrite = require('./leaderboard/medals_firestore').leaderboardMedalsOnEntryWrite;
 
 const identity = require('./identity');
 exports.profileChangeUsername = identity.profileChangeUsername;

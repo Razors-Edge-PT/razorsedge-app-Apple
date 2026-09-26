@@ -38,6 +38,7 @@ const {
 } = require('../showcase/reducer_v2');
 const { SHOWCASE_FORMULA_VERSION } = require('../showcase/e1rm_spec');
 const { RE_POINTS_FORMULA_VERSION } = require('../showcase/re_points');
+const { medalRankKeysOf } = require('./medals');
 
 /** 1 point = 10,000 units. */
 const POINT_UNITS = 10000;
@@ -177,9 +178,15 @@ function scoreDay(dateKey, v2Days, bodyweight, sex) {
  * tieBreakDateKey is the last date that added points — the day the total was
  * reached. Earlier wins a tie; the uid settles the rest. It is derived from
  * the data, so a rebuild reproduces it exactly.
+ *
+ * Per category (medals.js), categoryDateKeys[c] is likewise the last date
+ * that added points to that category — the day its subtotal was reached —
+ * and medalRankKeys[c] the category's sortable medal order.
  */
 function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
   const categoryTotalsUnits = zeroByCategory();
+  const categoryDateKeys = {};
+  for (const k of CATEGORY_KEYS) categoryDateKeys[k] = null;
   let total = 0;
   let scoredDayCount = 0;
   let tieBreakDateKey = null;
@@ -191,7 +198,12 @@ function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
     scoredDayCount += 1;
     for (const k of CATEGORY_KEYS) {
       const c = d.categories && d.categories[k];
-      if (c && Number.isInteger(c.pointsUnits)) categoryTotalsUnits[k] += c.pointsUnits;
+      if (c && Number.isInteger(c.pointsUnits)) {
+        categoryTotalsUnits[k] += c.pointsUnits;
+        if (c.pointsUnits > 0 && (!categoryDateKeys[k] || d.dateKey > categoryDateKeys[k])) {
+          categoryDateKeys[k] = d.dateKey;
+        }
+      }
     }
     if (!tieBreakDateKey || d.dateKey > tieBreakDateKey) tieBreakDateKey = d.dateKey;
   }
@@ -204,6 +216,8 @@ function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
     photoURL: id.photoURL,
     totalPointsUnits: total,
     categoryTotalsUnits,
+    categoryDateKeys,
+    medalRankKeys: medalRankKeysOf(uid, categoryTotalsUnits, categoryDateKeys),
     scoredDayCount,
     tieBreakDateKey,
     formulaVersion: LEADERBOARD_FORMULA_VERSION,
@@ -222,10 +236,13 @@ function allTimeEntryFromSnapshot(uid, snapshot, identity) {
   if (!isCurrentSnapshotV2(snapshot)) return { stale: true, entry: null };
   const categoryBestUnits = zeroByCategory();
   const winningExerciseIds = {};
+  // Per category: the training date of the winning record (medal order).
+  const categoryDateKeys = {};
   let total = 0;
   let tieBreakDateKey = null;
   for (const k of CATEGORY_KEYS) {
     winningExerciseIds[k] = null;
+    categoryDateKeys[k] = null;
     const cat = snapshot.categories[k];
     const best = cat && cat.exercises && cat.exercises[cat.bestExerciseId];
     const units = best ? toUnits(best.rePoints) : null;
@@ -235,6 +252,7 @@ function allTimeEntryFromSnapshot(uid, snapshot, identity) {
     total += units;
     // Reached on the Best RE Points record's own date.
     const d = best.points && best.points.dateKey;
+    if (typeof d === 'string') categoryDateKeys[k] = d;
     if (d && (!tieBreakDateKey || d > tieBreakDateKey)) tieBreakDateKey = d;
   }
   if (total <= 0) return { entry: null };
@@ -248,6 +266,8 @@ function allTimeEntryFromSnapshot(uid, snapshot, identity) {
       totalPointsUnits: total,
       categoryBestUnits,
       winningExerciseIds,
+      categoryDateKeys,
+      medalRankKeys: medalRankKeysOf(uid, categoryBestUnits, categoryDateKeys),
       tieBreakDateKey,
       formulaVersion: LEADERBOARD_FORMULA_VERSION,
     },
