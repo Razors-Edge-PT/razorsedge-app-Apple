@@ -504,7 +504,11 @@ class PeriodizationModelUtils {
   ///
   /// Returns the routed top-set history (newest-first, one sample per day),
   /// optionally sliced as-of [asOfDate] so a workout being edited never sees
-  /// samples recorded after it. Pure in-memory; never performs Firestore I/O.
+  /// samples recorded ON or after it: exercise-performance history is
+  /// STRICTLY before the selected date, so a partially logged, saved or
+  /// completed workout can never feed back into its own baseline target.
+  /// (Bodyweight measurements are a separate source and unaffected.)
+  /// Pure in-memory; never performs Firestore I/O.
   static List<Map<String, dynamic>> resolveTopSetHistory({
     required String exerciseId,
     required String exerciseName,
@@ -526,7 +530,7 @@ class PeriodizationModelUtils {
     final sliced = all.where((s) {
       final d = s['date'];
       if (d is! DateTime) return true;
-      return !d.isAfter(cutoff);
+      return DateTime(d.year, d.month, d.day).isBefore(cutoff);
     }).toList(growable: false);
     _asOfSliceCache[cacheKey] = sliced;
     return sliced;
@@ -554,7 +558,11 @@ class PeriodizationModelUtils {
 
     final out = <String>{};
     for (final e in all) {
-      if (cutoff != null && e.key.isAfter(cutoff)) continue;
+      // Strictly before the selected date (see resolveTopSetHistory).
+      if (cutoff != null &&
+          !DateTime(e.key.year, e.key.month, e.key.day).isBefore(cutoff)) {
+        continue;
+      }
       out.add(e.value);
     }
     _asOfComboCache[cacheKey] = out;
@@ -717,11 +725,11 @@ class PeriodizationModelUtils {
       };
     })
         // Defensive as-of guard: even if a caller hands us an unsliced list,
-        // a sample recorded AFTER the workout being planned can never inform
-        // that workout's baseline.
+        // a sample recorded ON or AFTER the workout being planned can never
+        // inform that workout's baseline.
         .where((e) {
       final DateTime? d = e['date'] as DateTime?;
-      return d == null || !DateTime(d.year, d.month, d.day).isAfter(_asOfDay);
+      return d == null || DateTime(d.year, d.month, d.day).isBefore(_asOfDay);
     }).toList()
       ..sort((a, b) {
         final ad = a['date'] as DateTime?;

@@ -1,7 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'active_instance.dart';
 import 'bb3_day_panel.dart';
+import 'bb3_history_gate.dart';
 import 'bb3_models.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'exercise_catalog.dart';
@@ -21,7 +23,11 @@ import 'user_context.dart';
 // Outside-block days show a banner; fallback/default hints still render.
 
 class BB3WeekPlanner extends StatefulWidget {
-  const BB3WeekPlanner({super.key});
+  const BB3WeekPlanner({super.key, @visibleForTesting this.historyGate});
+
+  /// TEST SEAM ONLY: the history readiness gate. Production passes none and
+  /// uses the default [Bb3HistoryGate] (ProgressionHistoryStore-backed).
+  final Bb3HistoryGate? historyGate;
 
   @override
   State<BB3WeekPlanner> createState() => _BB3WeekPlannerState();
@@ -237,10 +243,22 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
 
   // ── Week data load ────────────────────────────────────────────────────────
 
+  /// Non-blocking readiness of the viewed athlete's progression history for
+  /// exposure-model hints. Never awaited before rendering.
+  late final Bb3HistoryGate _historyGate =
+      widget.historyGate ?? Bb3HistoryGate();
+
   Future<void> _loadWeek({required bool fromServer}) async {
     final blockId = _selectedBlockId;
     if (blockId == null || blockId.isEmpty) return;
     final uid = _uid;
+
+    // Start (or join) the athlete's history hydration in the background — NOT
+    // part of this load's futures, so the page opens exactly as before. When it
+    // lands, ONE rebuild releases the withheld exposure-model hints.
+    _historyGate.ensure(uid, () {
+      if (mounted && _uid == uid) setState(() {});
+    });
 
     // Capture mutable state at call time so all 7 inner futures read the same
     // week/block even if _weekStart or _blockSettings changes mid-flight.
@@ -327,9 +345,11 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
   // ── Exposure hint index cache ─────────────────────────────────────────────
   //
   // Async post-load step: queries getExposureHintIndex for every DUP By Exposure
-  // / DUP Signature exercise in the displayed week and stores the result in
-  // _hintIndexCache. _buildDayList reads from this cache synchronously; a cache
-  // miss falls back to the within-week date-aware count (getWeeklyInstanceCount).
+  // / DUP Signature exercise in the displayed week and stores the canonical
+  // exposure POSITION in _hintIndexCache. _buildDayList reads from this cache
+  // synchronously; a cache miss uses exposurePositionSync (in-memory history +
+  // the week's loaded plans) — the same rules, so pre-cache and cache-loaded
+  // hints agree. Both are turned into an ActiveInstance by the one resolver.
 
   // Updates only _dupSigRepCache after a planned-row field save.
   // Skips getExposureHintIndex (session counts don't change on rep edits).
@@ -882,7 +902,10 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
         // (cross-week, block-wide) when available; the within-week count below
         // serves as the fallback until the cache populates.
         final sessionIndexByExId = <String, int>{};
+        final activeByExId = <String, ActiveInstance>{};
+        final withheldExIds = <String>{};
         if (isCurrentWeek) {
+          final bool historyReady = _historyGate.isReady(_uid);
           final now = DateTime.now();
           final todayNorm = DateTime(now.year, now.month, now.day);
           final wsNorm =
@@ -898,12 +921,50 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
                 model == 'DUP, By Exposure' || model == 'DUP, Signature';
             final cacheKey = '${_dateFmt.format(date)}_${ex.exerciseId}';
 
-            if (isExposureModel && _hintIndexCache.containsKey(cacheKey)) {
-              final rawCount = _hintIndexCache[cacheKey]!;
-              final patternCount =
-                  BB3PlannedExerciseService.getRepTargetPatternCount(exSettings);
-              sessionIndexByExId[ex.exerciseId] =
-                  patternCount > 0 ? rawCount % patternCount : rawCount;
+            if (isExposureModel) {
+              // The exposure position: the cache-loaded value (Firestore,
+              // independent of in-memory history) or, once the athlete's
+              // authoritative history is ready, the same rules synchronously.
+              // Without either, nothing is guessed.
+              final int? position = _hintIndexCache[cacheKey] ??
+                  (historyReady
+                      ? BB3PlannedExerciseService.exposurePositionSync(
+                          exerciseId: ex.exerciseId,
+                          exerciseName: ex.name,
+                          blockStartDate:
+                              _blockSettings?.startDate ?? weekStart,
+                          selectedDate: date,
+                          plannedByDateKey: <String, List<BB3Exercise>>{
+                            for (int pd = 0; pd < 7; pd++)
+                              _dateFmt.format(wsNorm.add(Duration(days: pd))):
+                                  _plannedByDay[pd],
+                          },
+                        )
+                      : null);
+              if (position != null) {
+                final ActiveInstance active =
+                    ActiveInstanceResolver.forSettings(
+                  exSettings: exSettings,
+                  exposurePosition: position,
+                  weekIndex: weekIndex,
+                );
+                activeByExId[ex.exerciseId] = active;
+                sessionIndexByExId[ex.exerciseId] = active.repInstanceIndex;
+              } else {
+                // Set count only (never a hint): the pre-existing count.
+                sessionIndexByExId[ex.exerciseId] =
+                    BB3PlannedExerciseService.getWeeklyInstanceCount(
+                  plannedByDay: _plannedByDay,
+                  completedByDay: _completedByDay,
+                  selectedDayIndex: d - 1,
+                  todayDayIndex: todayDayIndex,
+                  exerciseId: ex.exerciseId,
+                  exerciseName: ex.name,
+                );
+              }
+              // Weight/reps/RIR hints need the athlete's history: withheld —
+              // not guessed — until it is authoritative.
+              if (!historyReady) withheldExIds.add(ex.exerciseId);
             } else {
               sessionIndexByExId[ex.exerciseId] =
                   BB3PlannedExerciseService.getWeeklyInstanceCount(
@@ -939,6 +1000,10 @@ class _BB3WeekPlannerState extends State<BB3WeekPlanner> {
           sessionIndex: 0,
           sessionIndexByExerciseId:
               sessionIndexByExId.isNotEmpty ? sessionIndexByExId : null,
+          activeInstanceByExerciseId:
+              activeByExId.isNotEmpty ? activeByExId : null,
+          hintsWithheldExerciseIds:
+              withheldExIds.isNotEmpty ? withheldExIds : null,
           uid: _uid,
           allExercises: _allExercises,
           templates: _templates,

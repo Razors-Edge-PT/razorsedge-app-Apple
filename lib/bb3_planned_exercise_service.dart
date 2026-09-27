@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:intl/intl.dart';
 import 'bb3_models.dart';
 import 'local_cache/block_plan_cache.dart';
 import 'exercise_type.dart';
+import 'active_instance.dart';
 import 'periodization_model_utils.dart';
 
 // ─── BB3PlannedExerciseService ────────────────────────────────────────────────
@@ -20,7 +22,14 @@ import 'periodization_model_utils.dart';
 class BB3PlannedExerciseService {
   BB3PlannedExerciseService._();
 
-  static final _fs = FirebaseFirestore.instance;
+  /// TEST SEAM ONLY: a fake Firestore for widget tests. Never set in
+  /// production, where [_fs] resolves [FirebaseFirestore.instance] once,
+  /// lazily — exactly as the former `static final` did.
+  @visibleForTesting
+  static FirebaseFirestore? debugFirestoreOverride;
+  static FirebaseFirestore? _instance;
+  static FirebaseFirestore get _fs =>
+      debugFirestoreOverride ?? (_instance ??= FirebaseFirestore.instance);
   static final _dateFmt = DateFormat('yyyy-MM-dd');
 
   /// Did this stored workout row record a PERFORMED set?
@@ -527,81 +536,6 @@ class BB3PlannedExerciseService {
     return result;
   }
 
-  // ── Per-exercise session index for BB3 planning surface ──────────────────
-  //
-  // Returns how many distinct days earlier in this week (0..currentDayIndex-1)
-  // had this exercise either planned in BB3 or completed in WES.
-  // A day that is both planned and completed counts once (Set union).
-  // This is BB3-specific: unlike WES's getInstanceCountForExerciseInWeek,
-  // it counts planned exposures that may not yet be logged.
-
-  static int getPlannedSessionIndex({
-    required List<List<BB3Exercise>> plannedByDay,
-    required List<List<Map<String, dynamic>>> completedByDay,
-    required int currentDayIndex,
-    required String exerciseId,
-    required String exerciseName,
-  }) {
-    final Set<int> daysWithExposure = {};
-    final normName = exerciseName.trim().toLowerCase();
-
-    for (int prev = 0; prev < currentDayIndex; prev++) {
-      // Check planned first
-      if (plannedByDay[prev].any((e) =>
-          e.exerciseId == exerciseId ||
-          e.name.trim().toLowerCase() == normName)) {
-        daysWithExposure.add(prev);
-        continue; // already counted this day
-      }
-      // Check completed (WES-logged) for days not already added via planned
-      if (completedByDay[prev].any((ex) {
-        final exId = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
-        final exName = (ex['name'] ?? '').toString().trim().toLowerCase();
-        return exId == exerciseId || exName == normName;
-      })) {
-        daysWithExposure.add(prev);
-      }
-    }
-
-    return daysWithExposure.length;
-  }
-
-  // ── Exposure-style session index (DUP, By Exposure / DUP, Signature) ──────
-  //
-  // Level 1: synchronous best-effort for panel hint. Counts current-week days
-  // before currentDayIndex where the exercise appears (union of planned and
-  // completed, no double-count). Call for DUP, By Exposure and DUP, Signature
-  // only — DUP, By Week and non-DUP use getPlannedSessionIndex.
-
-  static int getExposureIndexSync({
-    required List<List<BB3Exercise>> plannedByDay,
-    required List<List<Map<String, dynamic>>> completedByDay,
-    required int currentDayIndex,
-    required String exerciseId,
-    required String exerciseName,
-  }) {
-    final Set<int> daysWithExposure = {};
-    final normName = exerciseName.trim().toLowerCase();
-
-    for (int d = 0; d < currentDayIndex; d++) {
-      if (plannedByDay[d].any((e) =>
-          e.exerciseId == exerciseId ||
-          e.name.trim().toLowerCase() == normName)) {
-        daysWithExposure.add(d);
-        continue;
-      }
-      if (completedByDay[d].any((ex) {
-        final id = (ex['exerciseId'] ?? ex['id'] ?? '').toString().trim();
-        final name = (ex['name'] ?? '').toString().trim().toLowerCase();
-        return id == exerciseId || name == normName;
-      })) {
-        daysWithExposure.add(d);
-      }
-    }
-
-    return daysWithExposure.length;
-  }
-
   // ── Within-week instance count (synchronous) ─────────────────────────────
   //
   // Counts distinct days in [0, selectedDayIndex] where this exercise appears:
@@ -652,25 +586,6 @@ class BB3PlannedExerciseService {
       }
     }
     return count;
-  }
-
-  // ── Repeating instance pattern count (for exposure/signature cache wrapping) ──
-  //
-  // Returns how many contiguous instanceN keys exist in repTargets.week1.
-  // Used to wrap raw block-wide exposure counts to the repeating pattern slot:
-  //   wrappedIndex = rawCount % patternCount
-  // Returns 0 when repTargets is absent or has no instance1 (safe no-op for callers).
-
-  static int getRepTargetPatternCount(Map<String, dynamic>? exSettings) {
-    final repTargets = exSettings?['repTargets'];
-    if (repTargets is! Map) return 0;
-    final weekData = repTargets['week1'];
-    if (weekData is! Map) return 0;
-    int n = 0;
-    while (weekData.containsKey('instance${n + 1}')) {
-      n++;
-    }
-    return n;
   }
 
   // ── DUP Signature rep target for BB3 planned-row hints ──────────────────
@@ -844,15 +759,16 @@ class BB3PlannedExerciseService {
     return computeNextDupSigRep(runningHistory, min, max);
   }
 
-  // ── Exposure hint index (BB3 row hints — async, cross-week) ─────────────
+  // ── Exposure position (BB3 row hints — cache-loaded, cross-week) ─────────
   //
-  // Returns the 0-based sessionIndex to use for BB3 planned-row hints for
-  // DUP, By Exposure and DUP, Signature models. Counts block-wide exposures
-  // that occurred BEFORE selectedDate:
-  //   • Completed valid instances in [blockStartDate, today] (inclusive).
-  //   • Planned instances in [today, selectedDate − 1 day] when future.
-  // Uses a date-string Set so today counts once even if both completed and
-  // planned.
+  // The canonical BB3 exposure position (ActiveInstanceResolver): distinct
+  // valid completed dates in [blockStart, selectedDate), plus — for a future
+  // selected date — the dates the exercise is planned on in
+  // [today, selectedDate). A date both completed and planned counts once; the
+  // selected date and anything after it never count.
+  //
+  // [firestore], [today] and [plannedDayLoader] default to production and are
+  // injectable for tests.
 
   static Future<int> getExposureHintIndex({
     required String exerciseId,
@@ -861,27 +777,31 @@ class BB3PlannedExerciseService {
     required DateTime selectedDate,
     required String uid,
     required String blockId,
+    FirebaseFirestore? firestore,
+    DateTime? today,
+    Future<List<BB3Exercise>> Function(DateTime date)? plannedDayLoader,
   }) async {
     final normName = exerciseName.trim().toLowerCase();
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final now = today ?? DateTime.now();
+    final todayNorm = DateTime(now.year, now.month, now.day);
     final selNorm =
         DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
     final blockStart = DateTime(
         blockStartDate.year, blockStartDate.month, blockStartDate.day);
-    final Set<String> countedDates = {};
+    final lastBefore = selNorm.subtract(const Duration(days: 1));
 
-    // Completed valid instances [blockStart, today]
-    if (!blockStart.isAfter(today)) {
+    // Completed valid dates [blockStart, selectedDate).
+    final Set<String> completed = <String>{};
+    if (!lastBefore.isBefore(blockStart)) {
       try {
-        final snaps = await _fs
+        final snaps = await (firestore ?? _fs)
             .collection('users')
             .doc(uid)
             .collection('workouts')
             .where(FieldPath.documentId,
                 isGreaterThanOrEqualTo: _dateFmt.format(blockStart))
             .where(FieldPath.documentId,
-                isLessThanOrEqualTo: _dateFmt.format(today))
+                isLessThanOrEqualTo: _dateFmt.format(lastBefore))
             .get();
         for (final doc in snaps.docs) {
           final exercises = (doc.data()['exercises'] as List?) ?? [];
@@ -892,38 +812,81 @@ class BB3PlannedExerciseService {
             if (id != exerciseId && name != normName) return false;
             return _hasPerformedSet(ex);
           })) {
-            countedDates.add(doc.id);
+            completed.add(doc.id);
           }
         }
       } catch (_) {}
     }
 
-    // Planned instances [today, selNorm − 1 day] (future selected dates only)
-    if (selNorm.isAfter(today)) {
-      final planEnd = selNorm.subtract(const Duration(days: 1));
-      DateTime cur = today;
-      while (!cur.isAfter(planEnd)) {
-        final (:weekIndex, :dayIndex) = dateToWeekDay(blockStart, cur);
-        try {
-          final planned = await getPlannedDay(
-            uid: uid,
-            blockId: blockId,
-            weekIndex: weekIndex,
-            dayIndex: dayIndex,
-            date: cur,
-          );
-          if (planned.any((e) =>
-              e.exerciseId == exerciseId ||
-              e.name.trim().toLowerCase() == normName)) {
-            countedDates.add(_dateFmt.format(cur));
-          }
-        } catch (_) {}
+    // Planned dates [today, selectedDate) — future selected dates only.
+    final Set<String> planned = <String>{};
+    if (selNorm.isAfter(todayNorm)) {
+      DateTime cur = todayNorm.isBefore(blockStart) ? blockStart : todayNorm;
+      while (cur.isBefore(selNorm)) {
+        final String key = _dateFmt.format(cur);
+        if (!completed.contains(key)) {
+          try {
+            final List<BB3Exercise> day;
+            if (plannedDayLoader != null) {
+              day = await plannedDayLoader(cur);
+            } else {
+              final (:weekIndex, :dayIndex) = dateToWeekDay(blockStart, cur);
+              day = await getPlannedDay(
+                uid: uid,
+                blockId: blockId,
+                weekIndex: weekIndex,
+                dayIndex: dayIndex,
+                date: cur,
+              );
+            }
+            if (_plansExercise(day, exerciseId, normName)) planned.add(key);
+          } catch (_) {}
+        }
         cur = cur.add(const Duration(days: 1));
       }
     }
 
-    return countedDates.length;
+    return ActiveInstanceResolver.exposurePosition(
+      selectedDate: selNorm,
+      completedDates: completed,
+      plannedDates: planned,
+      today: todayNorm,
+      blockStartDate: blockStart,
+    );
   }
+
+  /// The same position, synchronously, before the cache-loaded value exists:
+  /// completed dates from the in-memory history index (the engine's source),
+  /// planned dates from the plans already loaded ([plannedByDateKey],
+  /// yyyy-MM-dd → that day's planned exercises).
+  static int exposurePositionSync({
+    required String exerciseId,
+    required String exerciseName,
+    required DateTime blockStartDate,
+    required DateTime selectedDate,
+    DateTime? today,
+    required Map<String, List<BB3Exercise>> plannedByDateKey,
+  }) {
+    final normName = exerciseName.trim().toLowerCase();
+    return ActiveInstanceResolver.exposurePosition(
+      selectedDate: selectedDate,
+      completedDates: ActiveInstanceResolver.completedExposureDates(
+          exerciseId: exerciseId, exerciseName: exerciseName),
+      plannedDates: <String>[
+        for (final MapEntry<String, List<BB3Exercise>> e
+            in plannedByDateKey.entries)
+          if (_plansExercise(e.value, exerciseId, normName)) e.key,
+      ],
+      today: today,
+      blockStartDate: blockStartDate,
+    );
+  }
+
+  static bool _plansExercise(
+          List<BB3Exercise> day, String exerciseId, String normName) =>
+      day.any((e) =>
+          e.exerciseId == exerciseId ||
+          e.name.trim().toLowerCase() == normName);
 
   // ── Global block exposure count (Task B — dialog completedInstanceCount) ──
   //
@@ -957,43 +920,6 @@ class BB3PlannedExerciseService {
         currentWeekStart: currentWeekStart,
         currentDayIndexInWeek: currentDayIndexInWeek,
       );
-
-  // ── Model-specific active instance (Task C Level 2 — dialog DUP slot) ─────
-  //
-  // Returns null for DUP, By Week and non-DUP models (caller falls back to
-  // getPlannedSessionIndex). Returns block-wide exposure count for
-  // DUP, By Exposure and DUP, Signature.
-
-  static Future<int?> resolveBb3ModelInstanceIndex({
-    required String exerciseId,
-    required String exerciseName,
-    required String periodizationModel,
-    required DateTime blockStartDate,
-    required DateTime selectedDate,
-    required String uid,
-    required String blockId,
-    required List<List<BB3Exercise>> currentWeekPlannedByDay,
-    required List<List<Map<String, dynamic>>> currentWeekCompletedByDay,
-    required DateTime currentWeekStart,
-    required int currentDayIndexInWeek,
-  }) async {
-    if (periodizationModel != 'DUP, By Exposure' &&
-        periodizationModel != 'DUP, Signature') {
-      return null;
-    }
-    return _countBlockExposures(
-      exerciseId: exerciseId,
-      exerciseName: exerciseName,
-      blockStartDate: blockStartDate,
-      selectedDate: selectedDate,
-      uid: uid,
-      blockId: blockId,
-      currentWeekPlannedByDay: currentWeekPlannedByDay,
-      currentWeekCompletedByDay: currentWeekCompletedByDay,
-      currentWeekStart: currentWeekStart,
-      currentDayIndexInWeek: currentDayIndexInWeek,
-    );
-  }
 
   // ── Private: shared block exposure counting logic ──────────────────────────
   //

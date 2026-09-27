@@ -16,11 +16,24 @@ class BB3SetHint {
   final String weightDisplay; // e.g. "97.5" or "95–100" or ""
   final String repsDisplay;   // e.g. "5" or ""
   final String rirDisplay;    // e.g. "2" or ""
+  /// The snapped weight hint as a NUMBER (kg; display-added for bodyweight
+  /// exercises), or null when no weight is hinted. Consumers read this, never
+  /// a re-parse of [weightDisplay]: a 2-decimal kg string cannot represent a
+  /// pound-grid weight (285 lb = 129.27382545 kg), and parsing it back showed
+  /// artefacts such as 239.995 lb.
+  final double? weightKg;
+
+  /// The RIR hint as a NUMBER, or null when no RIR is hinted. [rirDisplay]
+  /// is rounded to one decimal (1.25 → "1.3"); BB3 surfaces and BB3-prescribed
+  /// WES2 sets read this exact value instead.
+  final double? rirValue;
 
   const BB3SetHint({
     this.weightDisplay = '',
     this.repsDisplay = '',
     this.rirDisplay = '',
+    this.weightKg,
+    this.rirValue,
   });
 
   bool get isEmpty =>
@@ -52,6 +65,8 @@ class BB3HintService {
     String? exerciseType,
     required Map<String, dynamic> fullExerciseSettings,
     required int weekIndex,
+    /// Rep-target instance index (0-based). For exposure models this is the
+    /// canonical ActiveInstance.repInstanceIndex.
     required int sessionIndex,
     required int setIndex,       // 0-based
     required DateTime blockStartDate,
@@ -67,7 +82,15 @@ class BB3HintService {
     double? userRir,
     // DUP Signature pre-computed rep target (overrides repTarget + baseReps).
     int? dupSigRep,
+    /// RIR session index (0-based) — resolved separately from the rep
+    /// instance (ActiveInstance.rirSessionIndex). Defaults to [sessionIndex]
+    /// for callers whose model uses one index for both.
+    int? rirSessionIndex,
+    /// Canonical exposure position (ActiveInstance.exposurePosition). When
+    /// given, the engine selects the DUP, By Exposure rep target from it.
+    int? exposurePosition,
   }) {
+    final int rirIdx = rirSessionIndex ?? sessionIndex;
     // Settings for this specific exercise
     final exSettings = fullExerciseSettings[exerciseId] as Map<String, dynamic>?;
 
@@ -75,7 +98,7 @@ class BB3HintService {
     final setRir = BB3PlannedExerciseService.getRirFromPlan(
       exSettings: exSettings,
       weekIndex: weekIndex,
-      sessionIndex: sessionIndex,
+      sessionIndex: rirIdx,
       setNumber: setIndex + 1,
     );
 
@@ -117,11 +140,12 @@ class BB3HintService {
           BB3PlannedExerciseService.getRirFromPlan(
         exSettings: exSettings,
         weekIndex: weekIndex,
-        sessionIndex: sessionIndex,
+        sessionIndex: rirIdx,
         setNumber: setNum,
       ),
       weightTextAt: (_, __) => '',
       rirTextAt: (_, __) => '',
+      exposurePosition: exposurePosition,
     );
 
     Map<String, dynamic> engineResult;
@@ -163,8 +187,8 @@ class BB3HintService {
     // entry (247.5 kg with a 2.5 kg primary).
     double _snapToGrid(double target) => _localGrid.snap(target);
 
-    // ── Shared helper: build the weight display string for a given reps/RIR ──
-    String _wHint(int reps, double rir) {
+    // ── Shared helper: the snapped weight hint (kg, display-added for BW) ──
+    double wKgHint(int reps, double rir) {
       final double abs = PeriodizationModelUtils.reverseCalculateWeight(
         targetE1RM: targetE1rm,
         reps: reps,
@@ -187,11 +211,28 @@ class BB3HintService {
           exerciseType: exerciseType,
           asOfDate: selectedDate,
         );
-        return _formatWeight(_snapToGrid(added));
+        return _snapToGrid(added);
       }
-      return _formatWeight(_snapToGrid(abs));
+      return _snapToGrid(abs);
     }
 
+    // Baseline reps for this day: DUP Signature supplies a pre-computed rep
+    // target; otherwise the BB3-planned repTarget, unless a progression model
+    // (Smart Progression, Add Reps) deliberately chose different reps for E1RM
+    // progression — then the Engine's reps. Engine baseReps are the last
+    // resort.
+    final int baseRepsRounded =
+        (baseReps > 0 && baseReps <= 45) ? baseReps.round() : 0;
+    final bool modelAdjustedReps =
+        baseRepsRounded > 0 && repTarget > 0 && baseRepsRounded != repTarget;
+    final int effectiveReps = dupSigRep ??
+        (modelAdjustedReps
+            ? baseRepsRounded
+            : (repTarget > 0
+                ? repTarget
+                : (baseRepsRounded > 0 ? baseRepsRounded : 8)));
+
+    final double? setRirValue = setRir > 0 ? setRir : null;
     final rirDisplay = setRir > 0
         ? (setRir == setRir.truncate()
             ? setRir.toInt().toString()
@@ -209,7 +250,10 @@ class BB3HintService {
       if (userWeight != null && userReps != null) {
         // Both weight and reps entered — no hints needed for either field.
         return BB3SetHint(
-            weightDisplay: '', repsDisplay: '', rirDisplay: rirHintStr);
+            weightDisplay: '',
+            repsDisplay: '',
+            rirDisplay: rirHintStr,
+            rirValue: userRir != null ? null : setRirValue);
       }
 
       if (userWeight != null) {
@@ -224,15 +268,19 @@ class BB3HintService {
           weightDisplay: '',
           repsDisplay: impliedReps.toString(),
           rirDisplay: rirHintStr,
+          rirValue: userRir != null ? null : setRirValue,
         );
       }
 
       if (userReps != null) {
         // Reps override: recompute weight hint to stay at targetE1rm.
+        final double w = wKgHint(userReps, effectiveRir);
         return BB3SetHint(
-          weightDisplay: _wHint(userReps, effectiveRir),
+          weightDisplay: _formatWeight(w),
+          weightKg: w,
           repsDisplay: '',
           rirDisplay: rirHintStr,
+          rirValue: userRir != null ? null : setRirValue,
         );
       }
 
@@ -241,32 +289,24 @@ class BB3HintService {
           (repTarget > 0
               ? repTarget
               : (baseReps > 0 && baseReps <= 45 ? baseReps.round() : 8));
+      final double w = wKgHint(effectiveRepsRirOnly, userRir!);
       return BB3SetHint(
-        weightDisplay: _wHint(effectiveRepsRirOnly, userRir!),
-        repsDisplay: effectiveRepsRirOnly > 0 ? effectiveRepsRirOnly.toString() : '',
+        weightDisplay: _formatWeight(w),
+        weightKg: w,
+        repsDisplay:
+            effectiveRepsRirOnly > 0 ? effectiveRepsRirOnly.toString() : '',
         rirDisplay: '',
       );
     }
 
     // ── Baseline hints (no overrides) ──────────────────────────────────────
-    // DUP Signature supplies a pre-computed rep target; fall back to the
-    // BB3-planned repTarget, then engine baseReps as a last resort.
-    // When the Engine returned reps that differ from the plan target, a
-    // progression model (Smart Progression, Add Reps) intentionally chose
-    // different reps for E1RM progression.  Use Engine's reps in that case so
-    // the displayed hint reflects the actual progressive combination selected.
-    final int _baseRepsRounded =
-        (baseReps > 0 && baseReps <= 45) ? baseReps.round() : 0;
-    final bool _modelAdjustedReps =
-        _baseRepsRounded > 0 && repTarget > 0 && _baseRepsRounded != repTarget;
-    final effectiveReps = dupSigRep ??
-        (_modelAdjustedReps
-            ? _baseRepsRounded
-            : (repTarget > 0 ? repTarget : (_baseRepsRounded > 0 ? _baseRepsRounded : 8)));
+    final double w = wKgHint(effectiveReps, setRir);
     return BB3SetHint(
-      weightDisplay: _wHint(effectiveReps, setRir),
+      weightDisplay: _formatWeight(w),
+      weightKg: w,
       repsDisplay: effectiveReps > 0 ? effectiveReps.toString() : '',
       rirDisplay: rirDisplay,
+      rirValue: setRirValue,
     );
   }
 

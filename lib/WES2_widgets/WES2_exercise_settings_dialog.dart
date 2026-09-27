@@ -2,6 +2,7 @@ import '../units/exercise_unit_registry.dart';
 import '../units/weight_unit.dart';
 import 'package:flutter/material.dart';
 import '../WES2_plan_service.dart';
+import '../active_instance.dart';
 import '../block_exercise_defaults_repository.dart';
 import '../exercise_catalog.dart';
 import '../exercise_model_registry.dart';
@@ -27,6 +28,12 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
   /// from the block-relative dayIndex (days % 7) + 1 — independent of the
   /// rep-target instance. Null when the caller cannot supply the correct source.
   final int? activeRirSessionIndex;
+  /// The canonical active instance (ActiveInstanceResolver) the BB3 hint uses
+  /// for this exercise and date. When supplied it is the source of the
+  /// displayed rep-target instance, so the dialog shows the instance the hint
+  /// uses. The highlighted RIR session follows [activeRirSessionIndex] when
+  /// given (the effective WES2 RIR selection); otherwise this instance's.
+  final ActiveInstance? activeInstance;
 
   const Wes2ExerciseSettingsDialog({
     super.key,
@@ -42,6 +49,7 @@ class Wes2ExerciseSettingsDialog extends StatefulWidget {
     this.completedInstanceCount,
     this.weeklyInstanceOverride,
     this.activeRirSessionIndex,
+    this.activeInstance,
   });
 
   @override
@@ -168,6 +176,8 @@ class _Wes2ExerciseSettingsDialogState
   /// Mirrors _targetSetCountForSession / getRepTargetForSet instance selection:
   /// if instance${dayIndex+1} exists in weekData → use it; else fall back to 1.
   int get _resolvedActiveInstanceNumber {
+    final ActiveInstance? active = widget.activeInstance;
+    if (active != null) return active.repInstanceIndex + 1;
     if (_isDupSignature) return 1;
     final weekData = _repTargetWeekData;
     if (weekData == null) return 1;
@@ -920,7 +930,12 @@ class _Wes2ExerciseSettingsDialogState
   /// current-week → week1 fallback, then the requested-session → session1
   /// fallback. Returns null only when the caller supplied no source index.
   int? get _activeRirSessionNumber {
-    final n = widget.activeRirSessionIndex;
+    // The caller's session index (the effective WES2 RIR selection) wins; a
+    // resolved instance supplies the RIR session only when none is given.
+    final n = widget.activeRirSessionIndex ??
+        (widget.activeInstance == null
+            ? null
+            : widget.activeInstance!.rirSessionIndex + 1);
     if (n == null) return null;
     final rirPlan = _existingSettings['rirPlan'];
     if (rirPlan is! Map) return 1; // matches getRirFromPlan's session1 default

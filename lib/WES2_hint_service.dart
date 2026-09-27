@@ -56,6 +56,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
   final DateTime? blockEndDate;
   final String uid;
 
+
   const Wes2HintServiceImpl({
     required this.exerciseSettings,
     required this.blockStartDate,
@@ -133,6 +134,12 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final sel = DateTime(date.year, date.month, date.day);
     final days = sel.difference(base).inDays;
     final weekIndex = days ~/ 7;
+    // Block-relative weekday position. It is the index WES2 uses for the plan
+    // rep target and the RIR session of every model (origin/main behaviour,
+    // preserved deliberately; a missing sessionN falls back to session1 in
+    // getRirFromPlan). The rep target of DUP, By Exposure comes from the
+    // engine's exposure count. The context carries a separate RIR session
+    // index so a future RIR model can diverge; today it equals this one.
     final sessionIndex = days % 7;
 
     // Build a padded sets list that covers at least setCount slots.
@@ -179,6 +186,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
       date: date,
       weekIndex: weekIndex,
       sessionIndex: sessionIndex,
+      rirSessionIndex: sessionIndex,
       planCount: planCount,
       exSettings: exSettings,
       effectiveCount: _resolveEffectiveSetCount(row, planCount),
@@ -225,9 +233,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required DateTime date,
     required String uid,
     double? Function()? pureSet1E1rm,
+    int? rirSessionIndex,
+    int? exposurePosition,
   }) {
+    final int rirIdx = rirSessionIndex ?? sessionIndex;
     final exSettings =
         exerciseSettings[row.exerciseId] as Map<String, dynamic>?;
+    final bool bb3Prescribed = _isBb3Locked(set.weight) ||
+        _isBb3Locked(set.reps) ||
+        _isBb3Locked(set.rir);
 
     // Per-field constraints: user actual > BB3 explicit hint (non-null) > null.
     final constrainedWeight = _constraintWeight(set);
@@ -300,7 +314,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     final planRir = BB3PlannedExerciseService.getRirFromPlan(
       exSettings: exSettings,
       weekIndex: weekIndex,
-      sessionIndex: sessionIndex,
+      sessionIndex: rirIdx,
       setNumber: 1,
     );
 
@@ -355,6 +369,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
         userReps: constrainedReps,
         dupSigRep: dupSigReps,
         userRir: constrainedRir,
+        rirSessionIndex: rirIdx,
+        exposurePosition: exposurePosition,
       );
 
       if (Wes2HintTrace.enabled) {
@@ -368,7 +384,16 @@ class Wes2HintServiceImpl implements Wes2HintService {
       }
       bool weightFromHistory = false;
       if (!hint.isEmpty) {
-        if (hint.weightDisplay.isNotEmpty) {
+        // A set carrying a BB3 prescription reads the hint's exact NUMBERS
+        // (weightKg / rirValue) so a pound-grid weight or a 1.25 RIR survives
+        // unrounded. Ordinary WES2 rows keep origin/main's display-string
+        // parsing unchanged (their precision is addressed separately).
+        if (bb3Prescribed) {
+          if (hint.weightKg != null) {
+            weightHint = hint.weightKg;
+            weightFromHistory = true;
+          }
+        } else if (hint.weightDisplay.isNotEmpty) {
           // Weight display may be a range like "95–100"; take the lower bound.
           final clean =
               hint.weightDisplay.split('–').first.split('-').first.trim();
@@ -386,7 +411,9 @@ class Wes2HintServiceImpl implements Wes2HintService {
           repsHint = int.tryParse(hint.repsDisplay);
         }
         if (hint.rirDisplay.isNotEmpty) {
-          rirHint = double.tryParse(hint.rirDisplay);
+          rirHint = bb3Prescribed && hint.rirValue != null
+              ? hint.rirValue
+              : double.tryParse(hint.rirDisplay);
         }
       }
       // hint.isEmpty means BB3HintService could not compute; fall through below.
@@ -407,6 +434,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
           sessionIndex: sessionIndex,
           date: date,
           uid: uid,
+          rirSessionIndex: rirIdx,
+          exposurePosition: exposurePosition,
         );
         if (targetE1rm != null) {
           final rawWeight = PeriodizationModelUtils.reverseCalculateWeight(
@@ -429,25 +458,10 @@ class Wes2HintServiceImpl implements Wes2HintService {
       }
     }
 
-    // Anchor reps only when the weight constraint is a BB3 explicit hint (no
-    // user actual), or when RIR is constrained. User-typed weight allows reps
-    // to adapt reactively to maintain the target E1RM.
-    if (constrainedReps == null &&
-        ((constrainedRir != null && set.rir.actualValue == null) ||
-            (constrainedWeight != null && set.weight.actualValue == null))) {
-      // For timed exercises, set.reps.hintValue is already in seconds after
-      // processedPadded conversion (e.g. 45). Using it with repsHintFromPlan=true
-      // would double-convert (45 × 5 = 225). Use planReps (rep units) directly
-      // so the × 5 timed conversion below produces the correct seconds value.
-      final anchoredVal = isTimed
-          ? (planReps > 0 ? planReps : null)
-          : (set.reps.hintValue ?? (planReps > 0 ? planReps : null));
-      if (anchoredVal != null) {
-        repsHint = anchoredVal;
-        repsHintFromPlan = true;
-      }
-      // null case: existing repsHint is unchanged (preserves history seconds)
-    }
+    // A BB3 prescription locks only its own field. There is deliberately no
+    // "anchor the reps to the plan" step for a BB3 weight or RIR: the reps the
+    // history solve produced above stand, exactly as for the same value typed
+    // in WES2. The plan/default fill below only runs when no solve exists.
 
     // ── Plan/default fallback ─────────────────────────────────────────────────
     // Fill any field that was not resolved by BB3HintService and is not locked
@@ -506,7 +520,7 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // 2. Suppress RIR (meaningless for timed exercises).
     // 3. Suppress weight hint for BW-only timed (weight is never saved).
     if (isTimed) {
-      if (repsHint != null && repsHintFromPlan) repsHint = repsHint! * 5;
+      if (repsHint != null && repsHintFromPlan) repsHint = repsHint * 5;
       rirHint = null;
       if (!isWeightedTimed) weightHint = null;
     }
@@ -533,9 +547,15 @@ class Wes2HintServiceImpl implements Wes2HintService {
     // value is preserved for the Phase 21C blue cue comparison below.
     // withHint() never touches actualValue, so typing actual RIR still wins.
     // Skipped for timed exercises — RIR has no meaning in timed mode.
+    //
+    // The same solve runs when weight and reps are constrained by any mix of
+    // actuals and BB3 prescriptions: a BB3 value behaves exactly like the same
+    // value typed in WES2, so the free RIR is solved against the day's target.
+    final bool bothActual =
+        set.weight.actualValue != null && set.reps.actualValue != null;
     if (!isTimed &&
-        set.weight.actualValue != null &&
-        set.reps.actualValue != null &&
+        constrainedWeight != null &&
+        constrainedReps != null &&
         set.rir.actualValue == null &&
         !_isBb3Locked(set.rir)) {
       final isBw1 = PeriodizationModelUtils.isBodyweightExercise(
@@ -551,33 +571,40 @@ class Wes2HintServiceImpl implements Wes2HintService {
       // and history, so repeated passes agree.
       final double? baselineHintE1rm = pureSet1E1rm?.call();
 
-      final targetE1rm = bb3SetTarget ??
-          _getTargetE1rm(
-            row: row,
-            weekIndex: weekIndex,
-            sessionIndex: sessionIndex,
-            date: date,
-            uid: uid,
-          ) ??
-          baselineHintE1rm;
+      final double? dayTarget = _getTargetE1rm(
+        row: row,
+        weekIndex: weekIndex,
+        sessionIndex: sessionIndex,
+        date: date,
+        uid: uid,
+        rirSessionIndex: rirIdx,
+        exposurePosition: exposurePosition,
+      );
+      // Both entered by the athlete: a BB3 prescription on this set still
+      // defines the target (unchanged behaviour). Otherwise the constraint
+      // IS the prescription, so the day's target applies — identical to the
+      // typed path.
+      final targetE1rm = bothActual
+          ? (bb3SetTarget ?? dayTarget ?? baselineHintE1rm)
+          : (dayTarget ?? bb3SetTarget ?? baselineHintE1rm);
 
       // Convert display-added BW load to absolute before solving.
       final solveWAbs = isBw1
           ? PeriodizationModelUtils.toAbsoluteWeight(
               uid: uid,
-              displayAddedKg: set.weight.actualValue!,
+              displayAddedKg: constrainedWeight,
               exerciseId: row.exerciseId,
               exerciseName: row.name,
               exerciseType: row.exerciseType,
               asOfDate: date,
             )
-          : set.weight.actualValue!;
+          : constrainedWeight;
 
       final solved = targetE1rm != null
           ? _solveRirForTargetE1rm(
               targetE1rm: targetE1rm,
               weight: solveWAbs,
-              reps: set.reps.actualValue!,
+              reps: constrainedReps,
             )
           : null;
       if (solved != null) {
@@ -622,6 +649,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
           sessionIndex: sessionIndex,
           date: date,
           uid: uid,
+          rirSessionIndex: rirIdx,
+          exposurePosition: exposurePosition,
         );
       }
     }
@@ -705,6 +734,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
     required int sessionIndex,
     required DateTime date,
     required String uid,
+    int? rirSessionIndex,
+    int? exposurePosition,
   }) {
     if (PeriodizationModelUtils.savedWorkoutsList.isEmpty) return null;
     final baseline = BB3HintService.getHintsForSet(
@@ -719,6 +750,8 @@ class Wes2HintServiceImpl implements Wes2HintService {
       blockEndDate: blockEndDate,
       selectedDate: date,
       uid: uid,
+      rirSessionIndex: rirSessionIndex,
+      exposurePosition: exposurePosition,
       // No constraints — pure baseline to extract the day's target E1RM.
     );
     if (baseline.isEmpty) return null;
@@ -1623,6 +1656,8 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
     required this.date,
     required this.weekIndex,
     required this.sessionIndex,
+    required this.rirSessionIndex,
+    this.exposurePosition,
     required this.planCount,
     required this.exSettings,
     required this.effectiveCount,
@@ -1635,7 +1670,14 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
   final String uid;
   final DateTime date;
   final int weekIndex;
+  /// Rep-target instance index (the weekday position for non-exposure models).
   final int sessionIndex;
+
+  /// RIR session index — resolved separately from the rep instance.
+  final int rirSessionIndex;
+
+  /// Canonical exposure position (exposure models only).
+  final int? exposurePosition;
   final int planCount;
   final Map<String, dynamic>? exSettings;
   final int effectiveCount;
@@ -1691,6 +1733,8 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
         date: date,
         uid: uid,
         pureSet1E1rm: _pureSet1,
+        rirSessionIndex: rirSessionIndex,
+        exposurePosition: exposurePosition,
       );
     }
     return service._computeSetNHints(
@@ -1701,7 +1745,8 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
       planCount: planCount,
       exSettings: exSettings,
       weekIndex: weekIndex,
-      sessionIndex: sessionIndex,
+      // Set N reads only the RIR plan from this index.
+      sessionIndex: rirSessionIndex,
       date: date,
     );
   }
@@ -1730,6 +1775,8 @@ class Wes2RowHintContext implements Wes2SetHintComputer {
         sessionIndex: sessionIndex,
         date: date,
         uid: uid,
+        rirSessionIndex: rirSessionIndex,
+        exposurePosition: exposurePosition,
       );
       final double? w = pure.weight.hintValue;
       final int? r = pure.reps.hintValue;

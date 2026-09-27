@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'bb3_models.dart';
 import 'block_exercise_defaults_repository.dart';
+import 'active_instance.dart';
 import 'bb3_hint_service.dart';
 import 'bb3_planned_exercise_service.dart';
 import 'bb3_template_picker.dart';
@@ -51,7 +52,17 @@ class BB3DayPanel extends StatefulWidget {
   final int weekIndex;
   final int sessionIndex; // fallback: 0 when sessionIndexByExerciseId is absent
   final Map<String, int>?
-      sessionIndexByExerciseId; // per-exercise session index
+      sessionIndexByExerciseId; // per-exercise rep-target instance index
+  /// Canonical active instance per exercise (DUP, By Exposure / Signature),
+  /// resolved by the week planner with ActiveInstanceResolver. The Set 1
+  /// hint, the Set 2+ cascade and the settings dialog all read this one value.
+  final Map<String, ActiveInstance>? activeInstanceByExerciseId;
+
+  /// Exposure-model exercises whose hints are WITHHELD because the viewed
+  /// athlete's authoritative progression history is not loaded yet. They show
+  /// no weight / reps / RIR hint (never a guessed lower-position or default
+  /// one) until the planner rebuilds once history is ready.
+  final Set<String>? hintsWithheldExerciseIds;
   final String uid;
   final List<Map<String, dynamic>> allExercises; // for the add-exercise picker
   final List<Template> templates; // for the template picker
@@ -78,6 +89,8 @@ class BB3DayPanel extends StatefulWidget {
     required this.weekIndex,
     required this.sessionIndex,
     this.sessionIndexByExerciseId,
+    this.activeInstanceByExerciseId,
+    this.hintsWithheldExerciseIds,
     required this.uid,
     required this.allExercises,
     required this.templates,
@@ -1115,23 +1128,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       } catch (_) {}
 
       if (model == 'DUP, By Exposure' || model == 'DUP, Signature') {
-        // Microcycle instance = block-wide exposure index (wraps over slot count).
-        try {
-          resolvedInstance =
-              await BB3PlannedExerciseService.resolveBb3ModelInstanceIndex(
-            exerciseId: ex.exerciseId,
-            exerciseName: ex.name,
-            periodizationModel: model,
-            blockStartDate: widget.blockSettings!.startDate!,
-            selectedDate: widget.date,
-            uid: widget.uid,
-            blockId: blockId,
-            currentWeekPlannedByDay: allWeekPlanned,
-            currentWeekCompletedByDay: allWeekCompleted,
-            currentWeekStart: currentWeekStart,
-            currentDayIndexInWeek: widget.dayIndex,
-          );
-        } catch (_) {}
+        // The canonical active instance (activeInstance below) is the only
+        // source of the rep instance and RIR session for these models.
       } else {
         // DUP By Week and non-DUP: within-week session count is the microcycle position.
         resolvedInstance = weeklyCount;
@@ -1154,9 +1152,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         completedInstanceCount: completedCount,
         resolvedActiveInstanceOverride: resolvedInstance,
         weeklyInstanceOverride: weeklyCount,
-        // dayIndex is the block-relative day-of-week (days % 7), the same source
-        // the hint engine passes as sessionIndex to getRirFromPlan.
+        // Non-exposure models: block-relative day-of-week (days % 7), the same
+        // source their hint engine uses. Exposure models: [activeInstance].
         activeRirSessionIndex: widget.dayIndex + 1,
+        activeInstance: widget.activeInstanceByExerciseId?[ex.exerciseId],
       ),
     );
 
@@ -1180,6 +1179,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final exId = ex.exerciseId;
     final sessionIndex =
         widget.sessionIndexByExerciseId?[exId] ?? widget.sessionIndex;
+    final ActiveInstance? active = widget.activeInstanceByExerciseId?[exId];
+    if (widget.hintsWithheldExerciseIds?.contains(exId) ?? false) {
+      return List.generate(ex.sets.length, (_) => const BB3SetHint());
+    }
 
     final wCtrls = _weightCtrl[exId];
     final rCtrls = _repsCtrl[exId];
@@ -1216,6 +1219,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       userReps: userR0,
       userRir: userRir0,
       dupSigRep: dupSigRep,
+      rirSessionIndex: active != null ? widget.dayIndex : null,
+      exposurePosition: active?.exposurePosition,
     );
 
     if (ex.sets.length <= 1) return [set0];
@@ -1229,9 +1234,10 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     }
 
     // Build Wes2ExerciseRow with Set 0 locked as bb3Hint
-    final rawW0 = double.tryParse(set0.weightDisplay.split('–').first.trim());
+    // Numeric kg — never a re-parse of the 2-decimal display string.
+    final rawW0 = set0.weightKg;
     final rawR0 = int.tryParse(set0.repsDisplay);
-    final rawRir0 = double.tryParse(set0.rirDisplay);
+    final rawRir0 = set0.rirValue ?? double.tryParse(set0.rirDisplay);
 
     final setStates = <Wes2SetState>[
       Wes2SetState(
@@ -1294,6 +1300,8 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
         weightDisplay: w != null ? _fmtNum(w) : '',
         repsDisplay: r != null ? r.toString() : '',
         rirDisplay: rir != null ? _fmtNum(rir) : '',
+        weightKg: w,
+        rirValue: rir,
       );
     });
   }
@@ -1728,7 +1736,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final double? dispW = userWeight ??
         (completedSet != null
             ? (completedSet['weight'] as num?)?.toDouble()
-            : double.tryParse(hint.weightDisplay));
+            : (hint.weightKg ?? double.tryParse(hint.weightDisplay)));
     final double? dispRRaw = (userReps ??
             (completedSet != null
                 ? (completedSet['reps'] as num?)?.toInt()
@@ -1737,7 +1745,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     final double dispRir = userRir ??
         (completedSet != null
             ? (completedSet['rir'] as num?)?.toDouble()
-            : double.tryParse(hint.rirDisplay)) ??
+            : (hint.rirValue ?? double.tryParse(hint.rirDisplay))) ??
         0.0;
     String e1rmLabel = '';
     if (dispW != null && dispW > 0 && dispRRaw != null && dispRRaw > 0) {
@@ -1772,7 +1780,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
               ? ((completedSet['weight'] as num?) == null
                   ? ''
                   : _wText((completedSet['weight'] as num).toDouble(), exId))
-              : _hintText(hint.weightDisplay, exId),
+              : (hint.weightKg != null
+                  ? _wText(hint.weightKg!, exId)
+                  : _hintText(hint.weightDisplay, exId)),
           label: _unitFor(exId).suffix,
           locked: locked,
           hasUserValue: completedSet != null
@@ -1808,7 +1818,9 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
           focusNode: rirFn,
           hint: completedSet != null
               ? (completedSet['rir']?.toString() ?? '')
-              : hint.rirDisplay,
+              : (hint.rirValue != null
+                  ? _fmtNum(hint.rirValue!)
+                  : hint.rirDisplay),
           label: 'RIR',
           locked: locked,
           hasUserValue: completedSet != null

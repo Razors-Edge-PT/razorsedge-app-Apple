@@ -2,6 +2,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:core';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'active_instance.dart';
 import 'periodization_model_utils.dart'; // your existing utils
 import 'increment_grid.dart';
 import 'dart:convert'; // for jsonEncode in debug logs
@@ -40,6 +41,12 @@ class ProgressionEngineInputs {
 
   final void Function()? debugPrintBlockDates; // optional
 
+  /// The canonical exposure position (ActiveInstanceResolver) for the row,
+  /// when the caller has resolved it — BB3 includes eligible planned dates.
+  /// DUP, By Exposure then selects its rep-target instance from this position
+  /// instead of recounting completed history.
+  final int? exposurePosition;
+
   const ProgressionEngineInputs({
     required this.blockStartDate,
     required this.blockEndDate,
@@ -57,6 +64,7 @@ class ProgressionEngineInputs {
     required this.weightTextAt,
     required this.rirTextAt,
     this.debugPrintBlockDates,
+    this.exposurePosition,
   });
 }
 
@@ -128,7 +136,12 @@ class ProgressionEngine {
         matchedDates.add(ymd);
       }
 
-      completedCount = matchedDates.length;
+      // The canonical count: distinct valid dates in [windowStart, selected).
+      completedCount = ActiveInstanceResolver.exposurePosition(
+        selectedDate: todayStart,
+        completedDates: exposures,
+        blockStartDate: windowStart,
+      );
     } catch (e) {}
 
     final plannedIndex = completedCount + (byWeek ? 0 : plannedCountBefore);
@@ -315,17 +328,28 @@ class ProgressionEngine {
               .toList()
             ..sort((a, b) => a.key.compareTo(b.key));
           if (sorted.isNotEmpty) {
-            final expRes = resolveDupActiveInstance(
-              exerciseId: exerciseId,
-              exerciseName: exerciseName,
-              blockStartDate: blockStartDate,
-              selectedDate: _selectedDate,
-              weekIndex: weekIndex ?? 0,
-              sorted: sorted,
-              plannedCountBefore: plannedCountBefore,
-              byWeek: false,
-            );
-            final raw = expRes?.raw ?? '';
+            final int? givenPosition = i.exposurePosition;
+            final String raw;
+            if (givenPosition != null) {
+              final int idx = ActiveInstanceResolver.resolve(
+                exposurePosition: givenPosition + plannedCountBefore,
+                repInstanceCount: sorted.length,
+                rirSessionCount: 0,
+              ).repInstanceIndex;
+              raw = sorted[idx].value?.toString() ?? '';
+            } else {
+              final expRes = resolveDupActiveInstance(
+                exerciseId: exerciseId,
+                exerciseName: exerciseName,
+                blockStartDate: blockStartDate,
+                selectedDate: _selectedDate,
+                weekIndex: weekIndex ?? 0,
+                sorted: sorted,
+                plannedCountBefore: plannedCountBefore,
+                byWeek: false,
+              );
+              raw = expRes?.raw ?? '';
+            }
             final match = RegExp(r'^(\d+)').firstMatch(raw);
             repTarget = match != null
                 ? int.tryParse(match.group(1)!)?.toDouble() ?? 10.0
