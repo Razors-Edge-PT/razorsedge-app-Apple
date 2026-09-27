@@ -3,6 +3,7 @@ import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:localtest222/onboarding/onboarding_cue.dart';
+import 'package:localtest222/onboarding/onboarding_cue_qa_policy.dart';
 import 'package:localtest222/onboarding/onboarding_cue_repository.dart';
 import 'package:localtest222/onboarding/onboarding_cue_service.dart';
 
@@ -39,7 +40,9 @@ class _FakeGateway implements OnboardingCueGateway {
   }
 }
 
-const richard = OnboardingCueService.richardUid;
+// The per-build replay moved from Richard's main account to the cue-QA test
+// account (OnboardingCueQaPolicy); these cases now pin it there.
+const qa = OnboardingCueQaPolicy.testAccountUid;
 const normal = 'normal_user_123';
 
 OnboardingCueService _svc(_FakeGateway g, String build) => OnboardingCueService(
@@ -88,55 +91,55 @@ void main() {
     });
   });
 
-  group('Richard test account', () {
+  group('Cue-QA test account', () {
     test('5. sees replayable cue in build 40', () async {
       final g = _FakeGateway();
       final s = _svc(g, '40');
-      await s.ensureLoaded(richard);
+      await s.ensureLoaded(qa);
       expect(
-          s.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, richard), true);
+          s.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, qa), true);
     });
 
     test('6. not again after completing in build 40', () async {
       final g = _FakeGateway();
       final s = _svc(g, '40');
-      await s.ensureLoaded(richard);
-      await s.markCueComplete(OnboardingCueId.wes2FieldWalkthrough, richard);
+      await s.ensureLoaded(qa);
+      await s.markCueComplete(OnboardingCueId.wes2FieldWalkthrough, qa);
       expect(
-          s.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, richard), false);
+          s.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, qa), false);
     });
 
     test('7. sees it again in build 41', () async {
       final g = _FakeGateway();
       final s40 = _svc(g, '40');
-      await s40.ensureLoaded(richard);
-      await s40.markCueComplete(OnboardingCueId.wes2FieldWalkthrough, richard);
+      await s40.ensureLoaded(qa);
+      await s40.markCueComplete(OnboardingCueId.wes2FieldWalkthrough, qa);
 
       final s41 = _svc(g, '41');
-      await s41.ensureLoaded(richard);
+      await s41.ensureLoaded(qa);
       expect(
-          s41.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, richard), true);
+          s41.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, qa), true);
     });
 
     test('8. completed demo video does NOT reappear in build 41', () async {
       final g = _FakeGateway();
       final s40 = _svc(g, '40');
-      await s40.ensureLoaded(richard);
-      await s40.markCueComplete(OnboardingCueId.wpDemoVideo, richard);
+      await s40.ensureLoaded(qa);
+      await s40.markCueComplete(OnboardingCueId.wpDemoVideo, qa);
 
       final s41 = _svc(g, '41');
-      await s41.ensureLoaded(richard);
-      expect(s41.shouldShowCue(OnboardingCueId.wpDemoVideo, richard), false);
+      await s41.ensureLoaded(qa);
+      expect(s41.shouldShowCue(OnboardingCueId.wpDemoVideo, qa), false);
     });
 
     test('9. missing build number fails closed for replayable cues', () async {
       final g = _FakeGateway();
       final s = _svc(g, ''); // unavailable build
-      await s.ensureLoaded(richard);
+      await s.ensureLoaded(qa);
       expect(
-          s.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, richard), false);
+          s.shouldShowCue(OnboardingCueId.wes2FieldWalkthrough, qa), false);
       // Permanent decisions still work from durable state.
-      expect(s.shouldShowCue(OnboardingCueId.wpDemoVideo, richard), true);
+      expect(s.shouldShowCue(OnboardingCueId.wpDemoVideo, qa), true);
     });
   });
 

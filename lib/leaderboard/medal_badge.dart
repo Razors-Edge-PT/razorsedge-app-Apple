@@ -4,7 +4,7 @@
 ///
 ///   * circular coin with a darker outer rim and a subtle inner highlight ring
 ///   * diagonal metallic gradient on the face
-///   * a small loop on top, drawn only where it stays legible
+///   * no loop, ribbon or attachment: the coin alone
 ///   * a very restrained shadow
 ///   * the category code (BP, VP, OH, DL, SQ) engraved in the centre
 ///
@@ -56,18 +56,21 @@ class MedalPainter extends CustomPainter {
   /// The engraving's font; null is the platform's default.
   final String? fontFamily;
 
-  /// Below this side the loop would be a smudge, so it is left out.
-  static const double minLoopSize = 20;
+  /// The coin's radius as a fraction of the square's side.
+  static const double coinRadiusFraction = 0.47;
+
+  /// The visible coin diameter painted into a square of [side].
+  static double coinDiameterFor(double side) => side * coinRadiusFraction * 2;
 
   @override
   void paint(Canvas canvas, Size size) {
     final MedalPalette c = MedalPalette.of(tier);
-    final double s = size.shortestSide;
-    final bool loop = s >= minLoopSize;
-    // The coin sits a little low so the loop fits inside the square.
-    final double r = s * (loop ? 0.43 : 0.47);
-    final Offset centre =
-        Offset(size.width / 2, size.height / 2 + (loop ? s * 0.06 : 0));
+    final double r = size.shortestSide * coinRadiusFraction;
+    // Every face detail is proportioned to the coin exactly as on the former
+    // looped medal, whose coin radius was 0.43 of its square: `s` is that
+    // medal's side for a coin of this radius. Only the loop is gone.
+    final double s = r / 0.43;
+    final Offset centre = Offset(size.width / 2, size.height / 2);
     final Rect coin = Rect.fromCircle(center: centre, radius: r);
 
     // Very restrained shadow.
@@ -78,18 +81,6 @@ class MedalPainter extends CustomPainter {
         ..color = const Color(0x40000000)
         ..maskFilter = MaskFilter.blur(BlurStyle.normal, s * 0.03),
     );
-
-    if (loop) {
-      final double loopR = s * 0.075;
-      canvas.drawCircle(
-        Offset(centre.dx, centre.dy - r - loopR * 0.35),
-        loopR,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = math.max(1.2, s * 0.045)
-          ..color = c.rim,
-      );
-    }
 
     // Outer rim: the darker metal, lit from the top-left.
     canvas.drawCircle(
@@ -166,7 +157,7 @@ class MedalBadge extends StatelessWidget {
       {super.key,
       required this.tier,
       required this.code,
-      this.size = 29,
+      this.size = kMedalCoinSide,
       this.fontFamily});
 
   final MedalTier tier;
@@ -183,55 +174,18 @@ class MedalBadge extends StatelessWidget {
       );
 }
 
-/// Height of a medal's tap target: roomy, but it never overlaps a neighbour
-/// (each target is exactly one medal pitch wide).
-const double kMedalTapHeight = 44;
+/// The preferred square of a row medal. Without the loop the coin fills
+/// 0.94 of its square, so 26.5 px keeps the visible coin at the 24.9 px the
+/// former 29 px looped medal showed.
+const double kMedalCoinSide = 26.5;
 
-/// A row's medals, in the fixed order BP, VP, OH, DL, SQ. Sizes itself to the
-/// width it gets: 29 px medals with 5 px gaps; 26 / 4 on narrow layouts;
-/// wrapping only as a last resort. Nothing at all for no medals.
-class MedalStrip extends StatelessWidget {
-  const MedalStrip({super.key, required this.medals, required this.onTap});
-
-  final List<LeaderboardMedal> medals;
-  final void Function(LeaderboardMedal medal) onTap;
-
-  static const double _size = 29;
-  static const double _gap = 5;
-  static const double _narrowSize = 26;
-  static const double _narrowGap = 4;
-
-  @override
-  Widget build(BuildContext context) {
-    if (medals.isEmpty) return const SizedBox.shrink();
-    return LayoutBuilder(builder: (BuildContext context, BoxConstraints box) {
-      final int n = medals.length;
-      final bool roomy =
-          !box.hasBoundedWidth || n * (_size + _gap) <= box.maxWidth;
-      final double size = roomy ? _size : _narrowSize;
-      final double gap = roomy ? _gap : _narrowGap;
-      return Wrap(
-        key: const ValueKey<String>('medal-strip'),
-        children: <Widget>[
-          for (final LeaderboardMedal m in medals)
-            _MedalButton(
-                medal: m, size: size, pitch: size + gap, onTap: () => onTap(m)),
-        ],
-      );
-    });
-  }
-}
-
-class _MedalButton extends StatelessWidget {
-  const _MedalButton(
-      {required this.medal,
-      required this.size,
-      required this.pitch,
-      required this.onTap});
+/// One row medal: the coin, a button with full semantics, and a tap that
+/// opens its detail (never the profile). [MedalRowLayout] sizes the coin and
+/// gives it a tap area wider and taller than the coin itself.
+class MedalButton extends StatelessWidget {
+  const MedalButton({super.key, required this.medal, required this.onTap});
 
   final LeaderboardMedal medal;
-  final double size;
-  final double pitch;
   final VoidCallback onTap;
 
   @override
@@ -239,20 +193,17 @@ class _MedalButton extends StatelessWidget {
     return Semantics(
       button: true,
       label: medal.semanticsLabel,
+      // The action lives here because the GestureDetector's own semantics
+      // are excluded with the painted code.
+      onTap: onTap,
       excludeSemantics: true,
       child: GestureDetector(
         key: ValueKey<String>(
             'leaderboard-medal-${medal.uid}-${medal.categoryKey}'),
         behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: SizedBox(
-          width: pitch,
-          height: kMedalTapHeight,
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: MedalBadge(tier: medal.tier, code: medal.code, size: size),
-          ),
-        ),
+        child: CustomPaint(
+            painter: MedalPainter(tier: medal.tier, code: medal.code)),
       ),
     );
   }

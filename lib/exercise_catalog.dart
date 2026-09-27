@@ -25,8 +25,7 @@ class ExerciseCatalog {
 
   /// The single admin/developer UID allowed to write the GLOBAL `/exercises`
   /// pool through the normal add flow. This is Richard's UID and matches the
-  /// existing `UserContext.isSuperAdmin` / `OnboardingCueService.richardUid`
-  /// constants. Kept here so the catalog layer does not depend on UI state.
+  /// existing `UserContext.isSuperAdmin` constant. Kept here so the catalog layer does not depend on UI state.
   ///
   /// TODO(Richard): confirm this is the correct production admin UID before
   /// release. It must NOT be Julien's or any athlete/testing UID.

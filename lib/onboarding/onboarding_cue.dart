@@ -4,8 +4,9 @@
 /// is the per-cue version handle: a substantially changed cue ships as a new id
 /// (e.g. `_v2`) so it appears for everyone without reviving the old id.
 ///
-/// No UI lives here. Screens never branch on the Richard UID or the build
-/// number directly — they call OnboardingCueService, which consults this map.
+/// No UI lives here. Screens never branch on an account UID or the build
+/// number directly — they call OnboardingCueService, which consults this map
+/// and OnboardingCueQaPolicy.
 library;
 
 enum OnboardingCueId {
@@ -27,9 +28,9 @@ enum OnboardingCuePolicy {
   /// Once-only for everyone, forever. Never replays on a new build.
   permanent,
 
-  /// Once-only for normal users; for the Richard test account it becomes
-  /// eligible again once per installed build.
-  richardReplayable,
+  /// Once-only for normal users; for the cue-QA account(s) in
+  /// OnboardingCueQaPolicy it becomes eligible again once per installed build.
+  qaReplayable,
 }
 
 class OnboardingCueSpec {
@@ -40,18 +41,18 @@ class OnboardingCueSpec {
 
 /// The single source of truth mapping each cue to its stable id + policy.
 const Map<OnboardingCueId, OnboardingCueSpec> kOnboardingCues = {
-  // Permanent for everyone — including Richard (special video exception).
+  // Permanent for everyone — including the cue-QA account (video exception).
   OnboardingCueId.wpDemoVideo:
       OnboardingCueSpec('wp_demo_video_v1', OnboardingCuePolicy.permanent),
 
   OnboardingCueId.wpPlannerWalkthrough: OnboardingCueSpec(
-      'wp_planner_walkthrough_v1', OnboardingCuePolicy.richardReplayable),
+      'wp_planner_walkthrough_v1', OnboardingCuePolicy.qaReplayable),
 
   OnboardingCueId.wes2FieldWalkthrough: OnboardingCueSpec(
-      'wes2_field_walkthrough_v1', OnboardingCuePolicy.richardReplayable),
+      'wes2_field_walkthrough_v1', OnboardingCuePolicy.qaReplayable),
 
   OnboardingCueId.wes2SettingsCog: OnboardingCueSpec(
-      'wes2_settings_cog_v1', OnboardingCuePolicy.richardReplayable),
+      'wes2_settings_cog_v1', OnboardingCuePolicy.qaReplayable),
 };
 
 extension OnboardingCueIdX on OnboardingCueId {
@@ -63,7 +64,7 @@ extension OnboardingCueIdX on OnboardingCueId {
 ///
 /// [done] — permanently complete (authoritative for normal users + permanent
 /// cues). [build] — the installed build number captured at completion time,
-/// used only for Richard's per-build replay comparison. Treated as an opaque
+/// used only for the cue-QA account's per-build replay comparison. Treated as an opaque
 /// string; never parsed numerically.
 class CueRecord {
   final bool done;

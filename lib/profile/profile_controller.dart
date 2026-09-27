@@ -28,7 +28,9 @@
 /// admin may read any story for moderation, and must still not be shown a
 /// stranger's story ring as if it were a friend's. An assigned coach is not a
 /// friend by virtue of coaching, and without a friendship source the gate stays
-/// closed.
+/// closed. The one addition is the holder of the support profile + DM
+/// override ([viewerOverride]; social/access_grants.dart): the rules give it
+/// friend-equivalent READ access, so it is shown what a friend is shown.
 library;
 
 import '../units/exercise_unit_registry.dart';
@@ -62,6 +64,7 @@ class ProfileController extends ChangeNotifier {
     required MediaUploader uploader,
     DateTime Function()? clock,
     Stream<List<String>> Function()? viewerFriends,
+    Stream<bool> Function()? viewerOverride,
   })  : _now = clock ?? DateTime.now,
         _profiles = profiles,
         _identity = identity,
@@ -70,7 +73,8 @@ class ProfileController extends ChangeNotifier {
         _stories = stories,
         _staging = staging,
         _uploader = uploader,
-        _viewerFriends = viewerFriends;
+        _viewerFriends = viewerFriends,
+        _viewerOverride = viewerOverride;
 
   /// Whose profile is on screen.
   final String targetUid;
@@ -91,13 +95,19 @@ class ProfileController extends ChangeNotifier {
   /// friendship is known, and a visitor is then shown no stories.
   final Stream<List<String>> Function()? _viewerFriends;
 
+  /// Whether the SIGNED-IN account holds the support profile + DM override.
+  /// Null means none is known: the visitor is an ordinary one.
+  final Stream<bool> Function()? _viewerOverride;
+
   /// True only when the signed-in user owns this profile.
   bool get isOwner => actorUid == targetUid;
 
   bool _viewerIsFriend = false;
+  bool _isFriend = false;
+  bool _hasOverride = false;
 
   /// True when the signed-in account may be shown this profile's stories: its
-  /// owner, or a confirmed friend.
+  /// owner, a confirmed friend, or the support override's holder.
   bool get viewerSeesStories => isOwner || _viewerIsFriend;
 
   // ── Editors ───────────────────────────────────────────────────────────────
@@ -230,6 +240,7 @@ class ProfileController extends ChangeNotifier {
   static const String _kPendingStories = 'pendingStories';
   static const String _kPendingAvatar = 'pendingAvatar';
   static const String _kFriendship = 'friendship';
+  static const String _kOverride = 'override';
 
   String? _gridError;
 
@@ -430,13 +441,28 @@ class ProfileController extends ChangeNotifier {
   /// the signed-in account and this profile are confirmed friends and stops —
   /// ring and all — the moment they are not.
   void _watchFriendship() {
+    final Stream<bool> Function()? override = _viewerOverride;
+    if (override != null) {
+      _bind(
+        _kOverride,
+        () => override().listen(
+              (bool holds) {
+                _hasOverride = holds;
+                _onFriendship(_isFriend || _hasOverride);
+              },
+              onError: (Object e) => _onStreamError(_kOverride, e),
+            ),
+      );
+    }
     final Stream<List<String>> Function()? source = _viewerFriends;
     if (source == null) return; // no friendship known: fail closed
     _bind(
       _kFriendship,
       () => source().listen(
-            (List<String> friends) =>
-                _onFriendship(friends.contains(targetUid)),
+            (List<String> friends) {
+              _isFriend = friends.contains(targetUid);
+              _onFriendship(_isFriend || _hasOverride);
+            },
             onError: (Object e) => _onStreamError(_kFriendship, e),
           ),
     );

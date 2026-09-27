@@ -226,7 +226,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     final svc = OnboardingCueService.instance;
     await svc.ensureLoaded(uid);
     if (!mounted) return;
-    // Already completed (build-aware for Richard) → never show.
+    // Already completed (build-aware for the cue-QA account) → never show.
     if (!svc.shouldShowCue(OnboardingCueId.wes2SettingsCog, uid)) {
       setState(() => _cogCueDismissed = true);
       return;

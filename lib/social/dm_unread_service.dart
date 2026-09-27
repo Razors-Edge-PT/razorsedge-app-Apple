@@ -45,6 +45,7 @@ import 'package:flutter/foundation.dart';
 
 import '../push/notification_platform.dart';
 import '../push/push_intent.dart';
+import 'access_grants.dart';
 
 /// What one conversation contributes.
 @immutable
@@ -244,6 +245,22 @@ class DmUnreadService {
   // inbox the way the old collection query could.
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _friendsSub;
 
+  // ── Conversations outside friendship: the support override ────────────
+  // A conversation with the holder of the support profile + DM override
+  // (access_grants.dart) is allowed without a friendship, so it cannot be
+  // derived from socialGraph. Two more sources add those ids:
+  //   * everyone: the conversation with each holder (one tiny query of
+  //     accessGrants — readable by any signed-in account);
+  //   * the holder: its own conversations, listed by participantList (the
+  //     rules let the holder list them).
+  // Both only ADD conversation ids; the per-conversation listeners, retries
+  // and failure handling below are exactly the friends' ones.
+  StreamSubscription<Set<String>>? _grantsSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ownConvsSub;
+  Set<String> _friends = <String>{};
+  Set<String> _holders = <String>{};
+  Set<String> _ownConvOthers = <String>{};
+
   /// Live listeners only. An entry here means Firestore may still deliver
   /// events for that conversation; a terminated listener is removed from
   /// this map (see [_deadConvIds]), never left behind under a stale key —
@@ -336,6 +353,13 @@ class DmUnreadService {
   void _teardown() {
     _friendsSub?.cancel();
     _friendsSub = null;
+    _grantsSub?.cancel();
+    _grantsSub = null;
+    _ownConvsSub?.cancel();
+    _ownConvsSub = null;
+    _friends = <String>{};
+    _holders = <String>{};
+    _ownConvOthers = <String>{};
     for (final StreamSubscription<Object?> s in _convSubs.values) {
       s.cancel();
     }
@@ -362,6 +386,53 @@ class DmUnreadService {
       _last = DmUnreadSnapshot.empty;
     }
     _subscribeFriends(uid);
+    _subscribeGrants(uid);
+  }
+
+  void _subscribeGrants(String uid) {
+    _grantsSub = AccessGrantsRepository(firestore: _db).watchHolders().listen(
+      (Set<String> holders) {
+        if (_currentUid() != uid || _subscribedUid != uid) return;
+        _holders = holders;
+        if (holders.contains(uid)) {
+          _ownConvsSub ??= _db
+              .collection('conversations')
+              .where('participantList', arrayContains: uid)
+              .snapshots()
+              .listen(
+            (QuerySnapshot<Map<String, dynamic>> q) {
+              if (_currentUid() != uid || _subscribedUid != uid) return;
+              _ownConvOthers = <String>{
+                for (final QueryDocumentSnapshot<Map<String, dynamic>> d
+                    in q.docs)
+                  if (_otherParticipant(uid, d.id) case final String o) o,
+              };
+              _reconcile(uid);
+            },
+            onError: (Object e) {
+              debugPrint('[dm] own conversations unavailable: $e');
+              _ownConvsSub = null;
+            },
+          );
+        } else {
+          _ownConvsSub?.cancel();
+          _ownConvsSub = null;
+          _ownConvOthers = <String>{};
+        }
+        _reconcile(uid);
+      },
+      onError: (Object _) {},
+    );
+  }
+
+  /// The other account a conversation id names, or null when [uid] is not
+  /// one of its two participants.
+  static String? _otherParticipant(String uid, String convId) {
+    if (convId.startsWith('${uid}_')) return convId.substring(uid.length + 1);
+    if (convId.endsWith('_$uid')) {
+      return convId.substring(0, convId.length - uid.length - 1);
+    }
+    return null;
   }
 
   void _subscribeFriends(String uid) {
@@ -383,13 +454,24 @@ class DmUnreadService {
     _hadError = false;
     final Map<String, dynamic>? data = snap.data();
     final Object? rawFriends = data?['friends'];
-    final Set<String> friends = <String>{
+    _friends = <String>{
       if (rawFriends is List)
         for (final Object? f in rawFriends)
           if (f is String && f.isNotEmpty) f,
     };
+    _reconcile(uid);
+  }
+
+  /// Attaches exactly the desired conversations — every confirmed friend's,
+  /// plus those the support override allows — and drops the rest.
+  void _reconcile(String uid) {
+    final Set<String> others = <String>{
+      ..._friends,
+      if (_holders.contains(uid)) ..._ownConvOthers,
+      ..._holders.where((String h) => h != uid),
+    };
     final Map<String, String> desired = <String, String>{
-      for (final String f in friends) conversationIdFor(uid, f): f,
+      for (final String f in others) conversationIdFor(uid, f): f,
     };
 
     // A friend removed (or never desired): drop everything about their
@@ -671,6 +753,10 @@ class DmUnreadService {
   @visibleForTesting
   Future<void> dispose() async {
     await _friendsSub?.cancel();
+    await _grantsSub?.cancel();
+    await _ownConvsSub?.cancel();
+    _grantsSub = null;
+    _ownConvsSub = null;
     for (final StreamSubscription<Object?> s in _convSubs.values) {
       await s.cancel();
     }

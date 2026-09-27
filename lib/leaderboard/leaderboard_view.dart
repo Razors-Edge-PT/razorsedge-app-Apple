@@ -11,12 +11,15 @@
 /// the existing read-only profile through [onOpenProfile]; anyone else's row
 /// offers Add friend (or shows the pending request) and does not open — their
 /// profile is not readable to the viewer, and the leaderboard never loosens
-/// that.
+/// that. The one exception is the holder of the support profile + DM override
+/// (social/access_grants.dart), whom the rules let read any profile: their
+/// rows open, and still show the genuine relationship control.
 ///
-/// Category medals (leaderboard_medals.dart) sit beneath the name of the row
-/// they were awarded to, matched by uid from the board's server snapshot.
-/// Tapping a medal opens its detail and never the profile; the rest of the
-/// row keeps opening the profile exactly as before.
+/// Category medals (leaderboard_medals.dart) sit beside the name of the row
+/// they were awarded to, matched by uid from the board's server snapshot,
+/// inside the row's pre-medal height (medal_row_layout.dart). Tapping a medal
+/// opens its detail and never the profile; the rest of the row keeps opening
+/// the profile exactly as before.
 library;
 
 import 'dart:async';
@@ -25,6 +28,7 @@ import 'package:flutter/material.dart';
 
 import '../main.dart' show showAppSnack;
 import '../profile/ui/profile_theme.dart';
+import '../social/access_grants.dart';
 import '../social/buddy_repository.dart';
 import '../social/ui/user_row.dart' show BuddyAvatar, kMinTouchTarget;
 import 'leaderboard_controller.dart';
@@ -32,6 +36,7 @@ import 'leaderboard_medals.dart';
 import 'leaderboard_models.dart';
 import 'leaderboard_repository.dart';
 import 'medal_badge.dart';
+import 'medal_row_layout.dart';
 
 class LeaderboardView extends StatefulWidget {
   const LeaderboardView({
@@ -65,6 +70,10 @@ class _LeaderboardViewState extends State<LeaderboardView> {
 
   late final BuddyRepository _buddies = widget.buddies ?? BuddyRepository();
   StreamSubscription<BuddyState>? _socialSub;
+
+  /// The viewer holds the support override: every row opens its profile.
+  bool _override = false;
+  StreamSubscription<bool>? _overrideSub;
   BuddyState _social = const BuddyState();
   final Set<String> _busy = <String>{};
 
@@ -93,11 +102,20 @@ class _LeaderboardViewState extends State<LeaderboardView> {
             (String uid, BuddyRelationship r) => s.relationshipWith(uid) == r);
       });
     }, onError: (Object _) {});
+    final String? me = _buddies.currentUid;
+    if (me != null) {
+      _overrideSub = AccessGrantsRepository(firestore: _buddies.firestore)
+          .watchHolds(me)
+          .listen((bool v) {
+        if (mounted && v != _override) setState(() => _override = v);
+      }, onError: (Object _) {});
+    }
   }
 
   @override
   void dispose() {
     unawaited(_socialSub?.cancel());
+    unawaited(_overrideSub?.cancel());
     if (_owns) _c.dispose();
     super.dispose();
   }
@@ -128,8 +146,9 @@ class _LeaderboardViewState extends State<LeaderboardView> {
 
   Widget _row(LeaderboardEntry e) {
     final BuddyRelationship? rel = _relationshipWith(e.uid);
-    final bool opens =
-        rel == BuddyRelationship.self || rel == BuddyRelationship.friends;
+    final bool opens = rel == BuddyRelationship.self ||
+        rel == BuddyRelationship.friends ||
+        (_override && rel != null);
     final LeaderboardRowAction action = switch (rel) {
       BuddyRelationship.none => LeaderboardRowAction.add,
       BuddyRelationship.requested => LeaderboardRowAction.requested,
@@ -397,27 +416,26 @@ class LeaderboardRow extends StatelessWidget {
                   const SizedBox(width: ProfileSpacing.sm),
                   points,
                 ] else
-                  // With medals, name and points share the top line and the
-                  // medals run beneath the name across the row's full width
-                  // (never under the rank or photo), so five fit on phones.
+                  // With medals, the row keeps its medal-less height: the
+                  // coins take only space already free beside the name or
+                  // the relationship control.
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Row(children: <Widget>[
-                          Expanded(child: plain(nameText)),
-                          const SizedBox(width: ProfileSpacing.sm),
-                          plain(points),
-                        ]),
-                        MedalStrip(
-                          key: ValueKey<String>(
-                              'leaderboard-medals-${entry.uid}'),
-                          medals: medals,
-                          onTap: (LeaderboardMedal m) => onMedalTap?.call(m),
-                        ),
-                        if (action != LeaderboardRowAction.none) rowAction,
+                    child: MedalRowLayout(
+                      key: ValueKey<String>('leaderboard-medals-${entry.uid}'),
+                      minContentHeight:
+                          kMinTouchTarget + 8 - 2 * ProfileSpacing.xs,
+                      nameMinWidth:
+                          _firstCharWidth(context, entry.displayName, name),
+                      name: plain(nameText),
+                      points: plain(points),
+                      medals: <Widget>[
+                        for (final LeaderboardMedal m in medals)
+                          MedalButton(
+                              medal: m, onTap: () => onMedalTap?.call(m)),
                       ],
+                      action: action == LeaderboardRowAction.none
+                          ? null
+                          : rowAction,
                     ),
                   ),
               ],
@@ -428,6 +446,22 @@ class LeaderboardRow extends StatelessWidget {
     );
     return standing;
   }
+}
+
+/// The width of [name]'s first character and an ellipsis, as drawn: the least
+/// of the name a medal row may show.
+double _firstCharWidth(BuildContext context, String name, TextStyle style) {
+  final Characters chars = name.characters;
+  final TextPainter p = TextPainter(
+    text: TextSpan(
+        text: '${chars.isEmpty ? '' : chars.first}…', style: style),
+    textDirection: TextDirection.ltr,
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: 1,
+  )..layout();
+  final double w = p.width.ceilToDouble() + 1;
+  p.dispose();
+  return w;
 }
 
 class _RowAction extends StatelessWidget {

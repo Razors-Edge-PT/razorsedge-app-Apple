@@ -154,6 +154,32 @@ service cloud.firestore {
       return isSelf(ownerUid) || isBuddyOf(ownerUid) || isSuperAdmin();
     }
 
+    // ── Support profile + DM override (narrow, server-owned) ────────────
+    // accessGrants/{uid}.profileAndDmOverride is written ONLY by the Admin
+    // SDK (functions/scripts/grant_profile_dm_override.js). No client — not
+    // the holder, not the super admin — can write it (see the accessGrants
+    // match below), so it cannot be self-assigned or handed to anyone else.
+    //
+    // It grants exactly two things, each enforced where it is used:
+    //   1. friend-equivalent READ of a profile's friend-only content
+    //      (canReadSocial — reads only; every social WRITE still needs
+    //      isSocial, so the holder cannot like, comment or edit as a friend);
+    //   2. a one-to-one conversation with anyone, in which the holder and the
+    //      other person are the only participants (conversations below).
+    // It never creates or changes a friendship: isBuddyOf is untouched.
+    function hasProfileDmOverride(uid) {
+      return exists(/databases/$(database)/documents/accessGrants/$(uid)) &&
+        get(/databases/$(database)/documents/accessGrants/$(uid))
+          .data.get('profileAndDmOverride', false) == true;
+    }
+
+    // Friend-equivalent READ: everyone isSocial admits, plus the holder of
+    // the support override. Used on read rules only.
+    function canReadSocial(ownerUid) {
+      return isSocial(ownerUid)
+        || (isSignedIn() && hasProfileDmOverride(request.auth.uid));
+    }
+
     // Training data gate: self, assignment-based coach, or super admin.
     function canAccessTraining(userId) {
       return isSelf(userId) || isCoachFor(userId) || isSuperAdmin();
@@ -399,7 +425,7 @@ service cloud.firestore {
       // ---- Lift video metadata ----
       // Social visibility only — coach is NOT a bypass here.
       match /liftVideos/{liftId} {
-        allow read: if isSocial(userId);
+        allow read: if canReadSocial(userId);
         allow write: if isSelf(userId) || isSuperAdmin();
       }
 
@@ -552,7 +578,7 @@ service cloud.firestore {
       // instead of silently re-labelling new work.
       // Social visibility only — an assigned coach is NOT a bypass.
       match /proofs/{fingerprint} {
-        allow read: if isSocial(userId);
+        allow read: if canReadSocial(userId);
         allow write: if isSelf(userId) || isSuperAdmin();
       }
 
@@ -618,7 +644,7 @@ service cloud.firestore {
 
         allow read: if isSelf(userId)
                     || isSuperAdmin()
-                    || (isSocial(userId) && storyIsLive());
+                    || (canReadSocial(userId) && storyIsLive());
 
         allow create: if isSelf(userId)
                       && request.resource.data.ownerUid == userId
@@ -811,8 +837,9 @@ service cloud.firestore {
     // POSTS
     // ======================================================
     match /posts/{postId} {
-      // Read: social access only (self, confirmed friend, super admin).
-      allow read: if isSocial(resource.data.ownerUid);
+      // Read: social access only (self, confirmed friend, super admin), or
+      // the support override (read only).
+      allow read: if canReadSocial(resource.data.ownerUid);
 
       // Create: only for yourself.
       allow create: if isSignedIn()
@@ -839,7 +866,7 @@ service cloud.firestore {
     // ---- Likes: doc ID = caller UID ----
     // Only the caller may write their own like; anyone social may read.
     match /posts/{postId}/likes/{uid} {
-      allow read: if isSocial(
+      allow read: if canReadSocial(
         get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
       );
       allow create, update: if isSelf(uid) && isSocial(
@@ -850,7 +877,7 @@ service cloud.firestore {
 
     // ---- GoodLifts: doc ID = caller UID ----
     match /posts/{postId}/goodLifts/{uid} {
-      allow read: if isSocial(
+      allow read: if canReadSocial(
         get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
       );
       allow create, update: if isSelf(uid) && isSocial(
@@ -861,7 +888,7 @@ service cloud.firestore {
 
     // ---- Comments: auto-generated ID; uid field = author UID ----
     match /posts/{postId}/comments/{commentId} {
-      allow read: if isSocial(
+      allow read: if canReadSocial(
         get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
       );
       // Creator must set uid == their own UID and must be social.
@@ -882,9 +909,23 @@ service cloud.firestore {
 
     // ---- Catch-all: any unlisted post subcollection is read-only (social) ----
     match /posts/{postId}/{sub=**} {
-      allow read: if isSocial(
+      allow read: if canReadSocial(
         get(/databases/$(database)/documents/posts/$(postId)).data.ownerUid
       );
+      allow write: if false;
+    }
+
+
+    // ======================================================
+    // ACCESS GRANTS (support profile + DM override)
+    // ======================================================
+    // Server-owned. Readable by any signed-in account so a client can show
+    // the support account's conversation in the other person's inbox and the
+    // Message button to the holder; it holds nothing but the flag. Never
+    // writable by a client — including the holder and the super admin — so
+    // the privilege cannot be self-assigned, extended or handed on.
+    match /accessGrants/{uid} {
+      allow read: if isSignedIn();
       allow write: if false;
     }
 
@@ -915,6 +956,15 @@ service cloud.firestore {
       // false, so the OR resolves to the friendship check against the other person.
       function isConvFriend() {
         return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
+      }
+
+      // One of the two accounts this conversation id names holds the support
+      // override: the pair may then use it without being friends. Only ever
+      // combined with a participant check, so it opens THIS conversation to
+      // its two participants and nobody else.
+      function isConvOverride() {
+        return hasProfileDmOverride(convId[0:28])
+          || hasProfileDmOverride(convId[29:57]);
       }
 
       // ── The unread ledger is the server's ──────────────────────────────
@@ -952,7 +1002,7 @@ service cloud.firestore {
       // checked, so a doc that somehow named different accounts is still
       // protected.
       allow read: if isSuperAdmin() || (
-        isPathParticipant() && isConvFriend() &&
+        isPathParticipant() && (isConvFriend() || isConvOverride()) &&
         (resource == null || resource.data.participants[request.auth.uid] == true)
       );
 
@@ -974,7 +1024,11 @@ service cloud.firestore {
                     && request.resource.data.participants[convId[29:57]] == true
                     && incomingOf(request.resource.data, convId[0:28]) == 0
                     && incomingOf(request.resource.data, convId[29:57]) == 0
-                    && isConvFriend();
+                    // Friends — or the support override held by the CALLER:
+                    // only the holder may open a conversation with a
+                    // non-friend; the other person can reply in it but not
+                    // start one.
+                    && (isConvFriend() || hasProfileDmOverride(request.auth.uid));
 
       // Update: participant + still a confirmed friend — and never the
       // participants themselves. Before this, either participant could rewrite
@@ -982,7 +1036,7 @@ service cloud.firestore {
       // isParticipant() and isConvFriend() and read the whole thread. Every
       // app write (lastMessage, updatedAt, participantState, and the merge-set
       // bootstrap that repeats the SAME map) leaves `participants` unchanged.
-      allow update: if isParticipant() && isConvFriend()
+      allow update: if isParticipant() && (isConvFriend() || isConvOverride())
                     && !request.resource.data.diff(resource.data)
                           .affectedKeys().hasAny(['participants'])
                     && ledgerUnchanged(convId[0:28])
@@ -1001,9 +1055,11 @@ service cloud.firestore {
               .data.participants[request.auth.uid] == true;
         }
 
-        // Same friend gate as the parent conversation.
+        // Same friend-or-override gate as the parent conversation.
         function msgConvFriend() {
-          return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
+          return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57])
+            || hasProfileDmOverride(convId[0:28])
+            || hasProfileDmOverride(convId[29:57]);
         }
 
         allow read: if (convParticipant() && msgConvFriend()) || isSuperAdmin();

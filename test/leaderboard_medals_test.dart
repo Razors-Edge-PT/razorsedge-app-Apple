@@ -15,6 +15,7 @@ import 'package:localtest222/leaderboard/leaderboard_models.dart';
 import 'package:localtest222/leaderboard/leaderboard_repository.dart';
 import 'package:localtest222/leaderboard/leaderboard_view.dart';
 import 'package:localtest222/leaderboard/medal_badge.dart';
+import 'package:localtest222/leaderboard/medal_row_layout.dart';
 import 'package:localtest222/profile/ui/cached_network_image.dart';
 import 'package:localtest222/social/buddy_repository.dart';
 
@@ -214,7 +215,7 @@ void main() {
     Finder row(String uid) =>
         find.byKey(ValueKey<String>('leaderboard-row-$uid'));
 
-    testWidgets('no medals: no strip and no extra row height',
+    testWidgets('no medals: no medal layout; medals add no row height',
         (WidgetTester tester) async {
       final FakeFirebaseFirestore db = FakeFirebaseFirestore();
       await seedEntries(db, '2026-09', <String>['a', 'b']);
@@ -222,13 +223,13 @@ void main() {
         'horizontalPress': <Object?>[award('a', 1, 100)],
       });
       await pumpBoard(tester, db);
-      expect(find.byType(MedalStrip), findsOneWidget);
-      expect(find.descendant(of: row('b'), matching: find.byType(MedalStrip)),
+      expect(find.byType(MedalRowLayout), findsOneWidget);
+      expect(
+          find.descendant(of: row('b'), matching: find.byType(MedalRowLayout)),
           findsNothing);
-      // b's row is exactly as tall as a row always was.
-      expect(tester.getSize(row('b')).height,
-          lessThan(tester.getSize(row('a')).height));
+      // b's row is exactly as tall as a row always was — and so is a's.
       expect(tester.getSize(row('b')).height, 56);
+      expect(tester.getSize(row('a')).height, 56);
     });
 
     testWidgets(
@@ -248,9 +249,10 @@ void main() {
         for (final String c in kCats) tester.getTopLeft(medal('a', c)).dx,
       ];
       expect(xs, List<double>.of(xs)..sort(), reason: 'category order');
-      final List<MedalBadge> badges = tester
-          .widgetList<MedalBadge>(
-              find.descendant(of: row('a'), matching: find.byType(MedalBadge)))
+      final List<LeaderboardMedal> badges = tester
+          .widgetList<MedalButton>(
+              find.descendant(of: row('a'), matching: find.byType(MedalButton)))
+          .map((MedalButton b) => b.medal)
           .toList();
       expect(badges.map((b) => b.code), <String>['BP', 'VP', 'OH', 'DL', 'SQ']);
       expect(badges.map((b) => b.tier), <MedalTier>[
@@ -260,13 +262,20 @@ void main() {
         MedalTier.silver,
         MedalTier.bronze,
       ]);
-      expect(badges.first.size, 29);
-      // Gap: 5 px between 29 px medals.
-      expect(xs[1] - xs[0], 34);
-      expect(find.descendant(of: row('b'), matching: find.byType(MedalBadge)),
+      // Evenly pitched, coins no larger than the preferred 26.5 px square.
+      final double pitch = xs[1] - xs[0];
+      for (int i = 2; i < xs.length; i++) {
+        expect(xs[i] - xs[i - 1], moreOrLessEquals(pitch));
+      }
+      expect(tester.getSize(medal('a', 'horizontalPress')).width,
+          lessThanOrEqualTo(kMedalCoinSide));
+      expect(find.descendant(of: row('b'), matching: find.byType(MedalButton)),
           findsOneWidget);
-      expect(find.descendant(of: row('c'), matching: find.byType(MedalBadge)),
+      expect(find.descendant(of: row('c'), matching: find.byType(MedalButton)),
           findsNothing);
+      // One medal gets the full coin.
+      expect(tester.getSize(medal('b', 'squatPattern')),
+          const Size.square(kMedalCoinSide));
       expect(tester.takeException(), isNull);
     });
 
@@ -419,7 +428,7 @@ void main() {
     });
 
     testWidgets(
-        '320 px with five medals, a long name and no avatar: no overflow, nothing compressed',
+        '320 px with five medals, a long name and no avatar: no overflow, no extra height',
         (WidgetTester tester) async {
       final FakeFirebaseFirestore db = FakeFirebaseFirestore();
       await seedEntries(db, '2026-09', <String>['long', 'b'],
@@ -433,18 +442,23 @@ void main() {
       final Finder strip =
           find.byKey(const ValueKey<String>('leaderboard-medals-long'));
       final Rect r = tester.getRect(row('long'));
-      final Rect s = tester.getRect(strip);
-      expect(s.right, lessThanOrEqualTo(r.right));
-      // Five medals, each still at least 26 px.
-      for (final MedalBadge b in tester.widgetList<MedalBadge>(
-          find.descendant(of: strip, matching: find.byType(MedalBadge)))) {
-        expect(b.size, greaterThanOrEqualTo(26));
-      }
-      expect(find.descendant(of: strip, matching: find.byType(MedalBadge)),
-          findsNWidgets(5));
-      // Points are still fully visible, right of the strip.
+      expect(r.height, 56, reason: 'the medal-less row height');
+      // Five medals, all inside the row, left of the points.
       final Rect pts = tester.getRect(find.text('899.00'));
-      expect(pts.left, greaterThanOrEqualTo(s.left));
+      final List<Rect> coins = <Rect>[
+        for (final Element e in find
+            .descendant(of: strip, matching: find.byType(MedalButton))
+            .evaluate())
+          tester.getRect(find.byWidget(e.widget)),
+      ];
+      expect(coins, hasLength(5));
+      for (final Rect c in coins) {
+        expect(r.contains(c.topLeft) && r.contains(c.bottomRight), isTrue);
+        expect(c.right, lessThanOrEqualTo(pts.left));
+        expect(c.width, greaterThan(0));
+      }
+      // Points are still fully visible.
+      expect(r.contains(pts.topLeft) && r.contains(pts.bottomRight), isTrue);
       expect(
           find.text('averyveryverylongusernamethatneverends'), findsOneWidget);
     });
@@ -458,11 +472,11 @@ void main() {
       });
       await pumpBoard(tester, db, size: const Size(320, 1600), textScale: 2.0);
       expect(tester.takeException(), isNull);
-      expect(find.byType(MedalBadge), findsNWidgets(5));
+      expect(find.byType(MedalButton), findsNWidgets(5));
     });
 
     testWidgets(
-        'medals are reachable buttons with full semantics and a tall tap target',
+        'medals are reachable buttons with full semantics and a tap area wider than the coin',
         (WidgetTester tester) async {
       final SemanticsHandle handle = tester.ensureSemantics();
       final FakeFirebaseFirestore db = FakeFirebaseFirestore();
@@ -477,8 +491,14 @@ void main() {
           findsOneWidget);
       expect(find.bySemanticsLabel(RegExp(r'^Rank 1, name-a, .*1 medal$')),
           findsOneWidget);
-      expect(tester.getSize(medal('a', 'horizontalPress')),
-          const Size(34, kMedalTapHeight));
+      // A tap just beside the coin, inside its cell, is still the medal's.
+      final RenderMedalRowLayout layout = tester.renderObject(
+          find.byKey(const ValueKey<String>('leaderboard-medals-a')));
+      final Rect cell = layout.debugCells.single;
+      expect(cell.height, greaterThan(kMedalCoinSide),
+          reason: 'the cell spans the free line height');
+      final Rect coin = tester.getRect(medal('a', 'horizontalPress'));
+      expect(cell.width, greaterThan(coin.width));
       handle.dispose();
     });
   });

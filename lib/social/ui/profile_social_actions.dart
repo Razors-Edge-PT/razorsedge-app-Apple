@@ -1,5 +1,7 @@
 /// The social actions on ANOTHER athlete's profile: Add friend, the pending
-/// request states, and Message for a confirmed friend.
+/// request states, and Message for a confirmed friend — or, for the holder of
+/// the support profile + DM override (access_grants.dart), Message beside
+/// whatever the genuine friendship control is.
 ///
 /// Every relationship and every action belongs to the SIGNED-IN account
 /// ([BuddyRepository.currentUid] resolves FirebaseAuth, never the athlete a
@@ -16,6 +18,7 @@ import 'package:flutter/material.dart';
 import '../../directMessages.dart' show ConversationPage, ensureDirectConversation;
 import '../../main.dart' show showAppSnack;
 import '../../profile/ui/profile_theme.dart';
+import '../access_grants.dart';
 import '../buddy_repository.dart';
 
 /// Opens the one-to-one conversation between the signed-in account and a
@@ -40,6 +43,7 @@ class ProfileSocialActions extends StatefulWidget {
     required this.targetUid,
     this.buddies,
     this.openConversation,
+    this.grants,
   });
 
   /// The profile being viewed.
@@ -50,6 +54,9 @@ class ProfileSocialActions extends StatefulWidget {
 
   final OpenConversation? openConversation;
 
+  /// For tests. Production reads the signed-in account's own grant.
+  final AccessGrantsRepository? grants;
+
   @override
   State<ProfileSocialActions> createState() => _ProfileSocialActionsState();
 }
@@ -58,6 +65,31 @@ class _ProfileSocialActionsState extends State<ProfileSocialActions> {
   late final BuddyRepository _buddies = widget.buddies ?? BuddyRepository();
   late final Stream<BuddyState> _state = _buddies.watchState();
   bool _busy = false;
+
+  /// The signed-in account holds the support override: Message is offered
+  /// to a non-friend too. Display only — the rules decide what it may do.
+  bool _override = false;
+  StreamSubscription<bool>? _overrideSub;
+
+  @override
+  void initState() {
+    super.initState();
+    final String? me = _buddies.currentUid;
+    if (me != null) {
+      _overrideSub = (widget.grants ??
+              AccessGrantsRepository(firestore: _buddies.firestore))
+          .watchHolds(me)
+          .listen((bool v) {
+        if (mounted && v != _override) setState(() => _override = v);
+      }, onError: (Object _) {});
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_overrideSub?.cancel());
+    super.dispose();
+  }
 
   /// What the server answered for the last action, shown until the live
   /// state catches up — so a just-sent request can never be sent again.
@@ -119,7 +151,20 @@ class _ProfileSocialActionsState extends State<ProfileSocialActions> {
           key: const ValueKey<String>('profile-social-actions'),
           padding: const EdgeInsets.fromLTRB(
               ProfileSpacing.lg, 0, ProfileSpacing.lg, ProfileSpacing.sm),
-          child: _buttons(rel, me),
+          child: _override && rel != BuddyRelationship.friends
+              // The genuine relationship control, unchanged, plus Message.
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _buttons(rel, me),
+                    if (!_busy) ...<Widget>[
+                      const SizedBox(height: ProfileSpacing.sm),
+                      _messageButton(me),
+                    ],
+                  ],
+                )
+              : _buttons(rel, me),
         );
       },
     );
@@ -175,14 +220,16 @@ class _ProfileSocialActionsState extends State<ProfileSocialActions> {
           ],
         );
       case BuddyRelationship.friends:
-        return FilledButton.icon(
-          key: const ValueKey<String>('profile-social-message'),
-          onPressed: () => unawaited(_message(me)),
-          icon: const Icon(Icons.chat_bubble_outline),
-          label: const Text('Message'),
-        );
+        return _messageButton(me);
       case BuddyRelationship.self:
         return const SizedBox.shrink();
     }
   }
+
+  Widget _messageButton(String me) => FilledButton.icon(
+        key: const ValueKey<String>('profile-social-message'),
+        onPressed: () => unawaited(_message(me)),
+        icon: const Icon(Icons.chat_bubble_outline),
+        label: const Text('Message'),
+      );
 }

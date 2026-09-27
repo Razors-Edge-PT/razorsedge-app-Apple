@@ -54,6 +54,7 @@ const P = require('./push_model');
 const U = require('./dm_unread');
 const A = require('./activity');
 const M = require('../social/buddy_model');
+const G = require('../social/access_grants');
 
 const COL_OUTBOX = 'pushOutbox';
 const COL_DEVICES = 'pushDevices';
@@ -605,7 +606,7 @@ async function enqueueDmReactions(db, {
       continue;
     }
     // eslint-disable-next-line no-await-in-loop
-    if (!(await mutualFriends(db, senderUid, actorUid))) {
+    if (!(await mayDirectMessage(db, senderUid, actorUid))) {
       results.push({ enqueued: false, reason: 'not-friends' });
       continue;
     }
@@ -667,6 +668,18 @@ async function mutualFriends(db, a, b) {
     db.collection(M.COL_ASSIGNMENTS).doc(b).get(),
   ]);
   return M.areMutualFriends(dataOf(sa), dataOf(sb), a, b);
+}
+
+/**
+ * A direct conversation between [a] and [b] may be delivered: they are
+ * mutual friends, or one of them holds the support profile + DM override
+ * (social/access_grants.js) — the same condition firestore.rules applies to
+ * the conversation. Post alerts never use this: the override is not a
+ * friendship.
+ */
+async function mayDirectMessage(db, a, b) {
+  if (await mutualFriends(db, a, b)) return true;
+  return G.eitherHoldsOverride(db, a, b);
 }
 
 /**
@@ -766,7 +779,7 @@ async function checkValidity(db, job) {
     // Withdrawn before delivery. A CHANGED emoji still delivers: it is the
     // same reaction, and the job carries what it was when it arrived.
     if (!emoji) return { ok: false, reason: 'reaction-withdrawn' };
-    if (!(await mutualFriends(db, recipientUid, actorUid))) {
+    if (!(await mayDirectMessage(db, recipientUid, actorUid))) {
       return { ok: false, reason: 'not-friends' };
     }
     return { ok: true, emoji: job.emoji || String(emoji).slice(0, 8) };
@@ -801,7 +814,7 @@ async function checkValidity(db, job) {
     if (U.isAcknowledged(convData, recipientUid, seq)) {
       return { ok: false, reason: 'already-read' };
     }
-    if (!(await mutualFriends(db, recipientUid, actorUid))) {
+    if (!(await mayDirectMessage(db, recipientUid, actorUid))) {
       return { ok: false, reason: 'not-friends' };
     }
     return { ok: true, kind, text: kind === 'text' ? String(msgData.text) : '' };
@@ -1096,6 +1109,7 @@ module.exports = {
   postAudience,
   isActivityRead,
   checkValidity,
+  mayDirectMessage,
   guardedDeleteDevice,
   processJob,
 };

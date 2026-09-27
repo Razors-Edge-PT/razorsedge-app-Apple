@@ -25,6 +25,7 @@ import '../push/notification_platform.dart';
 import '../push/push_intent.dart'
     show friendAcceptedTag, friendRequestTag;
 import '../profile/ui/profile_theme.dart';
+import 'access_grants.dart';
 import 'buddy_repository.dart';
 import 'feed_repository.dart';
 import 'feed_view.dart';
@@ -118,6 +119,11 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   late final BuddyRepository _buddies;
+
+  /// The signed-in account holds the support override: any search result
+  /// opens its profile.
+  bool _override = false;
+  StreamSubscription<bool>? _overrideSub;
   late final UserSearchRepository _search;
   final TextEditingController _queryController = TextEditingController();
 
@@ -163,6 +169,14 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
     _tabs.addListener(_onTabChanged);
     _buddies = widget.buddies ?? BuddyRepository();
     _search = widget.search ?? UserSearchRepository();
+    final String? me = _buddies.currentUid;
+    if (me != null) {
+      _overrideSub = AccessGrantsRepository(firestore: _buddies.firestore)
+          .watchHolds(me)
+          .listen((bool v) {
+        if (mounted && v != _override) setState(() => _override = v);
+      }, onError: (Object _) {});
+    }
   }
 
   void _onTabChanged() {
@@ -172,6 +186,7 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
 
   @override
   void dispose() {
+    unawaited(_overrideSub?.cancel());
     _debounce?.cancel();
     _queryController.dispose();
     _tabs.removeListener(_onTabChanged);
@@ -480,9 +495,10 @@ class _BuddyHubScreenState extends State<BuddyHubScreen>
       photoURL: user.photoURL,
       action: actionForRelationship(rel),
       busy: _busy.contains(user.uid),
-      // Only a confirmed buddy's profile is reachable. Offering the tap to
-      // anyone else would open a page the rules deny.
-      onTap: rel == BuddyRelationship.friends
+      // Only a confirmed buddy's profile is reachable — or, for the holder
+      // of the support override, anyone's (the rules let it read them).
+      // Offering the tap to anyone else would open a page the rules deny.
+      onTap: rel == BuddyRelationship.friends || _override
           ? () => _openProfile(user.uid)
           : null,
       onPrimary: () {

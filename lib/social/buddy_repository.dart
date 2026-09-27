@@ -213,6 +213,10 @@ class BuddyRepository {
         _uidResolver = uidResolver;
 
   final FirebaseFirestore _db;
+
+  /// The database this repository reads, for a companion read of the same
+  /// account's data (e.g. its access grant).
+  FirebaseFirestore get firestore => _db;
   final FirebaseFunctions? _functions;
   final FirebaseAuth? _auth;
   final String? _overrideUid;

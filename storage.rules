@@ -82,6 +82,20 @@ service firebase.storage {
       );
     }
 
+    // The support profile + DM override (see firestore.rules
+    // hasProfileDmOverride): server-owned, read-only here.
+    function hasProfileDmOverride(uid) {
+      return firestore.exists(/databases/(default)/documents/accessGrants/$(uid)) &&
+        firestore.get(/databases/(default)/documents/accessGrants/$(uid))
+          .data.get('profileAndDmOverride', false) == true;
+    }
+
+    // Friend-equivalent READ (reads only), as in firestore.rules.
+    function canReadSocial(ownerUid) {
+      return isSocial(ownerUid)
+        || (isSignedIn() && hasProfileDmOverride(request.auth.uid));
+    }
+
     function isOwner(ownerUid) {
       return isSignedIn() && request.auth.uid == ownerUid;
     }
@@ -154,7 +168,7 @@ service firebase.storage {
     // second copy of the same file.
     // ======================================================
     match /users/{ownerUid}/posts/{postId}/{fileName} {
-      allow read: if isSocial(ownerUid);
+      allow read: if canReadSocial(ownerUid);
       allow create, update: if isOwner(ownerUid) && sizeOk();
       allow delete: if isOwner(ownerUid) || isSuperAdmin();
     }
@@ -183,7 +197,7 @@ service firebase.storage {
     match /users/{ownerUid}/stories/{storyId}/{fileName} {
       allow read: if isSuperAdmin()
                   || (isOwner(ownerUid) && storyDocExists(ownerUid, storyId))
-                  || (isSocial(ownerUid) && storyIsLive(ownerUid, storyId));
+                  || (canReadSocial(ownerUid) && storyIsLive(ownerUid, storyId));
 
       // The upload necessarily precedes the story document, so create/update
       // cannot require one. The owner check is what keeps the path private,
@@ -200,7 +214,7 @@ service firebase.storage {
     // provenance and are never auto-claimed as proof of a current record.
     // ======================================================
     match /users/{ownerUid}/liftVideos/{fileName} {
-      allow read: if isSocial(ownerUid);
+      allow read: if canReadSocial(ownerUid);
       allow create, update: if isOwner(ownerUid) && sizeOk();
       allow delete: if isOwner(ownerUid) || isSuperAdmin();
     }
@@ -222,8 +236,11 @@ service firebase.storage {
 
       // convId = uid1_uid2 (UIDs sorted ascending, joined by "_", 57 chars).
       // Mirrors the Firestore DM friend-gate.
+      // Friends, or either participant holds the support override.
       function isConvFriend() {
-        return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57]);
+        return isBuddyOf(convId[0:28]) || isBuddyOf(convId[29:57])
+          || hasProfileDmOverride(convId[0:28])
+          || hasProfileDmOverride(convId[29:57]);
       }
 
       allow read: if (isConvParticipant() && isConvFriend()) || isSuperAdmin();

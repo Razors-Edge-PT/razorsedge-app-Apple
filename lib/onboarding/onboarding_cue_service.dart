@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'onboarding_cue.dart';
+import 'onboarding_cue_qa_policy.dart';
 import 'onboarding_cue_repository.dart';
 
 /// Resolves the installed build number. Injectable so tests can simulate
@@ -38,10 +39,6 @@ class OnboardingCueService {
 
   /// App-wide singleton used by screens.
   static final OnboardingCueService instance = OnboardingCueService();
-
-  /// The one test account that replays build-eligible cues. Kept here so no
-  /// screen hard-codes it.
-  static const String richardUid = 'yoVAqScwLMQLAgNHh8v9IK49fBw2';
 
   final OnboardingCueGateway _gateway;
   final BuildNumberProvider _buildProvider;
@@ -118,15 +115,16 @@ class OnboardingCueService {
     }
     final rec = _state[actorUid]?[cue.id];
 
-    final isRichardReplay = actorUid == richardUid &&
-        cue.policy == OnboardingCuePolicy.richardReplayable;
-    if (isRichardReplay) {
+    // The cue-QA account (OnboardingCueQaPolicy) replays once per build.
+    final isQaReplay = OnboardingCueQaPolicy.replaysCues(actorUid) &&
+        cue.policy == OnboardingCuePolicy.qaReplayable;
+    if (isQaReplay) {
       final b = buildNumber;
       if (b.isEmpty) return false; // unknown build → fail closed for replay
       return rec == null || rec.build != b;
     }
 
-    // Normal users, and permanent cues for everyone (incl. Richard's video).
+    // Normal users, and permanent cues for everyone (incl. the QA video).
     return rec == null ? true : rec.done != true;
   }
 

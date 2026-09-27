@@ -25,6 +25,7 @@ import 'package:provider/provider.dart';
 
 import '../post_media.dart';
 import '../post_service.dart';
+import '../social/access_grants.dart';
 import '../social/buddy_repository.dart';
 import '../social/ui/profile_social_actions.dart';
 import '../user_context.dart';
@@ -122,6 +123,8 @@ class _ProfileScreenState extends State<ProfileScreen>
       // the account from FirebaseAuth, never from the coach's "acting as"
       // athlete, so coaching an athlete never counts as being their friend.
       viewerFriends: BuddyRepository().watchFriends,
+      viewerOverride: () =>
+          AccessGrantsRepository().watchHolds(ctx.actorUid),
     )..start();
 
     setState(() => _controller = controller);
