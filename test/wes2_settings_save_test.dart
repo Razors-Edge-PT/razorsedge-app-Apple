@@ -442,14 +442,18 @@ void main() {
         ),
       );
       final saved = await _readSettings(db);
-      expect((saved['rirPlan']['week1']['session2'] as Map).containsKey('set2'),
-          false);
+      // The cleared leaf is gone. The set itself stays (with its derived
+      // reps) so the blank is intentional and never re-generated as a
+      // default RIR by the week-1 heal.
+      final set2 = saved['rirPlan']['week1']['session2']['set2'] as Map;
+      expect(set2.containsKey('rir'), false);
       expect(saved['rirPlan']['week1']['session2']['set1']['rir'], '2');
     });
   });
 
   group('FirestoreWes2PlanService.repairExerciseShadows', () {
-    test('7(e2e): sparse weekN shadow is removed in Firestore on open', () async {
+    test('7(e2e): sparse weekN shadow is repaired in memory on open and '
+        'persisted only by an explicit save', () async {
       final s = _completeTemplateSettings();
       (s['rirPlan'] as Map)['week3'] = {
         'session2': {
@@ -462,7 +466,17 @@ void main() {
       final repaired = await svc.repairExerciseShadows(
           uid: _uid, blockId: _block, exerciseId: _ex);
       expect((repaired!['rirPlan'] as Map).keys.toList(), ['week1']);
+      expect(((await _readSettings(db))['rirPlan'] as Map).keys.toList(),
+          ['week1', 'week3'],
+          reason: 'opening never writes the repair');
 
+      // Explicit Save (nothing else changed) persists the repair.
+      await svc.saveExerciseSettings(
+        uid: _uid,
+        blockId: _block,
+        exerciseId: _ex,
+        patch: const ExerciseSettingsPatch(totalBlockWeeks: 4),
+      );
       final saved = await _readSettings(db);
       expect((saved['rirPlan'] as Map).keys.toList(), ['week1']);
       // 15: reopening (load) shows complete week1 config.

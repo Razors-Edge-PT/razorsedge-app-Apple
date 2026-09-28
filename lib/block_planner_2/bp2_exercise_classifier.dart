@@ -74,7 +74,10 @@ class Bp2ExerciseClassifier {
   /// Splits [catalogue] into the three display groups.
   ///
   /// * `currentBlock` — union of exercises in templates whose `blockId` equals
-  ///   [activeBlockId] (the canonical active-block pointer).
+  ///   [activeBlockId] (the canonical active-block pointer) AND every
+  ///   exercise id in the active block's own `exerciseSettings`
+  ///   ([activeBlockSettingsIds]) — a block whose exercises are not linked
+  ///   through templates still shows them. Display only; nothing is written.
   /// * `otherBlocks`  — union of exercises in templates connected to any block
   ///   in [otherBlockIds], minus anything already in `currentBlock`.
   /// * `allOther`     — every remaining catalogue exercise.
@@ -86,6 +89,7 @@ class Bp2ExerciseClassifier {
     required List<Bp2TemplateSummary> templates,
     required String? activeBlockId,
     required Set<String> otherBlockIds,
+    Iterable<String> activeBlockSettingsIds = const [],
   }) {
     final byId = <String, Bp2Exercise>{for (final e in catalogue) e.id: e};
     final byLowerName = <String, Bp2Exercise>{};
@@ -111,6 +115,17 @@ class Bp2ExerciseClassifier {
         } else {
           other[ex.id] = ex;
         }
+      }
+    }
+    if (activeBlockId != null) {
+      for (final raw in activeBlockSettingsIds) {
+        final id = raw.trim();
+        if (id.isEmpty || current.containsKey(id)) continue;
+        // Id only: a settings key never falls back to name matching.
+        final ex = byId[id] ??
+            resolveRef(Bp2TemplateRef(exerciseId: id, name: ''),
+                byId: byId, byLowerName: const {});
+        if (ex != null) current[ex.id] = ex;
       }
     }
     for (final id in current.keys) {

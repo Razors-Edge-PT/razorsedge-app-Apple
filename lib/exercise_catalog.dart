@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'exercise_type.dart';
 
@@ -32,7 +33,13 @@ class ExerciseCatalog {
   static const String adminExerciseWriterUid =
       'yoVAqScwLMQLAgNHh8v9IK49fBw2';
 
-  static FirebaseFirestore get _db => FirebaseFirestore.instance;
+  /// TEST SEAM ONLY: a fake Firestore for widget tests. Never set in
+  /// production.
+  @visibleForTesting
+  static FirebaseFirestore? debugFirestoreOverride;
+
+  static FirebaseFirestore get _db =>
+      debugFirestoreOverride ?? FirebaseFirestore.instance;
 
   /// True when [actorUid] is the admin/global writer.
   static bool isAdminWriter(String actorUid) =>

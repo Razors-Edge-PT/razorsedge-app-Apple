@@ -15,6 +15,7 @@ import 'package:flutter/foundation.dart';
 
 import '../block_exercise_defaults_repository.dart';
 import '../exercise_catalog.dart';
+import '../wes2_exercise_settings_patch.dart';
 import 'bp2_date_utils.dart';
 import 'bp2_exercise_classifier.dart';
 import 'bp2_local_draft.dart';
@@ -53,6 +54,15 @@ class Bp2SaveOutcome {
       Bp2SaveOutcome._(success: false, error: message, focus: focus);
   factory Bp2SaveOutcome.failed(String message) =>
       Bp2SaveOutcome._(success: false, error: message);
+}
+
+enum Bp2AddToBlockOutcome {
+  added,
+  alreadyInBlock,
+  saveBlockFirst,
+  notLoaded,
+  unknownExercise,
+  failed,
 }
 
 class Bp2ActivationOutcome {
@@ -267,6 +277,10 @@ class Bp2Controller extends ChangeNotifier {
 
     // 3. One-shot catalogue freshness check (non-blocking for the UI).
     await _refresh(gen, uid, force: false);
+    if (!_live(gen)) return;
+
+    // 4. The active block's own exercises when another block is edited.
+    await _loadOtherActiveSettings(gen, uid);
   }
 
   Future<void> _loadExistingBlock(int gen, String uid, String blockId) async {
@@ -360,6 +374,7 @@ class Bp2Controller extends ChangeNotifier {
         ..addAll(draft.exerciseDrafts);
     }
     _blockLoaded = true;
+    _regroup();
     notifyListeners();
   }
 
@@ -373,6 +388,24 @@ class Bp2Controller extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// `exerciseSettings` keys of the active block when it is not the block
+  /// being edited (one read, display only).
+  Set<String> _otherActiveSettingsIds = const {};
+  String? _otherActiveSettingsFor;
+
+  /// Exercise ids stored in the ACTIVE block's own `exerciseSettings`.
+  Iterable<String> get _activeSettingsIds {
+    final active = activeBlockId;
+    final b = _block;
+    if (active == null) return const [];
+    if (b != null && b.existsRemotely && b.id == active) {
+      return b.exerciseSettings.keys;
+    }
+    return _otherActiveSettingsFor == active
+        ? _otherActiveSettingsIds
+        : const [];
+  }
+
   void _regroup() {
     final active = activeBlockId;
     final others = <String>{
@@ -384,7 +417,26 @@ class Bp2Controller extends ChangeNotifier {
       templates: _snapshot?.templates ?? const [],
       activeBlockId: active,
       otherBlockIds: others,
+      activeBlockSettingsIds: _activeSettingsIds,
     );
+  }
+
+  /// Reads (never writes) the active block's settings keys when a different
+  /// block is being edited, so "Current block" shows its real exercises.
+  Future<void> _loadOtherActiveSettings(int gen, String uid) async {
+    final active = activeBlockId;
+    if (active == null || active == _block?.id) return;
+    if (_otherActiveSettingsFor == active) return;
+    try {
+      final rec = await repo.fetchBlock(uid, active);
+      if (!_live(gen) || rec == null) return;
+      _otherActiveSettingsIds = rec.exerciseSettings.keys.toSet();
+      _otherActiveSettingsFor = active;
+      _regroup();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[BP2] active block settings read failed: $e');
+    }
   }
 
   Future<void> _refresh(int gen, String uid, {required bool force}) async {
@@ -423,6 +475,7 @@ class Bp2Controller extends ChangeNotifier {
     _block = fresh.copyWith(range: _rangeTouched ? cur.range : fresh.range);
     _persistedName = fresh.name;
     _persistedRange = fresh.range;
+    _regroup();
     notifyListeners();
   }
 
@@ -432,6 +485,8 @@ class Bp2Controller extends ChangeNotifier {
     _activeBlockPointer = id;
     _regroup();
     notifyListeners();
+    final uid = _uid;
+    if (uid != null) unawaited(_loadOtherActiveSettings(_gen, uid));
   }
 
   // ── Block name / dates ────────────────────────────────────────────────────
@@ -715,6 +770,7 @@ class Bp2Controller extends ChangeNotifier {
       b = b.copyWith(exerciseSettings: settings);
       if (!_live(gen)) return Bp2SaveOutcome.ok(offline: offline);
       _block = b;
+      _regroup();
 
       await _afterPersist(uid, b);
       return Bp2SaveOutcome.ok(offline: offline);
@@ -797,6 +853,53 @@ class Bp2Controller extends ChangeNotifier {
       debugPrint('[BP2] activation failed: $e');
       return const Bp2ActivationOutcome(
           false, 'Block saved, but it could not be activated.');
+    }
+  }
+
+  // ── Add an existing exercise to the selected block ────────────────────────
+
+  /// True when the selected block already stores settings for [exerciseId].
+  bool blockHasExercise(String exerciseId) =>
+      _block?.exerciseSettings.containsKey(exerciseId) ?? false;
+
+  /// Adds an EXISTING catalogue exercise (global or the athlete's custom) to
+  /// the selected block by seeding only that exercise's
+  /// `exerciseSettings.{id}` entry with its canonical defaults
+  /// ([Bp2Repository.saveExerciseSettings], one transaction). No other
+  /// exercise, block or catalogue document is touched.
+  Future<Bp2AddToBlockOutcome> addExerciseToBlock(String exerciseId) async {
+    final uid = _uid;
+    final gen = _gen;
+    final b = _block;
+    if (uid == null || b == null || !_blockLoaded) {
+      return Bp2AddToBlockOutcome.notLoaded;
+    }
+    if (!b.existsRemotely) return Bp2AddToBlockOutcome.saveBlockFirst;
+    if (blockHasExercise(exerciseId)) return Bp2AddToBlockOutcome.alreadyInBlock;
+    final defaults = defaultsFor(exerciseId);
+    if (defaults.isEmpty) return Bp2AddToBlockOutcome.unknownExercise;
+    try {
+      final merged = await _withTimeout(repo.saveExerciseSettings(
+        uid: uid,
+        blockId: b.id,
+        exerciseId: exerciseId,
+        patch: ExerciseSettingsPatch(totalBlockWeeks: b.range.weeks),
+        defaultsPayload: defaults,
+      ));
+      if (!_live(gen)) return Bp2AddToBlockOutcome.added;
+      final cur = _block;
+      if (cur == null || cur.id != b.id) return Bp2AddToBlockOutcome.added;
+      _block = cur.copyWith(exerciseSettings: {
+        ...cur.exerciseSettings,
+        exerciseId: merged,
+      });
+      unawaited(sync.writeBlock(uid, _block!));
+      _regroup();
+      notifyListeners();
+      return Bp2AddToBlockOutcome.added;
+    } catch (e) {
+      debugPrint('[BP2] add exercise to block failed: $e');
+      return Bp2AddToBlockOutcome.failed;
     }
   }
 

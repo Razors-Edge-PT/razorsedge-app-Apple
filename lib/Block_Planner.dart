@@ -19,10 +19,21 @@ import 'package:uuid/uuid.dart';
 import 'user_context.dart';
 import 'warmup_service.dart';
 import 'dart:math' as math;
+import 'dart:async' show unawaited;
+import 'package:collection/collection.dart' show DeepCollectionEquality;
+import 'block_save_guard.dart';
+import 'block_exercise_defaults_repository.dart';
 
 
 class Block_Planner extends StatefulWidget {
   const Block_Planner({super.key});
+
+  /// TEST SEAM ONLY: a fake Firestore for widget tests. Never set in
+  /// production, where [firestore] is [FirebaseFirestore.instance].
+  @visibleForTesting
+  static FirebaseFirestore? debugFirestoreOverride;
+  static FirebaseFirestore get firestore =>
+      debugFirestoreOverride ?? FirebaseFirestore.instance;
 
   // 👇 Static parser, same logic you provided
   static Map<String, double> parseIncrements(String incString) {
@@ -65,6 +76,29 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   bool _routeSubscribed = false;
   bool _allExercisesAvailable = false;
 
+  // ── Non-destructive persistence (see block_save_guard.dart) ──────────────
+  /// True only after the block — and, when its membership is derived from
+  /// the catalogue, the catalogue — loaded successfully. Nothing is written
+  /// to an existing block before this.
+  bool _loadSucceeded = false;
+  String? _loadError;
+  /// `newBlock: true` opens a local draft; its document is created on the
+  /// first genuine edit or Save, never merely by opening the page.
+  bool _isNewDraft = false;
+  Future<void>? _draftCreation;
+  /// Exercises whose settings the user changed since the last save.
+  final Set<String> _dirtySettingIds = {};
+  /// Exercises the user explicitly removed after a successful load.
+  final Set<String> _removedIds = {};
+  bool _membershipDirty = false;
+  /// Defaults filled in memory on open for display only; persisted only if
+  /// the user edits that exercise.
+  final Set<String> _seededOnlyIds = {};
+  /// Full catalogue ids (the picker prunes [_exerciseIdToName]).
+  Set<String> _catalogueIds = {};
+  /// Selected athlete captured while mounted.
+  String? _uid;
+
   String get userId => UserContext.of(context, listen: false).currentUid;
 
   ScaffoldMessengerState? _scaffoldMessenger;
@@ -75,28 +109,8 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     _blockNameController.dispose();
     _historyInputController.dispose();
 
-    // 🏁 Best-effort background save. Non-blocking for navigation.
-    Future.microtask(() async {
-      try {
-        if (blockIdToUse == null) {
-          print("ℹ️ [BP.dispose] Skipping save (blockIdToUse is null)");
-          return;
-        }
-
-        // 1) Persist the full block doc (users/{uid}/planned_blocks/{blockId})
-        await _savePlannedExercises(suppressSnack: true);
-
-        print('🧪[BP.dispose pre] blockId=$blockIdToUse '
-            'exercises.len=${exercises.length} '
-            'hasAdd(EFbQl9i9NdYi13F3DqHr)=${exercises.contains('EFbQl9i9NdYi13F3DqHr')} '
-            'hasEx(eyh76KELuuO805rZBpMa)=${exercises.contains('eyh76KELuuO805rZBpMa')}');
-
-        print("💾 [BP.dispose] _savePlannedExercises() completed");
-
-      } catch (e) {
-        print("❌ [BP.dispose] Background save error: $e");
-      }
-    });
+    // No save on dispose: every genuine edit is persisted when it is made
+    // (per-exercise), and leaving without an edit must write nothing.
 
     routeObserver.unsubscribe(this);
     super.dispose();
@@ -138,7 +152,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
     if (userId == null) return;
 
-    final doc = await FirebaseFirestore.instance
+    final doc = await Block_Planner.firestore
         .collection('users')
         .doc(userId)
         .collection('planned_blocks')
@@ -149,6 +163,17 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
     final data = doc.data()!;
 
+    try {
+      _applyExistingBlock(blockId, data);
+    } catch (e) {
+      // Unreadable block (e.g. no dates): display stays empty and the
+      // authoritative load reports it; never throws out of the route.
+      debugPrint('❌ [BP._loadExistingBlock] $e');
+    }
+  }
+
+  void _applyExistingBlock(String blockId, Map<String, dynamic> data) {
+    if (!mounted) return;
     _allExercisesAvailable = data['allExercisesAvailable'] == true;
 
     final loaded = List<String>.from(data['exercises'] ?? const <String>[]);
@@ -169,27 +194,19 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       for (final id in loadedExercises) {
         if (!fixed.contains(id)) fixed.add(id);
       }
-      // allExercisesAvailable blocks: exercises list is populated by _loadBlockFromFirestore
-      // once _exerciseIdToName is ready (post-frame). Leave as-is here if empty.
-      exercises = fixed;
-
-// 🔧 Self-heal corrupted blocks (safe, idempotent)
-      if (fixed.length != loadedExercises.length) {
-        FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .collection('planned_blocks')
-            .doc(blockId)
-            .update({
-          'exercises': fixed,
-          'plannedExercises': fixed,
-        }).catchError((_) {});
+      // Early display only. _loadBlockFromFirestore is authoritative for
+      // membership and settings; once it has succeeded this read (which can
+      // land later) must not replace them. Duplicates are fixed in memory
+      // only — opening a block never writes.
+      if (!_loadSucceeded) {
+        // allExercisesAvailable blocks: exercises list is populated by
+        // _loadBlockFromFirestore once _exerciseIdToName is ready.
+        exercises = fixed;
+        exerciseSettings = Map<String, Map<String, dynamic>>.from(
+          (data['exerciseSettings'] ?? {})
+              .map((key, val) => MapEntry(key, Map<String, dynamic>.from(val))),
+        );
       }
-
-      exerciseSettings = Map<String, Map<String, dynamic>>.from(
-        (data['exerciseSettings'] ?? {})
-            .map((key, val) => MapEntry(key, Map<String, dynamic>.from(val))),
-      );
       _isSavedBlock = true;
 
       _initialBlockIsActive = data['isActive'] ?? false;
@@ -207,7 +224,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   Future<void> _loadTemplateExerciseIds() async {
     final uid = userId;
     if (uid == null || blockIdToUse == null) return;
-    final snapshot = await FirebaseFirestore.instance
+    final snapshot = await Block_Planner.firestore
         .collection('users')
         .doc(uid)
         .collection('templates')
@@ -263,28 +280,63 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   void _onUpdateSetting(String exerciseId, String key, dynamic value) {
     print("📤 [TOP] Writing to Firestore: $exerciseId → $key = $value");
 
+    // A value equal to what is already held is not an edit (card
+    // normalisation re-emits stored values) and is never written.
+    final current = exerciseSettings[exerciseId];
+    final unchanged = current != null &&
+        current.containsKey(key) &&
+        const DeepCollectionEquality().equals(
+            _sanitizeForFirestore(current[key]), _sanitizeForFirestore(value));
+
     // 1) update local map so UI stays in sync
-    setState(() {
+    void apply() {
       exerciseSettings.putIfAbsent(exerciseId, () => {});
       exerciseSettings[exerciseId]![key] = value;
-    });
+    }
+    if (mounted) {
+      setState(apply);
+    } else {
+      apply();
+    }
+
+    if (unchanged) return;
+    if (!_loadSucceeded) {
+      print("⚠️ [TOP] Skipping write: block not loaded ($exerciseId → $key)");
+      return;
+    }
+    _dirtySettingIds.add(exerciseId);
+
+    // A new draft is created (with this edit) on its first genuine edit.
+    if (_isNewDraft) {
+      unawaited(_persistNewDraft());
+      return;
+    }
 
     // 🔁 2) Safely encode value before writing to Firestore
     final safeValue = _sanitizeForFirestore(value);
 
-    final userId = UserContext.of(context, listen: false).currentUid;
+    final userId = _uid;
     // 🧱 Hard guard: do NOT write unless we have a stable block id
     final bid = blockIdToUse;
-    if (bid == null || bid.trim().isEmpty) {
+    if (userId == null || bid == null || bid.trim().isEmpty) {
       print("⚠️ [TOP] Skipping write: blockIdToUse is null/empty ($exerciseId → $key)");
       return;
     }
 
-    final docRef = FirebaseFirestore.instance
+    final docRef = Block_Planner.firestore
         .collection('users')
         .doc(userId)
         .collection('planned_blocks')
         .doc(bid);
+
+    // An exercise shown with in-memory defaults has no stored entry yet:
+    // its first edit stores that one exercise's complete entry.
+    if (_seededOnlyIds.remove(exerciseId)) {
+      unawaited(_commitGuarded(BlockSaveRequest(
+        changedEntries: {exerciseId: _normalizedEntry(exerciseId)},
+      )).then((_) => _dirtySettingIds.remove(exerciseId)));
+      return;
+    }
 
 // ✅ Special-case repTargets so stale instances can't survive merge
     if (key == 'repTargets') {
@@ -293,6 +345,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       }).catchError((e) {
         print("❌ Failed to save $key for $exerciseId: $e");
       });
+      _persistHealedRir(exerciseId, key, docRef);
       return;
     }
 
@@ -306,10 +359,40 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     }, SetOptions(merge: true)).catchError((e) {
       print("❌ Failed to save $key for $exerciseId: $e");
     });
+    _persistHealedRir(exerciseId, key, docRef);
+  }
 
-
-
-
+  /// Source completeness: a user edit that changes an exercise's structure
+  /// (rep targets, set count, frequency, model) also stores that exercise's
+  /// complete week-1 RIR plan (canonical heal: fills only absent sets and
+  /// absent reps, never overwrites a value), so the planner never leaves an
+  /// incomplete RIR plan behind.
+  void _persistHealedRir(String exerciseId, String key,
+      DocumentReference<Map<String, dynamic>> docRef) {
+    const structural = {
+      'repTargets',
+      'defaultSets',
+      'weeklyFrequency',
+      'periodizationModel',
+    };
+    if (!structural.contains(key)) return;
+    final entry = exerciseSettings[exerciseId];
+    if (entry == null) return;
+    Map<String, dynamic>? healed;
+    try {
+      healed = BlockExerciseDefaultsRepository.healWeek1RirPlan(
+          Map<String, dynamic>.from(entry));
+    } catch (_) {
+      return; // unexpected shape: leave it for an explicit edit
+    }
+    if (healed == null) return;
+    entry['rirPlan'] = healed;
+    docRef.update({
+      FieldPath(['exerciseSettings', exerciseId, 'rirPlan']):
+          _sanitizeForFirestore(healed),
+    }).catchError((e) {
+      print("❌ Failed to store complete rirPlan for $exerciseId: $e");
+    });
   }
 
 
@@ -320,19 +403,26 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-
-      await loadExercisesFromFirestore(); // names/cache first for defaults
+      _uid = userId;
 
       if (args != null && args['blockId'] != null) {
-        // Explicit block → load its dates/scaffold, then planned IDs & settings
+        // Explicit block → load its dates/scaffold, then planned IDs & settings.
+        // _loadBlockFromFirestore loads the catalogue first and never throws.
         await _loadBlockFromFirestore(args['blockId']);
-        await _seedDefaultsFor(_idsWithoutSettings(exercises)); // mirror “Save” in picker
+        if (!_loadSucceeded) return; // nothing can be saved; see banner
+        // Display-only defaults for exercises without stored settings.
+        await _seedDefaultsFor(_idsWithoutSettings(exercises));
 
 
       } else if (args != null && args['newBlock'] == true) {
+        await loadExercisesFromFirestore(); // names/cache first for defaults
         // ✅ New block = local draft with all exercise IDs from Firestore (no pointer hydration)
 
-        final allExIds = await loadAllExerciseIds();
+        // Same query as loadAllExerciseIds(), through this screen's Firestore.
+        final allExIds = (await Block_Planner.firestore.collection('exercises').get())
+            .docs
+            .map((d) => d.id)
+            .toList();
 
         setState(() {
           exercises = allExIds.toSet().toList(); // defensive de-dupe
@@ -361,16 +451,20 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
 
         if (userId != null) {
-          final userSnap = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+          final userSnap = await Block_Planner.firestore.collection('users').doc(userId).get();
           final udata = userSnap.data() ?? const <String, dynamic>{};
 
           final u1 = (udata['username'] as String?)?.trim();
           final u2 = (udata['fullName'] as String?)?.trim();
-          final fallback = (FirebaseAuth.instance.currentUser?.displayName ?? '')
-              .trim()
-              .isNotEmpty
-              ? FirebaseAuth.instance.currentUser!.displayName!.trim()
-              : (FirebaseAuth.instance.currentUser?.email?.split('@').first ?? '').trim();
+          String fallback = '';
+          try {
+            final authUser = FirebaseAuth.instance.currentUser;
+            fallback = (authUser?.displayName ?? '').trim().isNotEmpty
+                ? authUser!.displayName!.trim()
+                : (authUser?.email?.split('@').first ?? '').trim();
+          } catch (_) {
+            // No auth instance (tests); the username/fullName fields decide.
+          }
 
           username = (u1 != null && u1.isNotEmpty)
               ? u1
@@ -401,13 +495,13 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
         if (!mounted) return;
 
-// 1) Ensure blockIdToUse exists (and save the base block doc)
-        await _savePlannedBlock(setActive: false);
-
-        if (!mounted) return;
-
-// 2) Save exerciseSettings/week docs/current_block pointer, etc.
-        await _savePlannedExercises(suppressSnack: true);
+        // Local draft only: opening the page writes nothing. The block
+        // document is created on the first genuine edit or on Save
+        // (_persistNewDraft).
+        setState(() {
+          _isNewDraft = true;
+          _loadSucceeded = true;
+        });
 
       }
       else {
@@ -421,24 +515,52 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   }
 
 
+  /// Loads the block into memory. Sets [_loadSucceeded] only when the block
+  /// and everything its membership depends on loaded; on any failure the
+  /// page stays read-only (no save path can run).
   Future<void> _loadBlockFromFirestore(String blockId) async {
     final userId = UserContext.of(context, listen: false).currentUid;
     if (userId == null) return;
+    _uid = userId;
 
+    try {
+      await _loadBlockFromFirestoreUnguarded(userId, blockId);
+    } catch (e) {
+      debugPrint('❌ [BP] block load failed: $e');
+      _loadSucceeded = false;
+      _loadError = 'Could not load this block. Nothing will be saved.';
+    }
+    if (mounted) setState(() {});
+  }
 
+  Future<void> _loadBlockFromFirestoreUnguarded(
+      String userId, String blockId) async {
     await loadExercisesFromFirestore(); // ✅ Ensure names are ready
 
-    final doc = await FirebaseFirestore.instance
+    final doc = await Block_Planner.firestore
         .collection('users')
         .doc(userId)
         .collection('planned_blocks')
         .doc(blockId)
         .get();
 
-    if (!doc.exists) return;
+    if (!doc.exists) {
+      _loadError = 'This block no longer exists.';
+      return;
+    }
 
     final data = doc.data()!;
     _allExercisesAvailable = data['allExercisesAvailable'] == true;
+    final hasStoredMembership =
+        (data['exercises'] as List?)?.isNotEmpty == true;
+    if (_allExercisesAvailable &&
+        !hasStoredMembership &&
+        _exerciseIdToName.isEmpty) {
+      // Membership is derived from the catalogue; without it the list would
+      // be empty and a save would exclude every exercise.
+      _loadError = 'Exercise library unavailable. Nothing will be saved.';
+      return;
+    }
 
     setState(() {
       _blockStartDate = (data['startDate'] as Timestamp).toDate();
@@ -475,7 +597,8 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         print("🔍 ${entry.key} → ${jsonEncode(entry.value)}");
       }
 
-
+      _loadError = null;
+      _loadSucceeded = true;
     });
   }
 
@@ -487,9 +610,14 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
   Future<void> _savePlannedBlock({ required bool setActive }) async {
     final userId = UserContext.of(context, listen: false).currentUid;
     if (userId == null) return;
+    if (!_loadSucceeded) {
+      _scaffoldMessenger?.showSnackBar(const SnackBar(
+          content: Text('This block did not load — nothing was saved.')));
+      return;
+    }
 
 
-    final userBlocksRef = FirebaseFirestore.instance
+    final userBlocksRef = Block_Planner.firestore
         .collection('users')
         .doc(userId)
         .collection('planned_blocks');
@@ -527,7 +655,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         }
 
         // 3) Deactivate the others in Firestore:
-        final batch = FirebaseFirestore.instance.batch();
+        final batch = Block_Planner.firestore.batch();
         for (final doc in others) {
           batch.update(doc.reference, {'isActive': false});
         }
@@ -536,34 +664,31 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     }
 
     // ─── Now your existing save logic ───
-    final blockDocRef = blockIdToUse != null
-        ? userBlocksRef.doc(blockIdToUse)
-        : userBlocksRef.doc();
-    blockIdToUse ??= blockDocRef.id;
+    // A new draft's document is created first (complete initial content);
+    // an existing block only ever receives the guarded narrow update below.
+    if (_isNewDraft) await _persistNewDraft();
+    final bid = blockIdToUse;
+    if (bid == null) return;
+    final blockDocRef = userBlocksRef.doc(bid);
 
-    // ✅ Capture messenger BEFORE any awaits (safe ancestor lookup)
-    final messenger = ScaffoldMessenger.of(context);
-
-    // For allExercisesAvailable blocks, write excludedExerciseIds instead of large arrays.
-    Map<String, dynamic> blockPayload = {
-      'name': _blockNameController.text.trim().isEmpty
-          ? 'Unnamed Block'
-          : _blockNameController.text.trim(),
-      'startDate': _blockStartDate,
-      'endDate': _blockEndDate,
-      'exerciseSettings': exerciseSettings,
-      'selectedDays': selectedDays,
-      'isActive': setActive,
-      'createdAt': FieldValue.serverTimestamp(),
-      if (_templateCandidateIds.isNotEmpty) 'templateCandidateExerciseIds': _templateCandidateIds,
-    };
-    if (_allExercisesAvailable) {
-      final allIds = _exerciseIdToName.keys.toSet();
-      blockPayload['excludedExerciseIds'] = allIds.difference(exercises.toSet()).toList();
-    } else {
-      blockPayload['exercises'] = exercises;
-    }
-    await blockDocRef.set(blockPayload, SetOptions(merge: true));
+    // Block-level metadata only. Settings and membership are persisted by
+    // _savePlannedExercises through the guard, never as whole maps here.
+    final plan = await _commitGuarded(BlockSaveRequest(
+      metadata: {
+        'name': _blockNameController.text.trim().isEmpty
+            ? 'Unnamed Block'
+            : _blockNameController.text.trim(),
+        'startDate': _blockStartDate,
+        'endDate': _blockEndDate,
+        'selectedDays': selectedDays,
+        'isActive': setActive,
+        if (_templateCandidateIds.isNotEmpty)
+          'templateCandidateExerciseIds': _templateCandidateIds,
+      },
+    ));
+    if (plan == null || plan.isEmpty) return;
+    _initialBlockIsActive = setActive;
+    debugPrint('💾 [BP] block metadata saved → ${blockDocRef.path}');
 
     if (!mounted) return;
 
@@ -579,7 +704,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
 
     if (setActive) {
-      final blockDataRef = FirebaseFirestore.instance
+      final blockDataRef = Block_Planner.firestore
           .collection('users')
           .doc(userId)
           .collection('block_data')
@@ -759,26 +884,15 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         ...defaults,
         if (explicitSeed != null) 'explicitRepTargets': explicitSeed,
       };
+      _seededOnlyIds.add(id);
       changed = true;
     }
     if (changed && mounted) setState(() {});
 
-    // ---- 3) Persist the same fields the dialog persists ----
-    for (final id in ids) {
-      final settings = exerciseSettings[id];
-      if (settings != null) {
-        _onUpdateSetting(id, 'repTargets', settings['repTargets']);
-        _onUpdateSetting(id, 'defaultSets', settings['defaultSets'] ?? 3);
-        _onUpdateSetting(
-          id,
-          'modelSpecificRepTargets',
-          settings['modelSpecificRepTargets'],
-        );
-      }
-    }
-
-    // ---- 4) Silent background save (same as dialog) ----
-    Future.microtask(() => _savePlannedExercises(suppressSnack: true));
+    // ---- 3) Display only ----
+    // Seeding happens on open, so it is never persisted here. An exercise's
+    // defaults are stored when the user first edits it (_onUpdateSetting) or
+    // the block is saved with it changed.
   }
 
 
@@ -787,7 +901,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     if (userId == null) return;
 
 
-    final doc = await FirebaseFirestore.instance
+    final doc = await Block_Planner.firestore
         .collection('users')
         .doc(userId)
         .collection('block_planner')
@@ -820,6 +934,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
     // (userId = selected athlete in coach mode).
     final combined =
         await ExerciseCatalog.loadCombinedExercisesForUser(userId);
+    _catalogueIds = {for (final e in combined) e.id};
 
 // Clear previous
     _exerciseIdToName.clear();
@@ -1301,6 +1416,14 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
 // Now apply changes
     if (selected.isNotEmpty) {
+      // The picker is an explicit user edit: deselected exercises form the
+      // explicit deletion set; nothing else is ever removed.
+      final deselected = prevSelected.difference(selected.toSet());
+      _removedIds
+        ..addAll(deselected)
+        ..removeAll(newIds);
+      _seededOnlyIds.removeAll(deselected);
+      _membershipDirty = true;
       setState(() {
         exerciseSettings.removeWhere((id, _) => !selected.contains(id));
         _exerciseIdToName.removeWhere((id, _) => !selected.contains(id));
@@ -1348,17 +1471,10 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         }
       });
 
-      // 💾 Persist seeds so re-open uses explicit defaults (not PMU fallbacks)
+      // 💾 Persist seeds so re-open uses explicit defaults (not PMU fallbacks):
+      // each new exercise's complete entry is written by the guarded save.
       for (final id in newIds) {
-
-        final settings = exerciseSettings[id];
-        if (settings != null) {
-          _onUpdateSetting(id, 'repTargets', settings['repTargets']);
-          _onUpdateSetting(id, 'defaultSets', settings['defaultSets'] ?? 3);
-         // _onUpdateSetting(id, 'explicitRepTargets', settings['repTargets']);
-          _onUpdateSetting(id, 'modelSpecificRepTargets', settings['modelSpecificRepTargets']);
-
-        }
+        if (exerciseSettings[id] != null) _dirtySettingIds.add(id);
       }
 
       // Also persist the list/details (silent)
@@ -1368,27 +1484,26 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
 
   }
 
+  /// Persists the user's changes to an existing block through
+  /// [BlockSaveGuard]: only the changed exercises' entries, only explicitly
+  /// removed exercises, and membership only when the user changed it.
+  /// Nothing is written before a successful load or when nothing changed.
   Future<void> _savePlannedExercises({bool suppressSnack = false}) async {
-
-    final userId = UserContext.of(context, listen: false).currentUid;
-    if (userId == null || blockIdToUse == null) return;
-
-
-    // 🔄 Now writing into the *same* collection as savePlannedBlock
-    final docRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .collection('planned_blocks')
-        .doc(blockIdToUse);
-
-    print("📤 Saving exerciseSettings for ${exercises.length} exercises");
-
-    for (final id in exercises) {
-      final settings = exerciseSettings[id];
-      print("💾 $id → ${jsonEncode(settings)}");
+    if (!_loadSucceeded) {
+      print("⚠️ [BP.save] Skipping: block not loaded");
+      return;
+    }
+    if (_isNewDraft) {
+      final wanted = _dirtySettingIds.isNotEmpty ||
+          _membershipDirty ||
+          _removedIds.isNotEmpty;
+      if (wanted) await _persistNewDraft();
+      return;
     }
 
-    print("📤 Writing full block to Firestore...");
+    final userId = _uid;
+    final bid = blockIdToUse;
+    if (userId == null || bid == null) return;
 
     // 🧼 Robustness: enforce unique exercise IDs (preserve order)
     final uniqueExercises = <String>[];
@@ -1402,23 +1517,175 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         ..addAll(uniqueExercises);
     }
 
-    // Read-modify exerciseSettings so unknown per-exercise keys are preserved.
-    final snapshot = await docRef.get();
-    final data = snapshot.data() ?? {};
+    final changedIds = {
+      for (final id in _dirtySettingIds)
+        if ((exerciseSettings[id] ?? const {}).isNotEmpty) id
+    };
+    final removedIds = Set<String>.of(_removedIds);
+    final membershipDirty = _membershipDirty;
+    if (changedIds.isEmpty && removedIds.isEmpty && !membershipDirty) {
+      print("ℹ️ [BP.save] Nothing changed — no write");
+      return;
+    }
 
-    final existingSettings = Map<String, dynamic>.from(
-      data['exerciseSettings'] ?? {},
-    );
+    List<String>? membership;
+    List<String>? excluded;
+    if (membershipDirty) {
+      if (_allExercisesAvailable) {
+        // Lightweight save: write excludedExerciseIds instead of large arrays.
+        excluded = _catalogueIds.difference(exercises.toSet()).toList();
+      } else {
+        membership = List<String>.of(exercises);
+      }
+    }
 
+    final plan = await _commitGuarded(BlockSaveRequest(
+      changedEntries: {for (final id in changedIds) id: _normalizedEntry(id)},
+      removedIds: removedIds,
+      membership: membership,
+      excludedExerciseIds: excluded,
+      visibleExerciseCount: exercises.length,
+    ));
+    if (plan == null) return;
+    _dirtySettingIds.removeAll(changedIds);
+    _seededOnlyIds.removeAll(changedIds);
+    _removedIds.removeAll(removedIds);
+    if (membershipDirty &&
+        (plan.updates.containsKey('exercises') ||
+            plan.updates.containsKey('excludedExerciseIds'))) {
+      _membershipDirty = false;
+    }
+    if (plan.isEmpty) return;
 
-    // For allExercisesAvailable blocks, only save exercises that have settings
-    // (candidates + any manually added exercises healed by ensureExerciseDefaults).
-    // This avoids iterating 100+ IDs and creating null-filled detail entries.
-    final exercisesToSave = _allExercisesAvailable
-        ? exerciseSettings.keys.toList()
-        : exercises;
+    print("✅ Planned exercises and details saved safely.");
+    await _writePointerAndWeeks(userId, bid);
 
-    for (final exercise in exercisesToSave) {
+    if (!suppressSnack && mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('✅ Planned exercises updated.')),
+      );
+    }
+  }
+
+  /// Runs [request] through [BlockSaveGuard] against the current block.
+  /// Returns null when there is no block to write or the commit failed.
+  Future<BlockSavePlan?> _commitGuarded(BlockSaveRequest request) async {
+    final uid = _uid;
+    final bid = blockIdToUse;
+    if (!_loadSucceeded || _isNewDraft || uid == null || bid == null) {
+      return null;
+    }
+    try {
+      final plan = await BlockSaveGuard.commit(
+        db: Block_Planner.firestore,
+        ref: Block_Planner.firestore
+            .collection('users')
+            .doc(uid)
+            .collection('planned_blocks')
+            .doc(bid),
+        request: request,
+      );
+      if (plan.refused.isNotEmpty) {
+        debugPrint('🛡️ [BP.save] refused: ${plan.refused.join('; ')}');
+      }
+      return plan;
+    } catch (e) {
+      debugPrint('❌ [BP.save] guarded save failed: $e');
+      return null;
+    }
+  }
+
+  /// Creates a new draft's block document once, with its complete initial
+  /// content (for a brand-new document the draft is the whole truth).
+  Future<void> _persistNewDraft() => _draftCreation ??= _createDraftBlock();
+
+  Future<void> _createDraftBlock() async {
+    final uid = _uid;
+    if (uid == null || uid.isEmpty || !_isNewDraft) return;
+    final ref = Block_Planner.firestore
+        .collection('users')
+        .doc(uid)
+        .collection('planned_blocks')
+        .doc();
+    final payload = <String, dynamic>{
+      'name': _blockNameController.text.trim().isEmpty
+          ? 'Unnamed Block'
+          : _blockNameController.text.trim(),
+      'startDate': _blockStartDate,
+      'endDate': _blockEndDate,
+      'exerciseSettings': {
+        for (final id in exerciseSettings.keys)
+          if (exercises.contains(id)) id: _normalizedEntry(id),
+      },
+      'selectedDays': selectedDays,
+      'isActive': false,
+      'createdAt': FieldValue.serverTimestamp(),
+      if (_templateCandidateIds.isNotEmpty)
+        'templateCandidateExerciseIds': _templateCandidateIds,
+      'exercises': exercises,
+      'plannedExercises': exercises,
+    };
+    try {
+      await ref.set(payload);
+    } catch (e) {
+      debugPrint('❌ [BP] new block creation failed: $e');
+      _draftCreation = null;
+      return;
+    }
+    blockIdToUse = ref.id;
+    _isNewDraft = false;
+    _dirtySettingIds.clear();
+    _seededOnlyIds.clear();
+    _removedIds.clear();
+    _membershipDirty = false;
+    if (mounted) setState(() => _isSavedBlock = true);
+    print('🆕 [BP] created block ${ref.id} on first edit/save');
+    await _writePointerAndWeeks(uid, ref.id);
+  }
+
+  /// Updates the `current_block` pointer and ensures week docs exist — only
+  /// ever after a genuine save.
+  Future<void> _writePointerAndWeeks(String userId, String bid) async {
+    await Block_Planner.firestore
+        .collection('users')
+        .doc(userId)
+        .collection('block_planner')
+        .doc('current_block')
+        .set({
+      'blockId': bid,
+      'blockName': _blockNameController.text.trim(),
+      'blockMeta': {
+        'blockStartDate': _blockStartDate?.toIso8601String() ?? '',
+        'blockEndDate': _blockEndDate?.toIso8601String() ?? '',
+      },
+      if (_templateCandidateIds.isNotEmpty) 'templateCandidateExerciseIds': _templateCandidateIds,
+    }, SetOptions(merge: true));
+    print('📌 Updated current_block → ID: $bid');
+
+    // 🧱 Ensure week docs exist for BB2 compatibility
+    if (_blockStartDate != null && _blockEndDate != null) {
+      final int totalWeeks = _blockEndDate!
+          .difference(_blockStartDate!)
+          .inDays ~/ 7 + 1;
+      final weeksCollection = Block_Planner.firestore
+          .collection('users')
+          .doc(userId) // ✅ selected athlete
+          .collection('planned_blocks')
+          .doc(bid)
+          .collection('weeks');
+      for (int i = 0; i < totalWeeks; i++) {
+        await weeksCollection.doc('week_$i').set({
+          'exists': true,
+        }, SetOptions(merge: true));
+      }
+    }
+  }
+
+  /// The normalised entry the legacy planner stores for one exercise (legacy
+  /// list rep targets → week/instance maps, DUP conversions, defaults). The
+  /// guard merges it over the server's entry, so unknown keys survive.
+  Map<String, dynamic> _normalizedEntry(String exercise) {
       final entry = Map<String, dynamic>.from(exerciseSettings[exercise] ?? {});
       print("🧾 [SAVE] pre-normalize increments for $exercise → "
           "${jsonEncode(entry['increments'])}");
@@ -1498,129 +1765,31 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       }
 
       final normalizedEntry = <String, dynamic>{
-        ...Map<String, dynamic>.from(existingSettings[exercise] ?? {}),
         ...entry,
-        'periodizationModel': entry['periodizationModel'],
-        'repTargets': entry['periodizationModel'] == 'DUP, Signature'
-            ? entry['repTargets']
-            : savedTargets,
-        'rirPlan': entry['rirPlan'],
-        'rirModel': entry['rirModel'],
+        if (entry['periodizationModel'] != null)
+          'periodizationModel': entry['periodizationModel'],
+        // Never fabricate an empty repTargets for an entry that has none.
+        if (entry['repTargets'] != null)
+          'repTargets': entry['periodizationModel'] == 'DUP, Signature'
+              ? entry['repTargets']
+              : savedTargets,
+        if (entry['rirPlan'] != null) 'rirPlan': entry['rirPlan'],
+        if (entry['rirModel'] != null) 'rirModel': entry['rirModel'],
         'progressionModel':
             entry['progressionModel'] ?? 'Linear Weight Increase',
         'increments': entry['increments'] ?? {'primary': 2.5},
         'weeklyFrequency': entry['weeklyFrequency'] ?? 3,
         'maxWeightXReps': entry['maxWeightXReps'] ?? '',
         'notes': entry['notes'] ?? '',
-      };
-      existingSettings[exercise] = normalizedEntry;
-      print('💾 [BP] saving increments for $exercise → '
-          '${jsonEncode(existingSettings[exercise]['increments'])}');
-
-      print('💾 [BP] saved exerciseSettings for $exercise → '
-          '${jsonEncode(existingSettings[exercise])}');
-    }
-
-    // 🧹 Remove settings for exercises that were deleted.
-    // For allExercisesAvailable blocks, prune against exercisesToSave (settings-keyed list).
-    existingSettings.removeWhere(
-      (k, v) => !exercisesToSave.contains(k),
-    );
-
-    print("📤 Saving exerciseSettings:\n${jsonEncode(existingSettings)}");
-
-    if (_allExercisesAvailable) {
-      // Lightweight save: write excludedExerciseIds instead of large arrays.
-      // exercises list is all IDs minus excluded; invert the diff to get excluded.
-      final allIds = _exerciseIdToName.keys.toSet();
-      final excluded = allIds.difference(exercises.toSet()).toList();
-      await docRef.set({
-        'excludedExerciseIds': excluded,
-        'exerciseSettings': existingSettings,
-      }, SetOptions(merge: true));
-    } else {
-      await docRef.set({
-        'exercises': exercises,
-        'plannedExercises': exercises,
-        'exerciseSettings': existingSettings,
-      }, SetOptions(merge: true));
-    }
-
-    // 🧹 Schema hygiene: remove explicitRepTargets (only clean exercises with settings)
-    final cleanup = <String, dynamic>{};
-    for (final ex in exercisesToSave) {
-      cleanup['exerciseSettings.$ex.explicitRepTargets'] = FieldValue.delete();
-    }
-    await docRef.update(cleanup).catchError((_) {
-      // ignore if nothing to delete
-    });
-
-
-    print("✅ Planned exercises and details saved safely.");
-
-// ✅ Also update the pointer at 'current_block'
-
-    if (userId != null && blockIdToUse != null) {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .collection('block_planner')
-          .doc('current_block')
-          .set({
-        'blockId': blockIdToUse,
-        'blockName': _blockNameController.text.trim(),
-        'blockMeta': {
-          'blockStartDate': _blockStartDate?.toIso8601String() ?? '',
-          'blockEndDate': _blockEndDate?.toIso8601String() ?? '',
-        },
-        if (_templateCandidateIds.isNotEmpty) 'templateCandidateExerciseIds': _templateCandidateIds,
-      }, SetOptions(merge: true));
-
-      print('📌 Updated current_block → ID: $blockIdToUse');
-    }
-
-
-    // 🧱 Ensure week docs exist for BB2 compatibility
-    if (_blockStartDate != null && _blockEndDate != null) {
-      final int totalWeeks = _blockEndDate!
-          .difference(_blockStartDate!)
-          .inDays ~/ 7 + 1;
-
-      final weeksCollection = FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId) // ✅ selected athlete
-          .collection('planned_blocks')
-          .doc(blockIdToUse!)
-          .collection('weeks');
-
-
-      for (int i = 0; i < totalWeeks; i++) {
-        final weekDocRef = weeksCollection.doc('week_$i');
-
-        await weekDocRef.set({
-          'exists': true,
-        }, SetOptions(merge: true));
-        print("📤 Creating weeks under blockId: $blockIdToUse");
-
-
-        print("📅 Created week_$i doc");
-      }
-    }
-
-
-
-    if (!suppressSnack && mounted && (ModalRoute.of(context)?.isCurrent ?? false)) {
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('✅ Planned exercises updated.')),
-      );
-    }
-
-
-    print("📦 Final saved frequencies:");
-    for (final ex in exercises) {
-      print("• $ex: ${exerciseSettings[ex]?['weeklyFrequency']}");
-    }
+      }..remove('explicitRepTargets');
+      // Store the complete week-1 RIR structure with the edited exercise.
+      try {
+        final healed =
+            BlockExerciseDefaultsRepository.healWeek1RirPlan(normalizedEntry);
+        if (healed != null) normalizedEntry['rirPlan'] = healed;
+      } catch (_) {}
+      return Map<String, dynamic>.from(
+          _sanitizeForFirestore(normalizedEntry) as Map);
   }
 
   Map<String, Map<String, String>> _convertToMap(dynamic data) {
@@ -1657,7 +1826,7 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
       return;
     }
 
-    final docRef = FirebaseFirestore.instance
+    final docRef = Block_Planner.firestore
         .collection('users')
         .doc(userId)
         .collection('planned_blocks')
@@ -1833,6 +2002,19 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_loadError != null)
+              Padding(
+                key: const ValueKey('bp-load-error'),
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.cloud_off,
+                        color: Theme.of(context).colorScheme.error),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(_loadError!)),
+                  ],
+                ),
+              ),
             _buildGlobalBlockInputs(),
             const FittedBox(),
             Row(
@@ -1876,6 +2058,9 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
                       if (confirm == true) {
                         setState(() {
                           exercises.clear();
+                          // Local only: an empty list is never written over
+                          // a populated block (BlockSaveGuard).
+                          _membershipDirty = true;
                         });
                       }
                     },
@@ -1934,11 +2119,18 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
                         direction: DismissDirection.endToStart,
                         onDismissed: (_) {
                           final removedExercise = exercise;
+                          Map<String, dynamic>? removedSettings;
 
                           setState(() {
                             exercises.remove(removedExercise);
                             // 🧼 Also drop its settings locally so save won't re-add details
-                            exerciseSettings.remove(removedExercise);
+                            removedSettings =
+                                exerciseSettings.remove(removedExercise);
+                            // Explicit user deletion of exactly this exercise.
+                            _removedIds.add(removedExercise);
+                            _dirtySettingIds.remove(removedExercise);
+                            _seededOnlyIds.remove(removedExercise);
+                            _membershipDirty = true;
                           });
 
                           // 💾 Fire-and-forget save so deletion persists immediately
@@ -1961,6 +2153,18 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
                                         if (!exercises.contains(removedExercise)) {
                                           exercises.add(removedExercise);
                                         }
+                                        // Undo restores the exercise's own
+                                        // settings (re-written if the removal
+                                        // already reached the server).
+                                        _removedIds.remove(removedExercise);
+                                        final restored = removedSettings;
+                                        if (restored != null &&
+                                            restored.isNotEmpty) {
+                                          exerciseSettings[removedExercise] =
+                                              restored;
+                                          _dirtySettingIds.add(removedExercise);
+                                        }
+                                        _membershipDirty = true;
                                       });
                                       Future.microtask(() => _savePlannedExercises(suppressSnack: true));
                                     },
@@ -2056,10 +2260,14 @@ class _BlockPlannerState extends State<Block_Planner> with RouteAware {
                       _blockGoalsController.text = '$weeks week block';
                     });
 
-                    // ✅ Save to Firestore if needed
+                    // ✅ Save to Firestore if needed — only for a loaded,
+                    // persisted block (never repoint to a draft/null id).
                     final user = FirebaseAuth.instance.currentUser;
-                    if (user != null) {
-                      await FirebaseFirestore.instance
+                    if (user != null &&
+                        _loadSucceeded &&
+                        !_isNewDraft &&
+                        blockIdToUse != null) {
+                      await Block_Planner.firestore
                           .collection('users')
                           .doc(userId)
                           .collection('block_planner')
@@ -2536,11 +2744,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
         final fallback = supportedModels.first;
         _selectedProgressionModel[widget.exerciseId] = fallback;
 
-        // 🧼 One-time cleanup of bad saved value
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          widget.onUpdateSetting(widget.exerciseId, 'progressionModel', fallback);
-          print("🧼 Cleaned up invalid progressionModel: '$savedProgressionModel' → '$fallback'");
-        });
+        // Display fallback only: opening a card never writes. The stored
+        // value is replaced only if the user picks a progression model.
+        print("🧼 Showing '$fallback' for unsupported progressionModel '$savedProgressionModel'");
       }
     }
 
@@ -2567,35 +2773,20 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       return;
     }
 
-    // Ensure latest local state is saved first
+    // Persist through the parent's per-exercise path, which writes only a
+    // value that actually changed (a set() with dotted keys would create
+    // literal top-level fields instead of updating exerciseSettings).
     if (_cachedRirPlan != null) {
-      safeSave('rirPlan', _cachedRirPlan);
+      widget.onUpdateSetting(widget.exerciseId, 'rirPlan', _cachedRirPlan);
     }
 
     // Also persist rirModel if present (use id first)
     final rirModel =
         _selectedRirModel[widget.exerciseId] ?? _selectedRirModel[widget.exerciseName];
     if (rirModel != null && rirModel.isNotEmpty) {
-      safeSave('rirModel', rirModel);
+      widget.onUpdateSetting(widget.exerciseId, 'rirModel', rirModel);
     }
-
-    final entry = Map<String, dynamic>.from(
-      widget.exerciseSettings[widget.exerciseId] ?? {},
-    );
-
-    final payload = <String, dynamic>{
-      'exerciseSettings.${widget.exerciseId}.rirPlan': entry['rirPlan'],
-      'exerciseSettings.${widget.exerciseId}.rirModel': entry['rirModel'],
-    };
-
-    FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('planned_blocks')
-        .doc(bid)
-        .set(payload, SetOptions(merge: true))
-        .then((_) => print("✅ [RIR.flush] wrote on $reason for ${widget.exerciseName}"))
-        .catchError((e) => print("❌ [RIR.flush] failed: $e"));
+    print("✅ [RIR.flush] flushed on $reason for ${widget.exerciseName}");
   }
 
 
@@ -2665,10 +2856,9 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           pruned[key] = kept;
         }
 
+        // Disposal (leaving the page, collapsing a card) is not an edit:
+        // frequency edits prune repTargets when they are committed.
         safeSave('repTargets', pruned);
-
-        // ✅ IMPORTANT: also push the pruned structure through the same path that writes to Firestore
-        widget.onUpdateSetting(widget.exerciseId, 'repTargets', pruned);
 
         print(
           "🧼 [DISPOSE] Pruned repTargets to weeklyFrequency=$freq "
@@ -2876,50 +3066,8 @@ class _ExerciseCardState extends State<_ExerciseCard> {
       _updateRirSummaryDisplay(freqOverride: freqForSave);
 
       safeSave('rirPlan', _cachedRirPlan);
-      print("💾 [DISPOSE] Saved rirPlan (pruned to $freqForSave) for ${widget.exerciseName}: ${jsonEncode(_cachedRirPlan)}");
-      final uid = _cachedUid;
-      final bid = _parentBlockId;
-
-      if (uid != null && uid.isNotEmpty && bid != null && bid.isNotEmpty) {
-        final docRef = FirebaseFirestore.instance
-            .collection('users')
-            .doc(uid)
-            .collection('planned_blocks')
-            .doc(bid);
-
-        // Pull latest local entry (safeSave already wrote into exerciseSettings)
-        final entry = Map<String, dynamic>.from(
-          widget.exerciseSettings[widget.exerciseId] ?? {},
-        );
-
-        final payload = <String, dynamic>{
-          'exerciseSettings.${widget.exerciseId}.rirPlan': entry['rirPlan'],
-          'exerciseSettings.${widget.exerciseId}.rirModel': entry['rirModel'],
-        };
-
-        docRef.set(payload, SetOptions(merge: true)).catchError((e) {
-          print("❌ [DISPOSE] Firestore flush failed for ${widget.exerciseId}: $e");
-        });
-
-        print("📤 [DISPOSE] Flushed rirPlan/rirModel to Firestore for ${widget.exerciseName} (block=$bid)");
-
-        // ✅ Refresh the current_block pointer so WES re-reads the active block
-        FirebaseFirestore.instance
-            .collection('users')
-            .doc(uid)
-            .collection('block_planner')
-            .doc('current_block')
-            .set({
-          'blockId': bid,
-        }, SetOptions(merge: true)).catchError((e) {
-          print("❌ [DISPOSE] current_block update failed (uid=$uid blockId=$bid): $e");
-        });
-
-      } else {
-        print("⚠️ [DISPOSE] Skip Firestore flush (uid=$uid blockId=$bid)");
-      }
-
-
+      // No Firestore flush on dispose: RIR edits are written when made
+      // (onUpdateSetting / focus loss), and disposal is not an edit.
     }
 
     _weeklyFrequencyController.dispose();
@@ -3663,7 +3811,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final snapshot = await FirebaseFirestore.instance
+    final snapshot = await Block_Planner.firestore
         .collection('users')
         .doc(userId)
         .collection('block_planner')

@@ -150,7 +150,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       _blockSetupComplete = true;
       _fetchTrainingDaysForMonth(_focusedDay);
       _setupActiveBlockListener(actingUid);
-      _scheduleRirHeal(uc);
       // Background: verify block exists + server-refresh meta (non-blocking).
       unawaited(() async {
         await _ensureAtLeastOneBlockExists();
@@ -807,17 +806,9 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
       // WES warmup for the new athlete.
       unawaited(WarmupService.instance.warmWES(newUid));
 
-      // RIR heal after switch (post-frame so block meta has a chance to hydrate).
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted) return;
-        final bid = uc.activeBlockId;
-        if (bid != null && bid.isNotEmpty) {
-          unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
-            uid: newUid,
-            blockId: bid,
-          ));
-        }
-      });
+      // No RIR self-heal write on athlete switch: incomplete week-1 RIR is
+      // healed in memory where it is shown (WES2 / BB3 / BP2) and persisted
+      // only by an explicit save or the reviewed backfill tool.
     }
   }
 
@@ -887,21 +878,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
     debugPrint('🏠 [HOME] block listener subscribed uid=$uid');
   }
 
-  /// Schedules a post-frame RIR self-heal for the current active block.
-  void _scheduleRirHeal(UserContext uc) {
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted) return;
-      final uid = uc.actingAsUid;
-      final bid = uc.activeBlockId;
-      if (uid.isNotEmpty && bid != null && bid.isNotEmpty) {
-        unawaited(BlockExerciseDefaultsRepository.healActiveBlockRirPlan(
-          uid: uid,
-          blockId: bid,
-        ));
-      }
-    });
-  }
-
   /// First-time setup flow for brand-new users who have no blocks yet.
   /// Shows progress messages while creating blocks, then unlocks navigation.
   Future<void> _runFirstTimeSetup(String actingUid) async {
@@ -956,7 +932,6 @@ class _HomeScreenState extends State<HomeScreen> with RouteAware {
 
     _fetchTrainingDaysForMonth(_focusedDay);
     _setupActiveBlockListener(uc.actingAsUid);
-    _scheduleRirHeal(uc);
   }
 
   // ── Navigation guard helpers ──────────────────────────────────────────────

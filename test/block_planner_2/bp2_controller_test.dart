@@ -228,7 +228,9 @@ void main() {
       expect(c.block!.name, 'old1');
       expect(h.repo.totalFetches, fetchesBefore, reason: 'no re-download');
       expect(h.repo.countCalls, countsBefore + 4);
-      expect(h.repo.blockDocFetches, blockReadsBefore + 1);
+      // The edited block plus ONE read of the active block's own settings
+      // (so "Current block" shows its real exercises).
+      expect(h.repo.blockDocFetches, blockReadsBefore + 2);
       c.dispose();
     });
   });

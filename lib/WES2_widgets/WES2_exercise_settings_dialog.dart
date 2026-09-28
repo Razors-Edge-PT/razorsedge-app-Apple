@@ -6,6 +6,7 @@ import '../active_instance.dart';
 import '../block_exercise_defaults_repository.dart';
 import '../exercise_catalog.dart';
 import '../exercise_model_registry.dart';
+import '../settings_merge.dart';
 import '../wes2_exercise_settings_patch.dart';
 
 
@@ -105,6 +106,10 @@ class _Wes2ExerciseSettingsDialogState
   // True only when the loaded configuration is complete and usable. When false
   // the dialog fails closed: Save is disabled so a sparse object can't be saved.
   bool _settingsUsable = false;
+
+  // Defaults shown in memory for an exercise that genuinely has no usable
+  // stored settings. Stored only when the user presses Save.
+  bool _pendingDefaults = false;
 
   @override
   void initState() {
@@ -239,43 +244,50 @@ class _Wes2ExerciseSettingsDialogState
       );
       if (!mounted) return;
 
-      var raw = allSettings[widget.exerciseId];
-      // Safety net: trigger if settings are absent OR incomplete (e.g. only
-      // week-N fragments with no core scalars like periodizationModel).
-      if (!BlockExerciseDefaultsRepository.isSettingsUsable(
-          raw is Map<String, dynamic> ? raw : null)) {
-        try {
-          await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
-            uid: widget.uid,
-            blockId: widget.blockId,
-            exerciseId: widget.exerciseId,
-          );
-          final reloaded = await widget.planService.loadExerciseSettings(
-            uid: widget.uid,
-            blockId: widget.blockId,
-          );
-          raw = reloaded[widget.exerciseId];
-        } catch (_) {}
+      final raw = allSettings[widget.exerciseId];
+      Map<String, dynamic>? loaded = raw is Map<String, dynamic> ? raw : null;
+      _pendingDefaults = false;
+      // Absent OR incomplete (e.g. only week-N fragments): decide from the
+      // server copy (read-only) whether the load itself was incomplete.
+      if (!BlockExerciseDefaultsRepository.isSettingsUsable(loaded)) {
+        final stored = await widget.planService.repairExerciseShadows(
+          uid: widget.uid,
+          blockId: widget.blockId,
+          exerciseId: widget.exerciseId,
+        );
+        if (!mounted) return;
+        if (BlockExerciseDefaultsRepository.isSettingsUsable(stored)) {
+          // The server has usable settings the load did not return: fail
+          // closed rather than present (and later save) a partial object.
+          setState(() {
+            _loading = false;
+            _loadError = 'Settings could not be loaded completely. '
+                'Close and try again.';
+          });
+          return;
+        }
+        final projected =
+            await BlockExerciseDefaultsRepository.projectExerciseDefaults(
+          uid: widget.uid,
+          exerciseId: widget.exerciseId,
+          existing: loaded,
+        );
+        if (BlockExerciseDefaultsRepository.isSettingsUsable(projected)) {
+          loaded = projected;
+          _pendingDefaults = true;
+        }
       }
-      Map<String, dynamic> settings = raw is Map<String, dynamic> ? raw : {};
+      Map<String, dynamic> settings = loaded ?? {};
 
       // Repair recoverable sparse weekN shadows BEFORE controllers populate, so
       // a valid exercise never opens with unexplained blank reps/RIR fields.
       // Conservative + evidence-based: only removes proven sparse shadows or
       // fills genuinely missing leaves — never overwrites present custom values.
-      // Performs a single-store transactional write only when a genuine repair
-      // is detected; otherwise no write occurs merely because the cog opened.
+      // In memory only: opening or cancelling the cog never writes; Save
+      // persists the repair (saveExerciseSettings applies the same transform
+      // to this exercise's server copy).
       if (settings.isNotEmpty) {
-        try {
-          final repaired = await widget.planService.repairExerciseShadows(
-            uid: widget.uid,
-            blockId: widget.blockId,
-            exerciseId: widget.exerciseId,
-          );
-          if (repaired != null) settings = repaired;
-        } catch (_) {
-          // Repair is best-effort; fall back to the loaded object.
-        }
+        settings = SettingsMerge.repairShadows(settings).$1;
       }
       if (!mounted) return;
 
@@ -629,19 +641,27 @@ class _Wes2ExerciseSettingsDialogState
 
       final patch = _buildPatch();
 
-      if (!patch.isEmpty) {
-        await widget.planService.saveExerciseSettings(
+      // Explicit Save: store defaults for an exercise that had none, then
+      // persist this exercise's heal/repair plus the user's changed leaves
+      // (saveExerciseSettings writes nothing when the result is unchanged).
+      if (_pendingDefaults) {
+        await BlockExerciseDefaultsRepository.ensureExerciseDefaults(
           uid: widget.uid,
           blockId: widget.blockId,
           exerciseId: widget.exerciseId,
-          patch: patch,
         );
-        if (patch.scalarChanges.containsKey(kWeightUnitField)) {
-          // Every screen shows the new unit at once (and offline); the server
-          // publishes it for friends in the background.
-          ExerciseUnitRegistry.shared
-              .noteLocalChoice(widget.uid, widget.exerciseId, _weightUnit);
-        }
+      }
+      await widget.planService.saveExerciseSettings(
+        uid: widget.uid,
+        blockId: widget.blockId,
+        exerciseId: widget.exerciseId,
+        patch: patch,
+      );
+      if (patch.scalarChanges.containsKey(kWeightUnitField)) {
+        // Every screen shows the new unit at once (and offline); the server
+        // publishes it for friends in the background.
+        ExerciseUnitRegistry.shared
+            .noteLocalChoice(widget.uid, widget.exerciseId, _weightUnit);
       }
 
       if (!mounted) return;

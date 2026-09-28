@@ -318,11 +318,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _hintRunner = Wes2HintLoadRunner(
       controller: _controller,
       planService: _planService,
-      ensureExerciseDefaults: (String exerciseId, String blockId) =>
-          BlockExerciseDefaultsRepository.ensureExerciseDefaults(
+      // In memory only: opening WES2 never writes the block. Defaults are
+      // stored when the athlete saves that exercise (or adds it explicitly).
+      projectDefaults: (String exerciseId, Map<String, dynamic>? existing) =>
+          BlockExerciseDefaultsRepository.projectExerciseDefaults(
         uid: _controller.actingUid,
-        blockId: blockId,
         exerciseId: exerciseId,
+        existing: existing,
       ),
       isSettingsUsable: BlockExerciseDefaultsRepository.isSettingsUsable,
       refreshHistory: () => _refreshHistoryForHints(_controller.selectedDate),

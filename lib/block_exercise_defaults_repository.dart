@@ -10,6 +10,13 @@ import 'settings_merge.dart';
 /// This is the "headless" version of BP's _seedDefaultsFor + getDefaultSettings,
 /// with no setState / BuildContext.
 class BlockExerciseDefaultsRepository {
+  /// TEST SEAM ONLY: a fake Firestore for widget/service tests. Never set in
+  /// production.
+  @visibleForTesting
+  static FirebaseFirestore? debugFirestoreOverride;
+  static FirebaseFirestore get _fs =>
+      debugFirestoreOverride ?? FirebaseFirestore.instance;
+
   // ---------------------------------------------------------------------------
   // 1) COPY YOUR DEFAULT MAPS FROM BP (EXACTLY)
   // ---------------------------------------------------------------------------
@@ -198,6 +205,12 @@ class BlockExerciseDefaultsRepository {
   // ---------------------------------------------------------------------------
 
   /// Isolation logic – same as BP
+  /// Every named-override and category default tier (tests only).
+  @visibleForTesting
+  static Iterable<String> get debugExplicitDefaultNames => _explicitDefaults.keys;
+  @visibleForTesting
+  static Iterable<String> get debugDefaultGroups => _defaultsByGroup.keys;
+
   static bool _isIsolation(String bodyPart) {
     return bodyPart.split(',').length == 1;
   }
@@ -467,7 +480,7 @@ class BlockExerciseDefaultsRepository {
   }) async {
     final safeValue = _sanitizeForFirestore(value);
 
-    final docRef = FirebaseFirestore.instance
+    final docRef = _fs
         .collection('users')
         .doc(uid)
         .collection('planned_blocks')
@@ -495,7 +508,7 @@ class BlockExerciseDefaultsRepository {
 
     print('🌱 [DefaultsRepo] Seeding defaults for block=$blockId (ex=${exerciseIds.length})');
 
-    final docRef = FirebaseFirestore.instance
+    final docRef = _fs
         .collection('users')
         .doc(uid)
         .collection('planned_blocks')
@@ -511,7 +524,7 @@ class BlockExerciseDefaultsRepository {
 
     if (idsNeedingFetch.isNotEmpty) {
       final snaps = await Future.wait(idsNeedingFetch.map(
-            (id) => FirebaseFirestore.instance.collection('exercises').doc(id).get(),
+            (id) => _fs.collection('exercises').doc(id).get(),
       ));
       for (final doc in snaps) {
         final d = doc.data();
@@ -686,6 +699,37 @@ class BlockExerciseDefaultsRepository {
     };
   }
 
+  /// READ-ONLY counterpart of [ensureExerciseDefaults]: the settings object
+  /// [exerciseId] would have after healing, computed in memory from
+  /// [existing] (null → absent) and the catalogue defaults. Never writes.
+  /// Returns [existing] unchanged when it is already usable, and null when
+  /// the exercise cannot be resolved or has no default tier.
+  static Future<Map<String, dynamic>?> projectExerciseDefaults({
+    required String uid,
+    required String exerciseId,
+    Map<String, dynamic>? existing,
+  }) async {
+    if (exerciseId.isEmpty) return null;
+    if (isSettingsUsable(existing)) return existing;
+    final ex = await ExerciseCatalog.resolveExercise(
+      exerciseId: exerciseId,
+      uid: uid,
+    );
+    if (ex == null) return null;
+    final payload = defaultSettingsPayload(
+      name: ex.name,
+      category: ex.category.isNotEmpty ? ex.category : 'Other',
+      bodyPart: ex.bodyPart,
+    );
+    if (payload.isEmpty) return null;
+    if (existing == null) return SettingsMerge.deepCopyMap(payload);
+    final projected = projectHealedSettings(
+        Map<String, dynamic>.from(existing), SettingsMerge.deepCopyMap(payload));
+    final healedRir = healWeek1RirPlan(projected);
+    if (healedRir != null) projected['rirPlan'] = healedRir;
+    return projected;
+  }
+
   /// Ensures [exerciseId] has complete, usable exerciseSettings in [blockId].
   /// No-op when settings are already complete (per [isSettingsUsable]).
   /// When settings are absent, writes the full default payload.
@@ -699,7 +743,7 @@ class BlockExerciseDefaultsRepository {
   }) async {
     if (exerciseId.isEmpty || blockId.isEmpty) return;
 
-    final docRef = FirebaseFirestore.instance
+    final docRef = _fs
         .collection('users')
         .doc(uid)
         .collection('planned_blocks')
@@ -742,6 +786,9 @@ class BlockExerciseDefaultsRepository {
       // Partially present (e.g. only week-N repTargets/rirPlan fragments).
       final existingMap = Map<String, dynamic>.from(existingForId);
       final projected = projectHealedSettings(existingMap, settingsPayload);
+      // Complete week-1 RIR for the athlete's OWN rep targets / set count.
+      final healedRir = healWeek1RirPlan(projected);
+      if (healedRir != null) projected['rirPlan'] = healedRir;
 
       // Write only the top-level fields that actually changed.
       final updates = <String, dynamic>{};
@@ -863,7 +910,7 @@ class BlockExerciseDefaultsRepository {
     required String blockId,
   }) async {
     try {
-      final docRef = FirebaseFirestore.instance
+      final docRef = _fs
           .collection('users')
           .doc(uid)
           .collection('planned_blocks')

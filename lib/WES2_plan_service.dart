@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'package:flutter/foundation.dart';
 import 'WES2_models.dart';
 import 'exercise_type.dart';
@@ -21,6 +22,8 @@ abstract class Wes2PlanService {
 
   /// Load the block-level exerciseSettings map from:
   ///   users/{uid}/planned_blocks/{blockId}.exerciseSettings
+  /// Week-1 RIR healing is applied to the RETURNED copy only; loading never
+  /// writes (the healed leaves persist when the user saves that exercise).
   Future<Map<String, dynamic>> loadExerciseSettings({
     required String uid,
     required String blockId,
@@ -37,11 +40,13 @@ abstract class Wes2PlanService {
   });
 
   /// Save exerciseSettings for one exercise from an explicit dirty-field
-  /// [patch]. Transactionally re-reads the latest canonical
-  /// `exerciseSettings[exerciseId]`, applies only the changed leaves with
-  /// model-aware block-wide propagation, preserves every untouched/unknown key,
-  /// writes only `exerciseSettings[exerciseId]`, and returns the canonical
-  /// saved object. Requires internet; must not be queued offline.
+  /// [patch] (the user pressed Save). Transactionally re-reads the latest
+  /// canonical `exerciseSettings[exerciseId]`, applies the week-1 RIR heal and
+  /// the sparse-shadow repair the user was shown, then only the changed
+  /// leaves with model-aware block-wide propagation; preserves every
+  /// untouched/unknown key and every other exercise, writes only when the
+  /// result differs from what is stored, and returns the canonical saved
+  /// object. Requires internet; must not be queued offline.
   Future<Map<String, dynamic>> saveExerciseSettings({
     required String uid,
     required String blockId,
@@ -50,9 +55,10 @@ abstract class Wes2PlanService {
   });
 
   /// Detects and conservatively repairs sparse `weekN` shadows in the canonical
-  /// `exerciseSettings[exerciseId]` (rirPlan / repTargets), writing back only
-  /// when a genuine repair was made. Returns the (possibly repaired) settings
-  /// object for that exercise, or null when the exercise has no settings.
+  /// `exerciseSettings[exerciseId]` (rirPlan / repTargets) IN MEMORY. Never
+  /// writes: the repair persists only through [saveExerciseSettings]. Returns
+  /// the (possibly repaired) settings object for that exercise, or null when
+  /// the exercise has no settings.
   Future<Map<String, dynamic>?> repairExerciseShadows({
     required String uid,
     required String blockId,
@@ -249,8 +255,9 @@ class FirestoreWes2PlanService implements Wes2PlanService {
 
     final rawMap = Map<String, dynamic>.from(settingsRaw);
     final healedMap = <String, dynamic>{};
-    final updates = <String, dynamic>{};
 
+    // In-memory only: opening WES2 (or its settings cog) never writes the
+    // block. saveExerciseSettings applies the same heal when the user saves.
     for (final entry in rawMap.entries) {
       final exerciseId = entry.key;
       final settingsVal = entry.value;
@@ -261,20 +268,8 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       final settings = Map<String, dynamic>.from(settingsVal);
       final healedRirPlan =
           BlockExerciseDefaultsRepository.healWeek1RirPlan(settings);
-      if (healedRirPlan != null) {
-        settings['rirPlan'] = healedRirPlan;
-        updates['exerciseSettings.$exerciseId.rirPlan'] = healedRirPlan;
-      }
+      if (healedRirPlan != null) settings['rirPlan'] = healedRirPlan;
       healedMap[exerciseId] = settings;
-    }
-
-    if (updates.isNotEmpty) {
-      try {
-        await docRef.update(updates);
-        print('[WES2PlanService] healed and wrote rirPlan for ${updates.length} exercise(s) in block=$blockId');
-      } catch (e) {
-        print('[WES2PlanService] rirPlan heal write failed for block=$blockId error=$e');
-      }
     }
 
     return healedMap;
@@ -374,9 +369,12 @@ class FirestoreWes2PlanService implements Wes2PlanService {
       final latest =
           SettingsMerge.asMap(allSettings[exerciseId]) ?? <String, dynamic>{};
 
-      // Apply only the changed leaves; preserves every untouched/unknown key
-      // and never replaces a complete nested map with a partial one.
-      final merged = SettingsMerge.applyPatch(latest, patch);
+      // The heal/repair the user was shown in memory, applied to the server
+      // copy of THIS exercise only, then only the changed leaves; preserves
+      // every untouched/unknown key and never replaces a complete nested map
+      // with a partial one.
+      final merged = SettingsMerge.applyPatch(_healedAndRepaired(latest), patch);
+      if (const DeepCollectionEquality().equals(merged, latest)) return merged;
       allSettings[exerciseId] = merged;
 
       _writeExerciseSettings(txn, docRef, allSettings);
@@ -408,34 +406,28 @@ class FirestoreWes2PlanService implements Wes2PlanService {
     required String blockId,
     required String exerciseId,
   }) async {
-    final docRef = _db
+    final snap = await _db
         .collection('users')
         .doc(uid)
         .collection('planned_blocks')
-        .doc(blockId);
+        .doc(blockId)
+        .get();
+    if (!snap.exists) return null;
+    final allSettings = SettingsMerge.asMap(snap.data()?['exerciseSettings']) ??
+        <String, dynamic>{};
+    final latest = SettingsMerge.asMap(allSettings[exerciseId]);
+    if (latest == null) return null;
+    // In memory only; persisted by saveExerciseSettings when the user saves.
+    return SettingsMerge.repairShadows(latest).$1;
+  }
 
-    return _db.runTransaction<Map<String, dynamic>?>((txn) async {
-      final snap = await txn.get(docRef);
-      if (!snap.exists) return null;
-      final data = snap.data() ?? <String, dynamic>{};
-
-      final allSettings =
-          SettingsMerge.asMap(data['exerciseSettings']) ?? <String, dynamic>{};
-      final latest = SettingsMerge.asMap(allSettings[exerciseId]);
-      if (latest == null) return null;
-
-      final (repaired, changed) = SettingsMerge.repairShadows(latest);
-      if (!changed) return latest;
-      allSettings[exerciseId] = repaired;
-
-      // True-replace so removed sparse weekN shadows actually disappear, while
-      // all other top-level block fields stay untouched.
-      _writeExerciseSettings(txn, docRef, allSettings);
-
-      print(
-          '🩹 [WES2PlanService] repaired sparse weekN shadow(s) for $exerciseId in block=$blockId');
-      return repaired;
-    });
+  /// Week-1 RIR heal then conservative sparse-shadow repair of one exercise
+  /// object (pure; the same transforms loading shows in memory).
+  static Map<String, dynamic> _healedAndRepaired(Map<String, dynamic> latest) {
+    final healed = SettingsMerge.deepCopyMap(latest);
+    final rir = BlockExerciseDefaultsRepository.healWeek1RirPlan(healed);
+    if (rir != null) healed['rirPlan'] = rir;
+    return SettingsMerge.repairShadows(healed).$1;
   }
 
   @override

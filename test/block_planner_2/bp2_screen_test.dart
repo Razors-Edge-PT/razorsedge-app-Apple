@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localtest222/block_planner_2/bp2_exercise_picker.dart';
 import 'package:localtest222/block_planner_2/bp2_screen.dart';
 import 'package:localtest222/block_planner_2/bp2_settings_resolver.dart';
 import 'package:localtest222/exercise_catalog.dart';
@@ -264,7 +265,8 @@ void main() {
   });
 
   testWidgets(
-      'Add exercise opens the canonical flow scoped to the athlete and refreshes',
+      'Create custom exercise is the picker secondary action, scoped to the '
+      'athlete; the new exercise is added only when deliberately picked',
       (tester) async {
     final h = await seeded();
     String? seenOwner;
@@ -281,20 +283,33 @@ void main() {
           ownerUid: athlete);
     }
 
-    await pumpScreen(tester, h, addExerciseFlow: flow);
+    await pumpScreen(tester, h, blockId: 'active1', addExerciseFlow: flow);
     final fetchesBefore = h.repo.totalFetches;
     await tester.tap(find.byKey(const ValueKey('bp2-add-exercise')));
     await tester.pumpAndSettle();
+    expect(seenOwner, isNull, reason: 'Add exercise does not create anything');
+    expect(find.text(Bp2ExercisePicker.title), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('bp2-picker-create-custom')));
+    await tester.pumpAndSettle();
     expect(seenOwner, athlete);
     expect(seenActor, coach);
-    // Appears immediately, alphabetically first in "All other exercises".
-    final tiles = tester
-        .widgetList<ListTile>(find.byType(ListTile))
-        .map((t) => (t.title as Text).data)
-        .toList();
-    final allOtherStart = tiles.indexOf('Aardvark Crunch');
-    expect(allOtherStart, greaterThanOrEqualTo(0));
-    expect(tiles.indexOf('Athlete Custom'), allOtherStart + 1);
+    // Shown in the picker immediately (no full reload), not yet in the block.
+    expect(find.byKey(const ValueKey('bp2-pick-newCustom')), findsOneWidget);
     expect(h.repo.totalFetches, fetchesBefore, reason: 'no full reload');
+    expect(
+        ((await h.block(athlete, 'active1'))!['exerciseSettings'] as Map?)
+                ?.containsKey('newCustom') ??
+            false,
+        isFalse,
+        reason: 'creating an exercise does not add it to the block');
+
+    await tester.tap(find.byKey(const ValueKey('bp2-pick-newCustom')));
+    await tester.pumpAndSettle();
+    final settings =
+        (await h.block(athlete, 'active1'))!['exerciseSettings'] as Map;
+    expect(settings.keys, ['newCustom']);
+    expect(find.text(Bp2ExercisePicker.title), findsNothing);
+    expect(find.text('Aardvark Crunch'), findsWidgets);
   });
 }

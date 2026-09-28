@@ -71,20 +71,31 @@ class Wes2HintLoadRunner {
   Wes2HintLoadRunner({
     required Wes2SessionController controller,
     required Wes2PlanService planService,
-    required Future<void> Function(String exerciseId, String blockId)
+    Future<void> Function(String exerciseId, String blockId)?
         ensureExerciseDefaults,
+    Future<Map<String, dynamic>?> Function(
+            String exerciseId, Map<String, dynamic>? existing)?
+        projectDefaults,
     required bool Function(Map<String, dynamic>? settings) isSettingsUsable,
     Future<void> Function()? refreshHistory,
   })  : _controller = controller,
         _planService = planService,
         _ensureExerciseDefaults = ensureExerciseDefaults,
+        _projectDefaults = projectDefaults,
         _isSettingsUsable = isSettingsUsable,
         _refreshHistory = refreshHistory;
 
   final Wes2SessionController _controller;
   final Wes2PlanService _planService;
-  final Future<void> Function(String exerciseId, String blockId)
+  /// Legacy writer (persists defaults, then settings are re-read). Unused
+  /// when [_projectDefaults] is given.
+  final Future<void> Function(String exerciseId, String blockId)?
       _ensureExerciseDefaults;
+
+  /// In-memory defaults for an exercise without usable settings (read-only;
+  /// production). Opening WES2 then never writes the block.
+  final Future<Map<String, dynamic>?> Function(
+      String exerciseId, Map<String, dynamic>? existing)? _projectDefaults;
   final bool Function(Map<String, dynamic>? settings) _isSettingsUsable;
   final Future<void> Function()? _refreshHistory;
 
@@ -186,7 +197,24 @@ class Wes2HintLoadRunner {
                   ? _settings[id] as Map<String, dynamic>
                   : null))
           .toSet();
-      if (missing.isNotEmpty) {
+      final projectDefaults = _projectDefaults;
+      if (missing.isNotEmpty && projectDefaults != null) {
+        final Map<String, dynamic> withDefaults =
+            Map<String, dynamic>.of(_settings);
+        for (final String id in missing) {
+          try {
+            final Object? existing = _settings[id];
+            final Map<String, dynamic>? projected = await projectDefaults(
+                id, existing is Map<String, dynamic> ? existing : null);
+            if (projected != null) withDefaults[id] = projected;
+          } catch (e) {
+            debugPrint('[WES2] default projection failed for $id: $e');
+          }
+          if (!current()) return _superseded(token);
+        }
+        _settings = withDefaults;
+        _controller.setExerciseSettings(_settings);
+      } else if (missing.isNotEmpty && _ensureExerciseDefaults != null) {
         for (final String id in missing) {
           try {
             await _ensureExerciseDefaults(id, token.blockId);

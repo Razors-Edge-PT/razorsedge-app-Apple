@@ -51,7 +51,6 @@ class HomeV2Controller extends ChangeNotifier {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _blockSub;
 
   // Session-level gates — reset when a new controller instance is created.
-  String? _rirHealedBlockId; // only heal each block once per session
   bool _startupRun = false; // only run ensureBlocksExist once per session
   String _calendarFetchKey = ''; // dedup guard: '$uid/$year-$month'
 
@@ -126,7 +125,6 @@ class HomeV2Controller extends ChangeNotifier {
     unawaited(_loadDisplayName(newUid));
     unawaited(_refreshCalendar(month, uid: newUid));
     unawaited(WarmupService.instance.warmWES(newUid));
-    _tryRirHeal(uid: newUid, blockId: uc.activeBlockId);
     // Self-heal: an athlete whose blocks exist but carry no isActive flag
     // would otherwise dead-end every block-gated screen. Metadata-only,
     // idempotent, never creates blocks.
@@ -183,7 +181,6 @@ class HomeV2Controller extends ChangeNotifier {
 
       unawaited(_refreshCalendar(month, uid: uid));
       unawaited(WarmupService.instance.warmWES(uid));
-      _tryRirHeal(uid: uid, blockId: uc.activeBlockId);
 
       if (!_startupRun) {
         _startupRun = true;
@@ -195,14 +192,6 @@ class HomeV2Controller extends ChangeNotifier {
         }
       }
     });
-  }
-
-  /// Heals the RIR plan for [blockId] at most once per session.
-  void _tryRirHeal({required String uid, required String? blockId}) {
-    if (blockId == null || blockId.isEmpty) return;
-    if (_rirHealedBlockId == blockId) return;
-    _rirHealedBlockId = blockId;
-    unawaited(HomeBootstrapService.healRirPlan(uid: uid, blockId: blockId));
   }
 
   /// Triggers template bootstrap only for the logged-in user (not coached athletes).
@@ -279,7 +268,6 @@ class HomeV2Controller extends ChangeNotifier {
 
     _setupBlockListener(actingUid);
     unawaited(_refreshCalendar(month, uid: actingUid));
-    _tryRirHeal(uid: actingUid, blockId: uc.activeBlockId);
     _tryTemplateBootstrap(uid: actingUid, actorUid: uc.actorUid);
     _startupRun = true;
   }

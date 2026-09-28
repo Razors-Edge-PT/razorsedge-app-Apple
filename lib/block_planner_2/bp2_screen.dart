@@ -10,11 +10,14 @@ import '../exercise_catalog.dart';
 import '../user_context.dart';
 import 'bp2_controller.dart';
 import 'bp2_date_utils.dart';
+import 'bp2_exercise_picker.dart';
 import 'bp2_exercise_tile.dart';
 import 'bp2_models.dart';
 import 'bp2_warmup.dart';
 
-/// The canonical custom-exercise creation flow (injectable for tests).
+/// The canonical custom-exercise creation flow — the picker's SECONDARY
+/// "Create custom exercise" action, never the main Add exercise behaviour
+/// (injectable for tests).
 typedef Bp2AddExerciseFlow = Future<AddExerciseResult?> Function(
   BuildContext context, {
   required String ownerUid,
@@ -278,28 +281,64 @@ class _Bp2ScreenState extends State<Bp2Screen> {
     _controller.setRange(picked.start, picked.end);
   }
 
+  /// "Add exercise": pick an EXISTING exercise and add it to the selected
+  /// block (only that exercise's settings entry is seeded).
   Future<void> _addExercise() async {
+    final c = _controller;
+    if (!c.blockLoaded) return;
+    if (c.block?.existsRemotely != true) {
+      _snack('Save the block before adding exercises.');
+      return;
+    }
+    final picked = await Navigator.of(context).push<Bp2Exercise>(
+      Bp2ExercisePicker.route(
+        controller: c,
+        onCreateCustom: _createCustomExercise,
+      ),
+    );
+    if (!mounted || picked == null) return;
+    final out = await c.addExerciseToBlock(picked.id);
+    if (!mounted) return;
+    switch (out) {
+      case Bp2AddToBlockOutcome.added:
+        _snack('Added ${picked.name} to this block.');
+      case Bp2AddToBlockOutcome.alreadyInBlock:
+        _snack('${picked.name} is already in this block.');
+      case Bp2AddToBlockOutcome.saveBlockFirst:
+        _snack('Save the block before adding exercises.');
+      case Bp2AddToBlockOutcome.notLoaded:
+      case Bp2AddToBlockOutcome.unknownExercise:
+      case Bp2AddToBlockOutcome.failed:
+        _snack('Could not add ${picked.name} — check your connection.');
+    }
+  }
+
+  /// Picker secondary action: the canonical custom-exercise creation flow.
+  /// The created exercise is returned to the picker, where the user can then
+  /// add it to the block deliberately.
+  Future<Bp2Exercise?> _createCustomExercise(BuildContext pickerContext) async {
     final uc = UserContext.of(context, listen: false);
     final owner = _controller.uid ?? uc.currentUid;
     final flow = widget.addExerciseFlow ?? showAddExerciseDialog;
     final result = await flow(
-      context,
+      pickerContext,
       ownerUid: owner,
       actorUid: uc.actorUid,
     );
-    if (!mounted || result == null) return;
+    if (!mounted || result == null) return null;
     if (result.isDuplicate) {
       _snack('That exercise already exists in your list.');
-      return;
+      return null;
     }
     final ex =
         await _controller.repo.fetchExerciseById(owner, result.exerciseId);
-    if (!mounted) return;
+    if (!mounted) return null;
     if (ex == null) {
       _snack('Exercise added — pull to refresh if it does not appear.');
-      return;
+      return null;
     }
     await _controller.onExerciseAdded(ex);
+    return _controller.exerciseById(ex.id) ?? Bp2Exercise.fromCatalog(ex);
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────

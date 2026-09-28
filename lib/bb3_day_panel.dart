@@ -1,6 +1,7 @@
 import 'units/exercise_unit_registry.dart';
 import 'units/weight_unit.dart';
 import 'package:flutter/material.dart';
+import 'package:collection/collection.dart' show DeepCollectionEquality;
 import 'app_theme.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -237,8 +238,12 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
     // after the parent (BB3WeekPlanner) has been deactivated. The returned Future is
     // intentionally unawaited; Firestore's offline queue guarantees the write.
     final bid = widget.blockId;
-    if (_orderedExIds.isNotEmpty && bid != null && bid.isNotEmpty) {
-      final exercises = _buildCurrentExercises();
+    final exercises = _orderedExIds.isNotEmpty && bid != null && bid.isNotEmpty
+        ? _buildCurrentExercises()
+        : const <BB3Exercise>[];
+    // Leaving without an edit writes nothing: flush only when the day now
+    // differs from the plan the parent loaded (and never an empty day).
+    if (exercises.isNotEmpty && _differsFromLoaded(exercises)) {
       debugPrint(
           '[BB3 dispose flush] day=${widget.dayIndex} count=${exercises.length}');
       final blockDayIndex = widget.blockSettings?.startDate != null
@@ -249,7 +254,7 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
       // ignore: discarded_futures
       BB3PlannedExerciseService.savePlannedDay(
         uid: widget.uid,
-        blockId: bid,
+        blockId: bid!,
         weekIndex: widget.weekIndex,
         dayIndex: blockDayIndex,
         exercises: exercises,
@@ -459,6 +464,19 @@ class _BB3DayPanelState extends State<BB3DayPanel> {
   Future<void> _doSave() async {
     final exercises = _buildCurrentExercises();
     await widget.onSave(widget.dayIndex, exercises);
+  }
+
+  /// True when [current] is not exactly the day the parent loaded.
+  bool _differsFromLoaded(List<BB3Exercise> current) {
+    final loaded = widget.plannedExercises;
+    if (loaded.length != current.length) return true;
+    for (int i = 0; i < current.length; i++) {
+      if (!const DeepCollectionEquality()
+          .equals(loaded[i].toMap(), current[i].toMap())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   List<BB3Exercise> _buildCurrentExercises() {

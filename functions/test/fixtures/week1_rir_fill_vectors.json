@@ -1,0 +1,509 @@
+{
+  "complete_already": {
+    "input": {
+      "defaultSets": 2,
+      "repTargets": {
+        "week1": {
+          "instance1": "8"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "2",
+              "reps": "8"
+            },
+            "set2": {
+              "rir": "2",
+              "reps": "8"
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "defaultSets": 2,
+      "repTargets": {
+        "week1": {
+          "instance1": "8"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "2",
+              "reps": "8"
+            },
+            "set2": {
+              "rir": "2",
+              "reps": "8"
+            }
+          }
+        }
+      }
+    }
+  },
+  "missing_sets_and_reps": {
+    "input": {
+      "defaultSets": 4,
+      "repTargets": {
+        "week1": {
+          "instance1": "5",
+          "instance2": "8",
+          "instance3": "3"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "2"
+            },
+            "set2": {
+              "rir": "2"
+            }
+          },
+          "session2": {
+            "set1": {
+              "rir": "1"
+            }
+          }
+        },
+        "week2": {
+          "session1": {
+            "set1": {
+              "rir": "9"
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "defaultSets": 4,
+      "repTargets": {
+        "week1": {
+          "instance1": "5",
+          "instance2": "8",
+          "instance3": "3"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "2",
+              "reps": "5"
+            },
+            "set2": {
+              "rir": "2",
+              "reps": "5"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "5"
+            },
+            "set4": {
+              "rir": "3.0",
+              "reps": "5"
+            }
+          },
+          "session2": {
+            "set1": {
+              "rir": "1",
+              "reps": "8"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "8"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "8"
+            },
+            "set4": {
+              "rir": "3.0",
+              "reps": "8"
+            }
+          },
+          "session3": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "3"
+            },
+            "set4": {
+              "rir": "3.5",
+              "reps": "3"
+            }
+          }
+        },
+        "week2": {
+          "session1": {
+            "set1": {
+              "rir": "9"
+            }
+          }
+        }
+      }
+    }
+  },
+  "no_rirplan_at_all": {
+    "input": {
+      "defaultSets": 3,
+      "repTargets": {
+        "week1": {
+          "instance1": "30"
+        }
+      }
+    },
+    "expected": {
+      "defaultSets": 3,
+      "repTargets": {
+        "week1": {
+          "instance1": "30"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "30"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "30"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "30"
+            }
+          }
+        }
+      }
+    }
+  },
+  "x_sets_overrides_defaultSets": {
+    "input": {
+      "defaultSets": 2,
+      "repTargets": {
+        "week1": {
+          "instance1": "12 x 3",
+          "instance2": "10 x 1"
+        }
+      },
+      "rirPlan": {
+        "week1": {}
+      }
+    },
+    "expected": {
+      "defaultSets": 2,
+      "repTargets": {
+        "week1": {
+          "instance1": "12 x 3",
+          "instance2": "10 x 1"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "12"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "12"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "12"
+            }
+          },
+          "session2": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "10"
+            }
+          }
+        }
+      }
+    }
+  },
+  "intentional_blank_and_zero_kept": {
+    "input": {
+      "defaultSets": 3,
+      "repTargets": {
+        "week1": {
+          "instance1": "6"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "reps": "6"
+            },
+            "set2": {
+              "rir": "",
+              "reps": ""
+            },
+            "set3": {
+              "rir": "0",
+              "reps": 0
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "defaultSets": 3,
+      "repTargets": {
+        "week1": {
+          "instance1": "6"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "reps": "6"
+            },
+            "set2": {
+              "rir": "",
+              "reps": ""
+            },
+            "set3": {
+              "rir": "0",
+              "reps": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  "zero_default_sets": {
+    "input": {
+      "defaultSets": 0,
+      "repTargets": {
+        "week1": {
+          "instance1": "8"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "1"
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "defaultSets": 0,
+      "repTargets": {
+        "week1": {
+          "instance1": "8"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "1"
+            }
+          }
+        }
+      }
+    }
+  },
+  "non_numeric_rep_target": {
+    "input": {
+      "defaultSets": 2,
+      "repTargets": {
+        "week1": {
+          "instance1": "AMRAP"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "1"
+            }
+          }
+        }
+      }
+    },
+    "expected": {
+      "defaultSets": 2,
+      "repTargets": {
+        "week1": {
+          "instance1": "AMRAP"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "1"
+            },
+            "set2": {
+              "rir": "2.0"
+            }
+          }
+        }
+      }
+    }
+  },
+  "five_sessions_wraps_matrix": {
+    "input": {
+      "defaultSets": 5,
+      "repTargets": {
+        "week1": {
+          "instance1": "3",
+          "instance2": "3",
+          "instance3": "3",
+          "instance4": "3",
+          "instance5": "3"
+        }
+      }
+    },
+    "expected": {
+      "defaultSets": 5,
+      "repTargets": {
+        "week1": {
+          "instance1": "3",
+          "instance2": "3",
+          "instance3": "3",
+          "instance4": "3",
+          "instance5": "3"
+        }
+      },
+      "rirPlan": {
+        "week1": {
+          "session1": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "3"
+            },
+            "set4": {
+              "rir": "3.0",
+              "reps": "3"
+            },
+            "set5": {
+              "rir": "3.0",
+              "reps": "3"
+            }
+          },
+          "session2": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "3"
+            },
+            "set4": {
+              "rir": "3.0",
+              "reps": "3"
+            },
+            "set5": {
+              "rir": "3.0",
+              "reps": "3"
+            }
+          },
+          "session3": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "3"
+            },
+            "set4": {
+              "rir": "3.5",
+              "reps": "3"
+            },
+            "set5": {
+              "rir": "3.5",
+              "reps": "3"
+            }
+          },
+          "session4": {
+            "set1": {
+              "rir": "2.5",
+              "reps": "3"
+            },
+            "set2": {
+              "rir": "3.0",
+              "reps": "3"
+            },
+            "set3": {
+              "rir": "3.0",
+              "reps": "3"
+            },
+            "set4": {
+              "rir": "3.5",
+              "reps": "3"
+            },
+            "set5": {
+              "rir": "3.5",
+              "reps": "3"
+            }
+          },
+          "session5": {
+            "set1": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set2": {
+              "rir": "2.0",
+              "reps": "3"
+            },
+            "set3": {
+              "rir": "2.5",
+              "reps": "3"
+            },
+            "set4": {
+              "rir": "3.0",
+              "reps": "3"
+            },
+            "set5": {
+              "rir": "3.0",
+              "reps": "3"
+            }
+          }
+        }
+      }
+    }
+  }
+}
