@@ -1,5 +1,6 @@
 import 'units/exercise_unit_registry.dart';
 import 'units/weight_unit.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -10,16 +11,51 @@ import 'package:google_fonts/google_fonts.dart';
 import 'periodization_model_utils.dart';
 import 'bodyweight_load.dart';
 
+@visibleForTesting
+class TopSetWorkoutTile extends StatelessWidget {
+  final DateTime workoutDate;
+  final Widget title;
+  final Widget subtitle;
+  final ValueChanged<DateTime>? onWorkoutSelected;
+
+  const TopSetWorkoutTile({
+    super.key,
+    required this.workoutDate,
+    required this.title,
+    required this.subtitle,
+    this.onWorkoutSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      key: ValueKey<String>(
+        'top-set-workout-${DateFormat('yyyy-MM-dd').format(workoutDate)}',
+      ),
+      onTap: onWorkoutSelected == null
+          ? null
+          : () => onWorkoutSelected!(workoutDate),
+      title: title,
+      subtitle: subtitle,
+      trailing: onWorkoutSelected == null
+          ? null
+          : const Icon(Icons.chevron_right),
+    );
+  }
+}
+
 class TopSetsScreen extends StatefulWidget {
   final String exerciseName;
   final String? exerciseId;
   final List<Workout> recentWorkouts;
+  final ValueChanged<DateTime>? onWorkoutSelected;
 
   const TopSetsScreen({
     super.key,
     required this.exerciseName,
     this.exerciseId,
     required this.recentWorkouts,
+    this.onWorkoutSelected,
   });
 
   @override
@@ -455,7 +491,9 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                     borderRadius: BorderRadius.circular(8.0),
                   )
                       : null,
-                  child: ListTile(
+                  child: TopSetWorkoutTile(
+                    workoutDate: workout.date,
+                    onWorkoutSelected: widget.onWorkoutSelected,
                     title: Text(
                       '$topExerciseName - ${DateFormat('dd-MM-yyyy').format(workout.date)}',
                       style: const TextStyle(fontWeight: FontWeight.bold),

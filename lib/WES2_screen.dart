@@ -2482,9 +2482,24 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
           exerciseName: row.name,
           exerciseId: row.exerciseId,
           recentWorkouts: const [],
+          onWorkoutSelected: _openWorkoutFromTopSets,
         ),
       ),
     );
+  }
+
+  /// Returns from Top Sets to this existing WES2 session on the workout day.
+  /// Reusing the session preserves the selected athlete/coach context and
+  /// avoids stacking a second logger above the first one.
+  void _openWorkoutFromTopSets(DateTime date) {
+    if (!mounted) return;
+    _pauseWorkoutDurationSegment();
+    _saveDraftNow();
+    _workoutDurationMilliseconds = 0;
+    _workoutDurationSegmentStartedAt = null;
+    Navigator.of(context).pop();
+    _controller.changeDate(date);
+    _loadDay();
   }
 
   String? _buildCombinedPlanNote(Wes2ExerciseRow row) {

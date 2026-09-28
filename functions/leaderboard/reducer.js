@@ -39,6 +39,7 @@ const {
 const { SHOWCASE_FORMULA_VERSION } = require('../showcase/e1rm_spec');
 const { RE_POINTS_FORMULA_VERSION } = require('../showcase/re_points');
 const { medalRankKeysOf } = require('./medals');
+const { isLeaderboardEligibleUid } = require('./eligibility');
 
 /** 1 point = 10,000 units. */
 const POINT_UNITS = 10000;
@@ -184,6 +185,7 @@ function scoreDay(dateKey, v2Days, bodyweight, sex) {
  * and medalRankKeys[c] the category's sortable medal order.
  */
 function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
+  if (!isLeaderboardEligibleUid(uid)) return null;
   const categoryTotalsUnits = zeroByCategory();
   const categoryDateKeys = {};
   for (const k of CATEGORY_KEYS) categoryDateKeys[k] = null;
@@ -232,6 +234,7 @@ function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
  * the snapshot was produced by another formula version (never mixed in).
  */
 function allTimeEntryFromSnapshot(uid, snapshot, identity) {
+  if (!isLeaderboardEligibleUid(uid)) return { entry: null };
   if (!snapshot) return { entry: null };
   if (!isCurrentSnapshotV2(snapshot)) return { stale: true, entry: null };
   const categoryBestUnits = zeroByCategory();

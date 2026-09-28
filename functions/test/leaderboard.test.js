@@ -28,6 +28,10 @@ const {
 const { applyRequest, refreshAllTime, memoryLeaderboardStore, isBuilt } = require('../leaderboard/store');
 const { runReconciliation, requestsOfItem, mergeQueueItem } = require('../leaderboard/reconcile');
 const { parseArgs } = require('../scripts/backfill_leaderboard');
+const {
+  EXCLUDED_LEADERBOARD_UIDS,
+  isLeaderboardEligibleUid,
+} = require('../leaderboard/eligibility');
 
 const ID = {
   bench: 'AmfUWbF1DH3I7qPAdh5k',
@@ -111,6 +115,36 @@ test('period key comes from the canonical training date', () => {
   assert.strictEqual(periodKeyOf('2026-09-24'), '2026-09');
   assert.strictEqual(periodKeyOf('2026-10-01'), '2026-10');
   assert.strictEqual(periodKeyOf('bad'), null);
+});
+
+test('only the two configured test accounts are excluded from leaderboards', () => {
+  assert.deepStrictEqual(EXCLUDED_LEADERBOARD_UIDS, [
+    'LWXGJ5SlIzM4OxEkOdTuv6d1c5b2',
+    'jhIB7Yi1whYwPvBSmK27KltJGn23',
+  ]);
+  for (const uid of EXCLUDED_LEADERBOARD_UIDS) {
+    assert.strictEqual(isLeaderboardEligibleUid(uid), false);
+    assert.strictEqual(isLeaderboardEligibleUid(`${uid}x`), true);
+  }
+  assert.strictEqual(isLeaderboardEligibleUid('real-athlete'), true);
+});
+
+test('excluded accounts produce neither monthly nor all-time entries', () => {
+  const uid = EXCLUDED_LEADERBOARD_UIDS[0];
+  const day = {
+    dateKey: '2026-09-02',
+    periodKey: '2026-09',
+    totalPointsUnits: 500000,
+    categories: { horizontalPress: { pointsUnits: 500000 } },
+  };
+  assert.strictEqual(
+    monthEntryFromDays(uid, '2026-09', [day], { username: 'test' }),
+    null,
+  );
+  assert.deepStrictEqual(
+    allTimeEntryFromSnapshot(uid, { categories: {} }, { username: 'test' }),
+    { entry: null },
+  );
 });
 
 // ── Daily winners ───────────────────────────────────────────────────────────

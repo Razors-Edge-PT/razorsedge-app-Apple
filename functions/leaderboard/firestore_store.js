@@ -43,6 +43,7 @@ const {
 const { isBuilt, applyRequest, refreshAllTime } = require('./store');
 const { runReconciliation, requestsOfItem, mergeQueueItem } = require('./reconcile');
 const medalsFs = require('./medals_firestore');
+const { isLeaderboardEligibleUid } = require('./eligibility');
 
 const QUEUE_COLLECTION = 'leaderboardRecalcQueue';
 
@@ -152,6 +153,12 @@ function leaderboardStore(uid, reader) {
       queueDelete(daysCol(uid).doc(d));
     },
     async setEntry(p, entry) {
+      // Defence in depth: the reducers already return no entry for an excluded
+      // account, but no current or future caller may publish one directly.
+      if (!isLeaderboardEligibleUid(uid)) {
+        queueDelete(entryRef(p, uid));
+        return;
+      }
       queueSet(entryRef(p, uid), Object.assign({}, entry, { updatedAt: serverTime() }));
     },
     async deleteEntry(p) {
@@ -228,6 +235,10 @@ async function applyRequestForUser(uid, request) {
 
 /** Queues a recomputation (merged with anything already queued). */
 async function enqueueRecalc(uid, request, reason) {
+  if (!isLeaderboardEligibleUid(uid)) {
+    await queueRef(uid).delete();
+    return;
+  }
   await db().runTransaction(async (tx) => {
     const ref = queueRef(uid);
     const snap = await tx.get(ref);
@@ -316,6 +327,17 @@ function showcaseCategoriesOf(publicData) {
  * a missing side).
  */
 async function handlePublicProfileWrite(uid, before, after) {
+  if (!isLeaderboardEligibleUid(uid)) {
+    // The one-time cleanup removes every historical period. This live guard
+    // also withdraws the two visible boards if an old entry survived or a
+    // profile event races the cleanup.
+    const batch = db().batch();
+    batch.delete(entryRef(ALL_TIME_PERIOD, uid));
+    batch.delete(entryRef(currentPeriodKey(), uid));
+    batch.delete(queueRef(uid));
+    await batch.commit();
+    return 'excluded';
+  }
   if (!after) {
     // The public profile is gone (account deletion): withdraw the live
     // entries. Closed months keep their historical snapshot.
@@ -401,7 +423,7 @@ function reconcileDeps(nowMs) {
           .get();
         for (const d of q.docs) out.add(d.id);
       }
-      return [...out].slice(0, limit);
+      return [...out].filter(isLeaderboardEligibleUid).slice(0, limit);
     },
     enqueue: (uid, request, reason) => enqueueRecalc(uid, request, reason),
     async listQueue(pageSize, after) {
