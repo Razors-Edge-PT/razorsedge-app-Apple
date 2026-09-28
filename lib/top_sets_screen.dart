@@ -10,13 +10,25 @@ import 'user_context.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'periodization_model_utils.dart';
 import 'bodyweight_load.dart';
+import 'top_sets_bodyweight_metrics.dart';
+
+typedef TopSetWorkoutSelected = Future<void> Function(DateTime workoutDate);
 
 @visibleForTesting
-class TopSetWorkoutTile extends StatelessWidget {
+String formatSignedTopSetWeightKg(
+  double weightKg,
+  ExerciseWeightUnit unit,
+) {
+  final String value = formatWeightKg(weightKg, unit);
+  return weightKg >= 0 ? '+$value' : value;
+}
+
+@visibleForTesting
+class TopSetWorkoutTile extends StatefulWidget {
   final DateTime workoutDate;
   final Widget title;
   final Widget subtitle;
-  final ValueChanged<DateTime>? onWorkoutSelected;
+  final TopSetWorkoutSelected? onWorkoutSelected;
 
   const TopSetWorkoutTile({
     super.key,
@@ -27,17 +39,33 @@ class TopSetWorkoutTile extends StatelessWidget {
   });
 
   @override
+  State<TopSetWorkoutTile> createState() => _TopSetWorkoutTileState();
+}
+
+class _TopSetWorkoutTileState extends State<TopSetWorkoutTile> {
+  bool _opening = false;
+
+  Future<void> _open() async {
+    final callback = widget.onWorkoutSelected;
+    if (callback == null || _opening) return;
+    _opening = true;
+    try {
+      await callback(widget.workoutDate);
+    } finally {
+      _opening = false;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListTile(
       key: ValueKey<String>(
-        'top-set-workout-${DateFormat('yyyy-MM-dd').format(workoutDate)}',
+        'top-set-workout-${DateFormat('yyyy-MM-dd').format(widget.workoutDate)}',
       ),
-      onTap: onWorkoutSelected == null
-          ? null
-          : () => onWorkoutSelected!(workoutDate),
-      title: title,
-      subtitle: subtitle,
-      trailing: onWorkoutSelected == null
+      onTap: widget.onWorkoutSelected == null ? null : _open,
+      title: widget.title,
+      subtitle: widget.subtitle,
+      trailing: widget.onWorkoutSelected == null
           ? null
           : const Icon(Icons.chevron_right),
     );
@@ -47,13 +75,17 @@ class TopSetWorkoutTile extends StatelessWidget {
 class TopSetsScreen extends StatefulWidget {
   final String exerciseName;
   final String? exerciseId;
+  final String? exerciseType;
+  final String? athleteUid;
   final List<Workout> recentWorkouts;
-  final ValueChanged<DateTime>? onWorkoutSelected;
+  final TopSetWorkoutSelected? onWorkoutSelected;
 
   const TopSetsScreen({
     super.key,
     required this.exerciseName,
     this.exerciseId,
+    this.exerciseType,
+    this.athleteUid,
     required this.recentWorkouts,
     this.onWorkoutSelected,
   });
@@ -78,11 +110,26 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
   String _sortOption = 'date';
   int? _selectedRepTarget;
 
-  String get userId => UserContext.of(context, listen: false).currentUid;
+  String get userId =>
+      widget.athleteUid ?? UserContext.of(context, listen: false).currentUid;
 
   /// This exercise's display unit; top sets stay canonical kilograms.
   ExerciseWeightUnit get _unit =>
       ExerciseUnitRegistry.shared.unitsFor(userId).unitFor(widget.exerciseId);
+
+  bool _matchesExercise(Exercise exercise) {
+    final String targetId = widget.exerciseId?.trim() ?? '';
+    final String rowId = exercise.id?.trim() ?? '';
+    if (targetId.isNotEmpty && rowId.isNotEmpty) return targetId == rowId;
+    return exercise.name == widget.exerciseName;
+  }
+
+  bool get _isBodyweightExercise =>
+      PeriodizationModelUtils.isBodyweightExercise(
+        id: widget.exerciseId,
+        name: widget.exerciseName,
+        type: widget.exerciseType,
+      );
 
   void _onUnitsChanged() {
     if (mounted) setState(() {});
@@ -114,12 +161,14 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
       for (final d in snap.docs) {
         final data = d.data();
         final double? bw = (data['weight'] as num?)?.toDouble();
-        final DateTime ts =
-            (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
-        final String unit = (data['unit'] as String?) ?? 'kg';
-        if (bw != null && bw > 0 && unit == 'kg') {
+        final rawTimestamp = data['timestamp'];
+        final unit = ((data['unit'] as String?) ?? 'kg').trim().toLowerCase();
+        if (bw != null &&
+            bw > 0 &&
+            unit == 'kg' &&
+            rawTimestamp is Timestamp) {
           entries.add({
-            'date': ts,
+            'date': rawTimestamp.toDate(),
             'weight': bw,
             'unit': 'kg',
             'tod': data['tod'],
@@ -127,9 +176,9 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
           });
         }
       }
-      if (entries.isNotEmpty) {
-        PeriodizationModelUtils.setBodyweightHistory(uid: uid, entries: entries);
-      }
+      // A successful empty read clears a previously cached history for this
+      // athlete; stale bodyweight must never be used to invent an E1RM.
+      PeriodizationModelUtils.setBodyweightHistory(uid: uid, entries: entries);
     } catch (e) {
       debugPrint('⚠️ [TopSets] BW history load failed: $e');
     }
@@ -209,32 +258,35 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
       if (_sortOption == 'date') {
         _workouts.sort((a, b) => b.date.compareTo(a.date));
       } else if (_sortOption == 'e1rm') {
-        final isBw = PeriodizationModelUtils.isBodyweightExercise(
-          id: widget.exerciseId,
-          name: widget.exerciseName,
-        );
+        final isBw = _isBodyweightExercise;
         if (isBw) {
-          // Added E1RM of each set's TOTAL load at the bodyweight recorded on
-          // or before that day (bodyweight_load.dart); unknown counts as 0.
-          double topAddedE1rm(Workout w) {
+          TopSetBodyweightMetrics? topMetrics(Workout w) {
             final double? bw = PeriodizationModelUtils
                 .recordedBodyweightKgOnOrBefore(uid: userId, asOf: w.date);
-            double best = 0.0;
-            if (bw == null) return best;
+            TopSetBodyweightMetrics? best;
             for (final ex in w.exercises) {
-              if (ex.name != widget.exerciseName) continue;
+              if (!_matchesExercise(ex)) continue;
               for (final s in ex.sets) {
-                final double? total = s.bodyweightLoad(bw).totalKg;
-                if (total == null) continue;
-                final e = calculateE1RM(total, (s.reps ?? 0).toDouble(), s.rir ?? 0) - bw;
-                if (e > best) best = e;
+                final metrics = topSetBodyweightMetrics(s, bw);
+                if (best == null || bodyweightTopSetBeats(metrics, best)) {
+                  best = metrics;
+                }
               }
             }
             return best;
           }
-          _workouts.sort((a, b) => topAddedE1rm(b).compareTo(topAddedE1rm(a)));
+          _workouts.sort((a, b) {
+            final am = topMetrics(a);
+            final bm = topMetrics(b);
+            if (am == null) return bm == null ? 0 : 1;
+            if (bm == null) return -1;
+            if (bodyweightTopSetBeats(am, bm)) return -1;
+            if (bodyweightTopSetBeats(bm, am)) return 1;
+            return 0;
+          });
         } else {
           double topE1rm(Workout w) => w.exercises
+              .where(_matchesExercise)
               .expand((e) => e.sets)
               .map((s) => calculateE1RM(s.weight ?? 0, (s.reps ?? 0).toDouble(), s.rir ?? 0))
               .fold(0.0, (p, c) => c > p ? c : p);
@@ -406,38 +458,47 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
 
                 final workout = _workouts[index];
 
-                final isBw = PeriodizationModelUtils.isBodyweightExercise(
-                  id: widget.exerciseId,
-                  name: widget.exerciseName,
-                );
+                final isBw = _isBodyweightExercise;
                 // Bodyweight exercises: WES2 stores the added load, the legacy
                 // screen stored the total (bodyweight_load.dart). Each set is
                 // read at the bodyweight recorded on or before this day and
-                // ranked on its TOTAL load.
+                // ranked on its added-load E1RM. Bodyweight itself is never
+                // presented or ranked as if it were external load.
                 final double? dayBw = isBw
                     ? PeriodizationModelUtils.recordedBodyweightKgOnOrBefore(
                         uid: userId, asOf: workout.date)
                     : null;
-                double rankWeight(SetDetails s) => isBw
-                    ? (s.bodyweightLoad(dayBw).totalKg ?? 0.0)
-                    : (s.weight ?? 0.0);
-
                 // 🔎 Only consider sets for the selected exercise
                 SetDetails? topSet;
+                TopSetBodyweightMetrics? topBodyweightMetrics;
                 double highestE1RM = 0.0;
                 String? topExerciseName;
 
                 for (var exercise in workout.exercises) {
-                  if (exercise.name != widget.exerciseName) continue;
+                  if (!_matchesExercise(exercise)) continue;
 
                   for (var set in exercise.sets) {
                     if (_selectedRepTarget != null && set.reps != _selectedRepTarget) {
                       continue;
                     }
-                    final weight = rankWeight(set);
+                    final weight = set.weight ?? 0.0;
                     final reps = (set.reps ?? 0).toDouble();
                     final rir  = set.rir ?? 0.0;
                     final e1rm = calculateE1RM(weight, reps, rir);
+
+                    if (isBw) {
+                      final metrics = topSetBodyweightMetrics(set, dayBw);
+                      if (topBodyweightMetrics == null ||
+                          bodyweightTopSetBeats(
+                            metrics,
+                            topBodyweightMetrics,
+                          )) {
+                        topSet = set;
+                        topBodyweightMetrics = metrics;
+                        topExerciseName = exercise.name;
+                      }
+                      continue;
+                    }
 
                     // Same canonical rule the progression history index uses,
                     // so the visible Top Set and the sample progression treats
@@ -447,7 +508,7 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                           candidateWeight: weight,
                           candidateReps: reps,
                           candidateRir: rir,
-                          incumbentWeight: rankWeight(topSet),
+                          incumbentWeight: topSet.weight ?? 0.0,
                           incumbentReps: (topSet.reps ?? 0).toDouble(),
                           incumbentRir: topSet.rir ?? 0.0,
                         )) {
@@ -464,17 +525,18 @@ class _TopSetsScreenState extends State<TopSetsScreen> {
                 final String weightLabel;
                 final String e1rmLabel;
                 if (isBw) {
-                  final NormalizedLoad load = topSet!.bodyweightLoad(dayBw);
+                  final metrics = topBodyweightMetrics!;
+                  final NormalizedLoad load = metrics.load;
                   final double? added = load.addedKg;
                   final double? total = load.totalKg;
                   weightLabel = added != null
-                      ? '+${formatWeightKg(added < 0 ? 0.0 : added, _unit)}'
+                      ? formatSignedTopSetWeightKg(added, _unit)
                       : '${formatWeightKg(total ?? 0.0, _unit)} total';
-                  if (total != null && dayBw != null) {
-                    final double e = calculateE1RM(total,
-                            (topSet!.reps ?? 0).toDouble(), topSet!.rir ?? 0.0) -
-                        dayBw;
-                    e1rmLabel = '+${formatWeightKg(e < 0 ? 0.0 : e, _unit)}';
+                  if (metrics.addedE1rmKg != null) {
+                    e1rmLabel = formatSignedTopSetWeightKg(
+                      metrics.addedE1rmKg!,
+                      _unit,
+                    );
                   } else {
                     e1rmLabel = '— (BW not recorded)';
                   }

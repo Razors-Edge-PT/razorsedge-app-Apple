@@ -30,6 +30,7 @@ import 'WES2_widgets/WES2_template_picker.dart';
 import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
 import 'exercise_details_screen.dart';
 import 'top_sets_screen.dart';
+import 'wes2_top_set_navigation.dart';
 import 'exercise_type.dart';
 import 'periodization_model_utils.dart';
 import 'progression_engine.dart';
@@ -106,6 +107,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// for the Done checkmark, plus the repeat-tap guard. See
   /// [Wes2DoneCoordinator] for why Done has to wait on the field path.
   final Wes2DoneCoordinator _doneCoordinator = Wes2DoneCoordinator();
+
+  /// Prevents repeated Top Sets taps from starting overlapping date loads.
+  bool _openingTopSetWorkout = false;
+  final Map<String, GlobalKey> _exerciseCardKeys = <String, GlobalKey>{};
+  int? _confirmedServerLoadEpoch;
 
   /// Local-durability barrier for the deliberate-exit paths AND for Done.
   ///
@@ -441,6 +447,16 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _saveDraft() async {
+    if (_controller.actingUid.isEmpty) return;
+    await _localStore.saveDraft(
+      uid: _controller.actingUid,
+      date: _controller.selectedDate,
+      rows: _controller.rows.toList(),
+      workoutDurationMs: _currentWorkoutDurationMs(),
+    );
+  }
+
   // ── Timer (Phase 17) ──────────────────────────────────────────────────────
 
   void _toggleTimerVisible() => setState(() => _timerVisible = !_timerVisible);
@@ -628,6 +644,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         prescriptions: prescriptions,
         epoch: epoch,
       );
+      _confirmedServerLoadEpoch = epoch;
       // A successful read proves the server is reachable, so anything still
       // queued is retried now instead of waiting out a backoff set while there
       // was no signal.
@@ -1894,42 +1911,50 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             prevCi = ci;
           }
           final combinedNote = _buildCombinedPlanNote(row);
-          items.add(Wes2ExerciseCard(
-            row: row,
-            weightUnit: ExerciseUnitRegistry.shared
-                .unitsFor(controller.actingUid,
-                    blockSettings: controller.exerciseSettings)
-                .unitFor(row.exerciseId),
-            onFieldUnfocused: _onFieldUnfocused,
-            onToggleMarkedDone: (isDone) =>
-                _onToggleMarkedDone(row.exerciseId, isDone),
-            onAddSet: () => _onAddSet(row.exerciseId),
-            onSettings: () => _showExerciseSettingsDialog(row),
-            onDelete: () => _onDeleteExercise(row),
-            onReplace: () => _onReplaceExercise(row),
-            onMoveToCircuit: () => _onMoveExerciseToCircuit(row),
-            onNotes: () => _showExerciseNoteDialog(row),
-            onRemoveSet: (setIndex) => _onRemoveSet(row, setIndex),
-            onNoteTap: (setIndex) => _onOpenSetNoteDialog(row, setIndex),
-            onVideoTap: (setIndex) => _onSetVideoTap(row, setIndex),
-            setsWithVideo:
-                _setsWithVideo[row.exerciseId] ?? const <int>{},
-            onExerciseDetails: () => _navigateToExerciseDetails(row),
-            onTopSets: () => _navigateToTopSets(row),
-            isExercisePlanNoteRead:
-                controller.isExercisePlanNoteRead(row.exerciseId),
-            hasExerciseExecutionNote:
-                row.exerciseExecutionNote?.trim().isNotEmpty == true,
-            onOpenExercisePlanNote: combinedNote != null
-                ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
-                : null,
-            showVelocityField: _shouldShowVelocityField(row),
-            tutorialStep:
-                isFirstCard ? (_tutorialStep >= 3 ? _tutorialStep - 2 : 0) : 0,
-            onTutorialRepsAccepted: (isFirstCard && _tutorialStep == 4)
-                ? _onRepsTutorialAccepted
-                : null,
-            showCogCue: isFirstCard && showCogCue,
+          final cardKey = _exerciseCardKeys.putIfAbsent(
+            row.exerciseId,
+            GlobalKey.new,
+          );
+          items.add(KeyedSubtree(
+            key: cardKey,
+            child: Wes2ExerciseCard(
+              row: row,
+              weightUnit: ExerciseUnitRegistry.shared
+                  .unitsFor(controller.actingUid,
+                      blockSettings: controller.exerciseSettings)
+                  .unitFor(row.exerciseId),
+              onFieldUnfocused: _onFieldUnfocused,
+              onToggleMarkedDone: (isDone) =>
+                  _onToggleMarkedDone(row.exerciseId, isDone),
+              onAddSet: () => _onAddSet(row.exerciseId),
+              onSettings: () => _showExerciseSettingsDialog(row),
+              onDelete: () => _onDeleteExercise(row),
+              onReplace: () => _onReplaceExercise(row),
+              onMoveToCircuit: () => _onMoveExerciseToCircuit(row),
+              onNotes: () => _showExerciseNoteDialog(row),
+              onRemoveSet: (setIndex) => _onRemoveSet(row, setIndex),
+              onNoteTap: (setIndex) => _onOpenSetNoteDialog(row, setIndex),
+              onVideoTap: (setIndex) => _onSetVideoTap(row, setIndex),
+              setsWithVideo:
+                  _setsWithVideo[row.exerciseId] ?? const <int>{},
+              onExerciseDetails: () => _navigateToExerciseDetails(row),
+              onTopSets: () => _navigateToTopSets(row),
+              isExercisePlanNoteRead:
+                  controller.isExercisePlanNoteRead(row.exerciseId),
+              hasExerciseExecutionNote:
+                  row.exerciseExecutionNote?.trim().isNotEmpty == true,
+              onOpenExercisePlanNote: combinedNote != null
+                  ? () => _onOpenExercisePlanNoteDialog(row, combinedNote)
+                  : null,
+              showVelocityField: _shouldShowVelocityField(row),
+              tutorialStep: isFirstCard
+                  ? (_tutorialStep >= 3 ? _tutorialStep - 2 : 0)
+                  : 0,
+              onTutorialRepsAccepted: (isFirstCard && _tutorialStep == 4)
+                  ? _onRepsTutorialAccepted
+                  : null,
+              showCogCue: isFirstCard && showCogCue,
+            ),
           ));
           isFirstCard = false;
         }
@@ -2481,8 +2506,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         builder: (_) => TopSetsScreen(
           exerciseName: row.name,
           exerciseId: row.exerciseId,
+          exerciseType: row.exerciseType,
+          athleteUid: _controller.actingUid,
           recentWorkouts: const [],
-          onWorkoutSelected: _openWorkoutFromTopSets,
+          onWorkoutSelected: (date) =>
+              _openWorkoutFromTopSets(date, row.exerciseId),
         ),
       ),
     );
@@ -2491,15 +2519,71 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// Returns from Top Sets to this existing WES2 session on the workout day.
   /// Reusing the session preserves the selected athlete/coach context and
   /// avoids stacking a second logger above the first one.
-  void _openWorkoutFromTopSets(DateTime date) {
-    if (!mounted) return;
+  Future<void> _openWorkoutFromTopSets(
+    DateTime date,
+    String exerciseId,
+  ) async {
+    if (!mounted || _openingTopSetWorkout) return;
+    _openingTopSetWorkout = true;
+    final durationWasRunning = _workoutDurationSegmentStartedAt != null;
+    bool navigationCommitted = false;
     _pauseWorkoutDurationSegment();
-    _saveDraftNow();
-    _workoutDurationMilliseconds = 0;
-    _workoutDurationSegmentStartedAt = null;
-    Navigator.of(context).pop();
-    _controller.changeDate(date);
-    _loadDay();
+    try {
+      FocusManager.instance.primaryFocus?.unfocus();
+      // Focus loss is delivered in a microtask. Yield once so the field's
+      // existing save registers with the durability barrier before we read it.
+      await Future<void>.delayed(Duration.zero);
+      await _awaitDurableWrites();
+      await _saveDraft();
+      if (!mounted) return;
+
+      final navigator = Navigator.of(context);
+      if (!navigator.canPop()) {
+        if (durationWasRunning) _startWorkoutDurationSegment();
+        return;
+      }
+
+      navigator.pop();
+      _workoutDurationMilliseconds = 0;
+      _workoutDurationSegmentStartedAt = null;
+      _controller.changeDate(date);
+      navigationCommitted = true;
+      await _loadDay();
+      if (!mounted) return;
+
+      if (!wes2TopSetTargetIsLoaded(
+        selectedDate: _controller.selectedDate,
+        targetDate: date,
+        exerciseId: exerciseId,
+        rows: _controller.rows,
+        serverLoadConfirmed:
+            _confirmedServerLoadEpoch == _controller.loadEpoch,
+      )) {
+        _showSnackBar('That workout is no longer available.');
+        return;
+      }
+
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final cardContext = _exerciseCardKeys[exerciseId]?.currentContext;
+      if (cardContext != null) {
+        await Scrollable.ensureVisible(
+          cardContext,
+          duration: const Duration(milliseconds: 250),
+          alignment: 0.1,
+        );
+      }
+    } catch (e, st) {
+      debugPrint('[WES2] Top Sets navigation failed: $e\n$st');
+      if (mounted) {
+        if (durationWasRunning && !navigationCommitted) {
+          _startWorkoutDurationSegment();
+        }
+        _showSnackBar('Could not open that workout. Please try again.');
+      }
+    } finally {
+      _openingTopSetWorkout = false;
+    }
   }
 
   String? _buildCombinedPlanNote(Wes2ExerciseRow row) {
