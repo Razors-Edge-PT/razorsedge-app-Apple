@@ -165,6 +165,7 @@ class _LeaderboardViewState extends State<LeaderboardView> {
         medal: m,
         athleteName: e.displayName,
         recordSource: _c.medalRecordSource,
+        contributions: m.isAllTime ? null : e.contributionsFor(m.categoryKey),
       ),
       action: action,
       busy: _busy.contains(e.uid),

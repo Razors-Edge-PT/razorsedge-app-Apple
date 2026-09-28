@@ -30,7 +30,7 @@
 
 'use strict';
 
-const { RE_CATEGORIES, RE_EXERCISES, reExerciseBySlot } = require('../showcase/re_catalog');
+const { RE_CATEGORIES, RE_EXERCISES, reExerciseBySlot, reExerciseById } = require('../showcase/re_catalog');
 const {
   pointsRecordOf,
   isCurrentSnapshotV2,
@@ -173,6 +173,37 @@ function scoreDay(dateKey, v2Days, bodyweight, sex) {
 }
 
 /**
+ * Attributes one day's category winner [c] (a rePointDays category, already
+ * the single winner of its date — equal scores resolved by scoreDay's
+ * catalogue order) to its exercise in [acc]: points summed, and the date
+ * counted once however many workouts or sets it held. Only the exercise id,
+ * its canonical catalogue name, points and the count are kept — never the
+ * date, load, reps or any other detail of the set.
+ */
+function addBreakdown(acc, c, dateKey) {
+  if (!Number.isInteger(c.pointsUnits) || c.pointsUnits <= 0) return;
+  const def = reExerciseBySlot(c.slot) || reExerciseById(c.exerciseId);
+  const exerciseId = def ? def.exerciseId : (typeof c.exerciseId === 'string' ? c.exerciseId : null);
+  const displayName = def ? def.displayName : (typeof c.displayName === 'string' ? c.displayName : null);
+  const key = exerciseId || `slot:${c.slot}`;
+  let row = acc.get(key);
+  if (!row) {
+    row = { exerciseId, displayName, pointsUnits: 0, dates: new Set() };
+    acc.set(key, row);
+  }
+  row.pointsUnits += c.pointsUnits;
+  row.dates.add(dateKey);
+}
+
+/** Points descending, then canonical name, then id: fully deterministic. */
+function sortedBreakdown(acc) {
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return [...acc.values()]
+    .map((r) => ({ exerciseId: r.exerciseId, displayName: r.displayName, pointsUnits: r.pointsUnits, sessionCount: r.dates.size }))
+    .sort((a, b) => b.pointsUnits - a.pointsUnits || cmp(a.displayName || '', b.displayName || '') || cmp(a.exerciseId || '', b.exerciseId || ''));
+}
+
+/**
  * A monthly entry from EVERY day document of that month (deterministic: the
  * same surviving days always give the same entry). Null when nothing scored.
  *
@@ -183,12 +214,20 @@ function scoreDay(dateKey, v2Days, bodyweight, sex) {
  * Per category (medals.js), categoryDateKeys[c] is likewise the last date
  * that added points to that category — the day its subtotal was reached —
  * and medalRankKeys[c] the category's sortable medal order.
+ *
+ * categoryExerciseBreakdown[c] (the monthly medal detail) attributes that
+ * subtotal to the exercises that won the category's daily score — see
+ * addBreakdown. Its pointsUnits always sum exactly to categoryTotalsUnits[c].
  */
 function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
   if (!isLeaderboardEligibleUid(uid)) return null;
   const categoryTotalsUnits = zeroByCategory();
   const categoryDateKeys = {};
-  for (const k of CATEGORY_KEYS) categoryDateKeys[k] = null;
+  const breakdown = {};
+  for (const k of CATEGORY_KEYS) {
+    categoryDateKeys[k] = null;
+    breakdown[k] = new Map();
+  }
   let total = 0;
   let scoredDayCount = 0;
   let tieBreakDateKey = null;
@@ -202,6 +241,7 @@ function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
       const c = d.categories && d.categories[k];
       if (c && Number.isInteger(c.pointsUnits)) {
         categoryTotalsUnits[k] += c.pointsUnits;
+        addBreakdown(breakdown[k], c, d.dateKey);
         if (c.pointsUnits > 0 && (!categoryDateKeys[k] || d.dateKey > categoryDateKeys[k])) {
           categoryDateKeys[k] = d.dateKey;
         }
@@ -219,6 +259,7 @@ function monthEntryFromDays(uid, periodKey, dayDocs, identity) {
     totalPointsUnits: total,
     categoryTotalsUnits,
     categoryDateKeys,
+    categoryExerciseBreakdown: Object.fromEntries(CATEGORY_KEYS.map((k) => [k, sortedBreakdown(breakdown[k])])),
     medalRankKeys: medalRankKeysOf(uid, categoryTotalsUnits, categoryDateKeys),
     scoredDayCount,
     tieBreakDateKey,

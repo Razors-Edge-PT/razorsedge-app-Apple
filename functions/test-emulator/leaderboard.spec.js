@@ -239,3 +239,64 @@ test('queue + reconciliation deps: enqueue merges, processing clears, months clo
     await wipe(uid);
   }
 });
+
+test('month breakdown: triggers write it; the current-month backfill patches only that field', async () => {
+  const uid = freshUid();
+  const excluded = require('../leaderboard/eligibility').EXCLUDED_LEADERBOARD_UIDS[0];
+  const backfill = require('../scripts/backfill_month_exercise_breakdown');
+  const current = lb.currentPeriodKey();
+  const quiet = () => {};
+  try {
+    await db().collection('users').doc(uid).set({ sex: 'M' });
+    await db().collection('users_public').doc(uid).set({ username: 'bree' });
+    await weighIn(uid, `${current}-01`, 80);
+    await logWorkout(uid, `${current}-02`, workout([BENCH, [{ weight: 100, reps: 1 }]], [SQUAT, [{ weight: 150, reps: 1 }]]));
+    await logWorkout(uid, `${current}-03`, workout([BENCH, [{ weight: 100, reps: 1 }, { weight: 90, reps: 3 }]]));
+    const ref = lb.entryRef(current, uid);
+    const built = (await ref.get()).data();
+    assert.deepEqual(built.categoryExerciseBreakdown.horizontalPress, [
+      { exerciseId: BENCH, displayName: 'Bench Press, Barbell', pointsUnits: 2 * units(100, 1, 80), sessionCount: 2 },
+    ]);
+    assert.equal(built.categoryExerciseBreakdown.squatPattern[0].pointsUnits, built.categoryTotalsUnits.squatPattern);
+
+    // The identity patch (leaderboardOnPublicProfileWrite) keeps it.
+    await db().collection('users_public').doc(uid).set({ username: 'bree2' });
+    await firePublic(uid, { username: 'bree' }, { username: 'bree2' });
+    assert.deepEqual((await ref.get()).data().categoryExerciseBreakdown, built.categoryExerciseBreakdown);
+
+    // Legacy state: the field absent; other periods and an excluded entry exist.
+    await ref.update({ categoryExerciseBreakdown: admin.firestore.FieldValue.delete() });
+    await lb.entryRef('2026-08', uid).set({ uid, periodKey: '2026-08', totalPointsUnits: 5 });
+    await lb.entryRef('all_time', uid).set({ uid, periodKey: 'all_time', totalPointsUnits: 7 });
+    await lb.entryRef(current, excluded).set({ uid: excluded, periodKey: current, totalPointsUnits: 3 });
+    const untouched = async () => Promise.all(['2026-08', 'all_time'].map(async (p) => (await lb.entryRef(p, uid).get()).updateTime.toMillis()));
+    const before = await untouched();
+    const legacy = await ref.get();
+
+    const dry = await backfill.run({ projectId: 'rules-test', apply: false, period: null }, quiet);
+    assert.equal(dry.counts.patch, 1);
+    assert.equal(dry.counts.excluded, 1);
+    assert.equal((await ref.get()).updateTime.toMillis(), legacy.updateTime.toMillis(), 'dry run writes nothing');
+
+    const applied = await backfill.run({ projectId: 'rules-test', apply: true, period: current }, quiet);
+    assert.equal(applied.counts.patched, 1);
+    const after = (await ref.get()).data();
+    assert.deepEqual(after.categoryExerciseBreakdown, built.categoryExerciseBreakdown);
+    const strip = (d) => { const o = Object.assign({}, d); delete o.categoryExerciseBreakdown; return o; };
+    assert.deepEqual(strip(after), strip(legacy.data()), 'only the breakdown field changed');
+    assert.deepEqual(await untouched(), before, 'history and all time untouched');
+    assert.equal((await lb.entryRef(current, excluded).get()).data().categoryExerciseBreakdown, undefined);
+
+    const again = await backfill.run({ projectId: 'rules-test', apply: true, period: null }, quiet);
+    assert.equal(again.counts.patched, 0, 'idempotent');
+    assert.equal(again.counts.ok, 1);
+    const verified = await backfill.run({ projectId: 'rules-test', verify: true, period: null }, quiet);
+    assert.equal(verified.counts.verifiedTotals, 2 - verified.counts.excluded);
+    assert.equal(verified.counts.verifiedSessions, 1);
+    await assert.rejects(backfill.run({ projectId: 'rules-test', apply: true, period: '2026-08' }, quiet), /only the current month/);
+  } finally {
+    await lb.entryRef('2026-08', uid).delete();
+    await lb.entryRef(current, excluded).delete();
+    await wipe(uid);
+  }
+});

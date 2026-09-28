@@ -213,11 +213,14 @@ class MedalButton extends StatelessWidget {
 /// score it was awarded for. [athleteName] is the row's public name.
 /// [recordSource] (all time only) resolves the winning set line, e.g.
 /// "158.5 kg × 9", from the medallist's public showcase.
+/// [contributions] (monthly only) are the row entry's per-exercise shares of
+/// the category total; null for an entry written before they existed.
 Future<void> showMedalDetail(
   BuildContext context, {
   required LeaderboardMedal medal,
   required String athleteName,
   Future<String?> Function(LeaderboardMedal medal)? recordSource,
+  List<MonthlyExerciseContribution>? contributions,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -227,6 +230,7 @@ Future<void> showMedalDetail(
       medal: medal,
       athleteName: athleteName,
       recordSource: recordSource,
+      contributions: contributions,
     ),
   );
 }
@@ -236,11 +240,24 @@ class MedalDetail extends StatelessWidget {
       {super.key,
       required this.medal,
       required this.athleteName,
-      this.recordSource});
+      this.recordSource,
+      this.contributions});
 
   final LeaderboardMedal medal;
   final String athleteName;
   final Future<String?> Function(LeaderboardMedal medal)? recordSource;
+  final List<MonthlyExerciseContribution>? contributions;
+
+  /// The breakdown to show, or null for the explanatory fallback: absent
+  /// (a legacy entry), empty, or not adding up exactly to the medal's total
+  /// (the entry and the medal snapshot were read at different moments).
+  List<MonthlyExerciseContribution>? get _breakdown {
+    final List<MonthlyExerciseContribution>? rows = contributions;
+    if (medal.isAllTime || rows == null || rows.isEmpty) return null;
+    final int sum = rows.fold<int>(
+        0, (int s, MonthlyExerciseContribution r) => s + r.pointsUnits);
+    return sum == medal.pointsUnits ? rows : null;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -253,6 +270,7 @@ class MedalDetail extends StatelessWidget {
         : reExerciseById(medal.exerciseId)?.displayName;
     final String? date =
         describeDateKey(medal.recordDateKey ?? medal.achievedDateKey);
+    final List<MonthlyExerciseContribution>? breakdown = _breakdown;
     return SafeArea(
       child: Padding(
         key: const ValueKey<String>('medal-detail'),
@@ -286,10 +304,27 @@ class MedalDetail extends StatelessWidget {
                   '${describeMonthKey(medal.periodKey)} category total: ${medal.pointsLabel} RE Points',
                   style: body),
               const SizedBox(height: ProfileSpacing.xs),
-              Text(
-                'The sum of this athlete\'s winning $category score on each training day this month.',
-                style: caption,
-              ),
+              if (breakdown == null)
+                Text(
+                  'The sum of this athlete\'s winning $category score on each training day this month.',
+                  style: caption,
+                )
+              else
+                Flexible(
+                  child: SingleChildScrollView(
+                    key: const ValueKey<String>('medal-breakdown'),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text('This month:', style: caption),
+                        for (int i = 0; i < breakdown.length; i++)
+                          Text(breakdown[i].label,
+                              key: ValueKey<String>('medal-breakdown-row-$i'),
+                              style: caption),
+                      ],
+                    ),
+                  ),
+                ),
             ] else ...<Widget>[
               Text('Best single score: ${medal.pointsLabel} RE Points',
                   style: body),

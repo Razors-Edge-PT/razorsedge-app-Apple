@@ -6,6 +6,7 @@
 /// display value here and nowhere earlier, so no client ever adds floats.
 library;
 
+import '../profile/core/re_catalog.dart' show reExerciseById;
 import '../profile/data/identity_repository.dart' show kUnknownAthleteName;
 
 /// 1 RE Point = 10,000 units (functions/leaderboard/reducer.js POINT_UNITS).
@@ -70,6 +71,88 @@ String describeMonthKey(String key) {
   return '${_months[m - 1]} $y';
 }
 
+/// One exercise's share of a monthly category total: the RE Points of the
+/// training days on which it won that category's daily score, and how many
+/// such days (shown as "sessions"). Server-derived
+/// (functions/leaderboard/reducer.js categoryExerciseBreakdown).
+class MonthlyExerciseContribution {
+  const MonthlyExerciseContribution({
+    required this.exerciseId,
+    required this.displayName,
+    required this.pointsUnits,
+    required this.sessionCount,
+  });
+
+  final String? exerciseId;
+  final String displayName;
+
+  /// In 1/10,000 points.
+  final int pointsUnits;
+  final int sessionCount;
+
+  String get pointsLabel => formatRePointUnits(pointsUnits);
+
+  String get sessionsLabel =>
+      '$sessionCount ${sessionCount == 1 ? 'session' : 'sessions'}';
+
+  /// "Bench Press, Barbell — 1000.00 RE pts · 13 sessions".
+  String get label => '$displayName — $pointsLabel RE pts · $sessionsLabel';
+
+  /// Parses one row, or null when it is unusable.
+  static MonthlyExerciseContribution? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final Object? id = raw['exerciseId'];
+    final Object? name = raw['displayName'];
+    final Object? units = raw['pointsUnits'];
+    final Object? sessions = raw['sessionCount'];
+    if (units is! num || !units.isFinite || units <= 0) return null;
+    if (sessions is! num || !sessions.isFinite || sessions < 1) return null;
+    final String? exerciseId = id is String && id.isNotEmpty ? id : null;
+    // The app's catalogue name wins; the server's copy is the fallback.
+    final String? resolved = exerciseId == null
+        ? null
+        : reExerciseById(exerciseId)?.displayName;
+    final String? stored =
+        name is String && name.trim().isNotEmpty ? name.trim() : null;
+    final String? displayName = resolved ?? stored;
+    if (displayName == null) return null;
+    return MonthlyExerciseContribution(
+      exerciseId: exerciseId,
+      displayName: displayName,
+      pointsUnits: units.round(),
+      sessionCount: sessions.round(),
+    );
+  }
+}
+
+/// Parses `categoryExerciseBreakdown`; null when the entry predates it.
+Map<String, List<MonthlyExerciseContribution>>? parseCategoryBreakdown(
+    Object? raw) {
+  if (raw is! Map) return null;
+  final Map<String, List<MonthlyExerciseContribution>> out =
+      <String, List<MonthlyExerciseContribution>>{};
+  for (final MapEntry<Object?, Object?> e in raw.entries) {
+    final Object? key = e.key;
+    final Object? rows = e.value;
+    if (key is! String || rows is! List) continue;
+    final List<MonthlyExerciseContribution> parsed =
+        <MonthlyExerciseContribution>[
+      for (final Object? r in rows)
+        if (MonthlyExerciseContribution.fromMap(r)
+            case final MonthlyExerciseContribution c)
+          c,
+    ];
+    // The server's order, re-applied: points descending, then name.
+    parsed.sort((MonthlyExerciseContribution a,
+            MonthlyExerciseContribution b) =>
+        b.pointsUnits != a.pointsUnits
+            ? b.pointsUnits.compareTo(a.pointsUnits)
+            : a.displayName.compareTo(b.displayName));
+    out[key] = List<MonthlyExerciseContribution>.unmodifiable(parsed);
+  }
+  return Map<String, List<MonthlyExerciseContribution>>.unmodifiable(out);
+}
+
 /// One ranked row.
 class LeaderboardEntry {
   const LeaderboardEntry({
@@ -79,6 +162,7 @@ class LeaderboardEntry {
     this.username,
     this.photoURL,
     this.tieBreakDateKey,
+    this.categoryBreakdown,
   });
 
   final String uid;
@@ -90,6 +174,18 @@ class LeaderboardEntry {
   final String? username;
   final String? photoURL;
   final String? tieBreakDateKey;
+
+  /// Monthly entries only: per category, the exercises its total came from.
+  /// Null for all time and for monthly entries written before it existed.
+  final Map<String, List<MonthlyExerciseContribution>>? categoryBreakdown;
+
+  /// [categoryKey]'s contributions, or null when this entry has none recorded.
+  List<MonthlyExerciseContribution>? contributionsFor(String categoryKey) {
+    final Map<String, List<MonthlyExerciseContribution>>? b =
+        categoryBreakdown;
+    if (b == null) return null;
+    return b[categoryKey] ?? const <MonthlyExerciseContribution>[];
+  }
 
   String get displayName => (username != null && username!.isNotEmpty)
       ? username!
@@ -116,6 +212,7 @@ class LeaderboardEntry {
       username: str('username'),
       photoURL: str('photoURL'),
       tieBreakDateKey: str('tieBreakDateKey'),
+      categoryBreakdown: parseCategoryBreakdown(d['categoryExerciseBreakdown']),
     );
   }
 }

@@ -14,6 +14,7 @@
     "backfill:showcase": "node scripts/backfill_profile_showcase.js",
     "backfill:showcase-v2": "node scripts/backfill_profile_showcase_v2.js",
     "backfill:leaderboard": "node scripts/backfill_leaderboard.js",
+    "backfill:month-breakdown": "node scripts/backfill_month_exercise_breakdown.js",
     "cleanup:leaderboard-exclusions": "node scripts/remove_excluded_leaderboard_accounts.js",
     "backfill:search-index": "node scripts/backfill_search_index.js",
     "repair:buddy-symmetry": "node scripts/symmetrise_buddy_assignments.js",

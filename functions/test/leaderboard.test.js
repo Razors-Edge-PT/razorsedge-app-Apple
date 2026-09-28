@@ -535,3 +535,202 @@ test('a rebuild twice produces identical documents (no accumulation)', async () 
   await applyRequest(a.lb, { full: true });
   assert.strictEqual(JSON.stringify([...a.entries.entries()].sort()), first);
 });
+
+// ── Monthly exercise breakdown (medal detail) ───────────────────────────────
+
+const {
+  planEntry,
+  assertCurrentMonth,
+  breakdownMatchesTotals,
+  contributingDates,
+  parseArgs: parseBreakdownArgs,
+} = require('../scripts/backfill_month_exercise_breakdown');
+
+const nameOf = (id) => reExerciseById(id).displayName;
+const breakdownOf = (entry, k) => entry.categoryExerciseBreakdown[k];
+const sumOf = (rows) => rows.reduce((s, r) => s + r.pointsUnits, 0);
+/** A stored rePointDays document with one winner per listed category. */
+const dayDoc = (dateKey, winners) => {
+  const categories = {};
+  let total = 0;
+  for (const [k, slot, pointsUnits] of winners) {
+    const def = RE_EXERCISES.find((e) => e.slot === slot);
+    categories[k] = { slot, exerciseId: def.exerciseId, displayName: def.displayName, pointsUnits, setKey: 's0', weight: 100, reps: 5, fingerprint: 'f' };
+    total += pointsUnits;
+  }
+  return { dateKey, periodKey: dateKey.slice(0, 7), categories, totalPointsUnits: total };
+};
+
+test('breakdown aggregates the daily winners by exercise, sorted by points', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  // 09-02: both bench variants — only the winner (dumbbell) contributes.
+  await a.log('2026-09-02', workout(row(ID.bench, [{ weight: 100, reps: 1 }]), row(ID.dbBench, [{ weight: 50, reps: 1 }])));
+  await a.log('2026-09-03', workout(row(ID.bench, [{ weight: 100, reps: 1 }])));
+  await a.log('2026-09-04', workout(row(ID.bench, [{ weight: 105, reps: 1 }])));
+  await a.log('2026-09-05', workout(row(ID.dbBench, [{ weight: 45, reps: 1 }])));
+  const m = a.month('2026-09');
+  assert.deepStrictEqual(breakdownOf(m, 'horizontalPress'), [
+    { exerciseId: ID.bench, displayName: nameOf(ID.bench), pointsUnits: units(100, 1, 80) + units(105, 1, 80), sessionCount: 2 },
+    { exerciseId: ID.dbBench, displayName: nameOf(ID.dbBench), pointsUnits: units(50, 2.11, 80) + units(45, 2.11, 80), sessionCount: 2 },
+  ]);
+  for (const k of Object.keys(m.categoryTotalsUnits)) assert.strictEqual(sumOf(breakdownOf(m, k)), m.categoryTotalsUnits[k]);
+});
+
+test('breakdown counts a date once however many rows, sets or saves it held', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  const sets = [{ weight: 90, reps: 1 }, { weight: 100, reps: 1 }, { weight: 95, reps: 1 }];
+  await a.log('2026-09-02', workout(row(ID.bench, sets), row(ID.bench, [{ weight: 98, reps: 1 }])));
+  // A second save of the same date (another workout write) replaces, never adds.
+  await a.log('2026-09-02', workout(row(ID.bench, sets), row(ID.bench, [{ weight: 98, reps: 1 }])));
+  await a.log('2026-09-09', workout(row(ID.bench, [{ weight: 100, reps: 1 }])));
+  assert.deepStrictEqual(breakdownOf(a.month('2026-09'), 'horizontalPress'), [
+    { exerciseId: ID.bench, displayName: nameOf(ID.bench), pointsUnits: 2 * units(100, 1, 80), sessionCount: 2 },
+  ]);
+});
+
+test('breakdown attributes a same-day score tie to the catalogue-order winner', () => {
+  const bw = { weightKg: 80, dateKey: '2026-09-01' };
+  const set = { setKey: 's0', weight: 200, reps: 1 };
+  const mk = (slot, id) => ({ slot, dateKey: '2026-09-02', exerciseId: id, bestE1rm: set, heaviest: set, bestPoints: set, sets: [set], bodyweight: bw });
+  const day = scoreDay('2026-09-02', [mk('deadliftSumo', ID.sumo), mk('deadlift', ID.deadlift)], null, Sex.MALE);
+  const m = monthEntryFromDays('u', '2026-09', [day], {});
+  assert.deepStrictEqual(breakdownOf(m, 'hipHinge').map((r) => r.exerciseId), [ID.deadlift]);
+  assert.strictEqual(breakdownOf(m, 'hipHinge')[0].sessionCount, 1);
+});
+
+test('breakdown rows with equal points sort by canonical name, deterministically', () => {
+  const days = [
+    dayDoc('2026-09-02', [['hipHinge', 'deadliftSumo', 1000]]),
+    dayDoc('2026-09-03', [['hipHinge', 'deadlift', 1000]]),
+  ];
+  const a = monthEntryFromDays('u', '2026-09', days, {});
+  const b = monthEntryFromDays('u', '2026-09', [...days].reverse(), {});
+  const names = [nameOf(ID.deadlift), nameOf(ID.sumo)].sort();
+  assert.deepStrictEqual(breakdownOf(a, 'hipHinge').map((r) => r.displayName), names);
+  assert.deepStrictEqual(a.categoryExerciseBreakdown, b.categoryExerciseBreakdown);
+});
+
+test('breakdown is exact in integer units; display rounding is per row only', () => {
+  const m = monthEntryFromDays('u', '2026-09', [
+    dayDoc('2026-09-01', [['squatPattern', 'squat', 3333]]),
+    dayDoc('2026-09-02', [['squatPattern', 'bulgarianSplitSquatDumbbell', 3333]]),
+    dayDoc('2026-09-03', [['squatPattern', 'bulgarianSplitSquatBarbell', 3334]]),
+  ], {});
+  const rows = breakdownOf(m, 'squatPattern');
+  assert.strictEqual(sumOf(rows), 10000);
+  assert.strictEqual(m.categoryTotalsUnits.squatPattern, 10000);
+  assert.ok(rows.every((r) => Number.isInteger(r.pointsUnits)));
+});
+
+test('a single contributing exercise gives one row; empty categories give none', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  await a.log('2026-09-02', workout(row(ID.squat, [{ weight: 150, reps: 1 }])));
+  const m = a.month('2026-09');
+  assert.deepStrictEqual(breakdownOf(m, 'squatPattern'), [
+    { exerciseId: ID.squat, displayName: nameOf(ID.squat), pointsUnits: units(150, 0.8, 80), sessionCount: 1 },
+  ]);
+  for (const k of ['horizontalPress', 'verticalPull', 'overheadPress', 'hipHinge']) assert.deepStrictEqual(breakdownOf(m, k), []);
+});
+
+test('zero, absent and non-positive contributions are never listed', () => {
+  const zeroDay = dayDoc('2026-09-01', [['hipHinge', 'deadlift', 0]]);
+  const m = monthEntryFromDays('u', '2026-09', [
+    zeroDay,
+    { dateKey: '2026-09-02', periodKey: '2026-09', totalPointsUnits: 500, categories: { hipHinge: { slot: 'deadlift', exerciseId: ID.deadlift, pointsUnits: 500 }, squatPattern: { slot: 'squat', exerciseId: ID.squat, pointsUnits: 0 } } },
+    { dateKey: '2026-09-03', periodKey: '2026-09', totalPointsUnits: 0, categories: {} },
+    dayDoc('2026-08-31', [['hipHinge', 'deadliftSumo', 900]]), // another month
+  ], {});
+  assert.deepStrictEqual(breakdownOf(m, 'hipHinge'), [
+    { exerciseId: ID.deadlift, displayName: nameOf(ID.deadlift), pointsUnits: 500, sessionCount: 1 },
+  ]);
+  assert.deepStrictEqual(breakdownOf(m, 'squatPattern'), []);
+  assert.strictEqual(monthEntryFromDays('u', '2026-09', [zeroDay], {}), null);
+});
+
+test('breakdown resolves the canonical name from the catalogue, not the stored name', () => {
+  const d = dayDoc('2026-09-02', [['hipHinge', 'deadlift', 700]]);
+  d.categories.hipHinge.displayName = 'an old name';
+  delete d.categories.hipHinge.slot; // legacy day: the id alone decides
+  const rows = breakdownOf(monthEntryFromDays('u', '2026-09', [d], {}), 'hipHinge');
+  assert.deepStrictEqual(rows, [{ exerciseId: ID.deadlift, displayName: nameOf(ID.deadlift), pointsUnits: 700, sessionCount: 1 }]);
+});
+
+test('breakdown rows carry only id, canonical name, points and session count', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  await a.log('2026-09-02', workout(row(ID.chin, [{ weight: 20, reps: 5, setIndex: 0, rir: 2, notes: 'secret note' }])));
+  const m = a.month('2026-09');
+  for (const rows of Object.values(m.categoryExerciseBreakdown)) {
+    for (const r of rows) assert.deepStrictEqual(Object.keys(r).sort(), ['displayName', 'exerciseId', 'pointsUnits', 'sessionCount']);
+  }
+  const json = JSON.stringify(m.categoryExerciseBreakdown);
+  assert.ok(!/2026-09-02|weight|reps|rir|note|secret|fingerprint|setKey|bodyweight/i.test(json), json);
+  // All time is unchanged: no monthly breakdown there.
+  assert.ok(!('categoryExerciseBreakdown' in a.allTime()));
+});
+
+test('excluded accounts get no breakdown and are never patched by the backfill', () => {
+  const uid = EXCLUDED_LEADERBOARD_UIDS[1];
+  const days = [dayDoc('2026-09-02', [['hipHinge', 'deadlift', 700]])];
+  assert.strictEqual(monthEntryFromDays(uid, '2026-09', days, {}), null);
+  assert.deepStrictEqual(planEntry(uid, '2026-09', { uid }, days, {}), { status: 'excluded' });
+});
+
+test('rebuild, retry, replay and profile paths keep the same breakdown', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  await a.log('2026-09-02', workout(row(ID.bench, [{ weight: 100, reps: 1 }]), row(ID.dbBench, [{ weight: 50, reps: 1 }])));
+  await a.log('2026-09-10', workout(row(ID.bench, [{ weight: 110, reps: 1 }])));
+  const incremental = a.month('2026-09').categoryExerciseBreakdown;
+  assert.strictEqual(incremental.horizontalPress.length, 2);
+  // Full rebuild (showcaseRebuildWorker / stale formula), a queued range retry
+  // (leaderboardReconcileDaily) and a duplicate trigger delivery.
+  await applyRequest(a.lb, { full: true });
+  assert.deepStrictEqual(a.month('2026-09').categoryExerciseBreakdown, incremental);
+  await applyRequest(a.lb, { sinceDateKey: '2026-09-01' });
+  assert.deepStrictEqual(a.month('2026-09').categoryExerciseBreakdown, incremental);
+  await applyRequest(a.lb, { dateKeys: ['2026-09-02', '2026-09-10'] });
+  assert.deepStrictEqual(a.month('2026-09').categoryExerciseBreakdown, incremental);
+  // A profile write (leaderboardOnPublicProfileWrite) re-derives all time
+  // only; the monthly entry and its breakdown are kept.
+  a.setIdentity({ username: 'renamed', photoURL: null });
+  await refreshAllTime(a.lb);
+  assert.deepStrictEqual(a.month('2026-09').categoryExerciseBreakdown, incremental);
+  // A weigh-in re-scores the range: the breakdown follows the new scores.
+  a.weighIns.push({ id: 'w9', dateKey: '2026-09-05', weight: 90 });
+  await applyRequest(a.lb, { sinceDateKey: '2026-09-05' });
+  const m = a.month('2026-09');
+  assert.strictEqual(sumOf(m.categoryExerciseBreakdown.horizontalPress), m.categoryTotalsUnits.horizontalPress);
+});
+
+test('breakdown backfill: dry run by default, current month only', () => {
+  assert.strictEqual(parseBreakdownArgs([]).apply, false);
+  assert.strictEqual(parseBreakdownArgs(['--apply']).apply, true);
+  assert.throws(() => parseBreakdownArgs(['--apply', '--verify']));
+  assert.throws(() => parseBreakdownArgs(['--all']));
+  assert.strictEqual(assertCurrentMonth(null, '2026-09'), '2026-09');
+  assert.strictEqual(assertCurrentMonth('2026-09', '2026-09'), '2026-09');
+  assert.throws(() => assertCurrentMonth('2026-08', '2026-09'), /only the current month/);
+  assert.throws(() => assertCurrentMonth('all_time', '2026-09'), /only the current month/);
+});
+
+test('breakdown backfill patches only the new field, only on drift-free entries', () => {
+  const days = [
+    dayDoc('2026-09-02', [['hipHinge', 'deadlift', 700], ['squatPattern', 'squat', 300]]),
+    dayDoc('2026-09-04', [['hipHinge', 'deadliftSumo', 900]]),
+  ];
+  const full = monthEntryFromDays('u', '2026-09', days, { username: 'u' });
+  const legacy = Object.assign({}, full);
+  delete legacy.categoryExerciseBreakdown;
+  const plan = planEntry('u', '2026-09', legacy, days, { username: 'u' });
+  assert.strictEqual(plan.status, 'patch');
+  assert.deepStrictEqual(Object.keys(plan.patch), ['categoryExerciseBreakdown']);
+  assert.deepStrictEqual(plan.patch.categoryExerciseBreakdown, full.categoryExerciseBreakdown);
+  assert.ok(breakdownMatchesTotals(plan.patch.categoryExerciseBreakdown, full.categoryTotalsUnits));
+  // Idempotent: once patched there is nothing left to do.
+  assert.deepStrictEqual(planEntry('u', '2026-09', full, days, { username: 'u' }), { status: 'ok' });
+  // Drift in any score field: reported, never patched.
+  const drifted = Object.assign({}, legacy, { totalPointsUnits: 1 });
+  assert.strictEqual(planEntry('u', '2026-09', drifted, days, {}).status, 'drift');
+  // Session counts equal the distinct contributing dates.
+  const dates = contributingDates(days, '2026-09');
+  for (const r of full.categoryExerciseBreakdown.hipHinge) assert.strictEqual(dates.hipHinge.get(r.exerciseId).size, r.sessionCount);
+});
