@@ -26,18 +26,25 @@ enum TrendRange { d14, m1, m6, y1, y2 }
 /// queries/aggregation until the user actually switches to it (section 6).
 enum AnalyticsMetric { e1rm, velocity }
 
-/// One entry in the Home exercise picker: an exercise this athlete has
-/// recorded history for. ID-first — [id] is null only for legacy workout
-/// entries recorded before exercise ids existed.
+/// One entry in the Home exercise picker: ONE semantic exercise identity,
+/// shared by every Analytics path (E1RM, rep target, Velocity, Top Sets).
+/// ID-first — [id] is null only for legacy workout entries recorded before
+/// exercise ids existed that cannot be attributed to any one id.
 @immutable
 class ExerciseHistoryOption {
+  /// The canonical id (the catalogue's spelling when catalogued).
   final String? id;
   final String name;
 
+  /// Every stored id that IS this exercise, case-folded: [id] itself, its
+  /// case variants, and verified obsolete ids absorbed into it (see
+  /// [deriveExerciseHistoryOptions]). Empty for an id-less choice.
+  final Set<String> memberIds;
+
   /// Names this exercise was logged under on legacy entries that carry NO id,
-  /// included only when they demonstrably belong to it: exactly one exercise
-  /// id was ever recorded (or catalogued) under that name. Selecting the
-  /// option includes those sets.
+  /// included only when they demonstrably belong to it: exactly one choice
+  /// recorded (or catalogues) that name. Selecting the option includes those
+  /// sets.
   final Set<String> legacyNames;
 
   /// Shown after [name] only when another choice has the same visible name.
@@ -46,6 +53,7 @@ class ExerciseHistoryOption {
   const ExerciseHistoryOption({
     required this.id,
     required this.name,
+    this.memberIds = const <String>{},
     this.legacyNames = const <String>{},
     this.disambiguation,
   });
@@ -62,20 +70,47 @@ class ExerciseHistoryOption {
       ? 'id:${id!.toLowerCase()}'
       : 'name:${name.toLowerCase()}';
 
+  /// True when this choice owns the stored id [storedId] (case-folded).
+  bool ownsId(String storedId) {
+    final fold = storedId.trim().toLowerCase();
+    if (fold.isEmpty || id == null || id!.isEmpty) return false;
+    return fold == id!.toLowerCase() || memberIds.contains(fold);
+  }
+
+  /// The ONE matcher every Analytics path uses for this choice.
+  bool matchesEntry(String? entryId, String? entryName) =>
+      exerciseEntryMatches(entryId, entryName,
+          targetId: id,
+          targetName: name,
+          targetLegacyNames: (id == null || id!.isEmpty) ? null : legacyNames,
+          targetMemberIds: memberIds);
+
   @override
   bool operator ==(Object other) => other is ExerciseHistoryOption && other.key == key;
   @override
   int get hashCode => key.hashCode;
 }
 
+/// Exact-name comparison key: trimmed, case-folded, inner whitespace collapsed.
+String _nameKey(String name) =>
+    name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
 /// The Analytics picker's choices: ONE per actual exercise.
 ///
 ///  * Entries with an id group by the case-folded id (the server's rule), so
 ///    a stored id differing only in case is not a second choice.
+///  * A verified OBSOLETE id joins the current catalogue exercise it names.
+///    Conservative, evidence-based: the id is absent from the combined
+///    catalogue, it is a legacy NAME-FORM id (the stored id is itself the
+///    exercise name, as older clients wrote it — e.g. "Bench Press, Barbell"),
+///    every name recorded with it is that same name, and exactly one GLOBAL
+///    catalogue exercise — and no custom one — has that exact name. Nothing
+///    is absorbed without the catalogue, and two catalogued exercises are
+///    never merged, whatever their names.
 ///  * A legacy entry with NO id joins an id's choice only when that name
-///    demonstrably belongs to it: exactly one id was ever recorded or
-///    catalogued under it (a renamed exercise keeps its older name this way).
-///    Otherwise it stays its own choice.
+///    demonstrably belongs to it: exactly one choice recorded or catalogues
+///    it (a renamed exercise keeps its older name this way). Otherwise it
+///    stays its own choice.
 ///  * Distinct ids that share a visible name stay distinct and are labelled.
 List<ExerciseHistoryOption> deriveExerciseHistoryOptions({
   required List<RawWorkoutDoc> docs,
@@ -94,7 +129,7 @@ List<ExerciseHistoryOption> deriveExerciseHistoryOptions({
   }
   for (final raw in docs) {
     for (final e in raw.exercises) {
-      final id = (e['id'] ?? e['exerciseId'])?.toString().trim() ?? '';
+      final id = rawExerciseIdOf(e) ?? '';
       final name = (e['name'] ?? '').toString();
       if (id.isNotEmpty) {
         final fold = id.toLowerCase();
@@ -110,20 +145,59 @@ List<ExerciseHistoryOption> deriveExerciseHistoryOptions({
     }
   }
 
-  String displayOf(String fold) {
-    final catalogId = catalogByFold[fold];
+  // Verified obsolete ids → the one current catalogue exercise they name.
+  final globalByName = <String, List<String>>{}; // name key -> global folds
+  final customNames = <String>{};
+  catalogNameById?.forEach((id, name) {
+    final fold = id.toLowerCase();
+    if (customIds.contains(fold)) {
+      customNames.add(_nameKey(name));
+    } else {
+      (globalByName[_nameKey(name)] ??= <String>[]).add(fold);
+    }
+  });
+  final absorbedInto = <String, String>{}; // obsolete fold -> catalogue fold
+  for (final fold in canonicalId.keys) {
+    if (catalogByFold.containsKey(fold)) continue; // current: authoritative
+    final key = _nameKey(canonicalId[fold]!); // a name-form id IS its name
+    final names = recordedNames[fold] ?? const <String>{};
+    if (names.isEmpty || names.any((n) => _nameKey(n) != key)) continue;
+    final owners = globalByName[key] ?? const <String>[];
+    if (owners.length != 1 || customNames.contains(key)) continue;
+    absorbedInto[fold] = owners.single;
+  }
+
+  // Identities: every recorded id is its own group unless absorbed.
+  final members = <String, Set<String>>{}; // group fold -> member folds
+  final groupNames = <String, Set<String>>{}; // group fold -> recorded names
+  for (final fold in canonicalId.keys) {
+    final g = absorbedInto[fold] ?? fold;
+    (members[g] ??= <String>{}).add(fold);
+    (groupNames[g] ??= <String>{})
+        .addAll(recordedNames[fold] ?? const <String>{});
+  }
+  String groupId(String g) => catalogByFold[g] ?? canonicalId[g] ?? g;
+
+  String displayOf(String g) {
+    final catalogId = catalogByFold[g];
     final catalogName = catalogId == null ? null : catalogNameById![catalogId];
-    final n = catalogName ?? latestName[fold] ?? '';
+    String? recorded = latestName[g];
+    if (recorded == null) {
+      for (final f in members[g]!) {
+        recorded ??= latestName[f];
+      }
+    }
+    final n = catalogName ?? recorded ?? '';
     return n.isEmpty ? 'Unnamed exercise' : n;
   }
 
-  final owned = <String, Set<String>>{}; // folded -> legacy names it absorbs
+  final owned = <String, Set<String>>{}; // group -> legacy names it absorbs
   final standaloneLegacy = <String>[];
   for (final legacy in legacyNames) {
-    final owners = canonicalId.keys
-        .where((f) =>
-            (recordedNames[f]?.contains(legacy) ?? false) ||
-            displayOf(f) == legacy)
+    final owners = members.keys
+        .where((g) =>
+            (groupNames[g]?.contains(legacy) ?? false) ||
+            displayOf(g) == legacy)
         .toList();
     if (owners.length == 1) {
       (owned[owners.single] ??= <String>{}).add(legacy);
@@ -133,11 +207,12 @@ List<ExerciseHistoryOption> deriveExerciseHistoryOptions({
   }
 
   final idOptions = <ExerciseHistoryOption>[
-    for (final fold in canonicalId.keys)
+    for (final g in members.keys)
       ExerciseHistoryOption(
-        id: canonicalId[fold],
-        name: displayOf(fold),
-        legacyNames: owned[fold] ?? const <String>{},
+        id: groupId(g),
+        name: displayOf(g),
+        memberIds: members[g]!,
+        legacyNames: owned[g] ?? const <String>{},
       ),
   ];
   // Label distinct ids that share a visible name.
@@ -158,6 +233,7 @@ List<ExerciseHistoryOption> deriveExerciseHistoryOptions({
       idOptions[i] = ExerciseHistoryOption(
           id: o.id,
           name: o.name,
+          memberIds: o.memberIds,
           legacyNames: o.legacyNames,
           disambiguation: tag);
     }
@@ -174,6 +250,39 @@ List<ExerciseHistoryOption> deriveExerciseHistoryOptions({
       ),
   ]..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
   return out;
+}
+
+/// The choice a (possibly stale) saved or preselected exercise belongs to,
+/// or null while the evidence that would resolve it has not loaded yet.
+///
+///  * An id resolves to the choice owning it — its canonical id, a case
+///    variant, or a verified obsolete id absorbed into it.
+///  * A name-only selection (no id) resolves to the id-less choice of that
+///    exact name while one still exists; otherwise to the ONE id choice whose
+///    legacy names contain it, or failing that the ONE id choice showing it.
+ExerciseHistoryOption? resolveExerciseSelection(
+  List<ExerciseHistoryOption> options, {
+  required String? id,
+  required String? name,
+}) {
+  final tid = (id ?? '').trim();
+  if (tid.isNotEmpty) {
+    for (final o in options) {
+      if (o.ownsId(tid)) return o;
+    }
+    return null;
+  }
+  final n = name ?? '';
+  if (n.isEmpty) return null;
+  for (final o in options) {
+    if (o.id == null && o.name == n) return o;
+  }
+  final byLegacy =
+      options.where((o) => o.id != null && o.legacyNames.contains(n)).toList();
+  if (byLegacy.length == 1) return byLegacy.single;
+  final byName = options.where((o) => o.id != null && o.name == n).toList();
+  if (byName.length == 1) return byName.single;
+  return null;
 }
 
 /// One raw recorded set carrying an actual saved velocity, for the velocity
@@ -341,13 +450,20 @@ bool exerciseEntryMatches(
   /// it ([ExerciseHistoryOption.legacyNames]). Null keeps the plain
   /// same-name fallback for callers that know nothing more.
   Set<String>? targetLegacyNames,
+
+  /// For an id target: every stored id (case-folded) that IS it — case
+  /// variants and verified obsolete ids ([ExerciseHistoryOption.memberIds]).
+  Set<String>? targetMemberIds,
 }) {
   final id = (entryId ?? '').trim();
   final tid = (targetId ?? '').trim();
   if (id.isNotEmpty) {
     // Case-folded, as the server's RE catalogue compares ids: a stored id
     // that differs only in case is the same exercise.
-    return tid.isNotEmpty && id.toLowerCase() == tid.toLowerCase();
+    if (tid.isEmpty) return false;
+    final fold = id.toLowerCase();
+    return fold == tid.toLowerCase() ||
+        (targetMemberIds?.contains(fold) ?? false);
   }
   final name = entryName ?? '';
   if (tid.isNotEmpty && targetLegacyNames != null) {
@@ -415,6 +531,7 @@ List<Workout> deriveWorkoutsForExercise({
   required String? targetId,
   String? targetName,
   Set<String>? targetLegacyNames,
+  Set<String>? targetMemberIds,
   /// Bodyweight classification, resolved by the caller (which owns the
   /// catalogue/registry). This function stays pure and performs no lookup.
   bool isBodyweight = false,
@@ -429,12 +546,13 @@ List<Workout> deriveWorkoutsForExercise({
   for (final raw in docs) {
     final matching = <Exercise>[];
     for (final e in raw.exercises) {
-      final id = (e['id'] ?? e['exerciseId'])?.toString();
+      final id = rawExerciseIdOf(e);
       final name = (e['name'])?.toString();
       if (exerciseEntryMatches(id, name,
           targetId: targetId,
           targetName: targetName,
-          targetLegacyNames: targetLegacyNames)) {
+          targetLegacyNames: targetLegacyNames,
+          targetMemberIds: targetMemberIds)) {
         matching.add(Exercise.fromFirestore(e));
       }
     }
@@ -457,6 +575,15 @@ List<Workout> deriveWorkoutsForExercise({
   return bestWorkoutByDay.values.toList();
 }
 
+/// Every set of a derived day's winning workout for the selected exercise.
+/// [deriveWorkoutsForExercise] already keeps ONLY the matching entries, so
+/// this never re-matches (a second match used to drop WES2 `exerciseId`
+/// rows, and kept only the first of several matching entries): every
+/// matching entry — the exercise logged twice that day, or under an alias
+/// id — contributes its sets. E1RM, rep target and Top Sets all read this.
+List<SetDetails> matchingSetsOf(Workout workout) =>
+    <SetDetails>[for (final e in workout.exercises) ...e.sets];
+
 /// Every valid [VelocitySample] for one exercise, derived from shared raw
 /// docs — scans EVERY matching entry per day (not just an E1RM winner), so
 /// a fastest set outside the winning workout is never missed. A top-level
@@ -466,6 +593,7 @@ List<VelocitySample> deriveVelocitySamplesForExercise({
   required String? targetId,
   String? targetName,
   Set<String>? targetLegacyNames,
+  Set<String>? targetMemberIds,
   /// Bodyweight classification, resolved by the caller. Pure function: no
   /// lookup happens here.
   bool isBodyweight = false,
@@ -476,12 +604,13 @@ List<VelocitySample> deriveVelocitySamplesForExercise({
   final out = <VelocitySample>[];
   for (final raw in docs) {
     for (final e in raw.exercises) {
-      final rid = (e['id'] ?? e['exerciseId'])?.toString();
+      final rid = rawExerciseIdOf(e);
       final rname = (e['name'])?.toString();
       if (!exerciseEntryMatches(rid, rname,
           targetId: targetId,
           targetName: targetName,
-          targetLegacyNames: targetLegacyNames)) {
+          targetLegacyNames: targetLegacyNames,
+          targetMemberIds: targetMemberIds)) {
         continue;
       }
       final sets = (e['sets'] as List?) ?? const [];
@@ -817,12 +946,18 @@ class ExerciseDetailsScreen extends StatefulWidget {
   @visibleForTesting
   final RawFetcher Function(String uid)? historyFetcherForUid;
 
+  /// Test seam: the combined exercise catalogue for an athlete uid.
+  /// Production leaves it null and loads the global + custom catalogue.
+  @visibleForTesting
+  final Future<List<CatalogExercise>> Function(String uid)? catalogLoaderForUid;
+
   const ExerciseDetailsScreen({
     super.key,
     this.exerciseId,
     this.exerciseName,
     this.recentWorkouts,
     this.historyFetcherForUid,
+    this.catalogLoaderForUid,
   });
 
   @override
@@ -850,6 +985,7 @@ class _ExerciseDetailsScreenState extends State<ExerciseDetailsScreen> {
       exerciseId: original ? widget.exerciseId : null,
       exerciseName: original ? widget.exerciseName : null,
       historyFetcherForUid: widget.historyFetcherForUid,
+      catalogLoaderForUid: widget.catalogLoaderForUid,
     );
   }
 }
@@ -861,12 +997,14 @@ class _ExerciseDetailsView extends StatefulWidget {
     this.exerciseId,
     this.exerciseName,
     this.historyFetcherForUid,
+    this.catalogLoaderForUid,
   });
 
   final String athleteUid;
   final String? exerciseId;
   final String? exerciseName;
   final RawFetcher Function(String uid)? historyFetcherForUid;
+  final Future<List<CatalogExercise>> Function(String uid)? catalogLoaderForUid;
 
   @override
   State<_ExerciseDetailsView> createState() => _ExerciseDetailsViewState();
@@ -891,6 +1029,7 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
 
   void _onLoaderChanged() {
     if (mounted) setState(() {});
+    _scheduleSelectionReconcile(); // new history can resolve a stale pick
   }
 
   /// Fires a coverage/invalidate request without awaiting it (preset
@@ -1019,11 +1158,13 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
   List<Workout> _deriveWorkouts() {
     final loader = _loader;
     if (loader == null || !_hasExercise) return <Workout>[];
+    final target = _activeTarget();
     return deriveWorkoutsForExercise(
       docs: loader.docs,
-      targetId: _activeExerciseId,
-      targetName: _activeExerciseName,
-      targetLegacyNames: _activeLegacyNames,
+      targetId: target.id,
+      targetName: target.name,
+      targetLegacyNames: target.legacyNames,
+      targetMemberIds: target.memberIds,
       isBodyweight: _activeIsBodyweight,
       bodyweightKgForDate: _recordedBwOn,
     );
@@ -1238,11 +1379,13 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
   List<VelocitySample> _deriveVelocitySamples() {
     final loader = _loader;
     if (loader == null || !_hasExercise) return <VelocitySample>[];
+    final target = _activeTarget();
     return deriveVelocitySamplesForExercise(
       docs: loader.docs,
-      targetId: _activeExerciseId,
-      targetName: _activeExerciseName,
-      targetLegacyNames: _activeLegacyNames,
+      targetId: target.id,
+      targetName: target.name,
+      targetLegacyNames: target.legacyNames,
+      targetMemberIds: target.memberIds,
       isBodyweight: _activeIsBodyweight,
       bodyweightKgForDate: _recordedBwOn,
     );
@@ -1391,7 +1534,8 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
 
   Future<void> _loadCatalogNames(String uid) async {
     try {
-      final catalog = await ExerciseCatalog.loadCombinedExercisesForUser(uid);
+      final catalog = await (widget.catalogLoaderForUid?.call(uid) ??
+          ExerciseCatalog.loadCombinedExercisesForUser(uid));
       if (!mounted) return;
       setState(() {
         _catalogNameById = {for (final c in catalog) c.id: c.name};
@@ -1400,6 +1544,8 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
             if (c.source == ExerciseSource.custom) c.id.toLowerCase()
         };
       });
+      // Catalogue evidence can resolve a stale (obsolete-id) selection.
+      _scheduleSelectionReconcile();
     } catch (_) {
       /* keep falling back to stored names */
     }
@@ -1419,27 +1565,97 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
       catalogNameById: _catalogNameById,
       customIds: _customIds,
     );
-    if (_hasExercise) {
-      final active = ExerciseHistoryOption(
-          id: _activeExerciseId, name: _activeExerciseName ?? '(unnamed)');
-      if (!list.any((o) => o.key == active.key)) {
-        list.add(active);
-        list.sort(
-            (a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
-      }
+    // The active exercise is listed even outside the loaded window, but only
+    // while it resolves to no choice: a stale saved or preselected pick that
+    // belongs to a choice is never shown as an extra row.
+    if (_hasExercise &&
+        resolveExerciseSelection(list,
+                id: _activeExerciseId, name: _activeExerciseName) ==
+            null) {
+      list.add(ExerciseHistoryOption(
+          id: _activeExerciseId, name: _activeExerciseName ?? '(unnamed)'));
+      list.sort(
+          (a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
     }
     return list;
   }
 
-  /// The legacy names the ACTIVE choice covers (see [ExerciseHistoryOption]).
-  /// Null (plain same-name fallback) only when it is not an id choice.
-  Set<String>? get _activeLegacyNames {
-    if (_activeExerciseId == null || _activeExerciseId!.isEmpty) return null;
-    final key = 'id:${_activeExerciseId!.toLowerCase()}';
-    for (final o in _deriveExerciseOptions()) {
-      if (o.key == key) return o.legacyNames;
+  /// The choice the active selection belongs to, or null while it resolves
+  /// to none (see [resolveExerciseSelection]).
+  ExerciseHistoryOption? _resolvedActiveOption() {
+    if (!_hasExercise) return null;
+    return resolveExerciseSelection(
+      deriveExerciseHistoryOptions(
+        docs: _loader?.docs ?? const <RawWorkoutDoc>[],
+        catalogNameById: _catalogNameById,
+        customIds: _customIds,
+      ),
+      id: _activeExerciseId,
+      name: _activeExerciseName,
+    );
+  }
+
+  /// The ONE identity every Analytics path (E1RM, rep target, Velocity, Top
+  /// Sets) filters by: the resolved choice (canonical id, member ids, legacy
+  /// names) or, while nothing resolves it, the bare selection with the plain
+  /// same-name fallback for id-less entries.
+  ({
+    String? id,
+    String? name,
+    Set<String>? legacyNames,
+    Set<String>? memberIds,
+  }) _activeTarget() {
+    final o = _resolvedActiveOption();
+    if (o == null) {
+      return (
+        id: _activeExerciseId,
+        name: _activeExerciseName,
+        legacyNames: null,
+        memberIds: null,
+      );
     }
-    return null;
+    return (
+      id: o.id,
+      name: o.name,
+      legacyNames: (o.id == null || o.id!.isEmpty) ? null : o.legacyNames,
+      memberIds: o.memberIds,
+    );
+  }
+
+  /// Whether a healed selection is written back: true for a pick restored
+  /// from this athlete's saved selection or made in the picker, false for a
+  /// BB3/WES2/history preselection (which never writes the saved pick).
+  bool _persistHealedSelection = false;
+  bool _reconcileScheduled = false;
+
+  /// Heals a stale selection (a saved name-only or obsolete-id pick) to its
+  /// canonical choice once the evidence resolving it has loaded. Runs after
+  /// the current frame (never during build), at most once per frame, and
+  /// writes only when the canonical choice differs, so it cannot loop.
+  void _scheduleSelectionReconcile() {
+    if (_reconcileScheduled || !mounted) return;
+    _reconcileScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reconcileScheduled = false;
+      _reconcileSelection();
+    });
+  }
+
+  void _reconcileSelection() {
+    if (!mounted || !_hasExercise) return;
+    final o = _resolvedActiveOption();
+    if (o == null || o.id == null || o.id!.isEmpty) return;
+    if (o.id == _activeExerciseId && o.name == _activeExerciseName) return;
+    // Same exercise, canonical identity: the velocity combination and every
+    // other view state stay as they are.
+    setState(() {
+      _activeExerciseId = o.id;
+      _activeExerciseName = o.name;
+    });
+    if (_persistHealedSelection) {
+      // ignore: discarded_futures
+      _persistLastSelectedExercise(userId, o);
+    }
   }
 
   /// Extends coverage all the way back so older exercises become
@@ -1487,6 +1703,7 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
       // ignore: discarded_futures
       _persistLastSelectedExercise(uid, option);
     }
+    _scheduleSelectionReconcile();
     _maybePrimeBodyweight(uid);
     // Defensive: coverage is athlete-wide, so this is normally already
     // satisfied, but an exercise switch must never leave the retained
@@ -1517,12 +1734,13 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
 
   Widget _buildExercisePicker(BuildContext context) {
     final accent = Theme.of(context).colorScheme.tertiary;
-    final activeOption = _hasExercise
-        ? ExerciseHistoryOption(
-            id: _activeExerciseId, name: _activeExerciseName ?? '(unnamed)')
-        : null;
-
     final items = _deriveExerciseOptions();
+    final activeOption = _hasExercise
+        ? (resolveExerciseSelection(items,
+                id: _activeExerciseId, name: _activeExerciseName) ??
+            ExerciseHistoryOption(
+                id: _activeExerciseId, name: _activeExerciseName ?? '(unnamed)'))
+        : null;
     // Distinct from "nothing found in what's loaded so far" (issue 3) —
     // only true once discovery has actually reached the supported minimum.
     final bool fullyDiscovered =
@@ -1603,6 +1821,7 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
               ],
               onChanged: (picked) {
                 if (picked == null || picked == activeOption) return;
+                _persistHealedSelection = true;
                 _selectExercise(picked, persist: true);
               },
             ),
@@ -2284,6 +2503,7 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
         if (!mounted) return;
         setState(() => _restoringLastExercise = false);
         if (restored != null) {
+          _persistHealedSelection = true; // a healed saved pick is re-saved
           _selectExercise(restored); // not persisted again — already stored
           // The restored exercise renders immediately from whatever's
           // already loaded/loading; ensure its own default window too.
@@ -2319,20 +2539,13 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
     int matchedWorkouts = 0;
 
     for (final workout in sortedWorkouts) {
-      // ID-first: an entry with its own id must match it exactly and can
-      // never be matched by name instead (exerciseEntryMatches).
-      final ex = workout.exercises.firstWhere(
-        (e) => exerciseEntryMatches(e.id, e.name,
-            targetId: _activeExerciseId,
-            targetName: _activeExerciseName,
-            targetLegacyNames: _activeLegacyNames),
-        orElse: () => Exercise(name: '', sets: const [], circuitIndex: 0),
-      );
-      if (ex.name.isEmpty || ex.sets.isEmpty) continue;
+      // Already only the matching entries (matchingSetsOf).
+      final sets = matchingSetsOf(workout);
+      if (sets.isEmpty) continue;
 
       matchedWorkouts++;
 
-      final top = ex.sets.reduce((a, b) {
+      final top = sets.reduce((a, b) {
         final aE1 = calculateE1RM(_chartWeight(a, workout.date) ?? 0.0, (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
         final bE1 = calculateE1RM(_chartWeight(b, workout.date) ?? 0.0, (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
         return aE1 > bE1 ? a : b;
@@ -2405,21 +2618,14 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
       final metaForGroup = <DateTime, _PointMeta>{};
 
       for (final workout in sortedWorkouts) {
-        // ID-first (exerciseEntryMatches): an entry's own id, when present,
-        // can never be overridden by a coincidental name match.
-        final ex = workout.exercises.firstWhere(
-          (e) => exerciseEntryMatches(e.id, e.name,
-              targetId: _activeExerciseId,
-              targetName: _activeExerciseName,
-              targetLegacyNames: _activeLegacyNames),
-          orElse: () => Exercise(name: '', sets: const [], circuitIndex: 0),
-        );
-        if (ex.sets.isEmpty) continue;
+        // Already only the matching entries (matchingSetsOf).
+        final sets = matchingSetsOf(workout);
+        if (sets.isEmpty) continue;
 
         // choose THE day's top set USING RIR
         SetDetails? topSetInc;
         double bestInc = double.negativeInfinity;
-        for (final s in ex.sets) {
+        for (final s in sets) {
           final w = _chartWeight(s, workout.date) ?? 0.0;
           final r = (s.reps ?? 0).toDouble();
           final rir = (s.rir ?? 0.0);
@@ -3186,18 +3392,11 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
         itemBuilder: (context, index) {
           final revIndex = sortedWorkouts.length - 1 - index;
           final workout = sortedWorkouts[revIndex];
-          // ID-first (exerciseEntryMatches) — this list used to match by
-          // name alone, so a same-named but different-id entry could show
-          // the wrong exercise's top sets.
-          final exercise = workout.exercises.firstWhere(
-            (ex) => exerciseEntryMatches(ex.id, ex.name,
-                targetId: _activeExerciseId,
-                targetName: _activeExerciseName,
-                targetLegacyNames: _activeLegacyNames),
-            orElse: () => Exercise(name: '', sets: []),
-          );
+          // Already only the matching entries (matchingSetsOf), matched
+          // ID-first by the selected identity.
+          final sets = matchingSetsOf(workout);
 
-          if (exercise.sets.isEmpty) return const SizedBox.shrink();
+          if (sets.isEmpty) return const SizedBox.shrink();
 
           final bool isBw = _activeIsBodyweight;
           // Bodyweight exercises: WES2 stores the added load, the legacy
@@ -3209,7 +3408,7 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
               ? (s.bodyweightLoad(dayBw).totalKg ?? 0.0)
               : (s.weight ?? 0.0);
 
-          final topSet = exercise.sets.reduce((a, b) {
+          final topSet = sets.reduce((a, b) {
             final aE1 = calculateE1RM(rankWeight(a), (a.reps ?? 0).toDouble(), a.rir ?? 0.0);
             final bE1 = calculateE1RM(rankWeight(b), (b.reps ?? 0).toDouble(), b.rir ?? 0.0);
             return aE1 > bE1 ? a : b;

@@ -1,5 +1,6 @@
 // The leaderboard repository (server-ordered, paginated query) and its
-// controller (period selection, paging, loading / empty / error states).
+// controller (period selection, the top-20 board, loading / empty / error
+// states).
 
 import 'dart:async';
 import 'dart:io';
@@ -42,6 +43,8 @@ class _ScriptedRepo extends LeaderboardRepository {
   final Map<LeaderboardPeriod, List<Future<LeaderboardPageResult> Function()>>
       pages;
   final List<LeaderboardPeriod> calls = <LeaderboardPeriod>[];
+  final List<int> limits = <int>[];
+  final List<Object?> cursors = <Object?>[];
 
   @override
   Future<LeaderboardPageResult> fetchPage(LeaderboardPeriod period,
@@ -49,6 +52,8 @@ class _ScriptedRepo extends LeaderboardRepository {
       int startRank = 1,
       int limit = LeaderboardRepository.pageSize}) {
     calls.add(period);
+    limits.add(limit);
+    cursors.add(after);
     final List<Future<LeaderboardPageResult> Function()> list = pages[period]!;
     final int n = calls.where((LeaderboardPeriod p) => p == period).length - 1;
     return list[n < list.length ? n : list.length - 1]();
@@ -160,6 +165,32 @@ void main() {
       expect(all.entries.length, 5);
     });
 
+    test('the top-20 query returns exactly ranks 1–20 of 25, for both periods',
+        () async {
+      final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+      for (final String p in <String>['2026-09', 'all_time']) {
+        await seed(db, p, <Map<String, Object?>>[
+          for (int i = 0; i < 25; i++) row('$p-u$i', 100000 - i, '2026-09-01'),
+        ]);
+      }
+      final LeaderboardRepository repo =
+          LeaderboardRepository(firestore: db, clock: () => kNow);
+      expect(LeaderboardRepository.boardSize, 20);
+      for (final (LeaderboardPeriod period, String key)
+          in <(LeaderboardPeriod, String)>[
+        (LeaderboardPeriod.thisMonth, '2026-09'),
+        (LeaderboardPeriod.allTime, 'all_time'),
+      ]) {
+        final LeaderboardPageResult top = await repo.fetchPage(period,
+            limit: LeaderboardRepository.boardSize);
+        expect(top.entries.map((LeaderboardEntry e) => e.rank),
+            <int>[for (int r = 1; r <= 20; r++) r]);
+        expect(top.entries.map((LeaderboardEntry e) => e.uid),
+            <String>[for (int i = 0; i < 20; i++) '$key-u$i'],
+            reason: 'server order preserved');
+      }
+    });
+
     test('This Month and All Time query different periods', () async {
       final FakeFirebaseFirestore db = FakeFirebaseFirestore();
       await seed(db, '2026-09',
@@ -242,24 +273,36 @@ void main() {
       expect(n, 1);
     });
 
-    test('load more appends the next page once', () async {
+    test('each board loads ONE top-20 page and never a further page',
+        () async {
+      final List<String> month = <String>[for (int i = 0; i < 25; i++) 'm$i'];
+      final List<String> all = <String>[for (int i = 0; i < 25; i++) 'a$i'];
       final _ScriptedRepo repo = _ScriptedRepo(<LeaderboardPeriod,
           List<Future<LeaderboardPageResult> Function()>>{
+        // A repository that over-delivers (25 rows, "more" available) is
+        // still shown as ranks 1–20 only.
         LeaderboardPeriod.thisMonth: <Future<LeaderboardPageResult> Function()>[
-          () async => page(<String>['a', 'b'], hasMore: true),
-          () async => page(<String>['c'], start: 3),
+          () async => page(month, hasMore: true),
         ],
         LeaderboardPeriod.allTime: <Future<LeaderboardPageResult> Function()>[
-          () async => page(<String>[])
+          () async => page(all, hasMore: true),
         ],
       });
       final LeaderboardController c = LeaderboardController(repository: repo);
       await c.start();
-      await Future.wait(<Future<void>>[c.loadMore(), c.loadMore()]);
+      expect(c.entries.map((LeaderboardEntry e) => e.rank),
+          <int>[for (int r = 1; r <= 20; r++) r]);
+      expect(c.entries.last.uid, 'm19');
+      await c.selectPeriod(LeaderboardPeriod.allTime);
       expect(c.entries.map((LeaderboardEntry e) => e.uid),
-          <String>['a', 'b', 'c']);
-      expect(c.hasMore, isFalse);
-      expect(repo.calls.length, 2);
+          <String>[for (int i = 0; i < 20; i++) 'a$i']);
+      await c.selectPeriod(LeaderboardPeriod.thisMonth);
+      await c.refresh();
+      expect(c.entries, hasLength(20));
+      expect(repo.limits, <int>[20, 20, 20],
+          reason: 'every load asks for the top 20 only');
+      expect(repo.cursors, everyElement(isNull),
+          reason: 'never a next page after a cursor');
     });
 
     test('a stale response for a superseded load is discarded', () async {

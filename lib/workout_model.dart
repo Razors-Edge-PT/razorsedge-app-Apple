@@ -47,6 +47,19 @@ class Workout {
 
 }
 
+/// The exercise id a stored workout row carries. Legacy-screen rows store it
+/// as `id`, WES2 rows as `exerciseId`; a non-blank `id` wins when both are
+/// present, and a blank value is no id at all. The ONE reader of a row's
+/// identity: [Exercise.fromFirestore] and every Analytics raw-row reader use
+/// it, so a row matched from its raw map keeps the same id once parsed.
+String? rawExerciseIdOf(Map<String, dynamic> row) {
+  for (final key in const <String>['id', 'exerciseId']) {
+    final v = row[key]?.toString().trim() ?? '';
+    if (v.isNotEmpty) return v;
+  }
+  return null;
+}
+
 class Exercise {
   final String? id;                  // 👈 optional id
   final String name;
@@ -75,7 +88,7 @@ class Exercise {
 
     final rawType = data['type'];
     return Exercise(
-      id: data['id']?.toString(),                   // 👈 safely pick up id if present
+      id: rawExerciseIdOf(data),                    // 👈 `id` or WES2's `exerciseId`
       name: data['name'] ?? 'Unnamed Exercise',
       sets: sets,
       circuitIndex: data['circuitIndex'] ?? 0, // ✅ Read from Firestore or fallback

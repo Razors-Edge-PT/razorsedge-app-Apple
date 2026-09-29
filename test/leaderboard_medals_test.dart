@@ -1,7 +1,7 @@
 // Leaderboard category medals in the app: parsing the server snapshot,
 // attaching awards to rows by uid, the vector medal strip, the detail sheet,
-// tap separation from profile navigation, board switching, paging, cached
-// medals, and narrow / large-text layouts.
+// tap separation from profile navigation, board switching, the top-20
+// board, cached medals, and narrow / large-text layouts.
 
 import 'dart:async';
 import 'dart:io';
@@ -408,12 +408,14 @@ void main() {
           reason: 'kept, immediately');
     });
 
-    testWidgets('a medallist on a later page gets their medal after Show more',
-        (WidgetTester tester) async {
+    testWidgets(
+        'medals on the top-20 board: rank 20 keeps its medal, rank 21+ is '
+        'never shown and there is no Show more', (WidgetTester tester) async {
       final FakeFirebaseFirestore db = FakeFirebaseFirestore();
       final List<String> uids = <String>[for (int i = 0; i < 55; i++) 'u$i'];
       await seedMedals(db, '2026-09', <String, List<Object?>>{
-        'squatPattern': <Object?>[award('u53', 1, 5)],
+        'squatPattern': <Object?>[award('u19', 1, 5)],
+        'hipHinge': <Object?>[award('u53', 1, 5)],
       });
       // Pages are scripted (the fake's cursor paging of this query is not
       // supported); the medals come from the real snapshot read.
@@ -421,10 +423,13 @@ void main() {
           size: const Size(400, 5000),
           friends: uids,
           repo: _PagedRepo(db, uids));
+      expect(row('u19'), findsOneWidget);
+      expect(medal('u19', 'squatPattern'), findsOneWidget);
+      expect(row('u20'), findsNothing);
       expect(row('u53'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey<String>('leaderboard-more')));
-      await tester.pumpAndSettle();
-      expect(medal('u53', 'squatPattern'), findsOneWidget);
+      expect(find.byKey(const ValueKey<String>('leaderboard-more')),
+          findsNothing);
+      expect(find.text('Show more'), findsNothing);
     });
 
     testWidgets(

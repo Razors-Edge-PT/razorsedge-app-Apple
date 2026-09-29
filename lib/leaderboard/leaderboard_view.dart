@@ -2,8 +2,8 @@
 ///
 /// Sized to its content with NO scrollable of its own — it sits inside a host
 /// scroll view (the home page), so there is no nested scrolling and nothing
-/// needs an unbounded height. Further pages come from an explicit
-/// "Show more" control rather than a scroll listener.
+/// needs an unbounded height. Each board shows its top 20 only (ranks 1–20);
+/// there is no further page and no "Show more" control.
 ///
 /// Every row always shows its public rank, photo, name and RE Points. Opening
 /// a profile is gated by the SIGNED-IN account's relationship (never a coach's
@@ -255,22 +255,6 @@ class _LeaderboardViewState extends State<LeaderboardView> {
       case LeaderboardStatus.ready:
         return <Widget>[
           for (final LeaderboardEntry e in _c.entries) _row(e),
-          if (_c.hasMore)
-            Padding(
-              padding: const EdgeInsets.only(top: ProfileSpacing.sm),
-              child: Center(
-                child: _c.loadingMore
-                    ? const SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator())
-                    : TextButton(
-                        key: const ValueKey<String>('leaderboard-more'),
-                        onPressed: _c.loadMore,
-                        child: const Text('Show more'),
-                      ),
-              ),
-            ),
         ];
     }
   }

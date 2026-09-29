@@ -5,8 +5,9 @@
 ///   totalPointsUnits desc, tieBreakDateKey asc (the day the total was
 ///   reached — earlier wins), uid asc
 /// so equal totals always rank the same way and the client never sorts a
-/// whole list. Rows with no points are excluded by the query. Pages are
-/// cursor-based (startAfterDocument); ranks continue across pages.
+/// whole list. Rows with no points are excluded by the query. The app shows
+/// only the top [LeaderboardRepository.boardSize] of each board; pages are
+/// cursor-based (startAfterDocument) and ranks continue across pages.
 ///
 /// Backed by the composite index in firestore.indexes.json. Reads go through
 /// Firestore's own persistence, so a leaderboard seen once still opens
@@ -32,8 +33,12 @@ class LeaderboardRepository {
   final FirebaseFirestore _db;
   final DateTime Function() _clock;
 
-  /// First page size. Later pages use the same.
+  /// Default page size for [fetchPage].
   static const int pageSize = 50;
+
+  /// Both boards (This Month and All Time) show ranks 1–[boardSize] only:
+  /// the app never queries or shows a row below it. Server data is untouched.
+  static const int boardSize = 20;
 
   /// The period key [period] resolves to right now.
   String periodKey(LeaderboardPeriod period) => periodKeyFor(period, _clock());
