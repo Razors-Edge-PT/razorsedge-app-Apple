@@ -33,6 +33,14 @@ class DmBadgeButton extends StatelessWidget {
   final double iconSize;
   final Color? iconColor;
 
+  /// Opens Messages: what tapping the icon does, and what a voice "messages"
+  /// does (Home's Aurelian handler).
+  static Future<void> open(BuildContext context, {DmUnreadService? unreadService}) =>
+      Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => DirectMessages(
+            unreadService: unreadService ?? DmUnreadService.instance),
+      ));
+
   @override
   Widget build(BuildContext context) {
     final DmUnreadService unread = unreadService ?? DmUnreadService.instance;
@@ -53,11 +61,7 @@ class DmBadgeButton extends StatelessWidget {
               tooltip: count == 0
                   ? 'Messages'
                   : '$count unread ${count == 1 ? 'message' : 'messages'}',
-              onPressed: () {
-                Navigator.of(context).push(MaterialPageRoute<void>(
-                  builder: (_) => DirectMessages(unreadService: unread),
-                ));
-              },
+              onPressed: () => open(context, unreadService: unread),
             ),
             if (count > 0)
               Positioned(

@@ -22,7 +22,7 @@ Mirrored exactly in Aurelian's `execution/goodlift/GoodLiftProtocol.kt`.
 | Target | package `com.goodlift.razorsedge`, activity `com.goodlift.razorsedge.MainActivity` (the canonical current package; legacy Good Lift packages are never used) |
 | Action | `com.goodlift.razorsedge.action.AURELIAN_COMMAND` (intent filter on MainActivity, category DEFAULT) |
 | Extras | `aurelian.protocol` (Int = 1), `aurelian.requestId` (`[A-Za-z0-9-]{1,64}`), `aurelian.command`, `aurelian.sentAtElapsed` (Long, `SystemClock.elapsedRealtime()`), `aurelian.caller` (immutable PendingIntent, caller proof), `aurelian.reply` (one-shot reply PendingIntent) |
-| Arguments | `aurelian.arg.<name>`; only the names and types each command allows (below). Strings ≤ 80 chars, doubles finite |
+| Arguments | `aurelian.arg.<name>`; only the names and types each command allows (below). Names ≤ 80 chars, the one spoken-list `phrase` ≤ 200, `choices` a string list of ≤ 8 × ≤ 80, doubles finite |
 | Reply extras | `aurelian.requestId`, `aurelian.status`, `aurelian.message` (≤ 200), optional `aurelian.candidates` (≤ 8 × ≤ 80), `aurelian.context` (≤ 80) |
 | Statuses | `ok`, `ambiguous`, `not_found`, `not_handled` (no GoodLift screen can do it; Aurelian then taps instead, used by "select"), `unavailable`, `unsupported`, `invalid`, `failed` |
 
@@ -37,11 +37,39 @@ Mirrored exactly in Aurelian's `execution/goodlift/GoodLiftProtocol.kt`.
 | `open_set_note` | `setNumber` | the existing set-note dialog (`_onOpenSetNoteDialog(row, setNumber - 1)`), note field focused |
 | `open_exercise_note` | — | the existing exercise execution-note dialog |
 | `add_set` | — | `_onAddSet` |
-| `mark_exercise_done` | — | the Done coordinator (`_onToggleMarkedDone`), only when the card itself offers "Completed?" |
+| `mark_exercise_done` | optional `exercise`, `choices` | the Done coordinator (`_onToggleMarkedDone`), only when the card itself offers "Completed?" |
 | `analytics_metric` | `metric` (`e1rm` / `velocity`) | Analytics `_setMetric` |
 
-Not offered: deleting exercises, removing sets, and undo. WES2's undo restores rows in memory without
-re-queuing the restored structure to the durable outbox for ordinary rows, so it is not exposed to voice.
+Added in the voice UX expansion (still protocol v1: new commands and new optional arguments only; an
+older GoodLift answers `unsupported` for a command it does not know):
+
+| Command | Arguments | What runs |
+|---|---|---|
+| `set_fields` (extended) | optional `exercise`, `choices` | as above, on the named exercise, which becomes the voice target |
+| `navigate` | `destination`: `body_weight_tracker`, `workout_planner`, `profile`, `block_planner_2`, `week_planner`, `settings`, `coach_dashboard`, `coaching`, `feed`, `leaderboard`, `buddy_hub`, `messages`, `menu` | Home's own card / top-bar handlers (`_openWorkoutPlanner`, `_openWeekPlanner`, … `BuddyHubButton.open`, `DmBadgeButton.open`, `openDrawer`), with the cards' readiness checks; Coach Dashboard only for coach accounts and Coaching only for athlete accounts, as on the Home screen; Feed/Leaderboard through the section's own switch (`HomeCommunityController`) and Menu only while Home is the screen in front |
+| `workout_action` | `action`: `load_template`, `select_date`, `previous_day`, `next_day`, `add_circuit`, `exercise_settings`, `exercise_details`, `top_sets`, `current_exercise` | the WES2 buttons' own handlers (`_showTemplatePicker`, `_onSelectDate`, `_onPrevDay`, `_onNextDay`, `_onAddCircuit`, `_showExerciseSettingsDialog`, `_navigateToExerciseDetails`, `_navigateToTopSets`); `current_exercise` names the voice target |
+| `add_exercises` | `phrase`, optional `choices` | splits the spoken list against the Add Exercise picker's catalogue (`ExerciseCatalog.loadCombinedExercisesForUser`, minus the day's exercises), resolves EVERY name first (≤ 10), then adds each through `_addExerciseFromPicker`; with the picker open, a single name is picked there |
+| `clear_set` | `setNumber`, optional `exercise`, `choices` | for each logged field of that set, the typed-entry path with empty text (`updateSetField` + `_onFieldUnfocused`: an explicit null reaches the outbox). The set, its note and its video stay |
+| `remove_set` | `setNumber`, optional `exercise`, `choices` | `_removeSetConfirmed` (the Remove Set core). Refused for the only set (name the exercise to delete it) and for BB3-planned rows, as the button refuses them |
+| `delete_exercise` | optional `exercise`, `choices` | `_deleteExerciseConfirmed` (the Delete Exercise core) |
+| `replace_exercise` | `replacement`, optional `exercise`, `choices` | resolves `replacement` in the Replace picker's list, then `_applyReplacement` (the Replace core) |
+| `add_exercise_to_circuit` | `circuit` (1-based, existing) | the circuit header's `_onAddExerciseToCircuit` picker |
+| `move_to_circuit` | `circuit` (1-based, existing), optional `exercise`, `choices` | `_moveExerciseToCircuitConfirmed` (the Move core) |
+
+**Exercise names** are resolved by GoodLift, never by Aurelian, against what the screen really offers:
+the workout's rows, or the picker's catalogue when adding or replacing
+(`lib/aurelian/aurelian_exercise_match.dart`). Tiers: exact words → same letters without spaces → same
+words in any order (plurals ignored) → every spoken word is one of the exercise's words → a close
+spelling (≤ 2 edits, ≤ a fifth of the length, never within 1 edit of another exercise). Several matches
+are answered `ambiguous` ("Which bench press?", ≤ 8 labels); Aurelian's follow-up ("the second one") is
+sent back as `choices`, the labels picked so far, and GoodLift accepts one only if it is among the
+candidates it finds again now. Clearing, removing, deleting, replacing and moving never accept the
+close-spelling tier. A command naming several exercises asks about one at a time.
+
+**Destructive voice commands** run the same cores as the buttons, after the explicit spoken command in
+place of the confirmation dialog, and offer Undo exactly when the buttons do (logged values). WES2's
+undo restores rows in memory without re-queuing the restored structure to the durable outbox for
+ordinary rows, so voice never offers an Undo the button would not.
 
 ## Authentication
 
@@ -131,6 +159,14 @@ queued outbox mutations offline.
   dialog, add set, Done.
 - `test/aurelian_analytics_voice_test.dart`: Analytics selection for the selected athlete, ambiguity,
   metrics, and that a screen alone never makes the bridge ready.
+- `test/aurelian_voice_ux_logic_test.dart`: the new commands' model and per-command arguments, matcher
+  tiers (plurals, subsets, fuzzy margins, destructive refusal), "which one?" answers, spoken-list
+  splitting ("clean and jerk and back squat"), and that Home cards/voice and WES2 dialogs/voice share
+  one method each.
+- `test/wes2_voice_bridge_e2e_test.dart` (voice UX group): named set entry and target, clear set
+  (explicit nulls queued), remove set / delete via the cores, replace with a "which one?", multi-add
+  resolving everything first, named Done, circuits, the picker taking "add X".
+- `test/home_community_section_test.dart`: voice selects Feed/Leaderboard through the tap's own switch.
 
 ## Physical testing
 

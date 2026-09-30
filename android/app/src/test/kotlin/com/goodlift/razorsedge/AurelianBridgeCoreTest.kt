@@ -35,6 +35,48 @@ class AurelianBridgeCoreTest {
         assertEquals("set_fields", map["command"])
     }
 
+    @Test fun acceptsTheVoiceUxCommandsWithBoundedTextAndLists() {
+        val add = parse(extras("add_exercises", "phrase" to "bench press, suspended high row and back squats", "choices" to arrayListOf("Bench Press, Barbell")))
+        add as AurelianParse.Accepted
+        assertEquals(listOf("Bench Press, Barbell"), add.request.args["choices"])
+        for ((command, args) in listOf(
+            "navigate" to arrayOf<Pair<String, Any?>>("destination" to "leaderboard"),
+            "workout_action" to arrayOf("action" to "load_template"),
+            "clear_set" to arrayOf("setNumber" to 1, "exercise" to "bench press"),
+            "remove_set" to arrayOf("setNumber" to 2),
+            "delete_exercise" to arrayOf("exercise" to "bench press", "choices" to arrayListOf("Bench Press, Barbell")),
+            "replace_exercise" to arrayOf("exercise" to "suspended high row", "replacement" to "kp face pull"),
+            "add_exercise_to_circuit" to arrayOf("circuit" to 2),
+            "move_to_circuit" to arrayOf("circuit" to 3, "exercise" to "back squat"),
+            "mark_exercise_done" to arrayOf("exercise" to "back squat"),
+            "set_fields" to arrayOf("setNumber" to 1, "weight" to 150.0, "reps" to 5, "rir" to 1.0, "exercise" to "bench press"),
+        )) {
+            assertTrue(command, parse(extras(command, *args)) is AurelianParse.Accepted)
+        }
+    }
+
+    @Test fun rejectsOversizedOrMistypedVoiceUxArguments() {
+        val bad = listOf(
+            extras("add_exercises", "phrase" to "x".repeat(AurelianBridgeProtocol.MAX_PHRASE + 1)),
+            extras("add_exercises", "phrase" to 5),
+            extras("delete_exercise", "exercise" to "x".repeat(AurelianBridgeProtocol.MAX_NAME + 1)),
+            extras("delete_exercise", "choices" to ArrayList(List(AurelianBridgeProtocol.MAX_CHOICES + 1) { "c$it" })),
+            extras("delete_exercise", "choices" to arrayListOf("x".repeat(AurelianBridgeProtocol.MAX_NAME + 1))),
+            extras("delete_exercise", "choices" to arrayListOf<Any>(1, 2)),
+            extras("delete_exercise", "choices" to "Bench Press"),
+            extras("replace_exercise", "replacement" to "x".repeat(AurelianBridgeProtocol.MAX_PHRASE)),
+            extras("navigate", "phrase" to "leaderboard"),
+            extras("clear_set", "setNumber" to 1.0),
+            extras("move_to_circuit", "circuit" to "2"),
+            // A phrase-length string is only allowed where the schema says TEXT.
+            extras("navigate", "destination" to "x".repeat(AurelianBridgeProtocol.MAX_NAME + 1)),
+        )
+        for (e in bad) {
+            val r = parse(e)
+            assertTrue("$e → $r", r is AurelianParse.Rejected && r.status == "invalid")
+        }
+    }
+
     @Test fun rejectsWrongProtocolVersion() {
         val r = parse(extras().apply { put(AurelianBridgeProtocol.EXTRA_PROTOCOL, 2) }) as AurelianParse.Rejected
         assertEquals("unsupported", r.status)

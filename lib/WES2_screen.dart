@@ -51,11 +51,14 @@ import 'wes2_field_parser.dart';
 import 'wes2_hint_input.dart';
 import 'wes2_hint_load_runner.dart';
 import 'wes2_hint_trace.dart';
+import 'aurelian/aurelian_add_list.dart';
 import 'aurelian/aurelian_bus.dart';
+import 'aurelian/aurelian_catalogue.dart';
 import 'aurelian/aurelian_command.dart';
 import 'aurelian/aurelian_exercise_match.dart';
 import 'aurelian/aurelian_set_entry.dart';
 import 'aurelian/wes2_voice_target.dart';
+import 'exercise_catalog.dart';
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -2221,6 +2224,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       case AurelianCommandKind.openExerciseNote:
       case AurelianCommandKind.addSet:
       case AurelianCommandKind.markExerciseDone:
+      case AurelianCommandKind.workoutAction:
+      case AurelianCommandKind.addExercises:
+      case AurelianCommandKind.clearSet:
+      case AurelianCommandKind.removeSet:
+      case AurelianCommandKind.deleteExercise:
+      case AurelianCommandKind.replaceExercise:
+      case AurelianCommandKind.addExerciseToCircuit:
+      case AurelianCommandKind.moveToCircuit:
         final String? blocked = await _bringWorkoutToFront();
         if (blocked != null) return AurelianResult.unavailable(blocked);
         if (!await _waitForDay()) {
@@ -2230,6 +2241,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         return _runVoiceWorkoutCommand(command);
       case AurelianCommandKind.openAnalytics:
       case AurelianCommandKind.analyticsMetric:
+      case AurelianCommandKind.navigate:
         return null;
     }
   }
@@ -2278,17 +2290,32 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   }
 
   Future<AurelianResult> _runVoiceWorkoutCommand(AurelianCommand command) async {
-    if (command.kind == AurelianCommandKind.addExercise) {
-      _voicePickerOpen = true;
-      unawaited(_onAddExercise());
-      return const AurelianResult.ok(
-          'Add Exercise open — say "select" and the exercise');
+    // Commands that need no particular exercise.
+    switch (command.kind) {
+      case AurelianCommandKind.addExercise:
+        _voicePickerOpen = true;
+        unawaited(_onAddExercise());
+        return const AurelianResult.ok(
+            'Add Exercise open — say "select" and the exercise');
+      case AurelianCommandKind.addExercises:
+        return _voiceAddExercises(command);
+      case AurelianCommandKind.addExerciseToCircuit:
+        final int ci = command.circuit! - 1;
+        if (!_circuits().contains(ci)) return _noSuchCircuit(command.circuit!);
+        _voicePickerOpen = true;
+        unawaited(_onAddExerciseToCircuit(ci));
+        return AurelianResult.ok('Add Exercise to Circuit ${ci + 1} open');
+      case AurelianCommandKind.workoutAction:
+        final AurelianResult? done = _voiceDayAction(command.action!);
+        if (done != null) return done;
+      default:
+        break;
     }
-    final Wes2ExerciseRow? row = _voiceTargetRow();
-    if (row == null) {
-      return const AurelianResult.unavailable(
-          'No exercises in this workout yet — say "add exercise"');
-    }
+
+    final ({Wes2ExerciseRow? row, AurelianResult? answer}) target =
+        _voiceRowFor(command);
+    if (target.answer != null) return target.answer!;
+    final Wes2ExerciseRow row = target.row!;
     switch (command.kind) {
       case AurelianCommandKind.nextExercise:
       case AurelianCommandKind.previousExercise:
@@ -2324,12 +2351,33 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         if (!plan.isValid) return AurelianResult.invalid(plan.error!);
         await _applyVoiceSetEdits(row.exerciseId, plan);
         return AurelianResult.ok('${row.name} · ${plan.summary}');
+      case AurelianCommandKind.clearSet:
+        return _voiceClearSet(row, command.setNumber!);
+      case AurelianCommandKind.removeSet:
+        return _voiceRemoveSet(row, command.setNumber!);
+      case AurelianCommandKind.deleteExercise:
+        final bool wasBb3 = row.source == Wes2RowSource.bb3Planned ||
+            _bb3PlannedExerciseIds.contains(row.exerciseId);
+        // Undo is offered exactly when the Delete button offers it.
+        await _deleteExerciseConfirmed(row,
+            offerUndo: row.hasAnyExecutionValue, wasBb3: wasBb3);
+        if (mounted) unawaited(_revealVoiceTarget());
+        return AurelianResult.ok('Deleted ${row.name}');
+      case AurelianCommandKind.replaceExercise:
+        return _voiceReplaceExercise(row, command);
+      case AurelianCommandKind.moveToCircuit:
+        final int ci = command.circuit! - 1;
+        if (ci == row.circuitIndex) {
+          return AurelianResult.ok('${row.name} is already in Circuit ${ci + 1}');
+        }
+        if (!_circuits().contains(ci)) return _noSuchCircuit(command.circuit!);
+        _moveExerciseToCircuitConfirmed(row, ci);
+        _voiceTarget.select(row.exerciseId);
+        await _revealVoiceTarget();
+        return AurelianResult.ok('${row.name} moved to Circuit ${ci + 1}');
       case AurelianCommandKind.openSetNote:
         final int n = command.setNumber!;
-        if (n > row.setCount) {
-          return AurelianResult.invalid(
-              '${row.name} has ${row.setCount} ${row.setCount == 1 ? 'set' : 'sets'}');
-        }
+        if (n > row.setCount) return _noSuchSet(row, n);
         await _revealVoiceTarget();
         unawaited(_onOpenSetNoteDialog(row, n - 1, focusNote: true));
         return AurelianResult.ok(
@@ -2356,9 +2404,304 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         _onToggleMarkedDone(row.exerciseId, true);
         await _revealVoiceTarget();
         return AurelianResult.ok('${row.name} marked done');
+      case AurelianCommandKind.workoutAction:
+        await _revealVoiceTarget();
+        switch (command.action!) {
+          case AurelianWorkoutAction.exerciseSettings:
+            unawaited(_showExerciseSettingsDialog(row));
+            return AurelianResult.ok('${row.name} settings');
+          case AurelianWorkoutAction.exerciseDetails:
+            _navigateToExerciseDetails(row);
+            return AurelianResult.ok('${row.name} details');
+          case AurelianWorkoutAction.topSets:
+            _navigateToTopSets(row);
+            return AurelianResult.ok('${row.name} top sets');
+          case AurelianWorkoutAction.currentExercise:
+            final List<String> ids = _rowIds();
+            return AurelianResult.ok(
+                'On ${row.name} (${ids.indexOf(row.exerciseId) + 1} of ${ids.length})');
+          default:
+            return const AurelianResult.unavailable('Not available here');
+        }
       default:
         return const AurelianResult.unavailable('Not available here');
     }
+  }
+
+  /// Workout controls that act on the day rather than on an exercise; null
+  /// for the ones that need an exercise.
+  AurelianResult? _voiceDayAction(AurelianWorkoutAction action) {
+    String day(DateTime d) =>
+        MaterialLocalizations.of(context).formatMediumDate(d);
+    switch (action) {
+      case AurelianWorkoutAction.loadTemplate:
+        if (_isLoadingTemplate) {
+          return const AurelianResult.unavailable('A template is still loading');
+        }
+        unawaited(_showTemplatePicker());
+        return const AurelianResult.ok('Templates open');
+      case AurelianWorkoutAction.selectDate:
+        unawaited(_onSelectDate());
+        return const AurelianResult.ok('Choose a date');
+      case AurelianWorkoutAction.previousDay:
+        _onPrevDay();
+        return AurelianResult.ok(day(_controller.selectedDate));
+      case AurelianWorkoutAction.nextDay:
+        _onNextDay();
+        return AurelianResult.ok(day(_controller.selectedDate));
+      case AurelianWorkoutAction.addCircuit:
+        if (_controller.loadState != Wes2LoadState.loaded) {
+          return const AurelianResult.unavailable('The workout is still loading');
+        }
+        _voicePickerOpen = true;
+        unawaited(_onAddCircuit());
+        return const AurelianResult.ok('Add Circuit open');
+      case AurelianWorkoutAction.exerciseSettings:
+      case AurelianWorkoutAction.exerciseDetails:
+      case AurelianWorkoutAction.topSets:
+      case AurelianWorkoutAction.currentExercise:
+        return null;
+    }
+  }
+
+  List<int> _circuits() =>
+      _controller.rows.map((Wes2ExerciseRow r) => r.circuitIndex).toSet().toList()
+        ..sort();
+
+  AurelianResult _noSuchCircuit(int circuit) => AurelianResult.invalid(
+      'There\'s no Circuit $circuit — say "add circuit" first');
+
+  AurelianResult _noSuchSet(Wes2ExerciseRow row, int n) => AurelianResult.invalid(
+      '${row.name} has ${row.setCount} ${row.setCount == 1 ? 'set' : 'sets'}');
+
+  /// The exercise a command acts on: the one it names (which then becomes the
+  /// voice target), or the current target. A name is matched against the
+  /// workout's own rows; commands that remove or restructure never accept a
+  /// fuzzy match. An unclear name comes back as a "which one?".
+  ({Wes2ExerciseRow? row, AurelianResult? answer}) _voiceRowFor(
+      AurelianCommand command) {
+    final String? spoken = command.exercise;
+    if (spoken == null) {
+      final Wes2ExerciseRow? row = _voiceTargetRow();
+      return row == null
+          ? (
+              row: null,
+              answer: const AurelianResult.unavailable(
+                  'No exercises in this workout yet — say "add exercise"')
+            )
+          : (row: row, answer: null);
+    }
+    final NamedResolution<Wes2ExerciseRow> r = resolveNamed<Wes2ExerciseRow>(
+      spoken,
+      _controller.rows.toList(),
+      (Wes2ExerciseRow row) => row.name,
+      (Wes2ExerciseRow row) => row.name,
+      choices: command.choices,
+      allowFuzzy: !command.kind.isDestructive,
+    );
+    if (r.isAmbiguous) {
+      return (
+        row: null,
+        answer: AurelianResult.ambiguous('Which $spoken?',
+            r.ask.map((Wes2ExerciseRow row) => row.name).toList(),
+            context: 'wes2')
+      );
+    }
+    final Wes2ExerciseRow? row = r.chosen;
+    if (row == null) {
+      return (
+        row: null,
+        answer: AurelianResult.notFound('"$spoken" isn\'t in this workout')
+      );
+    }
+    if (command.kind != AurelianCommandKind.deleteExercise &&
+        command.kind != AurelianCommandKind.replaceExercise) {
+      _voiceTarget.select(row.exerciseId);
+    }
+    return (row: row, answer: null);
+  }
+
+  /// Clears the logged values of one set (weight, reps, RIR, velocity) the
+  /// way deleting each field's text does. The set itself, its note and its
+  /// video stay.
+  Future<AurelianResult> _voiceClearSet(Wes2ExerciseRow row, int n) async {
+    if (n > row.setCount) return _noSuchSet(row, n);
+    final Wes2SetState set = row.sets.firstWhere(
+        (Wes2SetState s) => s.setIndex == n - 1,
+        orElse: () => Wes2SetState(setIndex: n - 1));
+    final List<SetFieldEdit> edits = <SetFieldEdit>[
+      if (set.weight.hasActual) const SetFieldEdit(Wes2FieldKey.weight, ''),
+      if (set.reps.hasActual) const SetFieldEdit(Wes2FieldKey.reps, ''),
+      if (set.rir.hasActual) const SetFieldEdit(Wes2FieldKey.rir, ''),
+      if (set.velocity.hasActual) const SetFieldEdit(Wes2FieldKey.velocity, ''),
+    ];
+    if (edits.isEmpty) {
+      await _revealVoiceTarget();
+      return AurelianResult.ok('${row.name} · set $n is already empty');
+    }
+    await _applyVoiceFieldEdits(row.exerciseId, n - 1, edits);
+    return AurelianResult.ok('${row.name} · set $n cleared');
+  }
+
+  Future<AurelianResult> _voiceRemoveSet(Wes2ExerciseRow row, int n) async {
+    final Wes2ExerciseRow current = _controller.rows.firstWhere(
+        (Wes2ExerciseRow r) => r.exerciseId == row.exerciseId,
+        orElse: () => row);
+    if (current.source == Wes2RowSource.bb3Planned) {
+      return const AurelianResult.unavailable(
+          'Removing sets from BB3 planned exercises isn\'t available yet');
+    }
+    if (n > current.setCount) return _noSuchSet(current, n);
+    if (current.setCount <= 1) {
+      return AurelianResult.invalid(
+          'That\'s the only set — say "delete ${current.name}" to remove the exercise');
+    }
+    final Wes2SetState set = current.sets.firstWhere(
+        (Wes2SetState s) => s.setIndex == n - 1,
+        orElse: () => Wes2SetState(setIndex: n - 1));
+    await _removeSetConfirmed(current, n - 1, set);
+    await _revealVoiceTarget();
+    return AurelianResult.ok('${current.name} · set $n removed');
+  }
+
+  // ── Voice add / replace: the Add Exercise picker's own catalogue ─────────
+
+  Future<List<CatalogExercise>>? _voiceCatalogue;
+  String? _voiceCatalogueUid;
+
+  /// The list the Add Exercise picker shows (global + this athlete's custom
+  /// exercises), loaded once per athlete while the workout is open.
+  Future<List<CatalogExercise>> _catalogue() {
+    final String uid = _controller.actingUid;
+    if (_voiceCatalogue == null || _voiceCatalogueUid != uid) {
+      _voiceCatalogueUid = uid;
+      _voiceCatalogue = ExerciseCatalog.loadCombinedExercisesForUser(uid);
+      // A failed load is retried next time rather than remembered.
+      _voiceCatalogue!.catchError((Object _) {
+        _voiceCatalogue = null;
+        return <CatalogExercise>[];
+      });
+    }
+    return _voiceCatalogue!;
+  }
+
+  Future<List<CatalogExercise>?> _catalogueOrNull() async {
+    try {
+      return await _catalogue().timeout(const Duration(seconds: 8));
+    } catch (_) {
+      _voiceCatalogue = null;
+      return null;
+    }
+  }
+
+  /// "add bench press, suspended high row and back squats": every name is
+  /// resolved first; nothing is added unless all of them are clear.
+  Future<AurelianResult> _voiceAddExercises(AurelianCommand command) async {
+    final List<CatalogExercise>? all = await _catalogueOrNull();
+    if (!mounted) return const AurelianResult.unavailable('The workout closed');
+    if (all == null) {
+      return const AurelianResult.failed('Could not load exercises');
+    }
+    final Set<String> inWorkout = _rowIds().toSet();
+    final List<CatalogExercise> available =
+        all.where((CatalogExercise e) => !inWorkout.contains(e.id)).toList();
+    final SpokenList list = splitSpokenList<CatalogExercise>(
+        command.phrase!, all, catalogueName);
+    if (list.error != null) return AurelianResult.invalid(list.error!);
+
+    final List<CatalogExercise> chosen = <CatalogExercise>[];
+    for (final String spoken in list.names) {
+      final NamedResolution<CatalogExercise> r = resolveNamed<CatalogExercise>(
+        spoken,
+        available,
+        catalogueName,
+        (CatalogExercise e) => catalogueVoiceLabel(e, all),
+        choices: command.choices,
+        allowFuzzy: true,
+      );
+      if (r.isAmbiguous) {
+        return AurelianResult.ambiguous(
+            'Which $spoken?',
+            r.ask
+                .take(kAurelianMaxCandidates)
+                .map((CatalogExercise e) => catalogueVoiceLabel(e, all))
+                .toList(),
+            context: 'catalogue');
+      }
+      final CatalogExercise? e = r.chosen;
+      if (e == null) return _notInCatalogue(spoken, all, inWorkout);
+      if (!chosen.any((CatalogExercise c) => c.id == e.id)) chosen.add(e);
+    }
+    for (final CatalogExercise e in chosen) {
+      if (!mounted) break;
+      _voicePickerOpen = false;
+      await _addExerciseFromPicker(
+          (exerciseId: e.id, name: catalogueName(e), circuitIndex: 0));
+    }
+    if (mounted) unawaited(_revealVoiceTarget());
+    return AurelianResult.ok('Added ${_spokenList(chosen.map(catalogueName))}');
+  }
+
+  /// "replace X with Y": Y is chosen from the same list the Replace picker
+  /// offers (everything not already in the workout, apart from X itself).
+  Future<AurelianResult> _voiceReplaceExercise(
+      Wes2ExerciseRow row, AurelianCommand command) async {
+    final List<CatalogExercise>? all = await _catalogueOrNull();
+    if (!mounted) return const AurelianResult.unavailable('The workout closed');
+    if (all == null) {
+      return const AurelianResult.failed('Could not load exercises');
+    }
+    final Set<String> others = _rowIds()
+        .where((String id) => id != row.exerciseId)
+        .toSet();
+    final List<CatalogExercise> available =
+        all.where((CatalogExercise e) => !others.contains(e.id)).toList();
+    final String spoken = command.replacement!;
+    final NamedResolution<CatalogExercise> r = resolveNamed<CatalogExercise>(
+      spoken,
+      available,
+      catalogueName,
+      (CatalogExercise e) => catalogueVoiceLabel(e, all),
+      choices: command.choices,
+    );
+    if (r.isAmbiguous) {
+      return AurelianResult.ambiguous(
+          'Which $spoken?',
+          r.ask
+              .take(kAurelianMaxCandidates)
+              .map((CatalogExercise e) => catalogueVoiceLabel(e, all))
+              .toList(),
+          context: 'catalogue');
+    }
+    final CatalogExercise? e = r.chosen;
+    if (e == null) return _notInCatalogue(spoken, all, others);
+    if (e.id == row.exerciseId) {
+      return AurelianResult.ok('${row.name} is already there');
+    }
+    final String newName = catalogueName(e);
+    await _applyReplacement(row, e.id, newName,
+        offerUndo: row.hasAnyExecutionValue);
+    _voiceTarget.select(e.id);
+    if (mounted) unawaited(_revealVoiceTarget());
+    return AurelianResult.ok('Replaced ${row.name} with $newName');
+  }
+
+  AurelianResult _notInCatalogue(
+      String spoken, List<CatalogExercise> all, Set<String> inWorkout) {
+    final ExerciseMatch<CatalogExercise> already = matchExercise<CatalogExercise>(
+        spoken,
+        all.where((CatalogExercise e) => inWorkout.contains(e.id)),
+        catalogueName);
+    return already.isUnique
+        ? AurelianResult.notFound(
+            '${catalogueName(already.single)} is already in this workout')
+        : AurelianResult.notFound('No exercise called "$spoken"');
+  }
+
+  static String _spokenList(Iterable<String> names) {
+    final List<String> l = names.toList();
+    if (l.length <= 1) return l.join();
+    return '${l.sublist(0, l.length - 1).join(', ')} and ${l.last}';
   }
 
   /// "select X" on the workout itself: X becomes the voice target.
@@ -2399,19 +2742,25 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// its focus loss makes (_onFieldUnfocused → local draft + durable outbox). A
   /// field still being typed in is left first, so its own text is saved before
   /// the voice value lands and can never overwrite it afterwards.
-  Future<void> _applyVoiceSetEdits(String exerciseId, SetEntryPlan plan) async {
+  Future<void> _applyVoiceSetEdits(String exerciseId, SetEntryPlan plan) =>
+      _applyVoiceFieldEdits(exerciseId, plan.setIndex, plan.edits);
+
+  /// See [_applyVoiceSetEdits]; an empty [SetFieldEdit.text] clears the field
+  /// exactly as deleting its text does (null reaches the outbox).
+  Future<void> _applyVoiceFieldEdits(
+      String exerciseId, int setIndex, List<SetFieldEdit> edits) async {
     FocusManager.instance.primaryFocus?.unfocus();
     await Future<void>.delayed(Duration.zero);
     await _awaitDurableWrites();
     if (!mounted) return;
-    for (final SetFieldEdit edit in plan.edits) {
+    for (final SetFieldEdit edit in edits) {
       _controller.updateSetField(
         exerciseId: exerciseId,
-        setIndex: plan.setIndex,
+        setIndex: setIndex,
         fieldKey: edit.fieldKey,
         rawText: edit.text,
       );
-      _onFieldUnfocused(exerciseId, plan.setIndex, edit.fieldKey, edit.text);
+      _onFieldUnfocused(exerciseId, setIndex, edit.fieldKey, edit.text);
     }
     _voiceTarget.select(exerciseId);
     await _revealVoiceTarget();
@@ -3102,12 +3451,21 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       content: 'Remove "${row.name}" from today\'s workout?',
     );
     if (!confirmed) return;
+    await _deleteExerciseConfirmed(row,
+        offerUndo: hadActuals, wasBb3: wasBb3);
+  }
+
+  /// The deletion itself, once confirmed (by the dialog, or by an explicit
+  /// voice command naming the exercise). [wasBb3] must be captured before any
+  /// async gap (see [_onDeleteExercise]).
+  Future<void> _deleteExerciseConfirmed(Wes2ExerciseRow row,
+      {required bool offerUndo, required bool wasBb3}) async {
     // Every recording on this row, identified before the row goes.
     await _videoSoftDeleteExercise(row.exerciseId);
     _controller.deleteExercise(row.exerciseId);
     _saveDraftNow();
     await _refreshSetVideoState();
-    if (hadActuals) _showUndoSnackBar('Exercise deleted');
+    if (offerUndo) _showUndoSnackBar('Exercise deleted');
     // ignore: discarded_futures
     _deleteExerciseSilently(
       uid: _controller.actingUid,
@@ -3134,29 +3492,38 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       titleOverride: 'Replace "${row.name}"',
     );
     if (result == null) return;
+    await _applyReplacement(row, result.exerciseId, result.name,
+        offerUndo: row.hasAnyExecutionValue);
+  }
+
+  /// Swaps [row] for the chosen exercise (from the Replace picker, or a voice
+  /// "replace X with Y" resolved against the same catalogue).
+  Future<void> _applyReplacement(
+      Wes2ExerciseRow row, String newExerciseId, String newName,
+      {required bool offerUndo}) async {
     // The old exerciseId is about to vanish from this day. Its footage is
     // soft-deleted here rather than left pointing at a row the user can no
     // longer open.
-    if (result.exerciseId != row.exerciseId) {
+    if (newExerciseId != row.exerciseId) {
       await _videoSoftDeleteExercise(row.exerciseId);
     }
     _controller.replaceExercise(
       oldExerciseId: row.exerciseId,
-      newExerciseId: result.exerciseId,
-      newName: result.name,
+      newExerciseId: newExerciseId,
+      newName: newName,
     );
     _saveDraftNow();
     await _refreshSetVideoState();
     // ignore: discarded_futures
     _loadAndApplyHints();
-    if (row.hasAnyExecutionValue) _showUndoSnackBar('Exercise replaced');
+    if (offerUndo) _showUndoSnackBar('Exercise replaced');
     // ignore: discarded_futures
     _replaceExerciseSilently(
       uid: _controller.actingUid,
       date: _controller.selectedDate,
       oldExerciseId: row.exerciseId,
-      newExerciseId: result.exerciseId,
-      newName: result.name,
+      newExerciseId: newExerciseId,
+      newName: newName,
     );
     if (row.source == Wes2RowSource.bb3Planned) {
       // ignore: discarded_futures
@@ -3174,6 +3541,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
     final targetCi = await _showCircuitPickerDialog(available);
     if (targetCi == null) return;
+    _moveExerciseToCircuitConfirmed(row, targetCi);
+  }
+
+  /// Moves [row] to circuit [targetCi] (0-based), once chosen.
+  void _moveExerciseToCircuitConfirmed(Wes2ExerciseRow row, int targetCi) {
     _controller.moveExerciseToCircuit(row.exerciseId, targetCi);
     _saveDraftNow();
     _showUndoSnackBar('Exercise moved to Circuit ${targetCi + 1}');
@@ -3289,7 +3661,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
       if (!confirmed || !mounted) return;
     }
+    await _removeSetConfirmed(currentRow, setIndex, targetSet);
+  }
 
+  /// Removes one set of a multi-set, non-BB3 row, once confirmed. Callers
+  /// guard those two cases (see [_onRemoveSet]).
+  Future<void> _removeSetConfirmed(
+      Wes2ExerciseRow currentRow, int setIndex, Wes2SetState targetSet) async {
     // BEFORE the controller renumbers: once compaction runs, the removed set's
     // identity is unreachable and its footage would be stranded.
     await _videoSoftDeleteSets(

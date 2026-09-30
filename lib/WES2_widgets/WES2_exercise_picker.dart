@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../aurelian/aurelian_bus.dart';
 import '../aurelian/aurelian_command.dart';
+import '../aurelian/aurelian_catalogue.dart';
 import '../aurelian/aurelian_exercise_match.dart';
 import '../exercise_catalog.dart';
 import '../planned_only_resolver.dart';
@@ -93,13 +94,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
 
   /// The label a voice "which one?" shows; a custom exercise sharing a
   /// catalogue name is told apart rather than merged.
-  String _voiceLabel(CatalogExercise e) {
-    final String name = e.name.isNotEmpty ? e.name : e.id;
-    final bool shared = _allExercises
-        .where((CatalogExercise o) => o.name == e.name && o.id != e.id)
-        .isNotEmpty;
-    return shared && e.source == ExerciseSource.custom ? '$name (custom)' : name;
-  }
+  String _voiceLabel(CatalogExercise e) => catalogueVoiceLabel(e, _allExercises);
 
   Future<AurelianResult?> _onAurelianCommand(AurelianCommand command) async {
     if (!mounted) return null;
@@ -108,6 +103,19 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
         return const AurelianResult.ok('Add Exercise is open');
       case AurelianCommandKind.selectExercise:
         return _voiceSelect(command);
+      case AurelianCommandKind.addExercises:
+        // "add bench press" with the picker open picks it here, the same as
+        // "select bench press"; a list is added from the workout instead.
+        final String phrase = command.phrase!;
+        if (phrase.length > kAurelianMaxName ||
+            RegExp(r',|\band\b|\bplus\b|&').hasMatch(phrase)) {
+          return const AurelianResult.unavailable(
+              'Close Add Exercise to add several at once');
+        }
+        return _voiceSelect(AurelianCommand(AurelianCommandKind.selectExercise,
+            requestId: command.requestId,
+            name: phrase,
+            choice: command.choices.isEmpty ? null : command.choices.last));
       default:
         return null;
     }
@@ -133,13 +141,15 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
     final String? choice = command.choice;
     if (choice != null) {
       picked = resolveChoice<CatalogExercise>(
-          spoken, choice, available, (CatalogExercise e) => e.name, _voiceLabel);
+          spoken, choice, available, (CatalogExercise e) => e.name, _voiceLabel,
+          allowFuzzy: true);
       if (picked == null) {
         return const AurelianResult.unavailable('The list changed — say it again');
       }
     } else {
       final ExerciseMatch<CatalogExercise> m = matchExercise<CatalogExercise>(
-          spoken, available, (CatalogExercise e) => e.name);
+          spoken, available, (CatalogExercise e) => e.name,
+          allowFuzzy: true);
       if (m.isNone) {
         final ExerciseMatch<CatalogExercise> already =
             matchExercise<CatalogExercise>(
@@ -153,8 +163,8 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
                 '${already.matches.first.name} is already in this workout');
       }
       if (m.isAmbiguous) {
-        return AurelianResult.ambiguous(
-            'Which one?', m.matches.map(_voiceLabel).toList(),
+        return AurelianResult.ambiguous('Which $spoken?',
+            m.matches.take(kAurelianMaxCandidates).map(_voiceLabel).toList(),
             context: 'picker');
       }
       picked = m.single;

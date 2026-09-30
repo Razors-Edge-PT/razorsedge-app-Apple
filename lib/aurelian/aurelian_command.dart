@@ -17,6 +17,16 @@ const int kAurelianMaxName = 80;
 const int kAurelianMaxCandidates = 8;
 const int kAurelianMaxMessage = 200;
 
+/// A spoken list of exercise names ("add bench press, rows and back squats").
+const int kAurelianMaxPhrase = 200;
+
+/// Labels picked in answer to earlier "which one?" questions for one command.
+const int kAurelianMaxChoices = 8;
+
+/// Exercises one "add …" may name.
+const int kAurelianMaxAdd = 10;
+const int kAurelianMaxCircuit = 20;
+
 enum AurelianCommandKind {
   openWorkout('open_workout'),
   openAnalytics('open_analytics'),
@@ -29,7 +39,17 @@ enum AurelianCommandKind {
   openExerciseNote('open_exercise_note'),
   addSet('add_set'),
   markExerciseDone('mark_exercise_done'),
-  analyticsMetric('analytics_metric');
+  analyticsMetric('analytics_metric'),
+  // Voice UX expansion (still protocol v1).
+  navigate('navigate'),
+  workoutAction('workout_action'),
+  addExercises('add_exercises'),
+  clearSet('clear_set'),
+  removeSet('remove_set'),
+  deleteExercise('delete_exercise'),
+  replaceExercise('replace_exercise'),
+  addExerciseToCircuit('add_exercise_to_circuit'),
+  moveToCircuit('move_to_circuit');
 
   const AurelianCommandKind(this.wire);
   final String wire;
@@ -51,10 +71,80 @@ enum AurelianCommandKind {
         AurelianCommandKind.openExerciseNote,
         AurelianCommandKind.addSet,
         AurelianCommandKind.markExerciseDone,
+        AurelianCommandKind.workoutAction,
+        AurelianCommandKind.addExercises,
+        AurelianCommandKind.clearSet,
+        AurelianCommandKind.removeSet,
+        AurelianCommandKind.deleteExercise,
+        AurelianCommandKind.replaceExercise,
+        AurelianCommandKind.addExerciseToCircuit,
+        AurelianCommandKind.moveToCircuit,
+      }.contains(this);
+
+  /// Commands that remove or restructure workout data: a fuzzy exercise match
+  /// is never good enough for these (see aurelian_exercise_match.dart).
+  bool get isDestructive => const <AurelianCommandKind>{
+        AurelianCommandKind.clearSet,
+        AurelianCommandKind.removeSet,
+        AurelianCommandKind.deleteExercise,
+        AurelianCommandKind.replaceExercise,
+        AurelianCommandKind.moveToCircuit,
       }.contains(this);
 }
 
 enum AurelianMetric { e1rm, velocity }
+
+/// The Home screen's cards and top-bar controls a voice command can open.
+/// Each one runs the same handler as tapping it.
+enum AurelianDestination {
+  bodyWeightTracker('body_weight_tracker', 'Body Weight Tracker'),
+  workoutPlanner('workout_planner', 'Workout Planner'),
+  profile('profile', 'Profile'),
+  blockPlanner2('block_planner_2', 'Block Planner 2'),
+  weekPlanner('week_planner', 'Week Planner'),
+  settings('settings', 'Settings'),
+  coachDashboard('coach_dashboard', 'Coach Dashboard'),
+  coaching('coaching', 'Coaching'),
+  feed('feed', 'Feed'),
+  leaderboard('leaderboard', 'Leaderboard'),
+  buddyHub('buddy_hub', 'Buddy Hub'),
+  messages('messages', 'Messages'),
+  menu('menu', 'Menu');
+
+  const AurelianDestination(this.wire, this.label);
+  final String wire;
+  final String label;
+
+  static AurelianDestination? fromWire(Object? wire) {
+    for (final AurelianDestination d in values) {
+      if (d.wire == wire) return d;
+    }
+    return null;
+  }
+}
+
+/// WES2 controls a voice command can press (each runs the button's own handler).
+enum AurelianWorkoutAction {
+  loadTemplate('load_template'),
+  selectDate('select_date'),
+  previousDay('previous_day'),
+  nextDay('next_day'),
+  addCircuit('add_circuit'),
+  exerciseSettings('exercise_settings'),
+  exerciseDetails('exercise_details'),
+  topSets('top_sets'),
+  currentExercise('current_exercise');
+
+  const AurelianWorkoutAction(this.wire);
+  final String wire;
+
+  static AurelianWorkoutAction? fromWire(Object? wire) {
+    for (final AurelianWorkoutAction a in values) {
+      if (a.wire == wire) return a;
+    }
+    return null;
+  }
+}
 
 @immutable
 class AurelianCommand {
@@ -70,6 +160,13 @@ class AurelianCommand {
     this.name,
     this.choice,
     this.metric,
+    this.exercise,
+    this.replacement,
+    this.phrase,
+    this.choices = const <String>[],
+    this.destination,
+    this.action,
+    this.circuit,
   });
 
   final AurelianCommandKind kind;
@@ -92,6 +189,24 @@ class AurelianCommand {
   final String? choice;
   final AurelianMetric? metric;
 
+  /// The exercise the command names ("… of bench press"); null = the current one.
+  final String? exercise;
+
+  /// The exercise to swap in, for [AurelianCommandKind.replaceExercise].
+  final String? replacement;
+
+  /// The spoken list for [AurelianCommandKind.addExercises].
+  final String? phrase;
+
+  /// Labels picked, in order, in answer to this command's earlier "which one?"
+  /// questions. Each is re-checked against the candidates GoodLift finds now.
+  final List<String> choices;
+  final AurelianDestination? destination;
+  final AurelianWorkoutAction? action;
+
+  /// 1-based circuit number, as spoken.
+  final int? circuit;
+
   bool get hasSetValues =>
       weight != null || reps != null || rir != null || velocity != null;
 
@@ -107,10 +222,8 @@ class AurelianCommand {
     if (rawArgs is! Map) return null;
     final Map<Object?, Object?> args = rawArgs;
 
-    const Set<String> allowed = <String>{
-      'setNumber', 'weight', 'weightUnit', 'reps', 'rir', 'velocity', //
-      'name', 'choice', 'metric',
-    };
+    // The same per-command argument sets as the native schema.
+    final Set<String> allowed = _argumentsOf[kind]!;
     if (args.keys.any((Object? k) => k is! String || !allowed.contains(k))) {
       return null;
     }
@@ -137,14 +250,47 @@ class AurelianCommand {
 
     bool present(String k) => args.containsKey(k) && args[k] != null;
     // A present argument of the wrong type is a malformed command, not an omission.
-    for (final String k in <String>['setNumber', 'reps']) {
+    for (final String k in <String>['setNumber', 'reps', 'circuit']) {
       if (present(k) && intArg(k) == null) return null;
     }
     for (final String k in <String>['weight', 'rir', 'velocity']) {
       if (present(k) && doubleArg(k) == null) return null;
     }
-    for (final String k in <String>['name', 'choice', 'metric', 'weightUnit']) {
+    for (final String k in <String>[
+      'name', 'choice', 'metric', 'weightUnit', //
+      'exercise', 'replacement', 'destination', 'action',
+    ]) {
       if (present(k) && stringArg(k) == null) return null;
+    }
+    String? phrase;
+    if (present('phrase')) {
+      final Object? v = args['phrase'];
+      if (v is! String) return null;
+      phrase = v.trim();
+      if (phrase.isEmpty || phrase.length > kAurelianMaxPhrase) return null;
+    }
+    List<String> choices = const <String>[];
+    if (present('choices')) {
+      final Object? v = args['choices'];
+      if (v is! List || v.length > kAurelianMaxChoices) return null;
+      final List<String> out = <String>[];
+      for (final Object? c in v) {
+        if (c is! String || c.trim().isEmpty || c.length > kAurelianMaxName) {
+          return null;
+        }
+        out.add(c.trim());
+      }
+      choices = List<String>.unmodifiable(out);
+    }
+    AurelianDestination? destination;
+    if (present('destination')) {
+      destination = AurelianDestination.fromWire(stringArg('destination'));
+      if (destination == null) return null;
+    }
+    AurelianWorkoutAction? action;
+    if (present('action')) {
+      action = AurelianWorkoutAction.fromWire(stringArg('action'));
+      if (action == null) return null;
     }
 
     ExerciseWeightUnit? unit;
@@ -176,9 +322,47 @@ class AurelianCommand {
       name: stringArg('name'),
       choice: stringArg('choice'),
       metric: metric,
+      exercise: stringArg('exercise'),
+      replacement: stringArg('replacement'),
+      phrase: phrase,
+      choices: choices,
+      destination: destination,
+      action: action,
+      circuit: intArg('circuit'),
     );
     return command._isWellFormed ? command : null;
   }
+
+  static const Set<String> _named = <String>{'exercise', 'choices'};
+  static const Map<AurelianCommandKind, Set<String>> _argumentsOf =
+      <AurelianCommandKind, Set<String>>{
+    AurelianCommandKind.openWorkout: <String>{},
+    AurelianCommandKind.openAnalytics: <String>{},
+    AurelianCommandKind.addExercise: <String>{},
+    AurelianCommandKind.nextExercise: <String>{},
+    AurelianCommandKind.previousExercise: <String>{},
+    AurelianCommandKind.addSet: <String>{},
+    AurelianCommandKind.openExerciseNote: <String>{},
+    AurelianCommandKind.markExerciseDone: _named,
+    AurelianCommandKind.openSetNote: <String>{'setNumber'},
+    AurelianCommandKind.analyticsMetric: <String>{'metric'},
+    AurelianCommandKind.selectExercise: <String>{'name', 'choice'},
+    AurelianCommandKind.setFields: <String>{
+      'setNumber', 'weight', 'weightUnit', 'reps', 'rir', 'velocity', //
+      'exercise', 'choices',
+    },
+    AurelianCommandKind.navigate: <String>{'destination'},
+    AurelianCommandKind.workoutAction: <String>{'action'},
+    AurelianCommandKind.addExercises: <String>{'phrase', 'choices'},
+    AurelianCommandKind.clearSet: <String>{'setNumber', 'exercise', 'choices'},
+    AurelianCommandKind.removeSet: <String>{'setNumber', 'exercise', 'choices'},
+    AurelianCommandKind.deleteExercise: _named,
+    AurelianCommandKind.replaceExercise: <String>{
+      'replacement', 'exercise', 'choices',
+    },
+    AurelianCommandKind.addExerciseToCircuit: <String>{'circuit'},
+    AurelianCommandKind.moveToCircuit: <String>{'circuit', 'exercise', 'choices'},
+  };
 
   bool get _isWellFormed {
     final int? n = setNumber;
@@ -192,6 +376,23 @@ class AurelianCommand {
         return name != null;
       case AurelianCommandKind.analyticsMetric:
         return metric != null;
+      case AurelianCommandKind.navigate:
+        return destination != null;
+      case AurelianCommandKind.workoutAction:
+        return action != null;
+      case AurelianCommandKind.addExercises:
+        return phrase != null;
+      case AurelianCommandKind.clearSet:
+      case AurelianCommandKind.removeSet:
+        return n != null && n >= 1 && n <= 99;
+      case AurelianCommandKind.replaceExercise:
+        return replacement != null;
+      case AurelianCommandKind.addExerciseToCircuit:
+      case AurelianCommandKind.moveToCircuit:
+        final int? c = circuit;
+        return c != null && c >= 1 && c <= kAurelianMaxCircuit;
+      case AurelianCommandKind.deleteExercise:
+        return true;
       case AurelianCommandKind.openWorkout:
       case AurelianCommandKind.openAnalytics:
       case AurelianCommandKind.addExercise:

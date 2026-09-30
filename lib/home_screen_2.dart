@@ -26,6 +26,8 @@ import 'templates.dart';
 import 'user_context.dart';
 import 'user_settings.dart';
 import 'membership_gate.dart';
+import 'social/ui/buddy_hub_button.dart';
+import 'social/ui/dm_badge_button.dart';
 import 'startup_trace.dart';
 
 /// Opens GoodLift's Analytics (ExerciseDetailsScreen) for the selected athlete
@@ -96,6 +98,10 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
   /// pages from it instead of nesting a second scrollable inside this one.
   final ScrollController _homeScrollCtrl = ScrollController();
 
+  /// Voice selects Feed | Leaderboard through the section's own switch.
+  final HomeCommunityController _community = HomeCommunityController();
+  final GlobalKey _communityKey = GlobalKey();
+
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   /// Aurelian voice bridge registration ("enter workout", "open analytics").
@@ -112,8 +118,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     });
   }
 
-  /// Voice runs exactly the Quick Access cards' own paths, readiness check
-  /// included.
+  /// Voice runs exactly the Quick Access cards' and top bar's own paths,
+  /// readiness checks and coach entitlement included.
   Future<AurelianResult?> _onAurelianCommand(AurelianCommand command) async {
     if (!mounted) return null;
     switch (command.kind) {
@@ -122,12 +128,95 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
             ? const AurelianResult.ok('Workout opened')
             : AurelianResult.unavailable(_blockNotReadyMessage());
       case AurelianCommandKind.openAnalytics:
+        if (_dialogOnTop()) return _closeDialogFirst;
         _openAnalytics();
         return const AurelianResult.ok('Analytics opened');
+      case AurelianCommandKind.navigate:
+        return _voiceNavigate(command.destination!);
       default:
         return null;
     }
   }
+
+  static const AurelianResult _closeDialogFirst =
+      AurelianResult.unavailable('Close the open dialog first');
+
+  /// Whether a dialog or sheet is the top route (voice never opens a page
+  /// over one: it may hold unsaved text). Reads the top route without popping.
+  bool _dialogOnTop() {
+    bool popup = false;
+    Navigator.of(context).popUntil((Route<dynamic> r) {
+      popup = r is PopupRoute;
+      return true;
+    });
+    return popup;
+  }
+
+  Future<AurelianResult> _voiceNavigate(AurelianDestination d) async {
+    if (_dialogOnTop()) return _closeDialogFirst;
+    final bool homeShown = ModalRoute.of(context)?.isCurrent ?? true;
+    final bool coach = UserContext.of(context, listen: false).hasCoachMode;
+    bool opened;
+    switch (d) {
+      case AurelianDestination.bodyWeightTracker:
+        opened = _openBodyWeightTracker();
+      case AurelianDestination.workoutPlanner:
+        opened = _openWorkoutPlanner();
+      case AurelianDestination.profile:
+        opened = _openProfile();
+      case AurelianDestination.blockPlanner2:
+        opened = _openBlockPlanner2();
+      case AurelianDestination.weekPlanner:
+        opened = _openWeekPlanner();
+      case AurelianDestination.settings:
+        opened = _openSettings();
+      case AurelianDestination.coachDashboard:
+        // The card is only on coach accounts' Home.
+        if (!coach) {
+          return const AurelianResult.unavailable(
+              'Coach Dashboard is for coach accounts');
+        }
+        opened = _openCoachDashboard();
+      case AurelianDestination.coaching:
+        if (coach) {
+          return const AurelianResult.unavailable(
+              'Coaching is for athlete accounts — say "coach dashboard"');
+        }
+        opened = _openCoaching();
+      case AurelianDestination.buddyHub:
+        unawaited(BuddyHubButton.open(context,
+            actingAsOtherAccount:
+                !UserContext.of(context, listen: false).isActingAsSelf));
+        opened = true;
+      case AurelianDestination.messages:
+        unawaited(DmBadgeButton.open(context));
+        opened = true;
+      case AurelianDestination.menu:
+        if (!homeShown) return _goHomeFirst(d);
+        _scaffoldKey.currentState?.openDrawer();
+        opened = true;
+      case AurelianDestination.feed:
+      case AurelianDestination.leaderboard:
+        if (!homeShown) return _goHomeFirst(d);
+        opened = _community.select(d == AurelianDestination.feed
+            ? HomeCommunityTab.feed
+            : HomeCommunityTab.leaderboard);
+        if (!opened) {
+          return AurelianResult.unavailable(_blockNotReadyMessage());
+        }
+        final BuildContext? section = _communityKey.currentContext;
+        if (section != null && section.mounted) {
+          await Scrollable.ensureVisible(section,
+              duration: const Duration(milliseconds: 250));
+        }
+    }
+    return opened
+        ? AurelianResult.ok(d.label)
+        : AurelianResult.unavailable(_blockNotReadyMessage());
+  }
+
+  AurelianResult _goHomeFirst(AurelianDestination d) => AurelianResult.unavailable(
+      '${d.label} is on the Home screen — go back to Home first');
 
   @override
   void didChangeDependencies() {
@@ -239,6 +328,81 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
   }
 
   void _openAnalytics() => pushExerciseAnalytics(context);
+
+  // Home card destinations: one path each, for the card and for voice.
+  // Each returns false (after the card's own "not ready" snackbar) when the
+  // card would not open it right now.
+
+  void _pushWithUserContext(Widget child) {
+    final uc = UserContext.of(context, listen: false);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+          value: uc,
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  bool _openBodyWeightTracker() {
+    Navigator.pushNamed(context, '/body_weight');
+    return true;
+  }
+
+  bool _openWorkoutPlanner() {
+    // Block only while first-time setup is actively running. A missing active
+    // block must NOT dead-end here — TemplatesScreen has its own repair path
+    // for that state.
+    if (_ctrl.isFirstTimeSetup) {
+      _showBlockNotReadySnack();
+      return false;
+    }
+    _pushWithUserContext(const TemplatesScreen());
+    return true;
+  }
+
+  bool _openProfile() {
+    _pushWithUserContext(const ProfilePage());
+    return true;
+  }
+
+  /// The single planner entry: it opens the shared planned-block selection
+  /// screen, which hands the chosen block (or a new draft) to Block Planner 2.
+  bool _openBlockPlanner2() {
+    if (_ctrl.isFirstTimeSetup) {
+      _showBlockNotReadySnack();
+      return false;
+    }
+    openPlannedBlocks(context, PlannedBlocksDestination.blockPlanner2);
+    return true;
+  }
+
+  bool _openWeekPlanner() {
+    if (!_isBlockReady()) {
+      _showBlockNotReadySnack();
+      return false;
+    }
+    _pushWithUserContext(const BB3WeekPlanner());
+    return true;
+  }
+
+  bool _openSettings() {
+    _pushWithUserContext(const UserSettingsScreen());
+    return true;
+  }
+
+  bool _openCoachDashboard() {
+    _pushWithUserContext(const CoachHomeScreen());
+    return true;
+  }
+
+  bool _openCoaching() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AthleteCoachingScreen()),
+    );
+    return true;
+  }
 
   Widget _buildQACard({
     Key? key,
@@ -459,8 +623,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                               _buildQACard(
                                 icon: Icons.monitor_weight,
                                 label: 'Body\nWeight\nTracker',
-                                onTap: () => Navigator.pushNamed(
-                                    context, '/body_weight'),
+                                onTap: _openBodyWeightTracker,
                               ),
                             ),
                             // Column 2: Workout Planner / Profile
@@ -471,46 +634,13 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                 child: _buildQACard(
                                   icon: Icons.view_list,
                                   label: 'Workout\nPlanner',
-                                  onTap: () {
-                                    // Block only while first-time setup is
-                                    // actively running. A missing active block
-                                    // must NOT dead-end here — TemplatesScreen
-                                    // has its own repair path for that state.
-                                    if (_ctrl.isFirstTimeSetup) {
-                                      _showBlockNotReadySnack();
-                                      return;
-                                    }
-                                    final uc =
-                                        UserContext.of(context, listen: false);
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<
-                                            UserContext>.value(
-                                          value: uc,
-                                          child: const TemplatesScreen(),
-                                        ),
-                                      ),
-                                    );
-                                  },
+                                  onTap: _openWorkoutPlanner,
                                 ),
                               ),
                               _buildQACard(
                                 icon: Icons.person_outline,
                                 label: 'Profile',
-                                onTap: () {
-                                  final uc =
-                                      UserContext.of(context, listen: false);
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<
-                                          UserContext>.value(
-                                        value: uc,
-                                        child: const ProfilePage(),
-                                      ),
-                                    ),
-                                  );
-                                },
+                                onTap: _openProfile,
                               ),
                             ),
                             // Column 3: Block Planner 2 / Week Planner.
@@ -522,38 +652,12 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                 key: const ValueKey('qa-block-planner-2'),
                                 icon: Icons.track_changes,
                                 label: 'Block\nPlanner 2',
-                                onTap: () {
-                                  if (_ctrl.isFirstTimeSetup) {
-                                    _showBlockNotReadySnack();
-                                    return;
-                                  }
-                                  openPlannedBlocks(
-                                    context,
-                                    PlannedBlocksDestination.blockPlanner2,
-                                  );
-                                },
+                                onTap: _openBlockPlanner2,
                               ),
                               _buildQACard(
                                 icon: Icons.calendar_view_week,
                                 label: 'Week\nPlanner',
-                                onTap: () {
-                                  if (!_isBlockReady()) {
-                                    _showBlockNotReadySnack();
-                                    return;
-                                  }
-                                  final uc =
-                                      UserContext.of(context, listen: false);
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<
-                                          UserContext>.value(
-                                        value: uc,
-                                        child: const BB3WeekPlanner(),
-                                      ),
-                                    ),
-                                  );
-                                },
+                                onTap: _openWeekPlanner,
                               ),
                             ),
                             // Column 4: Settings / Coach Dashboard (coach) or
@@ -563,19 +667,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                               _buildQACard(
                                 icon: Icons.settings_outlined,
                                 label: 'Settings',
-                                onTap: () {
-                                  final uc =
-                                      UserContext.of(context, listen: false);
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => ChangeNotifierProvider<
-                                          UserContext>.value(
-                                        value: uc,
-                                        child: const UserSettingsScreen(),
-                                      ),
-                                    ),
-                                  );
-                                },
+                                onTap: _openSettings,
                               ),
                               // Coaches keep the Coach Dashboard here
                               // unchanged; everyone else gets Analytics.
@@ -587,19 +679,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                       icon: Icons.supervisor_account,
                                       label: 'Coach\nDashboard',
                                       iconColor: Colors.amberAccent,
-                                      onTap: () {
-                                        final uc = context.read<UserContext>();
-                                        Navigator.of(context).push(
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                ChangeNotifierProvider<
-                                                    UserContext>.value(
-                                              value: uc,
-                                              child: const CoachHomeScreen(),
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                      onTap: _openCoachDashboard,
                                     )
                                   : _buildQACard(
                                       icon: Icons.insights,
@@ -621,12 +701,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   : _buildQACard(
                                       icon: Icons.supervisor_account_outlined,
                                       label: 'Coaching',
-                                      onTap: () => Navigator.of(context).push(
-                                        MaterialPageRoute(
-                                          builder: (_) =>
-                                              const AthleteCoachingScreen(),
-                                        ),
-                                      ),
+                                      onTap: _openCoaching,
                                     ),
                               const SizedBox(
                                   width: kFeatureCardWidth,
@@ -719,6 +794,8 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                     // the SIGNED-IN account's feed; when a coach is viewing an
                     // athlete the section says so.
                     HomeCommunitySection(
+                      key: _communityKey,
+                      controller: _community,
                       scrollController: _homeScrollCtrl,
                       actingAsOtherAccount:
                           !context.watch<UserContext>().isActingAsSelf,

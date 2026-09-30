@@ -35,6 +35,12 @@ object AurelianBridgeProtocol {
     const val MAX_MESSAGE = 200
     const val MAX_CANDIDATES = 8
 
+    /** A spoken list of exercise names ("add bench press, rows and back squats"). */
+    const val MAX_PHRASE = 200
+
+    /** Labels picked in answer to earlier "which one?" questions for the same command. */
+    const val MAX_CHOICES = 8
+
     /** A request older than this (by the system-wide elapsed clock) is stale and never executed. */
     const val MAX_AGE_MS = 15_000L
 
@@ -56,7 +62,7 @@ object AurelianBridgeProtocol {
         "next_exercise" to emptyMap(),
         "previous_exercise" to emptyMap(),
         "add_set" to emptyMap(),
-        "mark_exercise_done" to emptyMap(),
+        "mark_exercise_done" to named(),
         "open_exercise_note" to emptyMap(),
         "open_set_note" to mapOf("setNumber" to ArgType.INT),
         "analytics_metric" to mapOf("metric" to ArgType.STRING),
@@ -68,10 +74,29 @@ object AurelianBridgeProtocol {
             "reps" to ArgType.INT,
             "rir" to ArgType.DOUBLE,
             "velocity" to ArgType.DOUBLE,
-        ),
+        ) + named(),
+
+        // GoodLift voice UX expansion (still v1: new commands and optional arguments only). Every
+        // one of these goes through the same Dart handlers the screens' own buttons use.
+        "navigate" to mapOf("destination" to ArgType.STRING),
+        "workout_action" to mapOf("action" to ArgType.STRING),
+        "add_exercises" to mapOf("phrase" to ArgType.TEXT, "choices" to ArgType.STRING_LIST),
+        "clear_set" to mapOf("setNumber" to ArgType.INT) + named(),
+        "remove_set" to mapOf("setNumber" to ArgType.INT) + named(),
+        "delete_exercise" to named(),
+        "replace_exercise" to mapOf("replacement" to ArgType.STRING) + named(),
+        "add_exercise_to_circuit" to mapOf("circuit" to ArgType.INT),
+        "move_to_circuit" to mapOf("circuit" to ArgType.INT) + named(),
     )
 
-    enum class ArgType { INT, DOUBLE, STRING }
+    /** The optional exercise a command names, and the answers to GoodLift's "which one?" questions. */
+    private fun named(): Map<String, ArgType> = mapOf("exercise" to ArgType.STRING, "choices" to ArgType.STRING_LIST)
+
+    /**
+     * STRING: a name, at most [MAX_NAME] chars. TEXT: a spoken list, at most [MAX_PHRASE] chars.
+     * STRING_LIST: at most [MAX_CHOICES] names of at most [MAX_NAME] chars each.
+     */
+    enum class ArgType { INT, DOUBLE, STRING, TEXT, STRING_LIST }
 }
 
 /** One accepted request, ready for the Dart command bus. [sentAtMs] is Aurelian's send time (elapsed clock). */
@@ -123,9 +148,14 @@ object AurelianRequestParser {
                 AurelianBridgeProtocol.ArgType.INT -> value is Int
                 AurelianBridgeProtocol.ArgType.DOUBLE -> value is Double && value.isFinite()
                 AurelianBridgeProtocol.ArgType.STRING -> value is String && value.length <= AurelianBridgeProtocol.MAX_NAME
+                AurelianBridgeProtocol.ArgType.TEXT -> value is String && value.length <= AurelianBridgeProtocol.MAX_PHRASE
+                AurelianBridgeProtocol.ArgType.STRING_LIST -> value is List<*> &&
+                    value.size <= AurelianBridgeProtocol.MAX_CHOICES &&
+                    value.all { it is String && it.length <= AurelianBridgeProtocol.MAX_NAME }
             }
             if (!ok) return AurelianParse.Rejected(id, "invalid", "Bad argument \"$name\"")
-            args[name] = value!!
+            // A list crosses to Dart as a plain List<String>, never the Bundle's own ArrayList subtype.
+            args[name] = if (value is List<*>) value.map { it as String } else value!!
         }
         return AurelianParse.Accepted(AurelianRequest(id, command!!, args, sentAt))
     }

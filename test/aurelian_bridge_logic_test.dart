@@ -246,9 +246,16 @@ void main() {
       expect(row.matches, <String>['Seated Cable Row', 'Cable Row, Seated']);
       // Near-identical but different word counts stay different exercises.
       expect(m('larsen press bench').single, 'Larsen Bench Press');
-      expect(m('bench press').isNone, isTrue,
-          reason: 'a partial name is not "similar enough"');
-      expect(m('bench press barbel').isNone, isTrue);
+      // A partial name is never guessed: every exercise it is part of is
+      // offered as a "which one?".
+      expect(m('bench press').matches, <String>[
+        'Bench Press, Barbell',
+        'Bench Press, Dumbbell',
+        'Bench Press, Larsen Press',
+        'Larsen Bench Press',
+      ]);
+      expect(m('bench press barbel').isNone, isTrue,
+          reason: 'misspellings only match where a caller allows fuzzy');
     });
 
     test('an exact name beats word order', () {

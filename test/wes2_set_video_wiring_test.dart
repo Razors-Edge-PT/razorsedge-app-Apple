@@ -286,9 +286,11 @@ void main() {
   });
 
   group('blocker 3: structural operations are video-aware', () {
+    // The Remove Set / Delete / Replace buttons and their voice commands share
+    // one confirmed core each; the ordering lives there.
     test('removing a set soft-deletes before the controller renumbers', () {
-      final String body = _method(screen, 'Future<void> _onRemoveSet(');
-      expect(body, contains('_videoSoftDeleteSets('));
+      expect(_method(screen, 'Future<void> _onRemoveSet('), contains('_removeSetConfirmed('));
+      final String body = _method(screen, 'Future<void> _removeSetConfirmed(');
       final int soft = body.indexOf('_videoSoftDeleteSets(');
       final int remove = body.indexOf('_controller.removeSet(');
       expect(soft, greaterThanOrEqualTo(0));
@@ -302,16 +304,20 @@ void main() {
     });
 
     test('deleting an exercise soft-deletes all of its recordings', () {
-      final String body = _method(screen, 'Future<void> _onDeleteExercise(');
-      expect(body, contains('_videoSoftDeleteExercise('));
+      expect(_method(screen, 'Future<void> _onDeleteExercise('), contains('_deleteExerciseConfirmed('));
+      final String body = _method(screen, 'Future<void> _deleteExerciseConfirmed(');
       final int soft = body.indexOf('_videoSoftDeleteExercise(');
       final int del = body.indexOf('_controller.deleteExercise(');
-      expect(soft, lessThan(del));
+      expect(soft, greaterThanOrEqualTo(0));
+      expect(del, greaterThan(soft));
     });
 
     test('replacing an exercise does not orphan its footage', () {
-      final String body = _method(screen, 'Future<void> _onReplaceExercise(');
-      expect(body, contains('_videoSoftDeleteExercise('));
+      expect(_method(screen, 'Future<void> _onReplaceExercise('), contains('_applyReplacement('));
+      final String body = _method(screen, 'Future<void> _applyReplacement(');
+      final int soft = body.indexOf('_videoSoftDeleteExercise(');
+      expect(soft, greaterThanOrEqualTo(0));
+      expect(body.indexOf('_controller.replaceExercise('), greaterThan(soft));
     });
 
     test('template and whole-day replacement sweep orphans', () {

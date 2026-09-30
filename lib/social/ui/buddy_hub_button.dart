@@ -65,6 +65,22 @@ class BuddyHubButton extends StatefulWidget {
   final Color? iconColor;
   final double iconSize;
 
+  /// Opens the Buddy Hub: what tapping the button does, and what a voice
+  /// "buddy hub" does (Home's Aurelian handler).
+  static Future<void> open(
+    BuildContext context, {
+    BuddyRepository? buddies,
+    UserSearchRepository? search,
+    bool actingAsOtherAccount = false,
+  }) =>
+      Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => BuddyHubScreen(
+          buddies: buddies,
+          search: search,
+          showOwnAccountNotice: actingAsOtherAccount,
+        ),
+      ));
+
   @override
   State<BuddyHubButton> createState() => _BuddyHubButtonState();
 }
@@ -103,13 +119,12 @@ class _BuddyHubButtonState extends State<BuddyHubButton> {
   }
 
   void _openHub() {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => BuddyHubScreen(
-        buddies: _buddies,
-        search: widget.search,
-        showOwnAccountNotice: widget.actingAsOtherAccount,
-      ),
-    ));
+    BuddyHubButton.open(
+      context,
+      buddies: _buddies,
+      search: widget.search,
+      actingAsOtherAccount: widget.actingAsOtherAccount,
+    );
   }
 
   @override

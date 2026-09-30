@@ -32,6 +32,23 @@ import '../social/user_search_repository.dart';
 
 enum HomeCommunityTab { feed, leaderboard }
 
+/// Lets the page (Home's Aurelian voice handler) switch the section exactly
+/// as tapping its Feed | Leaderboard switch does.
+class HomeCommunityController {
+  _HomeCommunitySectionState? _state;
+
+  /// The tab shown, or null while no section is attached.
+  HomeCommunityTab? get tab => _state?._tab;
+
+  /// Selects [tab]; false when no section is on screen.
+  bool select(HomeCommunityTab tab) {
+    final _HomeCommunitySectionState? state = _state;
+    if (state == null || !state.mounted) return false;
+    state._select(tab);
+    return true;
+  }
+}
+
 class HomeCommunitySection extends StatefulWidget {
   const HomeCommunitySection({
     super.key,
@@ -43,6 +60,7 @@ class HomeCommunitySection extends StatefulWidget {
     this.search,
     this.leaderboard,
     this.buddies,
+    this.controller,
   });
 
   /// The home page's scroll controller. The feed pages from it.
@@ -59,6 +77,9 @@ class HomeCommunitySection extends StatefulWidget {
   /// The signed-in account's social state, for the leaderboard's friend
   /// gating. For tests; production uses FirebaseAuth's account.
   final BuddyRepository? buddies;
+
+  /// Optional: lets the page select a tab (voice).
+  final HomeCommunityController? controller;
 
   @override
   State<HomeCommunitySection> createState() => _HomeCommunitySectionState();
@@ -81,7 +102,23 @@ class _HomeCommunitySectionState extends State<HomeCommunitySection> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    widget.controller?._state = this;
+  }
+
+  @override
+  void didUpdateWidget(HomeCommunitySection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      if (oldWidget.controller?._state == this) oldWidget.controller?._state = null;
+      widget.controller?._state = this;
+    }
+  }
+
+  @override
   void dispose() {
+    if (widget.controller?._state == this) widget.controller?._state = null;
     _leaderboard?.dispose();
     super.dispose();
   }

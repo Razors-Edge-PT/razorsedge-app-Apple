@@ -309,8 +309,13 @@ Future<void> _type(WidgetTester tester, int rowIndex, int field, String text) as
 Future<AurelianResult> _say(WidgetTester tester, AurelianCommand command) async {
   AurelianResult? result;
   unawaited(AurelianCommandBus.instance.dispatch(command).then((AurelianResult r) => result = r));
-  for (int i = 0; i < 100 && result == null; i++) {
+  for (int i = 0; i < 300 && result == null; i++) {
     await tester.pump(const Duration(milliseconds: 20));
+    // Structural edits also reach the set-video store, whose (absent in tests)
+    // platform services answer on the real event loop, not the fake clock.
+    if (i > 10) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 5)));
+    }
   }
   await tester.pumpAndSettle();
   expect(result, isNotNull, reason: 'no answer for $command');
@@ -534,6 +539,177 @@ void main() {
         await w.outbox.pendingForDay(actorUid: _uid, athleteUid: _uid, dateKey: '2026-01-12');
     expect(queued.map((Wes2MutationRow r) => r.kind), contains(Wes2MutationKind.markDone));
     expect(jsonDecode(queued.lastWhere((Wes2MutationRow r) => r.kind == Wes2MutationKind.markDone).payloadJson), isA<Map<String, dynamic>>());
+    await w.close(tester);
+  });
+  // ── Voice UX expansion ──────────────────────────────────────────────────────
+
+  List<String> names(WidgetTester tester) => tester
+      .widgetList<Text>(find.byType(Text))
+      .map((Text t) => t.data ?? '')
+      .where((String d) => <String>[_nameA, _nameB, _nameC, _benchName, 'Bench Press, Dumbbell', 'Seated Cable Row']
+          .contains(d))
+      .toSet()
+      .toList();
+
+  testWidgets('a named exercise takes the set entry and becomes the voice target', (WidgetTester tester) async {
+    final _World w = _World(online: false);
+    await w.seed(threeExercises);
+    await w.pump(tester);
+    // "for set 1 of row cable seated put 30 for 10": the words in another order.
+    final AurelianResult r = await _say(tester, const AurelianCommand(AurelianCommandKind.setFields,
+        setNumber: 1, weight: 30, weightUnit: ExerciseWeightUnit.kg, reps: 10, exercise: 'cable seated row'));
+    expect(r.message, '$_nameB · Set 1: 30 kg · 10 reps');
+    expect(await w.queuedFieldEdits(), <String>['$_exB|0|reps=10', '$_exB|0|weight=30.0']);
+    // It is now the target: an unnamed command follows it.
+    await _say(tester, const AurelianCommand(AurelianCommandKind.setFields, setNumber: 2, reps: 9));
+    expect(_rows(tester)[4].set.reps.actualValue, 9);
+    // A close misspelling is fine for entering values (fuzzy, clear margin).
+    final AurelianResult fuzzy = await _say(tester,
+        const AurelianCommand(AurelianCommandKind.setFields, setNumber: 1, reps: 7, exercise: 'bicep curl dumbell'));
+    expect(fuzzy.message, startsWith(_nameC));
+    // Not in the workout: said so, nothing written.
+    final List<String> before = await w.queuedFieldEdits();
+    final AurelianResult missing = await _say(tester,
+        const AurelianCommand(AurelianCommandKind.setFields, setNumber: 1, reps: 7, exercise: 'deadlift'));
+    expect(missing.status, AurelianStatus.notFound);
+    expect(await w.queuedFieldEdits(), before);
+    await w.close(tester);
+  });
+
+  testWidgets('clear set N empties its logged fields through the typed-entry path; the set and its note stay',
+      (WidgetTester tester) async {
+    final _World w = _World(online: false);
+    await w.seed(threeExercises);
+    await w.pump(tester);
+    await _say(tester, const AurelianCommand(AurelianCommandKind.setFields,
+        setNumber: 1, weight: 40, weightUnit: ExerciseWeightUnit.kg, reps: 8, rir: 1));
+    await _say(tester, const AurelianCommand(AurelianCommandKind.setFields, setNumber: 2, reps: 6));
+    final AurelianResult r = await _say(tester, const AurelianCommand(AurelianCommandKind.clearSet, setNumber: 1));
+    expect(r.message, '$_nameA · set 1 cleared');
+    final List<Wes2SetRow> rows = _rows(tester);
+    expect(rows.length, 9, reason: 'no set removed');
+    expect(rows[0].set.weight.actualValue, isNull);
+    expect(rows[0].set.reps.actualValue, isNull);
+    expect(rows[0].set.rir.actualValue, isNull);
+    expect(rows[1].set.reps.actualValue, 6, reason: 'other sets untouched');
+    // Explicit nulls reached the durable outbox (the last write per field wins).
+    final List<Wes2MutationRow> queued =
+        await w.outbox.pendingForDay(actorUid: _uid, athleteUid: _uid, dateKey: '2026-01-12');
+    final Map<String, Object?> last = <String, Object?>{};
+    for (final Wes2MutationRow q in queued.where((Wes2MutationRow q) => q.kind == Wes2MutationKind.field && q.setIndex == 0)) {
+      final Map<String, dynamic> pl = Wes2Mutation.decodePayload(q.payloadJson);
+      last['${Wes2Mutation.fieldKeyFrom(pl)?.name}'] = pl['value'];
+    }
+    expect(last, <String, Object?>{'weight': null, 'reps': null, 'rir': null});
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.clearSet, setNumber: 1))).message,
+        '$_nameA · set 1 is already empty');
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.clearSet, setNumber: 5))).status,
+        AurelianStatus.invalid);
+    await w.close(tester);
+  });
+
+  testWidgets('remove set N and delete an exercise reuse the canonical cores', (WidgetTester tester) async {
+    final _World w = _World(online: false);
+    await w.seed(<({String id, String name, int sets})>[
+      (id: _exA, name: _nameA, sets: 3),
+      (id: _exC, name: _nameC, sets: 3),
+      (id: 'ex_solo', name: 'Landmine Press', sets: 1),
+    ]);
+    await w.pump(tester);
+    final int before = _rows(tester).length;
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.removeSet, setNumber: 2))).message,
+        '$_nameA · set 2 removed');
+    expect(_rows(tester).length, before - 1);
+    expect(find.text('Set removed'), findsNothing, reason: 'Undo exactly as the button offers it: only for logged values');
+    // The only set is never removed by "remove set": the exercise must be named.
+    final AurelianResult only = await _say(tester,
+        const AurelianCommand(AurelianCommandKind.removeSet, setNumber: 1, exercise: 'landmine press'));
+    expect(only.status, AurelianStatus.invalid);
+    expect(only.message, contains('delete'));
+    // Deleting never accepts a fuzzy name…
+    final AurelianResult fuzzy = await _say(tester,
+        const AurelianCommand(AurelianCommandKind.deleteExercise, exercise: 'bicep curl dumbell'));
+    expect(fuzzy.status, AurelianStatus.notFound);
+    expect(names(tester), contains(_nameC));
+    // …but the exercise's own words, unique in this workout, are enough.
+    final AurelianResult deleted =
+        await _say(tester, const AurelianCommand(AurelianCommandKind.deleteExercise, exercise: 'bicep curl'));
+    expect(deleted.message, 'Deleted $_nameC');
+    expect(names(tester), isNot(contains(_nameC)));
+    final List<Wes2MutationRow> queued =
+        await w.outbox.pendingForDay(actorUid: _uid, athleteUid: _uid, dateKey: '2026-01-12');
+    expect(queued.map((Wes2MutationRow r) => r.kind),
+        containsAll(<String>[Wes2MutationKind.removeSet, Wes2MutationKind.deleteExercise]));
+    await w.close(tester);
+  });
+
+  testWidgets('replace resolves the new exercise in the Replace picker list and asks which one', (WidgetTester tester) async {
+    final _World w = _World(online: false);
+    await w.seed(threeExercises);
+    await w.pump(tester);
+    final AurelianResult which = await _say(tester, const AurelianCommand(AurelianCommandKind.replaceExercise,
+        exercise: 'bicep curl dumbbell', replacement: 'bench press'));
+    expect(which.status, AurelianStatus.ambiguous);
+    expect(which.message, 'Which bench press?');
+    expect(which.candidates, unorderedEquals(<String>[_benchName, 'Bench Press, Dumbbell']));
+    expect(names(tester), contains(_nameC), reason: 'nothing changed while asking');
+    final AurelianResult done = await _say(tester, const AurelianCommand(AurelianCommandKind.replaceExercise,
+        exercise: 'bicep curl dumbbell', replacement: 'bench press', choices: <String>[_benchName]));
+    expect(done.message, 'Replaced $_nameC with $_benchName');
+    expect(names(tester), isNot(contains(_nameC)));
+    expect(names(tester), contains(_benchName));
+    // The replacement is the target now.
+    await _say(tester, const AurelianCommand(AurelianCommandKind.setFields, setNumber: 1, reps: 5));
+    expect(await w.queuedFieldEdits(), contains('$_bench|0|reps=5'));
+    await w.close(tester);
+  });
+
+  testWidgets('add several exercises: all resolved first, nothing added while one is unclear', (WidgetTester tester) async {
+    final _World w = _World(online: false);
+    await w.seed(threeExercises);
+    await w.pump(tester);
+    final AurelianResult which = await _say(tester, const AurelianCommand(AurelianCommandKind.addExercises,
+        phrase: 'bench press and seated cable row'));
+    expect(which.status, AurelianStatus.ambiguous);
+    expect(which.message, 'Which bench press?');
+    expect(names(tester), isNot(contains('Seated Cable Row')), reason: 'no partial add');
+    final AurelianResult added = await _say(tester, const AurelianCommand(AurelianCommandKind.addExercises,
+        phrase: 'bench press and seated cable row', choices: <String>['Bench Press, Dumbbell']));
+    expect(added.message, 'Added Bench Press, Dumbbell and Seated Cable Row');
+    expect(names(tester), containsAll(<String>['Bench Press, Dumbbell', 'Seated Cable Row']));
+    // The last one added is the target.
+    final AurelianResult current =
+        await _say(tester, const AurelianCommand(AurelianCommandKind.workoutAction, action: AurelianWorkoutAction.currentExercise));
+    expect(current.message, 'On Seated Cable Row (5 of 5)');
+    final AurelianResult unknown = await _say(tester,
+        const AurelianCommand(AurelianCommandKind.addExercises, phrase: 'bench press barbell and zercher hover'));
+    expect(unknown.status, AurelianStatus.notFound);
+    expect(names(tester), isNot(contains(_benchName)));
+    await w.close(tester);
+  });
+
+  testWidgets('named mark done, circuits and exercise controls', (WidgetTester tester) async {
+    final _World w = _World(online: false);
+    await w.seed(threeExercises);
+    await w.pump(tester);
+    await _say(tester, const AurelianCommand(AurelianCommandKind.setFields,
+        setNumber: 1, weight: 12, weightUnit: ExerciseWeightUnit.kg, reps: 10, rir: 2, exercise: _nameC));
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.markExerciseDone, exercise: 'bicep curl'))).message,
+        '$_nameC marked done');
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.moveToCircuit, circuit: 1))).message,
+        '$_nameC is already in Circuit 1');
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.moveToCircuit, circuit: 2))).status,
+        AurelianStatus.invalid);
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.addExerciseToCircuit, circuit: 3))).status,
+        AurelianStatus.invalid);
+    final AurelianResult pick =
+        await _say(tester, const AurelianCommand(AurelianCommandKind.addExerciseToCircuit, circuit: 1));
+    expect(pick.isOk, isTrue);
+    expect(find.byType(Wes2ExercisePicker), findsOneWidget, reason: 'the circuit\'s own Add Exercise picker');
+    // With the picker open, "add bench press barbell" picks it there.
+    expect((await _say(tester, const AurelianCommand(AurelianCommandKind.addExercises, phrase: 'bench press barbell'))).message,
+        '$_benchName added');
+    expect(find.byType(Wes2ExercisePicker), findsNothing);
     await w.close(tester);
   });
 }

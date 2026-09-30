@@ -310,10 +310,17 @@ void main() {
       expect(blanks.length, 1, reason: 'no new blank card position');
       expect(blanks.single.start, greaterThan(qa.indexOf("label: 'Settings'")));
 
-      // The card opens block selection, never an editor draft directly.
-      expect(qa, contains('PlannedBlocksDestination.blockPlanner2'));
-      expect(qa.contains('Bp2Screen'), isFalse);
-      expect(qa.contains('PlannedBlocksScreen('), isFalse);
+      // The card opens block selection, never an editor draft directly. Its
+      // handler is shared with the voice "block planner 2" command.
+      expect(qa, contains('onTap: _openBlockPlanner2,'));
+      final String src = File('lib/home_screen_2.dart').readAsStringSync();
+      final int open = src.indexOf('bool _openBlockPlanner2()');
+      final String handler = src.substring(open, src.indexOf('\n  }', open));
+      expect(handler, contains('PlannedBlocksDestination.blockPlanner2'));
+      for (final String code in <String>[qa, handler]) {
+        expect(code.contains('Bp2Screen'), isFalse);
+        expect(code.contains('PlannedBlocksScreen('), isFalse);
+      }
     });
 
     testWidgets(

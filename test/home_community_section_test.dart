@@ -114,6 +114,7 @@ void main() {
     required LeaderboardRepository board,
     void Function(String uid)? onOpenProfile,
     BuddyRepository? buddies,
+    HomeCommunityController? controller,
   }) async {
     tester.view.physicalSize = const Size(400, 1600);
     tester.view.devicePixelRatio = 1.0;
@@ -126,6 +127,7 @@ void main() {
           controller: host,
           padding: const EdgeInsets.all(16),
           child: HomeCommunitySection(
+            controller: controller,
             scrollController: host,
             feed: feed,
             search: search,
@@ -197,6 +199,35 @@ void main() {
     expect(find.text('200.00'), findsOneWidget);
     expect(find.text('123.46'), findsOneWidget);
     expect(find.text('name-cat'), findsNothing);
+  });
+
+  testWidgets('voice selects a tab through the same switch a tap uses',
+      (WidgetTester tester) async {
+    final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+    await seedFeed(db);
+    await seedBoard(db);
+    final HomeCommunityController controller = HomeCommunityController();
+    expect(controller.select(HomeCommunityTab.leaderboard), isFalse,
+        reason: 'nothing attached yet');
+    await pump(tester,
+        feed: FeedRepository(firestore: db, overrideUid: kMe),
+        search: UserSearchRepository(firestore: db),
+        board: LeaderboardRepository(firestore: db, clock: () => kNow),
+        controller: controller);
+    expect(controller.tab, HomeCommunityTab.feed);
+    expect(controller.select(HomeCommunityTab.leaderboard), isTrue);
+    await tester.pumpAndSettle();
+    final SegmentedButton<HomeCommunityTab> sw = tester
+        .widget(find.byKey(const ValueKey<String>('home-community-switch')));
+    expect(sw.selected, <HomeCommunityTab>{HomeCommunityTab.leaderboard});
+    expect(find.text('Total RE Points · September 2026'), findsOneWidget);
+    expect(visible(tester, find.byType(FeedCard)), isFalse);
+    controller.select(HomeCommunityTab.feed);
+    await tester.pumpAndSettle();
+    expect(visible(tester, find.byType(FeedCard)), isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(controller.select(HomeCommunityTab.feed), isFalse,
+        reason: 'detached when the section goes');
   });
 
   testWidgets('switching to All Time changes the result',
