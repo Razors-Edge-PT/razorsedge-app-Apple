@@ -125,6 +125,14 @@ class Wes2ExerciseCard extends StatelessWidget {
     this.weightUnit = ExerciseWeightUnit.kg,
   });
 
+  /// How [row] is entered (normal, or timed), exactly as the card decides it.
+  static Wes2ExerciseEntryMode entryModeFor(Wes2ExerciseRow row) =>
+      _resolveEntryMode(row.exerciseId, row.name);
+
+  /// Whether the card offers "Completed?" for [row] right now.
+  static bool isCompletedEligible(Wes2ExerciseRow row) =>
+      _isCompletedEligible(row, entryModeFor(row));
+
   static bool _isCompletedEligible(
       Wes2ExerciseRow row, Wes2ExerciseEntryMode mode) {
     switch (mode) {

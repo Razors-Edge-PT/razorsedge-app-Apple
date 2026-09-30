@@ -1,4 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import '../aurelian/aurelian_bus.dart';
+import '../aurelian/aurelian_command.dart';
+import '../aurelian/aurelian_exercise_match.dart';
 import '../exercise_catalog.dart';
 import '../planned_only_resolver.dart';
 
@@ -62,18 +67,111 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
   late int _selectedCircuitIndex;
   final Set<String> _expandedCategories = {..._categoryOrder, 'Other'};
 
+  /// Aurelian voice: "select Bench Press, Barbell" picks from this sheet.
+  Object? _aurelianHandle;
+  final Completer<void> _exercisesLoaded = Completer<void>();
+
   @override
   void initState() {
     super.initState();
     _selectedCircuitIndex = widget.initialCircuitIndex;
     _fetchExercises();
     _fetchPlannedIds();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _aurelianHandle = AurelianCommandBus.instance
+          .register(AurelianScopeKind.picker, _onAurelianCommand);
+    });
   }
 
   @override
   void dispose() {
+    AurelianCommandBus.instance.unregister(_aurelianHandle);
     _searchCtrl.dispose();
     super.dispose();
+  }
+
+  /// The label a voice "which one?" shows; a custom exercise sharing a
+  /// catalogue name is told apart rather than merged.
+  String _voiceLabel(CatalogExercise e) {
+    final String name = e.name.isNotEmpty ? e.name : e.id;
+    final bool shared = _allExercises
+        .where((CatalogExercise o) => o.name == e.name && o.id != e.id)
+        .isNotEmpty;
+    return shared && e.source == ExerciseSource.custom ? '$name (custom)' : name;
+  }
+
+  Future<AurelianResult?> _onAurelianCommand(AurelianCommand command) async {
+    if (!mounted) return null;
+    switch (command.kind) {
+      case AurelianCommandKind.addExercise:
+        return const AurelianResult.ok('Add Exercise is open');
+      case AurelianCommandKind.selectExercise:
+        return _voiceSelect(command);
+      default:
+        return null;
+    }
+  }
+
+  /// Chooses from the picker's real list (everything not already in the day,
+  /// exactly what a tap can reach) and closes it the same way a tap does.
+  Future<AurelianResult> _voiceSelect(AurelianCommand command) async {
+    if (!_exercisesLoaded.isCompleted) {
+      try {
+        await _exercisesLoaded.future.timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        return const AurelianResult.unavailable('Exercises are still loading');
+      }
+    }
+    if (!mounted) return const AurelianResult.unavailable('The picker closed');
+    if (_fetchError.isNotEmpty) return AurelianResult.failed(_fetchError);
+    final String spoken = command.name!;
+    final List<CatalogExercise> available = _allExercises
+        .where((CatalogExercise d) => !widget.excludedIds.contains(d.id))
+        .toList();
+    CatalogExercise? picked;
+    final String? choice = command.choice;
+    if (choice != null) {
+      picked = resolveChoice<CatalogExercise>(
+          spoken, choice, available, (CatalogExercise e) => e.name, _voiceLabel);
+      if (picked == null) {
+        return const AurelianResult.unavailable('The list changed — say it again');
+      }
+    } else {
+      final ExerciseMatch<CatalogExercise> m = matchExercise<CatalogExercise>(
+          spoken, available, (CatalogExercise e) => e.name);
+      if (m.isNone) {
+        final ExerciseMatch<CatalogExercise> already =
+            matchExercise<CatalogExercise>(
+                spoken,
+                _allExercises.where(
+                    (CatalogExercise d) => widget.excludedIds.contains(d.id)),
+                (CatalogExercise e) => e.name);
+        return already.isNone
+            ? AurelianResult.notFound('No exercise called "$spoken"')
+            : AurelianResult.notFound(
+                '${already.matches.first.name} is already in this workout');
+      }
+      if (m.isAmbiguous) {
+        return AurelianResult.ambiguous(
+            'Which one?', m.matches.map(_voiceLabel).toList(),
+            context: 'picker');
+      }
+      picked = m.single;
+    }
+    final String name = picked.name.isNotEmpty ? picked.name : picked.id;
+    _pick(picked);
+    return AurelianResult.ok('$name added');
+  }
+
+  /// A tile tap and a voice selection close the sheet identically.
+  void _pick(CatalogExercise doc) {
+    final name = doc.name.isNotEmpty ? doc.name : doc.id;
+    Navigator.of(context).pop((
+      exerciseId: doc.id,
+      name: name,
+      circuitIndex: _selectedCircuitIndex,
+    ));
   }
 
   Future<void> _fetchExercises() async {
@@ -93,6 +191,8 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
         _fetchError = 'Could not load exercises.';
         _loadingExercises = false;
       });
+    } finally {
+      if (!_exercisesLoaded.isCompleted) _exercisesLoaded.complete();
     }
   }
 
@@ -393,11 +493,7 @@ class _Wes2ExercisePickerState extends State<Wes2ExercisePicker> {
       visualDensity: VisualDensity.compact,
       minVerticalPadding: 0,
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-      onTap: () => Navigator.of(context).pop((
-      exerciseId: doc.id,
-      name: name,
-      circuitIndex: _selectedCircuitIndex,
-      )),
+      onTap: () => _pick(doc),
     );
   }
 }

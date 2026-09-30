@@ -78,4 +78,7 @@ dependencies {
     implementation "androidx.core:core:1.13.1"
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.android.material:material:1.11.0"
+
+    // JVM unit tests of the Aurelian voice bridge core (android/app/src/test).
+    testImplementation "junit:junit:4.13.2"
 }

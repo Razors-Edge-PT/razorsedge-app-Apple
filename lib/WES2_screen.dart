@@ -23,6 +23,7 @@ import 'WES2_widgets/WES2_empty_state.dart';
 import 'WES2_widgets/WES2_day_actions_row.dart';
 import 'WES2_widgets/WES2_exercise_card.dart';
 import 'units/exercise_unit_registry.dart';
+import 'units/weight_unit.dart';
 import 'WES2_widgets/WES2_exercise_picker.dart';
 import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
@@ -50,6 +51,11 @@ import 'wes2_field_parser.dart';
 import 'wes2_hint_input.dart';
 import 'wes2_hint_load_runner.dart';
 import 'wes2_hint_trace.dart';
+import 'aurelian/aurelian_bus.dart';
+import 'aurelian/aurelian_command.dart';
+import 'aurelian/aurelian_exercise_match.dart';
+import 'aurelian/aurelian_set_entry.dart';
+import 'aurelian/wes2_voice_target.dart';
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -209,6 +215,18 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   bool _qualifiedDatesLoaded = false;
   bool _qualifiedDatesLoading = false;
 
+  // ── Aurelian voice bridge (session-local; never saved) ───────────────────
+  Object? _aurelianHandle;
+
+  /// The exercise voice commands act on ("set one weight 50").
+  final Wes2VoiceTarget _voiceTarget = Wes2VoiceTarget();
+
+  /// Outline the voice target once voice has been used in this visit.
+  bool _voiceTargetShown = false;
+
+  /// The Add Exercise picker was opened by voice: its pick becomes the target.
+  bool _voicePickerOpen = false;
+
   // ── Tutorial helpers ──────────────────────────────────────────────────────
 
   Future<void> _loadTutorialState() async {
@@ -336,6 +354,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       refreshHistory: () => _refreshHistoryForHints(_controller.selectedDate),
     );
     unawaited(_attachSyncEngine());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _aurelianHandle = AurelianCommandBus.instance
+          .register(AurelianScopeKind.wes2, _onAurelianCommand);
+    });
   }
 
   /// Opens the durable outbox (idempotent) and subscribes to it.
@@ -394,6 +417,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    AurelianCommandBus.instance.unregister(_aurelianHandle);
     ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     _timerTicker?.cancel();
     _hintRunner.dispose();
@@ -1915,9 +1939,24 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
             row.exerciseId,
             GlobalKey.new,
           );
+          final bool isVoiceTarget = _voiceTargetShown &&
+              row.exerciseId == _voiceTarget.exerciseId;
           items.add(KeyedSubtree(
             key: cardKey,
-            child: Wes2ExerciseCard(
+            // Always present (transparent unless targeted) so toggling the
+            // outline never rebuilds the card's own state or fields.
+            child: DecoratedBox(
+              position: DecorationPosition.foreground,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isVoiceTarget
+                      ? Theme.of(context).colorScheme.secondary
+                      : Colors.transparent,
+                  width: 2,
+                ),
+              ),
+              child: Wes2ExerciseCard(
               row: row,
               weightUnit: ExerciseUnitRegistry.shared
                   .unitsFor(controller.actingUid,
@@ -1954,6 +1993,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                   ? _onRepsTutorialAccepted
                   : null,
               showCogCue: isFirstCard && showCogCue,
+            ),
             ),
           ));
           isFirstCard = false;
@@ -2013,7 +2053,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       result.name,
       circuitIndex: result.circuitIndex,
     );
+    final bool viaVoice = _voicePickerOpen;
+    _voicePickerOpen = false;
     if (!added) return;
+    // A newly added exercise is where the next set entry goes.
+    _voiceTarget.select(result.exerciseId);
     // Await defaults so hints are correct immediately after adding.
     final activeBlockId = _controller.activeBlockId;
     if (activeBlockId != null && activeBlockId.isNotEmpty) {
@@ -2038,6 +2082,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       // ignore: discarded_futures
       _loadAndApplyHints();
     }
+    if (viaVoice && mounted) unawaited(_revealVoiceTarget());
   }
 
   /// Top "Add Exercise" button — defaults to Circuit 1.
@@ -2130,6 +2175,294 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     _workoutDurationSegmentStartedAt = null;
     _controller.changeDate(picked);
     _loadDay();
+  }
+
+  // ── Aurelian voice commands (first-party bridge) ─────────────────────────
+  //
+  // Every command runs the SAME canonical operation as the equivalent tap or
+  // typed entry: the Add Exercise picker, updateSetField + _onFieldUnfocused
+  // (the durable outbox), _onAddSet, the Done coordinator and the existing
+  // note dialogs. Voice only adds a session-local target exercise.
+
+  List<String> _rowIds() =>
+      _controller.rows.map((Wes2ExerciseRow r) => r.exerciseId).toList();
+
+  Wes2ExerciseRow? _voiceTargetRow() {
+    final String? id = _voiceTarget.resolve(_rowIds());
+    if (id == null) return null;
+    for (final Wes2ExerciseRow r in _controller.rows) {
+      if (r.exerciseId == id) return r;
+    }
+    return null;
+  }
+
+  bool get _isCurrentRoute => ModalRoute.of(context)?.isCurrent ?? true;
+
+  Future<AurelianResult?> _onAurelianCommand(AurelianCommand command) async {
+    if (!mounted) return null;
+    switch (command.kind) {
+      case AurelianCommandKind.openWorkout:
+        final String? blocked = await _bringWorkoutToFront();
+        return blocked == null
+            ? const AurelianResult.ok('Workout open')
+            : AurelianResult.unavailable(blocked);
+      case AurelianCommandKind.selectExercise:
+        // Another screen on top (Analytics) selects there instead.
+        if (!_isCurrentRoute) return null;
+        if (!await _waitForDay()) {
+          return const AurelianResult.unavailable('The workout is still loading');
+        }
+        return _voiceSelectExercise(command);
+      case AurelianCommandKind.addExercise:
+      case AurelianCommandKind.nextExercise:
+      case AurelianCommandKind.previousExercise:
+      case AurelianCommandKind.setFields:
+      case AurelianCommandKind.openSetNote:
+      case AurelianCommandKind.openExerciseNote:
+      case AurelianCommandKind.addSet:
+      case AurelianCommandKind.markExerciseDone:
+        final String? blocked = await _bringWorkoutToFront();
+        if (blocked != null) return AurelianResult.unavailable(blocked);
+        if (!await _waitForDay()) {
+          return const AurelianResult.unavailable('The workout is still loading');
+        }
+        if (!mounted) return const AurelianResult.unavailable('The workout closed');
+        return _runVoiceWorkoutCommand(command);
+      case AurelianCommandKind.openAnalytics:
+      case AurelianCommandKind.analyticsMetric:
+        return null;
+    }
+  }
+
+  /// Makes WES2 the current screen again by popping pages above it (Analytics,
+  /// for example). A dialog or sheet is never dismissed (it may hold unsaved
+  /// text): popping stops at the first popup, before popping it.
+  Future<String?> _bringWorkoutToFront() async {
+    final ModalRoute<dynamic>? route = ModalRoute.of(context);
+    if (route == null || route.isCurrent) return null;
+    bool blocked = false;
+    Navigator.of(context).popUntil((Route<dynamic> r) {
+      if (r == route) return true;
+      if (r is PopupRoute) {
+        blocked = true;
+        return true;
+      }
+      return false;
+    });
+    if (blocked) return 'Close the open dialog first';
+    await WidgetsBinding.instance.endOfFrame;
+    return mounted ? null : 'The workout closed';
+  }
+
+  /// Waits (bounded) for the day to finish loading, by listening to the
+  /// controller rather than sleeping.
+  Future<bool> _waitForDay() async {
+    bool settled() =>
+        _controller.loadState != Wes2LoadState.idle &&
+        _controller.loadState != Wes2LoadState.loading;
+    if (settled()) return true;
+    final Completer<void> done = Completer<void>();
+    void listener() {
+      if (settled() && !done.isCompleted) done.complete();
+    }
+
+    _controller.addListener(listener);
+    try {
+      await done.future.timeout(const Duration(seconds: 8));
+      return true;
+    } on TimeoutException {
+      return false;
+    } finally {
+      if (mounted) _controller.removeListener(listener);
+    }
+  }
+
+  Future<AurelianResult> _runVoiceWorkoutCommand(AurelianCommand command) async {
+    if (command.kind == AurelianCommandKind.addExercise) {
+      _voicePickerOpen = true;
+      unawaited(_onAddExercise());
+      return const AurelianResult.ok(
+          'Add Exercise open — say "select" and the exercise');
+    }
+    final Wes2ExerciseRow? row = _voiceTargetRow();
+    if (row == null) {
+      return const AurelianResult.unavailable(
+          'No exercises in this workout yet — say "add exercise"');
+    }
+    switch (command.kind) {
+      case AurelianCommandKind.nextExercise:
+      case AurelianCommandKind.previousExercise:
+        final List<String> ids = _rowIds();
+        final bool forward = command.kind == AurelianCommandKind.nextExercise;
+        final String? id =
+            forward ? _voiceTarget.next(ids) : _voiceTarget.previous(ids);
+        if (id == null) {
+          await _revealVoiceTarget();
+          return AurelianResult.unavailable(forward
+              ? 'Already on the last exercise (${row.name})'
+              : 'Already on the first exercise (${row.name})');
+        }
+        await _revealVoiceTarget();
+        final Wes2ExerciseRow now =
+            _controller.rows.firstWhere((Wes2ExerciseRow r) => r.exerciseId == id);
+        return AurelianResult.ok(
+            '${now.name} (${ids.indexOf(id) + 1} of ${ids.length})');
+      case AurelianCommandKind.setFields:
+        final ExerciseWeightUnit unit = ExerciseUnitRegistry.shared
+            .unitsFor(_controller.actingUid,
+                blockSettings: _controller.exerciseSettings)
+            .unitFor(row.exerciseId);
+        final SetEntryPlan plan = planSetEntry(
+          command,
+          exerciseName: row.name,
+          setCount: row.setCount,
+          displayUnit: unit,
+          velocityShown: _shouldShowVelocityField(row),
+          normalEntry: Wes2ExerciseCard.entryModeFor(row) ==
+              Wes2ExerciseEntryMode.normal,
+        );
+        if (!plan.isValid) return AurelianResult.invalid(plan.error!);
+        await _applyVoiceSetEdits(row.exerciseId, plan);
+        return AurelianResult.ok('${row.name} · ${plan.summary}');
+      case AurelianCommandKind.openSetNote:
+        final int n = command.setNumber!;
+        if (n > row.setCount) {
+          return AurelianResult.invalid(
+              '${row.name} has ${row.setCount} ${row.setCount == 1 ? 'set' : 'sets'}');
+        }
+        await _revealVoiceTarget();
+        unawaited(_onOpenSetNoteDialog(row, n - 1, focusNote: true));
+        return AurelianResult.ok(
+            '${row.name} · set $n note — say "type …", then "tap save"');
+      case AurelianCommandKind.openExerciseNote:
+        await _revealVoiceTarget();
+        unawaited(_showExerciseNoteDialog(row));
+        return AurelianResult.ok(
+            '${row.name} note — say "type …", then "tap save"');
+      case AurelianCommandKind.addSet:
+        _onAddSet(row.exerciseId);
+        await _revealVoiceTarget();
+        final Wes2ExerciseRow now = _controller.rows
+            .firstWhere((Wes2ExerciseRow r) => r.exerciseId == row.exerciseId);
+        return AurelianResult.ok('${row.name} · set ${now.setCount} added');
+      case AurelianCommandKind.markExerciseDone:
+        if (row.isMarkedDone) {
+          return AurelianResult.ok('${row.name} is already done');
+        }
+        if (!Wes2ExerciseCard.isCompletedEligible(row)) {
+          return AurelianResult.invalid(
+              'Log a set of ${row.name} before marking it done');
+        }
+        _onToggleMarkedDone(row.exerciseId, true);
+        await _revealVoiceTarget();
+        return AurelianResult.ok('${row.name} marked done');
+      default:
+        return const AurelianResult.unavailable('Not available here');
+    }
+  }
+
+  /// "select X" on the workout itself: X becomes the voice target.
+  Future<AurelianResult> _voiceSelectExercise(AurelianCommand command) async {
+    final List<Wes2ExerciseRow> rows = _controller.rows.toList();
+    final String spoken = command.name!;
+    final String? choice = command.choice;
+    Wes2ExerciseRow? picked;
+    if (choice != null) {
+      picked = resolveChoice<Wes2ExerciseRow>(spoken, choice, rows,
+          (Wes2ExerciseRow r) => r.name, (Wes2ExerciseRow r) => r.name);
+      if (picked == null) {
+        return const AurelianResult.unavailable(
+            'The workout changed — say it again');
+      }
+    } else {
+      final ExerciseMatch<Wes2ExerciseRow> m =
+          matchExercise<Wes2ExerciseRow>(spoken, rows, (Wes2ExerciseRow r) => r.name);
+      if (m.isNone) {
+        return AurelianResult.notFound(
+            '"$spoken" isn\'t in this workout — say "add exercise" to add it');
+      }
+      if (m.isAmbiguous) {
+        return AurelianResult.ambiguous(
+            'Which one?',
+            m.matches.map((Wes2ExerciseRow r) => r.name).toList(),
+            context: 'wes2');
+      }
+      picked = m.single;
+    }
+    _voiceTarget.select(picked.exerciseId);
+    await _revealVoiceTarget();
+    return AurelianResult.ok('${picked.name} selected');
+  }
+
+  /// The ordinary typed-entry path, once per value: the model update the row's
+  /// onFieldChanged makes (updateSetField, with the same cascade), then the save
+  /// its focus loss makes (_onFieldUnfocused → local draft + durable outbox). A
+  /// field still being typed in is left first, so its own text is saved before
+  /// the voice value lands and can never overwrite it afterwards.
+  Future<void> _applyVoiceSetEdits(String exerciseId, SetEntryPlan plan) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    await Future<void>.delayed(Duration.zero);
+    await _awaitDurableWrites();
+    if (!mounted) return;
+    for (final SetFieldEdit edit in plan.edits) {
+      _controller.updateSetField(
+        exerciseId: exerciseId,
+        setIndex: plan.setIndex,
+        fieldKey: edit.fieldKey,
+        rawText: edit.text,
+      );
+      _onFieldUnfocused(exerciseId, plan.setIndex, edit.fieldKey, edit.text);
+    }
+    _voiceTarget.select(exerciseId);
+    await _revealVoiceTarget();
+  }
+
+  /// Outlines the voice target and scrolls its card into view.
+  Future<void> _revealVoiceTarget() async {
+    if (!mounted) return;
+    final String? id = _voiceTarget.resolve(_rowIds());
+    if (!_voiceTargetShown) setState(() => _voiceTargetShown = true);
+    if (id == null) return;
+    await WidgetsBinding.instance.endOfFrame;
+    await _ensureExerciseVisible(id);
+  }
+
+  /// Scrolls [exerciseId]'s card into view with its own layout (the existing
+  /// card keys). The list builds cards lazily, so a card far away is reached by
+  /// paging the list's own scroll position toward it until it is built.
+  Future<void> _ensureExerciseVisible(String exerciseId) async {
+    for (int attempt = 0; attempt < 30 && mounted; attempt++) {
+      final BuildContext? target = _exerciseCardKeys[exerciseId]?.currentContext;
+      if (target != null && target.mounted) {
+        await Scrollable.ensureVisible(target,
+            duration: const Duration(milliseconds: 250), alignment: 0.05);
+        return;
+      }
+      final List<String> ids = _rowIds();
+      final int want = ids.indexOf(exerciseId);
+      if (want < 0) return;
+      ScrollPosition? position;
+      int? lowest;
+      int? highest;
+      for (final MapEntry<String, GlobalKey> e in _exerciseCardKeys.entries) {
+        final BuildContext? c = e.value.currentContext;
+        if (c == null || !c.mounted) continue;
+        position ??= Scrollable.maybeOf(c)?.position;
+        final int i = ids.indexOf(e.key);
+        if (i < 0) continue;
+        lowest = lowest == null || i < lowest ? i : lowest;
+        highest = highest == null || i > highest ? i : highest;
+      }
+      if (position == null || lowest == null || highest == null) return;
+      final double direction = want > highest ? 1 : (want < lowest ? -1 : 0);
+      if (direction == 0) return;
+      final double to = (position.pixels +
+              direction * position.viewportDimension * 0.8)
+          .clamp(position.minScrollExtent, position.maxScrollExtent);
+      if (to == position.pixels) return;
+      position.jumpTo(to);
+      await WidgetsBinding.instance.endOfFrame;
+    }
   }
 
   // ── Undo (Phase 15) ──────────────────────────────────────────────────────
@@ -3230,7 +3563,10 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _onOpenSetNoteDialog(Wes2ExerciseRow row, int setIndex) async {
+  /// [focusNote]: put the cursor in the note even when a plan note is shown
+  /// (voice: the next thing said is "type …").
+  Future<void> _onOpenSetNoteDialog(Wes2ExerciseRow row, int setIndex,
+      {bool focusNote = false}) async {
     // Always re-fetch from controller so we have the latest in-memory state.
     final currentRow = _controller.rows.firstWhere(
       (r) => r.exerciseId == row.exerciseId,
@@ -3284,7 +3620,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 controller: noteCtrl,
                 maxLines: 4,
                 minLines: 2,
-                autofocus: set.planNote == null,
+                autofocus: focusNote || set.planNote == null,
                 decoration: const InputDecoration(
                   hintText: 'Add a note for this set…',
                   border: OutlineInputBorder(),

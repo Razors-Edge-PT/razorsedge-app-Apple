@@ -1,4 +1,7 @@
 import 'units/exercise_unit_registry.dart';
+import 'aurelian/aurelian_bus.dart';
+import 'aurelian/aurelian_command.dart';
+import 'aurelian/aurelian_exercise_match.dart';
 import 'units/weight_unit.dart';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -1715,6 +1718,61 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
     }
   }
 
+  /// An explicit pick (the dropdown, or voice): selected and remembered.
+  void _pickExercise(ExerciseHistoryOption option) {
+    _persistHealedSelection = true;
+    _selectExercise(option, persist: true);
+  }
+
+  Future<AurelianResult?> _onAurelianCommand(AurelianCommand command) async {
+    // Only while Analytics is the screen in front.
+    if (!mounted || !(ModalRoute.of(context)?.isCurrent ?? true)) return null;
+    switch (command.kind) {
+      case AurelianCommandKind.openAnalytics:
+        return const AurelianResult.ok('Analytics is open');
+      case AurelianCommandKind.analyticsMetric:
+        final bool velocity = command.metric == AurelianMetric.velocity;
+        _setMetric(velocity ? AnalyticsMetric.velocity : AnalyticsMetric.e1rm);
+        return AurelianResult.ok(
+            velocity ? 'Showing the velocity trend' : 'Showing the E1RM trend');
+      case AurelianCommandKind.selectExercise:
+        return _voiceSelectExercise(command);
+      default:
+        return null;
+    }
+  }
+
+  /// Chooses among the exercises the picker lists right now, by the same
+  /// identity (one row per exercise) the dropdown uses.
+  AurelianResult _voiceSelectExercise(AurelianCommand command) {
+    final List<ExerciseHistoryOption> options = _deriveExerciseOptions();
+    final String spoken = command.name!;
+    final String? choice = command.choice;
+    ExerciseHistoryOption? picked;
+    if (choice != null) {
+      picked = resolveChoice<ExerciseHistoryOption>(spoken, choice, options,
+          (ExerciseHistoryOption o) => o.name, (ExerciseHistoryOption o) => o.label);
+      if (picked == null) {
+        return const AurelianResult.unavailable('The list changed — say it again');
+      }
+    } else {
+      final ExerciseMatch<ExerciseHistoryOption> m =
+          matchExercise<ExerciseHistoryOption>(
+              spoken, options, (ExerciseHistoryOption o) => o.name);
+      if (m.isNone) {
+        return AurelianResult.notFound('No history for "$spoken" yet');
+      }
+      if (m.isAmbiguous) {
+        return AurelianResult.ambiguous('Which one?',
+            m.matches.map((ExerciseHistoryOption o) => o.label).toList(),
+            context: 'analytics');
+      }
+      picked = m.single;
+    }
+    _pickExercise(picked);
+    return AurelianResult.ok('Analytics: ${picked.label}');
+  }
+
   String _rangeLabel(TrendRange t) {
     switch (t) {
       case TrendRange.d14:
@@ -1821,8 +1879,7 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
               ],
               onChanged: (picked) {
                 if (picked == null || picked == activeOption) return;
-                _persistHealedSelection = true;
-                _selectExercise(picked, persist: true);
+                _pickExercise(picked);
               },
             ),
           ),
@@ -2459,11 +2516,19 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
     }
   }
 
+  /// Aurelian voice: "select …", "show E1RM", "show velocity" on this screen.
+  Object? _aurelianHandle;
+
   @override
   void initState() {
     super.initState();
     ExerciseUnitRegistry.shared.addListener(_onUnitsChanged);
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _aurelianHandle = AurelianCommandBus.instance
+          .register(AurelianScopeKind.analytics, _onAurelianCommand);
+    });
     _onRepTargetChanged(_repTargetCtrl.text); // seed groups from "5"
     final selectedUid = userId;
 
@@ -2515,6 +2580,7 @@ class _ExerciseDetailsViewState extends State<_ExerciseDetailsView>
 
   @override
   void dispose() {
+    AurelianCommandBus.instance.unregister(_aurelianHandle);
     ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     WidgetsBinding.instance.removeObserver(this);
     _repTargetCtrl.dispose();

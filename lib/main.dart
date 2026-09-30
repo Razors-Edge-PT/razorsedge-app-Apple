@@ -21,7 +21,6 @@ import 'Block_Planner.dart';
 import 'SavedWorkoutsScreen.dart';
 import 'bb3_week_planner.dart';
 import 'WES2_screen.dart';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'dart:io' show Platform;
@@ -49,6 +48,8 @@ import 'auth_diag.dart';
 import 'auth_signout.dart';
 import 'push/push_notification_service.dart';
 import 'push/push_ready_scope.dart';
+import 'aurelian/aurelian_bridge_scope.dart';
+import 'aurelian/aurelian_bus.dart';
 
 
 
@@ -949,6 +950,10 @@ void main() async {
   // Not awaited: never delays the first frame.
   unawaited(PushNotificationService.instance.onAppStart());
 
+  // Aurelian voice bridge (Android only): commands wait natively until an
+  // AurelianBridgeScope inside the membership gate is mounted.
+  AurelianBridgeChannel.attach();
+
   StartupTrace.runAppCalled();
   runApp(
     ChangeNotifierProvider<ThemeController>.value(
@@ -1030,13 +1035,16 @@ class MyApp extends StatelessWidget {
   /// Gated default Home — used by `/home`, the initial route, and as the
   /// restore target when a root WES2 route is deliberately exited.
   // PushReadyScope sits INSIDE the gate: notification taps open only once the
-  // gate has let the person through (see push/push_ready_scope.dart).
+  // gate has let the person through (see push/push_ready_scope.dart). The
+  // AurelianBridgeScope follows the same rule for voice commands.
   static Widget _gatedHome() => MembershipGate(
-        child: PushReadyScope(
-          offerPermissionPrimer: true,
-          child: kUseHomeScreen2AsDefault
-              ? const HomeScreen2()
-              : const HomeScreen(),
+        child: AurelianBridgeScope(
+          child: PushReadyScope(
+            offerPermissionPrimer: true,
+            child: kUseHomeScreen2AsDefault
+                ? const HomeScreen2()
+                : const HomeScreen(),
+          ),
         ),
       );
 
@@ -1090,7 +1098,8 @@ class MyApp extends StatelessWidget {
                     // A tap opens ON TOP of the restored workout; WES2 stays
                     // underneath untouched.
                     builder: (_) => const MembershipGate(
-                        child: PushReadyScope(child: Wes2Screen())),
+                        child: AurelianBridgeScope(
+                            child: PushReadyScope(child: Wes2Screen()))),
                   ),
                 ];
               }

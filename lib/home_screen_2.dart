@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
 
+import 'aurelian/aurelian_bus.dart';
+import 'aurelian/aurelian_command.dart';
 import 'app_drawer.dart';
 import 'app_theme.dart';
 import 'bb3_week_planner.dart';
@@ -25,6 +27,20 @@ import 'user_context.dart';
 import 'user_settings.dart';
 import 'membership_gate.dart';
 import 'startup_trace.dart';
+
+/// Opens GoodLift's Analytics (ExerciseDetailsScreen) for the selected athlete
+/// — the one route both Home Analytics cards and "open analytics" by voice use.
+void pushExerciseAnalytics(BuildContext context) {
+  final uc = UserContext.of(context, listen: false);
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+        value: uc,
+        child: const ExerciseDetailsScreen(),
+      ),
+    ),
+  );
+}
 
 // Private to this file — avoids name collision with home_screen.dart's SelectedFeed.
 
@@ -82,10 +98,35 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
+  /// Aurelian voice bridge registration ("enter workout", "open analytics").
+  Object? _aurelianHandle;
+
   @override
   void initState() {
     super.initState();
     debugPrint('🏠 [HOME2:initState] created');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _aurelianHandle = AurelianCommandBus.instance
+          .register(AurelianScopeKind.home, _onAurelianCommand);
+    });
+  }
+
+  /// Voice runs exactly the Quick Access cards' own paths, readiness check
+  /// included.
+  Future<AurelianResult?> _onAurelianCommand(AurelianCommand command) async {
+    if (!mounted) return null;
+    switch (command.kind) {
+      case AurelianCommandKind.openWorkout:
+        return _openWorkout()
+            ? const AurelianResult.ok('Workout opened')
+            : AurelianResult.unavailable(_blockNotReadyMessage());
+      case AurelianCommandKind.openAnalytics:
+        _openAnalytics();
+        return const AurelianResult.ok('Analytics opened');
+      default:
+        return null;
+    }
   }
 
   @override
@@ -112,6 +153,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
 
   @override
   void dispose() {
+    AurelianCommandBus.instance.unregister(_aurelianHandle);
     if (_ucBound) {
       _uc.removeListener(_onUserContextChange);
       _ctrl.removeListener(_onControllerNotify);
@@ -167,12 +209,36 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
     return uc.activeBlockId?.isNotEmpty == true;
   }
 
+  String _blockNotReadyMessage() => _ctrl.isFirstTimeSetup
+      ? 'Setting up your training profile, please wait a moment...'
+      : 'Training data is loading, please wait...';
+
   void _showBlockNotReadySnack() {
-    final msg = _ctrl.isFirstTimeSetup
-        ? 'Setting up your training profile, please wait a moment...'
-        : 'Training data is loading, please wait...';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(_blockNotReadyMessage())));
   }
+
+  /// Enter Workout: the gated WES2 route for the selected athlete. False (and
+  /// nothing opened) while the training block is not ready.
+  bool _openWorkout() {
+    if (!_isBlockReady()) {
+      _showBlockNotReadySnack();
+      return false;
+    }
+    final uc = UserContext.of(context, listen: false);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider<UserContext>.value(
+          value: uc,
+          child: gatedWes2(),
+        ),
+      ),
+    );
+    return true;
+  }
+
+  void _openAnalytics() => pushExerciseAnalytics(context);
 
   Widget _buildQACard({
     Key? key,
@@ -363,22 +429,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   icon: Icons.fitness_center,
                                   label: 'Enter\nWorkout',
                                   onTap: () {
-                                    if (!_isBlockReady()) {
-                                      _showBlockNotReadySnack();
-                                      return;
-                                    }
-                                    final uc =
-                                        UserContext.of(context, listen: false);
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => ChangeNotifierProvider<
-                                            UserContext>.value(
-                                          value: uc,
-                                          child: gatedWes2(),
-                                        ),
-                                      ),
-                                    );
+                                    _openWorkout();
                                   },
                                   iconWidget: SizedBox(
                                     width: 52,
@@ -553,21 +604,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   : _buildQACard(
                                       icon: Icons.insights,
                                       label: 'Analytics',
-                                      onTap: () {
-                                        final uc = UserContext.of(context,
-                                            listen: false);
-                                        Navigator.of(context).push(
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                ChangeNotifierProvider<
-                                                    UserContext>.value(
-                                              value: uc,
-                                              child:
-                                                  const ExerciseDetailsScreen(),
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                      onTap: _openAnalytics,
                                     ),
                             ),
                             // Column 5: Coaching (moved here for non-coach
@@ -579,21 +616,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                                   ? _buildQACard(
                                       icon: Icons.insights,
                                       label: 'Analytics',
-                                      onTap: () {
-                                        final uc = UserContext.of(context,
-                                            listen: false);
-                                        Navigator.of(context).push(
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                ChangeNotifierProvider<
-                                                    UserContext>.value(
-                                              value: uc,
-                                              child:
-                                                  const ExerciseDetailsScreen(),
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                      onTap: _openAnalytics,
                                     )
                                   : _buildQACard(
                                       icon: Icons.supervisor_account_outlined,

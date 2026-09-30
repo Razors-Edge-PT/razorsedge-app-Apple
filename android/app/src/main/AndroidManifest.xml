@@ -50,6 +50,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Aurelian voice bridge. Discoverable, but every request must carry a caller-proof
+                 PendingIntent created by Aurelian and signed with its allowed certificate
+                 (AurelianBridge / AurelianCallerPolicy); anything else is dropped. -->
+            <intent-filter>
+                <action android:name="com.goodlift.razorsedge.action.AURELIAN_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
@@ -81,5 +88,7 @@
             <action android:name="android.intent.action.PROCESS_TEXT" />
             <data android:mimeType="text/plain" />
         </intent>
+        <!-- Aurelian voice bridge: needed to check the caller's signing certificate. -->
+        <package android:name="com.razorsedgesystems.aurelian" />
     </queries>
 </manifest>

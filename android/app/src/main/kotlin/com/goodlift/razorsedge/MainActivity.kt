@@ -19,17 +19,24 @@ class MainActivity : FlutterActivity() {
 
     private var notificationChannel: MethodChannel? = null
 
+    /** Aurelian's authenticated voice bridge (its own channel; see AurelianBridge). */
+    private var aurelianBridge: AurelianBridge? = null
+
     /** Extra key on the Activity intent for a tap on a notification GoodLift posted itself. */
     private val EXTRA_TAP_DATA = "goodlift_tap_data"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ensureNotificationChannels()
+        // A cold start by an Aurelian command: queued natively until Dart's bridge scope is ready.
+        // Never on a recreation (the command was already consumed then).
+        if (savedInstanceState == null) aurelianBridge?.handle(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         // super registers the generated plugins; keep it first.
         super.configureFlutterEngine(flutterEngine)
+        aurelianBridge = AurelianBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "goodlift/notifications")
         notificationChannel = channel
         channel.setMethodCallHandler { call, result ->
@@ -81,6 +88,8 @@ class MainActivity : FlutterActivity() {
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // A warm Aurelian command: handled by the bridge and never treated as a notification tap.
+        if (aurelianBridge?.handle(intent) == true) return
         setIntent(intent)
         val data = intent.getStringExtra(EXTRA_TAP_DATA) ?: return
         intent.removeExtra(EXTRA_TAP_DATA)
