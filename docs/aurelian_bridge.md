@@ -214,7 +214,7 @@ is never part of a normal or release build. Reinstall the normal debug build aft
 ```powershell
 flutter build apk --debug -t tool/aurelian_bridge_harness/main.dart
 adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
-# … run Aurelian's GoodLiftBridgeHarnessSmokeTest …
+# … run Aurelian's GoodLiftBridgeHarnessSmokeTest with -e goodliftHarness true …
 flutter build apk --debug
 adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
 ```
