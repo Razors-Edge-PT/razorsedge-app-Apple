@@ -118,10 +118,21 @@ class AurelianBridgeCoreTest {
     }
 
     @Test fun allowedCertificateIsAurelianSha256() {
+        // JVM unit tests use the debug build's allowlist: the development certificate by default.
         val cert = AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256.single()
         assertEquals(64, cert.length)
         assertEquals(32, AurelianCallerPolicy.hexToBytes(cert).size)
         assertEquals(0x8e.toByte(), AurelianCallerPolicy.hexToBytes("8E:8D")[0])
+    }
+
+    @Test fun callerAllowlistIsParsedStrictly() {
+        val a = "8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763"
+        val b = "AB".repeat(32)
+        assertEquals(emptySet<String>(), AurelianCallerPolicy.parseCertList(""))
+        assertEquals(setOf(a), AurelianCallerPolicy.parseCertList(" $a "))
+        assertEquals(setOf(a, "ab".repeat(32)), AurelianCallerPolicy.parseCertList("$a,${b.chunked(2).joinToString(":")}"))
+        assertEquals("malformed entries never become trusted", emptySet<String>(),
+            AurelianCallerPolicy.parseCertList("*,android,${a.dropLast(1)},${a}00"))
     }
 
     // ------------------------------------------------------------------ queue and replies

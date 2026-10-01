@@ -80,6 +80,9 @@ class AurelianBridge(private val activity: Activity, messenger: BinaryMessenger)
         val caller = parcelable(extras, AurelianBridgeProtocol.EXTRA_CALLER)
         val reply = parcelable(extras, AurelianBridgeProtocol.EXTRA_REPLY)
         if (!callerIsAurelian(caller) || reply == null || reply.creatorPackage != AurelianBridgeProtocol.AURELIAN_PACKAGE) {
+            if (AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256.isEmpty()) {
+                Log.w(TAG, "Bridge request dropped: this build trusts no Aurelian certificate")
+            }
             Log.w(TAG, "Bridge request from an untrusted caller dropped")
             return true
         }

@@ -25,6 +25,28 @@ def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
 def flutterVersionName = localProperties.getProperty('flutter.versionName')
     ?: (project.hasProperty('flutter.versionName') ? project.getProperty('flutter.versionName') : "1.7.19")
 
+// Aurelian bridge caller allowlist (docs/aurelian_bridge.md, "Caller certificates"): SHA-256
+// fingerprints of the certificates allowed to sign the Aurelian app that may call the bridge.
+// Public identifiers, not secrets. Set per build in android/local.properties (or with -P):
+//   aurelian.callerCerts.release=<64 hex>[,<64 hex>]   release builds: NO caller unless set here
+//   aurelian.callerCerts.debug=<64 hex>                 debug builds: defaults to the dev machine's
+//                                                       debug certificate below
+def aurelianCallerCerts = { String key ->
+    def raw = (project.findProperty(key) ?: localProperties.getProperty(key) ?: '').toString().trim()
+    def certs = raw ? raw.split(',').collect { it.trim().replace(':', '').toLowerCase() }.findAll { it } : []
+    certs.each { cert ->
+        if (!(cert ==~ /[0-9a-f]{64}/)) {
+            throw new GradleException("$key: '$cert' is not a SHA-256 certificate fingerprint")
+        }
+    }
+    return certs.join(',')
+}
+// Richard's development machine's Android debug certificate (CN=Android Debug). Debug builds only:
+// a release build never trusts it unless aurelian.callerCerts.release names it explicitly.
+def devAurelianCallerCert = '8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763'
+def debugAurelianCallerCerts = aurelianCallerCerts('aurelian.callerCerts.debug') ?: devAurelianCallerCert
+def releaseAurelianCallerCerts = aurelianCallerCerts('aurelian.callerCerts.release')
+
 android {
     namespace = "com.goodlift.razorsedge"
     compileSdk = 36
@@ -44,6 +66,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     // 🔐 Release signing config (matches the keystore you just made)
     signingConfigs {
         release {
@@ -58,9 +84,11 @@ android {
     buildTypes {
         debug {
             // default debug signing
+            buildConfigField "String", "AURELIAN_CALLER_CERTS", "\"${debugAurelianCallerCerts}\""
         }
         release {
             signingConfig signingConfigs.release
+            buildConfigField "String", "AURELIAN_CALLER_CERTS", "\"${releaseAurelianCallerCerts}\""
             minifyEnabled false
             shrinkResources false
         }

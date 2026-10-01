@@ -92,13 +92,31 @@ A request is accepted only if its `aurelian.caller` PendingIntent
 3. which is signed with an allowed certificate (`PackageManager.hasSigningCertificate(…, CERT_INPUT_SHA256)`, Android 9+).
 
 Anything else is dropped without a reply. A PendingIntent's creator cannot be forged, and neither can
-a signing certificate; the package name alone could be claimed by another app. The allowed
-certificate is `AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256`: the SHA-256 of the Android debug
-certificate on Richard's build machine, which is the only key Aurelian (a personal, sideloaded app)
-is signed with. The same allowance applies to GoodLift debug and release builds. Certificate hashes
-are public identifiers, not secrets. If Aurelian ever gets its own release key, add that
-certificate's SHA-256 there. `<queries><package android:name="com.razorsedgesystems.aurelian"/>`
-makes the check possible under package visibility.
+a signing certificate; the package name alone could be claimed by another app.
+
+### Caller certificates (configured per build)
+
+The allowed certificates are `AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256`, read from
+`BuildConfig.AURELIAN_CALLER_CERTS`, which `android/app/build.gradle` sets per build type:
+
+| Build | Trusted Aurelian signer |
+|---|---|
+| debug | `aurelian.callerCerts.debug`, else the development machine's Android debug certificate (`8e8d2fe3…13bea763`, CN=Android Debug) |
+| release | **none**, unless the build sets `aurelian.callerCerts.release` |
+
+Set them in the build checkout's `android/local.properties` (not committed) or with `-P`, as
+comma-separated SHA-256 fingerprints (colons optional); a malformed value fails the build. A release
+build without the property drops every bridge request (logged once per request), so a production
+GoodLift never trusts a debug-signed Aurelian by accident. Certificate fingerprints are public
+identifiers, never key material.
+
+Aurelian is still signed with that machine's **debug** key, whose keystore uses Android's well-known
+default password. Trusting it is acceptable only for internal-testing builds installed on Richard's own
+devices. Before any GoodLift build that trusts Aurelian reaches Production, give Aurelian a dedicated
+release key (a protected keystore; note that changing Aurelian's key requires reinstalling Aurelian,
+which clears its voice profile) and set `aurelian.callerCerts.release` to that certificate only.
+`<queries><package android:name="com.razorsedgesystems.aurelian"/>` makes the check possible under
+package visibility.
 
 The reply PendingIntent must also have Aurelian as its creator. Request ids, command names and
 argument names/types are validated natively (`AurelianRequestParser`) and again in Dart

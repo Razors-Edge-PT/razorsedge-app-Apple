@@ -193,17 +193,24 @@ object AurelianRequestParser {
  * first; the signing certificate cannot be forged. Certificate hashes are public, not secrets.
  */
 object AurelianCallerPolicy {
+    // Declared first: object properties initialise in order, and the allowlist below parses with it.
+    private val SHA256_HEX = Regex("^[0-9a-f]{64}$")
+
     /**
-     * SHA-256 of the certificate Aurelian is signed with. Aurelian is a personal, sideloaded app
-     * built and signed with the Android debug key on Richard's build machine (CN=Android Debug);
-     * that is the ONLY Aurelian build it has, so it is the only allowed signer, in debug and release
-     * GoodLift builds alike. If Aurelian ever gets its own release key, add that certificate's SHA-256
-     * here (never a password or key material). An Aurelian built on another machine has a different
-     * debug certificate and is refused.
+     * SHA-256 fingerprints of the certificates allowed to sign the calling Aurelian, configured PER
+     * BUILD (android/app/build.gradle → BuildConfig.AURELIAN_CALLER_CERTS). Debug builds default to the
+     * development machine's debug certificate; a RELEASE build trusts no caller at all unless that
+     * build explicitly lists one (aurelian.callerCerts.release), so a debug-signed Aurelian is never
+     * trusted by a production GoodLift by accident. Fingerprints are public, never key material.
      */
-    val ALLOWED_AURELIAN_CERT_SHA256: Set<String> = setOf(
-        "8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763",
-    )
+    val ALLOWED_AURELIAN_CERT_SHA256: Set<String> = parseCertList(BuildConfig.AURELIAN_CALLER_CERTS)
+
+
+    /** "AA:BB:…,ccdd…" → valid lower-case SHA-256 hex fingerprints only (anything else is dropped). */
+    fun parseCertList(raw: String): Set<String> = raw.split(',')
+        .map { it.trim().replace(":", "").lowercase() }
+        .filter { SHA256_HEX.matches(it) }
+        .toSet()
 
     fun isTrusted(creatorPackage: String?, packagesForCreatorUid: List<String>, signedWithAllowedCert: Boolean): Boolean =
         creatorPackage == AurelianBridgeProtocol.AURELIAN_PACKAGE &&
