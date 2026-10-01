@@ -185,6 +185,25 @@ queued outbox mutations offline.
   completion, populated-delete confirmation, set timer vs general timer, idempotent retries, read-back,
   safe undo, the channel binding, and the real `Wes2Screen` driven through `WorkoutActionPort`.
 
+## Bridge test harness (emulator only)
+
+`tool/aurelian_bridge_harness/main.dart` is an alternative debug entrypoint: GoodLift's real
+MainActivity, native bridge, channel and action service, with in-memory fake ports and no Firebase.
+Aurelian's `GoodLiftBridgeHarnessSmokeTest` uses it to prove `execute_action` end to end (cold start,
+structured results, idempotency, invalid actions, confirmation, verification) without any account. It
+is never part of a normal or release build. Reinstall the normal debug build afterwards:
+
+```powershell
+flutter build apk --debug -t tool/aurelian_bridge_harness/main.dart
+adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
+# … run Aurelian's GoodLiftBridgeHarnessSmokeTest …
+flutter build apk --debug
+adb -s emulator-5554 install -r build/app/outputs/flutter-apk/app-debug.apk
+```
+
+While the harness is installed, the v1 `GoodLiftBridgeInstrumentedTest` fails by design (the harness
+handles no v1 commands).
+
 ## Physical testing
 
 Install this GoodLift build and Aurelian Milestone 2 on the same phone (Aurelian signed with the allowed
