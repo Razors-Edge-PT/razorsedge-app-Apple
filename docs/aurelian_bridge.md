@@ -56,6 +56,18 @@ older GoodLift answers `unsupported` for a command it does not know):
 | `add_exercise_to_circuit` | `circuit` (1-based, existing) | the circuit header's `_onAddExerciseToCircuit` picker |
 | `move_to_circuit` | `circuit` (1-based, existing), optional `exercise`, `choices` | `_moveExerciseToCircuitConfirmed` (the Move core) |
 
+Added for Aurelian 2.0 (still transport protocol v1: one new command and argument; an older GoodLift
+answers `unsupported`):
+
+| Command | Arguments | What runs |
+|---|---|---|
+| `execute_action` | `envelope` (one JSON object, ≤ 4096 chars) | The **action service** (`lib/aurelian/actions/action_service.dart`): strict envelope schema 1, signed-in account and coach authorisation, idempotency, confirmation tokens, the screens' own operations through `WorkoutActionPort` (WES2) and `AthleteActionPort` (UserContext + CoachRosterService), read-back verification and a guarded undo journal. The reply is `ok` with the action's own result JSON in the extra `aurelian.result` (≤ 4096 chars). See docs/aurelian_capabilities.md. |
+
+Natively the envelope is only checked for size and outer shape (`JSON_OBJECT`); the one strict schema
+is the Dart parser (`parseActionEnvelope`), so there is a single definition of what is allowed. Like
+every command it waits in the native queue until a root bridge scope (inside the membership gate) is
+mounted, and the channel refuses it while the bus is not ready.
+
 **Exercise names** are resolved by GoodLift, never by Aurelian, against what the screen really offers:
 the workout's rows, or the picker's catalogue when adding or replacing
 (`lib/aurelian/aurelian_exercise_match.dart`). Tiers: exact words → same letters without spaces → same
@@ -167,6 +179,11 @@ queued outbox mutations offline.
   (explicit nulls queued), remove set / delete via the cores, replace with a "which one?", multi-add
   resolving everything first, named Done, circuits, the picker taking "add X".
 - `test/home_community_section_test.dart`: voice selects Feed/Leaderboard through the tap's own switch.
+- `test/aurelian_actions/` (Aurelian 2.0): envelope validation, authentication and coach authorisation,
+  athlete matching and switching (real `UserContext` and roster rules over an in-memory Firestore),
+  exercise aliases and ambiguity, circuits, partial and combined set updates, notes, explicit-only
+  completion, populated-delete confirmation, set timer vs general timer, idempotent retries, read-back,
+  safe undo, the channel binding, and the real `Wes2Screen` driven through `WorkoutActionPort`.
 
 ## Physical testing
 
