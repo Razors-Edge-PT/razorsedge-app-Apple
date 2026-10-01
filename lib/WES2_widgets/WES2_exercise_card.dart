@@ -8,6 +8,7 @@ import '../WES2_models.dart';
 import '../exercise_video_button.dart';
 import '../periodization_model_utils.dart';
 import 'WES2_set_row.dart';
+import 'wes2_set_timer_hub.dart';
 
 // blueGrey.shade400 and blueGrey.shade700 as compile-time constants.
 const _kBb3AccentColor = Color(0xFF455A64); // blueGrey.shade700
@@ -370,6 +371,7 @@ class Wes2ExerciseCard extends StatelessWidget {
                       entryMode: entryMode,
                       bwDisplayText: bwDisplayText,
                       weightUnit: weightUnit,
+                      timerKey: Wes2SetTimerHub.keyFor(row.exerciseId, s.setIndex),
                       uid: wes2Ctrl.actingUid,
                       selectedDate: wes2Ctrl.selectedDate,
                       onFieldChanged: (fieldKey, rawText) =>

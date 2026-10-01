@@ -23,6 +23,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'actions/action_service.dart';
 import 'aurelian_command.dart';
 
 enum AurelianScopeKind {
@@ -175,6 +176,18 @@ class AurelianBridgeChannel {
       final AurelianCommand? command = AurelianCommand.fromBridge(call.arguments);
       if (command == null) {
         return const AurelianResult.invalid('Malformed command').toMap();
+      }
+      // Aurelian 2.0 actions go to the action service, which does its own
+      // validation, authorisation and routing (it opens the workout itself).
+      // Only reachable once a root scope is mounted: the native side holds
+      // every request until the bus reports ready.
+      if (command.kind == AurelianCommandKind.executeAction) {
+        if (!bus.ready) {
+          return const AurelianResult.unavailable("GoodLift isn't ready").toMap();
+        }
+        final String json = await AurelianActionService.instance.handleJson(command.envelope!);
+        debugPrint('[AURELIAN] execute_action handled');
+        return AurelianResult.action(json).toMap();
       }
       final AurelianResult result = await bus.dispatch(command);
       debugPrint('[AURELIAN] ${command.kind.wire} -> ${result.status.wire}');

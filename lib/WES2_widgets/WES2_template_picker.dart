@@ -9,6 +9,26 @@ class _PickerData {
   _PickerData(this.templates, this.blockNames);
 }
 
+/// The templates the Load Template picker lists for [uid] (those with at least
+/// one loadable exercise), by name. Shared with Aurelian's template action so
+/// voice and touch offer the same list.
+Future<List<Template>> loadWes2PickerTemplates(String uid) async {
+  final snap = await FirebaseFirestore.instance
+      .collection('users')
+      .doc(uid)
+      .collection('templates')
+      .orderBy('name')
+      .get();
+  return snap.docs
+      .map((d) => Template.fromFirestore(d.data(), d.id))
+      .where((t) => t.exercises.any((e) {
+            final id = ((e['exerciseId'] ?? e['id']) as String? ?? '').trim();
+            if (id.isNotEmpty) return true;
+            return ((e['name'] ?? e['exercise']) as String? ?? '').trim().isNotEmpty;
+          }))
+      .toList();
+}
+
 /// Modal bottom sheet that lists the user's templates grouped by block
 /// and pops the selected templateId, or null if dismissed.
 class Wes2TemplatePicker extends StatefulWidget {
@@ -38,20 +58,7 @@ class _Wes2TemplatePickerState extends State<Wes2TemplatePicker> {
   }
 
   Future<_PickerData> _load() async {
-    final snap = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(widget.uid)
-        .collection('templates')
-        .orderBy('name')
-        .get();
-    final templates = snap.docs
-        .map((d) => Template.fromFirestore(d.data(), d.id))
-        .where((t) => t.exercises.any((e) {
-          final id = ((e['exerciseId'] ?? e['id']) as String? ?? '').trim();
-          if (id.isNotEmpty) return true;
-          return ((e['name'] ?? e['exercise']) as String? ?? '').trim().isNotEmpty;
-        }))
-        .toList();
+    final templates = await loadWes2PickerTemplates(widget.uid);
 
     // Best-effort load block names for group headers.
     Map<String, String> blockNames = {};

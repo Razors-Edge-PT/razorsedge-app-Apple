@@ -30,6 +30,9 @@ object AurelianBridgeProtocol {
     const val REPLY_CANDIDATES = "aurelian.candidates"
     const val REPLY_CONTEXT = "aurelian.context"
 
+    /** Aurelian 2.0: the action service's result JSON for an `execute_action` request. */
+    const val REPLY_RESULT = "aurelian.result"
+
     const val MAX_REQUEST_ID = 64
     const val MAX_NAME = 80
     const val MAX_MESSAGE = 200
@@ -40,6 +43,13 @@ object AurelianBridgeProtocol {
 
     /** Labels picked in answer to earlier "which one?" questions for the same command. */
     const val MAX_CHOICES = 8
+
+    /**
+     * Aurelian 2.0 action envelope (JSON text) and its result. Checked here for size and shape only;
+     * the Dart action service (lib/aurelian/actions/action_envelope.dart) is the one strict schema.
+     */
+    const val MAX_ENVELOPE = 4096
+    const val MAX_RESULT = 4096
 
     /** A request older than this (by the system-wide elapsed clock) is stale and never executed. */
     const val MAX_AGE_MS = 15_000L
@@ -87,6 +97,10 @@ object AurelianBridgeProtocol {
         "replace_exercise" to mapOf("replacement" to ArgType.STRING) + named(),
         "add_exercise_to_circuit" to mapOf("circuit" to ArgType.INT),
         "move_to_circuit" to mapOf("circuit" to ArgType.INT) + named(),
+
+        // Aurelian 2.0: one versioned action envelope for the Dart action service, which validates
+        // it strictly, checks the signed-in account and coach access, and answers in `result`.
+        "execute_action" to mapOf("envelope" to ArgType.JSON_OBJECT),
     )
 
     /** The optional exercise a command names, and the answers to GoodLift's "which one?" questions. */
@@ -95,8 +109,10 @@ object AurelianBridgeProtocol {
     /**
      * STRING: a name, at most [MAX_NAME] chars. TEXT: a spoken list, at most [MAX_PHRASE] chars.
      * STRING_LIST: at most [MAX_CHOICES] names of at most [MAX_NAME] chars each.
+     * JSON_OBJECT: the text of one JSON object, at most [MAX_ENVELOPE] chars, no control characters
+     * outside JSON whitespace.
      */
-    enum class ArgType { INT, DOUBLE, STRING, TEXT, STRING_LIST }
+    enum class ArgType { INT, DOUBLE, STRING, TEXT, STRING_LIST, JSON_OBJECT }
 }
 
 /** One accepted request, ready for the Dart command bus. [sentAtMs] is Aurelian's send time (elapsed clock). */
@@ -152,12 +168,21 @@ object AurelianRequestParser {
                 AurelianBridgeProtocol.ArgType.STRING_LIST -> value is List<*> &&
                     value.size <= AurelianBridgeProtocol.MAX_CHOICES &&
                     value.all { it is String && it.length <= AurelianBridgeProtocol.MAX_NAME }
+                AurelianBridgeProtocol.ArgType.JSON_OBJECT -> value is String && isJsonObjectText(value)
             }
             if (!ok) return AurelianParse.Rejected(id, "invalid", "Bad argument \"$name\"")
             // A list crosses to Dart as a plain List<String>, never the Bundle's own ArrayList subtype.
             args[name] = if (value is List<*>) value.map { it as String } else value!!
         }
         return AurelianParse.Accepted(AurelianRequest(id, command!!, args, sentAt))
+    }
+
+    /** Size and outer shape of one JSON object; the content is validated by the Dart schema. */
+    fun isJsonObjectText(text: String): Boolean {
+        if (text.isEmpty() || text.length > AurelianBridgeProtocol.MAX_ENVELOPE) return false
+        val trimmed = text.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false
+        return text.none { it < ' ' && it != '\n' && it != '\r' && it != '\t' }
     }
 }
 
@@ -289,6 +314,9 @@ class AurelianBridgeCore(
                 ?.map { it.take(AurelianBridgeProtocol.MAX_NAME) }
                 ?.take(AurelianBridgeProtocol.MAX_CANDIDATES)
             if (!candidates.isNullOrEmpty()) out[AurelianBridgeProtocol.REPLY_CANDIDATES] = ArrayList(candidates)
+            // An oversized result is dropped, never truncated mid-JSON; Aurelian then reports a failure.
+            (result["result"] as? String)?.takeIf { it.length <= AurelianBridgeProtocol.MAX_RESULT }
+                ?.let { out[AurelianBridgeProtocol.REPLY_RESULT] = it }
             return out
         }
     }

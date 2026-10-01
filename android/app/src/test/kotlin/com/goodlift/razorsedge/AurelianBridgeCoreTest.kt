@@ -223,4 +223,31 @@ class AurelianBridgeCoreTest {
         assertTrue(candidates.all { (it as String).length <= AurelianBridgeProtocol.MAX_NAME })
         assertEquals("failed", AurelianBridgeCore.replyFields("z", mapOf("status" to "rm -rf"))[AurelianBridgeProtocol.REPLY_STATUS])
     }
+
+    // ------------------------------------------------------------------ Aurelian 2.0 actions
+
+    @Test fun executeActionCarriesOneBoundedJsonEnvelope() {
+        val envelope = """{"schemaVersion":1,"requestId":"r1","idempotencyKey":"k1234567","action":"set.update","payload":{"set":1,"reps":5}}"""
+        val ok = parse(extras("execute_action", "envelope" to envelope))
+        ok as AurelianParse.Accepted
+        assertEquals(envelope, ok.request.args["envelope"])
+        for (bad in listOf(
+            "[1,2]",
+            "not json",
+            "{" + "x".repeat(AurelianBridgeProtocol.MAX_ENVELOPE) + "}",
+            "{\"a\":\"\u0000\"}",
+        )) {
+            assertTrue(bad.take(20), parse(extras("execute_action", "envelope" to bad)) is AurelianParse.Rejected)
+        }
+        assertTrue(parse(extras("execute_action", "envelope" to 42)) is AurelianParse.Rejected)
+        assertTrue(parse(extras("execute_action", "envelope" to envelope, "exercise" to "bench")) is AurelianParse.Rejected)
+    }
+
+    @Test fun actionResultsPassThroughBoundedOrNotAtAll() {
+        val result = """{"status":"success","summary":"ok"}"""
+        val fields = AurelianBridgeCore.replyFields("r", mapOf("status" to "ok", "message" to "Action handled", "result" to result))
+        assertEquals(result, fields[AurelianBridgeProtocol.REPLY_RESULT])
+        val big = AurelianBridgeCore.replyFields("r", mapOf("status" to "ok", "result" to "{" + "x".repeat(AurelianBridgeProtocol.MAX_RESULT) + "}"))
+        assertFalse(big.containsKey(AurelianBridgeProtocol.REPLY_RESULT))
+    }
 }

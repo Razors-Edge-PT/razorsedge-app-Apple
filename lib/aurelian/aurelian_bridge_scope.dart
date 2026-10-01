@@ -17,6 +17,8 @@ import 'package:provider/provider.dart';
 import '../home_screen_2.dart' show pushExerciseAnalytics;
 import '../membership_gate.dart' show gatedWes2;
 import '../user_context.dart';
+import 'actions/action_service.dart';
+import 'actions/goodlift_athlete_port.dart';
 import 'aurelian_bus.dart';
 import 'aurelian_command.dart';
 
@@ -31,6 +33,8 @@ class AurelianBridgeScope extends StatefulWidget {
 
 class _AurelianBridgeScopeState extends State<AurelianBridgeScope> {
   Object? _handle;
+  GoodLiftAthletePort? _athletes;
+  Future<bool> Function()? _opener;
 
   @override
   void initState() {
@@ -39,12 +43,27 @@ class _AurelianBridgeScopeState extends State<AurelianBridgeScope> {
       if (!mounted) return;
       _handle = AurelianCommandBus.instance
           .register(AurelianScopeKind.root, _onCommand);
+      // Aurelian 2.0 actions: the signed-in account and the Coach Dashboard's
+      // athlete state, and Home's own Enter Workout path.
+      final AurelianActionService actions = AurelianActionService.instance;
+      _athletes = GoodLiftAthletePort(
+          () => mounted ? UserContext.of(context, listen: false) : null, actions);
+      _opener = () async => (await AurelianCommandBus.instance.dispatch(
+              const AurelianCommand(AurelianCommandKind.openWorkout)))
+          .isOk;
+      actions
+        ..athletePort = _athletes
+        ..openWorkout = _opener;
     });
   }
 
   @override
   void dispose() {
     AurelianCommandBus.instance.unregister(_handle);
+    final AurelianActionService actions = AurelianActionService.instance;
+    // Only clear what this scope installed (another scope may have replaced it).
+    if (identical(actions.athletePort, _athletes)) actions.athletePort = null;
+    if (identical(actions.openWorkout, _opener)) actions.openWorkout = null;
     super.dispose();
   }
 

@@ -1,6 +1,7 @@
 import '../units/weight_unit.dart';
 import 'dart:async';
 import 'WES2_tap_target.dart';
+import 'wes2_set_timer_hub.dart';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -233,6 +234,10 @@ class Wes2SetRow extends StatefulWidget {
   /// boundary.
   final ExerciseWeightUnit weightUnit;
 
+  /// Registers a timed set's stopwatch with [Wes2SetTimerHub] under this key,
+  /// so a voice command can run the same start/stop as a tap. Null = none.
+  final String? timerKey;
+
   const Wes2SetRow({
     super.key,
     required this.set,
@@ -251,6 +256,7 @@ class Wes2SetRow extends StatefulWidget {
     this.tutorialStep = 0,
     this.onTutorialRepsAccepted,
     this.weightUnit = ExerciseWeightUnit.kg,
+    this.timerKey,
   });
 
   @override
@@ -845,6 +851,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             width: 70,
             onChanged: (t) => widget.onFieldChanged(Wes2FieldKey.reps, t),
             onUnfocused: (t) => widget.onFieldUnfocused(Wes2FieldKey.reps, t),
+            timerKey: widget.timerKey,
           ),
           _removeAndNoteIcons(),
         ],
@@ -879,6 +886,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             width: 70,
             onChanged: (t) => widget.onFieldChanged(Wes2FieldKey.reps, t),
             onUnfocused: (t) => widget.onFieldUnfocused(Wes2FieldKey.reps, t),
+            timerKey: widget.timerKey,
           ),
           const SizedBox(width: 4),
           // Same rule as the normal row: the derived column yields first.
@@ -1149,6 +1157,7 @@ class _Wes2TimedCell extends StatefulWidget {
   final double width;
   final void Function(String rawText) onChanged;
   final void Function(String rawText) onUnfocused;
+  final String? timerKey;
 
   const _Wes2TimedCell({
     required this.storedSeconds,
@@ -1156,6 +1165,7 @@ class _Wes2TimedCell extends StatefulWidget {
     required this.width,
     required this.onChanged,
     required this.onUnfocused,
+    this.timerKey,
   });
 
   @override
@@ -1186,15 +1196,49 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
     return '$m:$sec.$cs';
   }
 
+  /// This cell's controls for [Wes2SetTimerHub]: the same start/stop a tap runs.
+  late final Wes2SetTimerHandle _hubHandle = Wes2SetTimerHandle(
+    isRunning: () => _running,
+    start: () {
+      if (!mounted || _running) return;
+      if (!_active) setState(() => _active = true);
+      _resume();
+    },
+    stop: () {
+      if (mounted && _running) _stop();
+    },
+    cancel: _cancelWithoutSaving,
+  );
+
   @override
   void initState() {
     super.initState();
     _displaySeconds = widget.storedSeconds ?? 0;
+    final String? key = widget.timerKey;
+    if (key != null) Wes2SetTimerHub.instance.register(key, _hubHandle);
+  }
+
+  /// Undo of a voice start: stop the ticker and show the stored value again,
+  /// saving nothing.
+  void _cancelWithoutSaving() {
+    _ticker?.cancel();
+    _ticker = null;
+    if (!mounted) return;
+    setState(() {
+      _running = false;
+      _active = false;
+      _centiSeconds = 0;
+      _displaySeconds = widget.storedSeconds ?? 0;
+    });
   }
 
   @override
   void didUpdateWidget(_Wes2TimedCell old) {
     super.didUpdateWidget(old);
+    if (old.timerKey != widget.timerKey) {
+      if (old.timerKey != null) Wes2SetTimerHub.instance.unregister(old.timerKey!, _hubHandle);
+      if (widget.timerKey != null) Wes2SetTimerHub.instance.register(widget.timerKey!, _hubHandle);
+    }
     if (!_active && !_running && widget.storedSeconds != old.storedSeconds) {
       _displaySeconds = widget.storedSeconds ?? 0;
     }
@@ -1295,6 +1339,8 @@ class _Wes2TimedCellState extends State<_Wes2TimedCell> {
 
   @override
   void dispose() {
+    final String? key = widget.timerKey;
+    if (key != null) Wes2SetTimerHub.instance.unregister(key, _hubHandle);
     _ticker?.cancel();
     super.dispose();
   }

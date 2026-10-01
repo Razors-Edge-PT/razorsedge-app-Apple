@@ -23,6 +23,12 @@ const int kAurelianMaxPhrase = 200;
 /// Labels picked in answer to earlier "which one?" questions for one command.
 const int kAurelianMaxChoices = 8;
 
+/// One Aurelian 2.0 action envelope (JSON text; see actions/action_envelope.dart).
+const int kAurelianMaxEnvelope = 4096;
+
+/// The action result JSON sent back with an [AurelianCommandKind.executeAction].
+const int kAurelianMaxActionResult = 4096;
+
 /// Exercises one "add …" may name.
 const int kAurelianMaxAdd = 10;
 const int kAurelianMaxCircuit = 20;
@@ -49,7 +55,12 @@ enum AurelianCommandKind {
   deleteExercise('delete_exercise'),
   replaceExercise('replace_exercise'),
   addExerciseToCircuit('add_exercise_to_circuit'),
-  moveToCircuit('move_to_circuit');
+  moveToCircuit('move_to_circuit'),
+
+  /// Aurelian 2.0: one validated action envelope for the action service
+  /// (actions/action_service.dart), which applies its own strict schema,
+  /// authorisation, confirmation, idempotency and undo rules.
+  executeAction('execute_action');
 
   const AurelianCommandKind(this.wire);
   final String wire;
@@ -167,6 +178,7 @@ class AurelianCommand {
     this.destination,
     this.action,
     this.circuit,
+    this.envelope,
   });
 
   final AurelianCommandKind kind;
@@ -206,6 +218,9 @@ class AurelianCommand {
 
   /// 1-based circuit number, as spoken.
   final int? circuit;
+
+  /// The action envelope JSON of [AurelianCommandKind.executeAction].
+  final String? envelope;
 
   bool get hasSetValues =>
       weight != null || reps != null || rir != null || velocity != null;
@@ -269,6 +284,12 @@ class AurelianCommand {
       phrase = v.trim();
       if (phrase.isEmpty || phrase.length > kAurelianMaxPhrase) return null;
     }
+    String? envelope;
+    if (present('envelope')) {
+      final Object? v = args['envelope'];
+      if (v is! String || v.isEmpty || v.length > kAurelianMaxEnvelope) return null;
+      envelope = v;
+    }
     List<String> choices = const <String>[];
     if (present('choices')) {
       final Object? v = args['choices'];
@@ -329,6 +350,7 @@ class AurelianCommand {
       destination: destination,
       action: action,
       circuit: intArg('circuit'),
+      envelope: envelope,
     );
     return command._isWellFormed ? command : null;
   }
@@ -362,6 +384,7 @@ class AurelianCommand {
     },
     AurelianCommandKind.addExerciseToCircuit: <String>{'circuit'},
     AurelianCommandKind.moveToCircuit: <String>{'circuit', 'exercise', 'choices'},
+    AurelianCommandKind.executeAction: <String>{'envelope'},
   };
 
   bool get _isWellFormed {
@@ -393,6 +416,8 @@ class AurelianCommand {
         return c != null && c >= 1 && c <= kAurelianMaxCircuit;
       case AurelianCommandKind.deleteExercise:
         return true;
+      case AurelianCommandKind.executeAction:
+        return envelope != null;
       case AurelianCommandKind.openWorkout:
       case AurelianCommandKind.openAnalytics:
       case AurelianCommandKind.addExercise:
@@ -428,7 +453,12 @@ enum AurelianStatus {
 @immutable
 class AurelianResult {
   const AurelianResult(this.status, this.message,
-      {this.candidates = const <String>[], this.context});
+      {this.candidates = const <String>[], this.context, this.actionResult});
+
+  /// The bridge delivered an action envelope and the action service answered;
+  /// the action's own status is inside [actionResult] (JSON text).
+  const AurelianResult.action(String resultJson)
+      : this(AurelianStatus.ok, 'Action handled', actionResult: resultJson);
 
   const AurelianResult.ok(String message) : this(AurelianStatus.ok, message);
   const AurelianResult.unavailable(String message)
@@ -454,6 +484,9 @@ class AurelianResult {
   /// The screen the result came from ("picker", "analytics", "wes2").
   final String? context;
 
+  /// The action service's result JSON for an [AurelianCommandKind.executeAction].
+  final String? actionResult;
+
   bool get isOk => status == AurelianStatus.ok;
 
   Map<String, Object?> toMap() => <String, Object?>{
@@ -469,6 +502,8 @@ class AurelianResult {
                   : c)
               .toList(),
         if (context != null) 'context': context,
+        if (actionResult != null && actionResult!.length <= kAurelianMaxActionResult)
+          'result': actionResult,
       };
 
   @override

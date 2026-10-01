@@ -51,6 +51,8 @@ import 'wes2_field_parser.dart';
 import 'wes2_hint_input.dart';
 import 'wes2_hint_load_runner.dart';
 import 'wes2_hint_trace.dart';
+import 'aurelian/actions/action_ports.dart';
+import 'aurelian/actions/action_service.dart';
 import 'aurelian/aurelian_add_list.dart';
 import 'aurelian/aurelian_bus.dart';
 import 'aurelian/aurelian_catalogue.dart';
@@ -59,6 +61,8 @@ import 'aurelian/aurelian_exercise_match.dart';
 import 'aurelian/aurelian_set_entry.dart';
 import 'aurelian/wes2_voice_target.dart';
 import 'exercise_catalog.dart';
+import 'membership_gate.dart' show gatedWes2;
+import 'WES2_widgets/wes2_set_timer_hub.dart';
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -230,6 +234,11 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   /// The Add Exercise picker was opened by voice: its pick becomes the target.
   bool _voicePickerOpen = false;
 
+  /// This screen as the Aurelian 2.0 action service's workout (see
+  /// [_Wes2ActionPort]); registered while mounted.
+  late final _Wes2ActionPort _actionPort = _Wes2ActionPort(this);
+  Object? _actionPortHandle;
+
   // ── Tutorial helpers ──────────────────────────────────────────────────────
 
   Future<void> _loadTutorialState() async {
@@ -361,6 +370,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       if (!mounted) return;
       _aurelianHandle = AurelianCommandBus.instance
           .register(AurelianScopeKind.wes2, _onAurelianCommand);
+      _actionPortHandle =
+          AurelianActionService.instance.registerWorkout(_actionPort);
     });
   }
 
@@ -421,6 +432,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   @override
   void dispose() {
     AurelianCommandBus.instance.unregister(_aurelianHandle);
+    AurelianActionService.instance.unregisterWorkout(_actionPortHandle);
     ExerciseUnitRegistry.shared.removeListener(_onUnitsChanged);
     _timerTicker?.cancel();
     _hintRunner.dispose();
@@ -487,6 +499,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
   // ── Timer (Phase 17) ──────────────────────────────────────────────────────
 
   void _toggleTimerVisible() => setState(() => _timerVisible = !_timerVisible);
+
+  /// Shows the floating timer (voice "start a timer" opens it like the menu).
+  void _showTimer() {
+    if (!_timerVisible) setState(() => _timerVisible = true);
+  }
+
+  void _setLoadingTemplate(bool loading) =>
+      setState(() => _isLoadingTemplate = loading);
 
   void _startTimer() {
     if (_timerRunning) return;
@@ -2242,6 +2262,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       case AurelianCommandKind.openAnalytics:
       case AurelianCommandKind.analyticsMetric:
       case AurelianCommandKind.navigate:
+      case AurelianCommandKind.executeAction:
         return null;
     }
   }
@@ -4162,7 +4183,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 
   // ── Template load (Phase 18) ──────────────────────────────────────────────
 
-  Future<void> _onLoadTemplate(String templateId) async {
+  /// Returns true once the template has replaced the day (false when it could
+  /// not be loaded; the snackbar has said why).
+  Future<bool> _onLoadTemplate(String templateId) async {
     List<Wes2ExerciseRow> templateRows;
     try {
       templateRows = await _templateService.loadTemplate(
@@ -4171,13 +4194,13 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       );
     } catch (_) {
       _showSnackBar('Failed to load template.');
-      return;
+      return false;
     }
     if (templateRows.isEmpty) {
       _showSnackBar('Template has no loadable exercises.');
-      return;
+      return false;
     }
-    if (!mounted) return;
+    if (!mounted) return false;
 
     // Deduplicate and normalize template rows before loading.
     final hardened = _hardened(templateRows);
@@ -4228,6 +4251,7 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     if (hadAnyRows && mounted) {
       _showUndoSnackBar('Exercises replaced by template');
     }
+    return true;
   }
 
   Future<void> _replaceWithTemplateRowsSilently({
@@ -4498,5 +4522,318 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+}
+
+/// The open WES2 day as the Aurelian 2.0 action service's [WorkoutActionPort].
+///
+/// A thin adapter: every mutation runs the handler the screen's own controls
+/// run (the typed-entry save, the Delete/Replace/Move cores, the Done
+/// coordinator, the note saves, Load Template, Add Set, the timers), so voice
+/// and touch share one canonical path to the local draft and the durable
+/// outbox. Decisions (matching, confirmation, undo, read-back) live in the
+/// service, which reads this screen's state back after each change.
+class _Wes2ActionPort implements WorkoutActionPort, ReloadableWorkout {
+  _Wes2ActionPort(this._s);
+
+  final _Wes2ScreenState _s;
+
+  Wes2SessionController get _c => _s._controller;
+
+  Wes2ExerciseRow? _rowOf(String id) =>
+      _c.rows.where((Wes2ExerciseRow r) => r.exerciseId == id).firstOrNull;
+
+  @override
+  Future<String?> prepare() async {
+    if (!_s.mounted) return 'The workout closed';
+    final String? blocked = await _s._bringWorkoutToFront();
+    if (blocked != null) return blocked;
+    if (!await _s._waitForDay()) return 'The workout is still loading';
+    return _s.mounted ? null : 'The workout closed';
+  }
+
+  @override
+  DateTime get date => _c.selectedDate;
+
+  @override
+  String get actingUid => _c.actingUid;
+
+  @override
+  List<WorkoutExerciseView> get exercises {
+    final units = ExerciseUnitRegistry.shared
+        .unitsFor(_c.actingUid, blockSettings: _c.exerciseSettings);
+    return <WorkoutExerciseView>[
+      for (final Wes2ExerciseRow r in _c.rows)
+        WorkoutExerciseView(
+          exerciseId: r.exerciseId,
+          name: r.name,
+          circuitIndex: r.circuitIndex,
+          setCount: r.setCount,
+          sets: <WorkoutSetView>[
+            for (final Wes2SetState st in r.sets)
+              if (st.setIndex < r.setCount)
+                WorkoutSetView(
+                  index: st.setIndex,
+                  weightKg: st.weight.actualValue,
+                  reps: st.reps.actualValue,
+                  rir: st.rir.actualValue,
+                  velocity: st.velocity.actualValue,
+                  note: st.executionNote,
+                ),
+          ],
+          note: r.exerciseExecutionNote,
+          done: r.isMarkedDone,
+          timed: Wes2ExerciseCard.entryModeFor(r) != Wes2ExerciseEntryMode.normal,
+          velocityShown: _s._shouldShowVelocityField(r),
+          bb3Planned: r.source == Wes2RowSource.bb3Planned,
+          unit: units.unitFor(r.exerciseId),
+        ),
+    ];
+  }
+
+  @override
+  String? get targetExerciseId => _s._voiceTarget.resolve(_s._rowIds());
+
+  @override
+  void setTarget(String exerciseId) {
+    _s._voiceTarget.select(exerciseId);
+    if (_s.mounted) unawaited(_s._revealVoiceTarget());
+  }
+
+  @override
+  Map<String, int> exerciseUsage() {
+    final Map<String, int> counts = <String, int>{};
+    final snapshot = ProgressionHistoryStore.instance.snapshotFor(_c.actingUid);
+    if (snapshot == null) return counts;
+    for (final Map<String, dynamic> doc in snapshot.docsByDay.values) {
+      final Object? list = doc['exercises'];
+      if (list is! List) continue;
+      final Set<String> seen = <String>{};
+      for (final Object? e in list) {
+        if (e is! Map) continue;
+        final Object? id = e['exerciseId'] ?? e['id'];
+        if (id is String && id.isNotEmpty && seen.add(id)) {
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
+      }
+    }
+    return counts;
+  }
+
+  @override
+  Future<bool> changeDate(DateTime date) async {
+    if (!_s.mounted) return false;
+    // The same steps as choosing a day in the date picker.
+    _s._pauseWorkoutDurationSegment();
+    _s._saveDraftNow();
+    _s._workoutDurationMilliseconds = 0;
+    _s._workoutDurationSegmentStartedAt = null;
+    _c.changeDate(date);
+    unawaited(_s._loadDay());
+    return _s._waitForDay();
+  }
+
+  @override
+  Future<List<CatalogueEntry>?> catalogue() async {
+    final List<CatalogExercise>? all = await _s._catalogueOrNull();
+    if (all == null) return null;
+    return <CatalogueEntry>[
+      for (final CatalogExercise e in all)
+        CatalogueEntry(id: e.id, name: catalogueName(e), label: catalogueVoiceLabel(e, all)),
+    ];
+  }
+
+  @override
+  Future<List<TemplateEntry>?> templates() async {
+    try {
+      final templates = await loadWes2PickerTemplates(_c.actingUid)
+          .timeout(const Duration(seconds: 8));
+      return <TemplateEntry>[
+        for (final t in templates)
+          TemplateEntry(
+            id: t.id,
+            name: t.name,
+            day: t.day,
+            inActiveBlock: t.blockId != null && t.blockId == _c.activeBlockId,
+          ),
+      ];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  int? blockDayNumber() {
+    final DateTime? start = _c.blockStartDate;
+    if (start == null || _Wes2ScreenState._isBeforeBlockStart(_c.selectedDate, start)) {
+      return null;
+    }
+    return _Wes2ScreenState._weekDayFromDate(start, _c.selectedDate).dayIndex + 1;
+  }
+
+  @override
+  Future<String?> loadTemplate(String templateId) async {
+    if (_s._isLoadingTemplate) return 'A template is still loading';
+    _s._setLoadingTemplate(true);
+    try {
+      // The service has already confirmed any replacement of logged data.
+      final bool loaded = await _s._onLoadTemplate(templateId);
+      return loaded ? null : 'The template could not be loaded';
+    } finally {
+      if (_s.mounted) _s._setLoadingTemplate(false);
+    }
+  }
+
+  @override
+  Future<void> addExercise(CatalogueEntry exercise, int circuitIndex) async {
+    _s._voicePickerOpen = false;
+    await _s._addExerciseFromPicker(
+        (exerciseId: exercise.id, name: exercise.name, circuitIndex: circuitIndex));
+  }
+
+  @override
+  Future<void> deleteExercise(String exerciseId) async {
+    final Wes2ExerciseRow? row = _rowOf(exerciseId);
+    if (row == null) return;
+    final bool wasBb3 = row.source == Wes2RowSource.bb3Planned ||
+        _s._bb3PlannedExerciseIds.contains(row.exerciseId);
+    await _s._deleteExerciseConfirmed(row,
+        offerUndo: row.hasAnyExecutionValue, wasBb3: wasBb3);
+  }
+
+  @override
+  Future<void> replaceExercise(String exerciseId, CatalogueEntry replacement) async {
+    final Wes2ExerciseRow? row = _rowOf(exerciseId);
+    if (row == null) return;
+    await _s._applyReplacement(row, replacement.id, replacement.name,
+        offerUndo: row.hasAnyExecutionValue);
+  }
+
+  @override
+  Future<void> moveExercise(String exerciseId, int circuitIndex) async {
+    final Wes2ExerciseRow? row = _rowOf(exerciseId);
+    if (row == null) return;
+    _s._moveExerciseToCircuitConfirmed(row, circuitIndex);
+  }
+
+  @override
+  Future<void> setFields(String exerciseId, int setIndex, List<FieldEdit> edits) =>
+      _s._applyVoiceFieldEdits(exerciseId, setIndex,
+          <SetFieldEdit>[for (final FieldEdit e in edits) SetFieldEdit(e.key, e.text)]);
+
+  @override
+  Future<void> setNote(String exerciseId, int setIndex, String? note) async {
+    // The set-note dialog's Save, without the dialog.
+    final String trimmed = (note ?? '').trim();
+    _c.updateExecutionNote(exerciseId: exerciseId, setIndex: setIndex, rawText: trimmed);
+    _s._saveDraftNow();
+    unawaited(_s._saveExecutionNoteSilently(
+      uid: _c.actingUid,
+      date: _c.selectedDate,
+      exerciseId: exerciseId,
+      setIndex: setIndex,
+      note: trimmed.isEmpty ? null : trimmed,
+    ));
+  }
+
+  @override
+  Future<void> exerciseNote(String exerciseId, String? note) async {
+    // The exercise-note dialog's Save, without the dialog.
+    final String trimmed = (note ?? '').trim();
+    _c.updateExerciseExecutionNote(exerciseId: exerciseId, rawText: trimmed);
+    _s._saveDraftNow();
+    unawaited(_s._saveExerciseExecutionNoteSilently(
+      uid: _c.actingUid,
+      date: _c.selectedDate,
+      exerciseId: exerciseId,
+      note: trimmed.isEmpty ? null : trimmed,
+    ));
+  }
+
+  @override
+  Future<void> setCompleted(String exerciseId, bool done) async {
+    // The Completed? toggle's own ordering (focus, durable write, then Done).
+    await _s._doneCoordinator.toggleMarkedDone(
+      exerciseId: exerciseId,
+      dropFocus: () => FocusManager.instance.primaryFocus?.unfocus(),
+      awaitDurableWrites: _s._awaitDurableWrites,
+      commitDone: () => _s._commitMarkedDone(exerciseId, done),
+    );
+  }
+
+  @override
+  Future<void> addSet(String exerciseId) async => _s._onAddSet(exerciseId);
+
+  @override
+  Future<void> removeSet(String exerciseId, int setIndex) async {
+    final Wes2ExerciseRow? row = _rowOf(exerciseId);
+    if (row == null || row.source == Wes2RowSource.bb3Planned || row.setCount <= 1) return;
+    final Wes2SetState set = row.sets.firstWhere((Wes2SetState x) => x.setIndex == setIndex,
+        orElse: () => Wes2SetState(setIndex: setIndex));
+    await _s._removeSetConfirmed(row, setIndex, set);
+  }
+
+  @override
+  GeneralTimerView get generalTimer {
+    _s._syncTimerElapsed();
+    return GeneralTimerView(
+        visible: _s._timerVisible, running: _s._timerRunning, elapsedMs: _s._elapsedMilliseconds);
+  }
+
+  @override
+  Future<void> startGeneralTimer() async {
+    // The three-dot menu's Timer: show it, then start it.
+    _s._showTimer();
+    _s._startTimer();
+  }
+
+  @override
+  Future<void> stopGeneralTimer() async => _s._stopTimer();
+
+  @override
+  SetTimerView? get runningSetTimer {
+    final String? key = Wes2SetTimerHub.instance.runningKey;
+    if (key == null) return null;
+    final int hash = key.lastIndexOf('#');
+    final int? setIndex = hash <= 0 ? null : int.tryParse(key.substring(hash + 1));
+    if (setIndex == null) return null;
+    return SetTimerView(exerciseId: key.substring(0, hash), setIndex: setIndex, running: true);
+  }
+
+  @override
+  Future<bool> startSetTimer(String exerciseId, int setIndex) async {
+    final String key = Wes2SetTimerHub.keyFor(exerciseId, setIndex);
+    // The stopwatch lives in the set's own cell, which exists only on screen.
+    await _s._ensureExerciseVisible(exerciseId);
+    await WidgetsBinding.instance.endOfFrame;
+    return Wes2SetTimerHub.instance.start(key);
+  }
+
+  @override
+  Future<bool> stopSetTimer() async {
+    final String? key = Wes2SetTimerHub.instance.runningKey;
+    if (key == null) return false;
+    final bool stopped = Wes2SetTimerHub.instance.stop(key);
+    await WidgetsBinding.instance.endOfFrame;
+    return stopped;
+  }
+
+  @override
+  Future<bool> cancelSetTimer() async {
+    final String? key = Wes2SetTimerHub.instance.runningKey;
+    return key != null && Wes2SetTimerHub.instance.cancel(key);
+  }
+
+  @override
+  Future<void> reopenForCurrentAthlete() async {
+    if (!_s.mounted) return;
+    final UserContext uc = UserContext.of(_s.context, listen: false);
+    final DateTime day = _c.selectedDate;
+    unawaited(Navigator.of(_s.context).pushReplacement(MaterialPageRoute<void>(
+      builder: (_) => ChangeNotifierProvider<UserContext>.value(
+        value: uc,
+        child: gatedWes2(initialDate: day),
+      ),
+    )));
   }
 }
