@@ -93,8 +93,9 @@ class GoodLiftAthletePort implements AthleteActionPort {
     final bool leaving = workout != null && workout.actingUid != uid;
     final DateTime? day = leaving ? workout.date : null;
     if (leaving && workout is ExitableWorkout) {
-      if (!await (workout as ExitableWorkout).exitToHome())
+      if (!await (workout as ExitableWorkout).exitToHome()) {
         return uc.currentUid;
+      }
       if (!await _service.waitForNoWorkout(const Duration(seconds: 8))) {
         return uc.currentUid;
       }

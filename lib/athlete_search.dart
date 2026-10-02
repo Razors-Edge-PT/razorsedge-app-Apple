@@ -76,8 +76,9 @@ int athleteSearchScore(String query, AthleteSearchFields f) {
   }
 
   final String emailLower = f.email.trim().toLowerCase();
-  if (emailLower.isNotEmpty && emailLower == query.trim().toLowerCase())
+  if (emailLower.isNotEmpty && emailLower == query.trim().toLowerCase()) {
     take(100);
+  }
   for (final String v in fields) {
     final String vt = athleteSearchText(v);
     final String vc = athleteCompact(v);
