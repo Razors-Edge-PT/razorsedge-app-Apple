@@ -29,6 +29,7 @@ import 'WES2_local_store.dart';
 import 'WES2_template_service.dart';
 import 'WES2_widgets/WES2_template_picker.dart';
 import 'WES2_widgets/WES2_exercise_settings_dialog.dart';
+import 'WES2_widgets/WES2_weight_converter_dialog.dart';
 import 'exercise_details_screen.dart';
 import 'top_sets_screen.dart';
 import 'wes2_top_set_navigation.dart';
@@ -1777,6 +1778,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                 },
                 onToggleTimer: _toggleTimerVisible,
                 onShowTemplates: _showTemplatePicker,
+                // Local calculator: never touches the controller or workout.
+                onShowWeightConverter: () =>
+                    unawaited(showWes2WeightConverter(context)),
                 onDeleteAll: _onDeleteAllExercisesForDay,
                 onHintDebugSnapshot: null,
               ),

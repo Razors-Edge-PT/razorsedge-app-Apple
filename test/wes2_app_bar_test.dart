@@ -37,6 +37,7 @@ void main() {
   late int refreshCount;
   late int timerCount;
   late int templatesCount;
+  late int weightConverterCount;
   late int deleteAllCount;
 
   Future<void> pumpBar(
@@ -52,6 +53,7 @@ void main() {
     refreshCount = 0;
     timerCount = 0;
     templatesCount = 0;
+    weightConverterCount = 0;
     deleteAllCount = 0;
 
     final bar = Scaffold(
@@ -65,6 +67,7 @@ void main() {
         onRefresh: () => refreshCount++,
         onToggleTimer: () => timerCount++,
         onShowTemplates: () => templatesCount++,
+        onShowWeightConverter: () => weightConverterCount++,
         onDeleteAll: () => deleteAllCount++,
       ),
       body: const SizedBox.shrink(),
@@ -190,6 +193,32 @@ void main() {
     await tester.tap(find.text('Templates'));
     await tester.pumpAndSettle();
     expect(templatesCount, 1);
+  });
+
+  testWidgets('Weight converter item sits after Templates, before Delete Day, and forwards once',
+      (tester) async {
+    await pumpBar(tester);
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+
+    final List<String> order = tester
+        .widgetList<PopupMenuItem<Wes2AppBarMenuAction>>(
+            find.byType(PopupMenuItem<Wes2AppBarMenuAction>))
+        .map((item) => item.value!.name)
+        .toList();
+    expect(order, <String>['timer', 'templates', 'weightConverter', 'deleteAll']);
+    expect(
+      find.descendant(
+        of: find.widgetWithText(PopupMenuItem<Wes2AppBarMenuAction>, 'Weight converter'),
+        matching: find.byIcon(Icons.calculate_outlined),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Weight converter'));
+    await tester.pumpAndSettle();
+    expect(weightConverterCount, 1);
+    expect(timerCount + templatesCount + deleteAllCount, 0);
   });
 
   testWidgets('undo is disabled when canUndo is false', (tester) async {

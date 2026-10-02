@@ -3,7 +3,13 @@ import 'package:flutter/material.dart';
 /// Menu actions in the WES2 AppBar overflow menu.
 /// [hintDebug] is debug-instrumentation only — its item renders solely when
 /// the screen passes a non-null [Wes2AppBar.onHintDebugSnapshot] (kDebugMode).
-enum Wes2AppBarMenuAction { timer, templates, deleteAll, hintDebug }
+enum Wes2AppBarMenuAction {
+  timer,
+  templates,
+  weightConverter,
+  deleteAll,
+  hintDebug
+}
 
 /// The WES2 screen AppBar, extracted from `Wes2Screen` so its navigation
 /// controls can be widget-tested against the real production widget without
@@ -47,6 +53,9 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
   /// Invoked by the overflow menu "Templates" item.
   final VoidCallback onShowTemplates;
 
+  /// Invoked by the overflow menu "Weight converter" item.
+  final VoidCallback onShowWeightConverter;
+
   /// Invoked by the overflow menu "Delete Day" item.
   final VoidCallback onDeleteAll;
 
@@ -65,6 +74,7 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.onRefresh,
     required this.onToggleTimer,
     required this.onShowTemplates,
+    required this.onShowWeightConverter,
     required this.onDeleteAll,
     this.onHintDebugSnapshot,
   });
@@ -172,6 +182,9 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
               case Wes2AppBarMenuAction.templates:
                 onShowTemplates();
                 break;
+              case Wes2AppBarMenuAction.weightConverter:
+                onShowWeightConverter();
+                break;
               case Wes2AppBarMenuAction.deleteAll:
                 onDeleteAll();
                 break;
@@ -202,6 +215,18 @@ class Wes2AppBar extends StatelessWidget implements PreferredSizeWidget {
                   Icon(Icons.layers_outlined, size: 18),
                   SizedBox(width: 10),
                   Text('Templates'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: Wes2AppBarMenuAction.weightConverter,
+              height: 40,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.calculate_outlined, size: 18),
+                  SizedBox(width: 10),
+                  Text('Weight converter'),
                 ],
               ),
             ),

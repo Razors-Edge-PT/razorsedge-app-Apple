@@ -18,6 +18,7 @@ import 'package:localtest222/WES2_repository.dart';
 import 'package:localtest222/WES2_screen.dart';
 import 'package:localtest222/WES2_widgets/WES2_exercise_picker.dart';
 import 'package:localtest222/WES2_widgets/WES2_set_row.dart';
+import 'package:localtest222/WES2_widgets/WES2_weight_converter_dialog.dart';
 import 'package:localtest222/aurelian/aurelian_bus.dart';
 import 'package:localtest222/aurelian/aurelian_command.dart';
 import 'package:localtest222/block_exercise_defaults_repository.dart';
@@ -121,6 +122,8 @@ class _MemoryLocalStore implements Wes2LocalStore {
   final Map<String, ({List<Wes2ExerciseRow> rows, int workoutDurationMs})> drafts =
       <String, ({List<Wes2ExerciseRow> rows, int workoutDurationMs})>{};
 
+  int saveDraftCalls = 0;
+
   String _key(String uid, DateTime d) => '$uid|${d.year}-${d.month}-${d.day}';
 
   @override
@@ -130,6 +133,7 @@ class _MemoryLocalStore implements Wes2LocalStore {
     required List<Wes2ExerciseRow> rows,
     int workoutDurationMs = 0,
   }) async {
+    saveDraftCalls++;
     drafts[_key(uid, date)] = (
       rows: rows.map((Wes2ExerciseRow r) => Wes2ExerciseRow.fromJson(r.toJson())).toList(),
       workoutDurationMs: workoutDurationMs,
@@ -521,6 +525,89 @@ void main() {
     final AurelianResult blocked = await _say(tester, const AurelianCommand(AurelianCommandKind.nextExercise));
     expect(blocked.message, 'Close the open dialog first');
     expect(find.byType(AlertDialog), findsOneWidget);
+    await w.close(tester);
+  });
+
+  testWidgets('weight converter from the real WES2 menu: a pending edit survives, calculator input changes nothing, voice cannot bypass it',
+      (WidgetTester tester) async {
+    final _World w = _World(online: false);
+    await w.seed(threeExercises);
+    await w.pump(tester);
+    // A typed weight whose field still has focus: it is saved on focus loss.
+    final Finder setFields =
+        find.descendant(of: find.byType(Wes2SetRow).at(0), matching: find.byType(TextField));
+    await tester.enterText(setFields.at(0), '50');
+    await tester.pump();
+
+    await tester.tap(find.descendant(of: find.byType(AppBar), matching: find.byIcon(Icons.more_vert)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Weight converter'));
+    await tester.pumpAndSettle();
+    expect(find.byType(Wes2WeightConverterDialog), findsOneWidget);
+    expect(find.text('Weight converter'), findsOneWidget, reason: 'the dialog title');
+
+    // Opening the menu ran the normal focus-loss save of the pending edit.
+    expect(await w.queuedFieldEdits(), <String>['$_exA|0|weight=50.0']);
+    expect(_rows(tester)[0].set.weight.actualValue, 50.0);
+
+    // Snapshot everything the calculator must leave alone.
+    final List<List<String>> setsBefore = <List<String>>[for (final Wes2SetRow r in _rows(tester)) _setState(r.set)];
+    final int pendingBefore =
+        (await w.outbox.pendingForDay(actorUid: _uid, athleteUid: _uid, dateKey: '2026-01-12')).length;
+    final int draftSavesBefore = w.store.saveDraftCalls;
+    final String draftBefore = jsonEncode(
+        w.store.drafts.values.single.rows.map((Wes2ExerciseRow r) => r.toJson()).toList());
+    final VoidCallback? undoBefore =
+        tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.undo)).onPressed;
+
+    final Finder input =
+        find.descendant(of: find.byType(Wes2WeightConverterDialog), matching: find.byType(TextField));
+    final Finder result = find.byKey(const ValueKey('weightConverterResult'));
+    await tester.enterText(input, '225');
+    await tester.pump();
+    expect(tester.widget<Text>(result).data, '102.058 kg');
+    await tester.tap(find.text('kg → lb'));
+    await tester.pumpAndSettle();
+    await tester.enterText(input, '100');
+    await tester.pump();
+    expect(tester.widget<Text>(result).data, '220.462 lb');
+    await tester.enterText(input, '-5');
+    await tester.pump();
+    await tester.tap(find.text('Clear'));
+    await tester.pumpAndSettle();
+    await tester.enterText(input, '60');
+    await tester.pump();
+
+    // Voice workout actions are refused while it is open and do not dismiss it.
+    final AurelianResult next = await _say(tester, const AurelianCommand(AurelianCommandKind.nextExercise));
+    expect(next.message, 'Close the open dialog first');
+    final AurelianResult set = await _say(tester, const AurelianCommand(AurelianCommandKind.setFields,
+        setNumber: 1, weight: 70, weightUnit: ExerciseWeightUnit.kg));
+    expect(set.message, 'Close the open dialog first');
+    expect(find.byType(Wes2WeightConverterDialog), findsOneWidget);
+    expect(tester.widget<TextField>(input).controller!.text, '60');
+
+    expect(<List<String>>[for (final Wes2SetRow r in _rows(tester)) _setState(r.set)], setsBefore);
+    expect((await w.outbox.pendingForDay(actorUid: _uid, athleteUid: _uid, dateKey: '2026-01-12')).length,
+        pendingBefore);
+    expect(w.store.saveDraftCalls, draftSavesBefore, reason: 'calculator input never enters the save path');
+
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pumpAndSettle();
+
+    // Back on the same WES2 session, with the edit intact and nothing else changed.
+    expect(find.byType(Wes2WeightConverterDialog), findsNothing);
+    expect(find.byType(Wes2Screen), findsOneWidget);
+    expect(tester.widget<TextField>(setFields.at(0)).controller!.text, '50');
+    expect(<List<String>>[for (final Wes2SetRow r in _rows(tester)) _setState(r.set)], setsBefore);
+    expect(await w.queuedFieldEdits(), <String>['$_exA|0|weight=50.0']);
+    expect(
+        jsonEncode(w.store.drafts.values.single.rows.map((Wes2ExerciseRow r) => r.toJson()).toList()),
+        draftBefore);
+    expect(tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.undo)).onPressed == null,
+        undoBefore == null);
     await w.close(tester);
   });
 
