@@ -80,18 +80,34 @@ class GoodLiftAthletePort implements AthleteActionPort {
     return out;
   }
 
+  /// Switches through the Coach Dashboard's own selection
+  /// (UserContext.switchAthlete — what tapping the athlete there does). From
+  /// Workout Entry the workout is first left through its ordinary exit, which
+  /// saves it; after the switch Workout Entry is opened again on the same day
+  /// for the new athlete. From Home, Home simply refreshes for them.
   @override
   Future<String> switchTo(String uid) async {
     final UserContext? uc = _context();
     if (uc == null) return '';
-    uc.switchAthlete(uid);
-    // Home and the dashboards listen to UserContext and refresh themselves. An
-    // open workout read its athlete when it opened, so it is reopened for the
-    // same day once the new athlete's block is known.
     final WorkoutActionPort? workout = _service.workoutPort;
-    if (workout != null &&
-        workout.actingUid != uid &&
-        workout is ReloadableWorkout) {
+    final bool leaving = workout != null && workout.actingUid != uid;
+    final DateTime? day = leaving ? workout.date : null;
+    if (leaving && workout is ExitableWorkout) {
+      if (!await (workout as ExitableWorkout).exitToHome())
+        return uc.currentUid;
+      if (!await _service.waitForNoWorkout(const Duration(seconds: 8))) {
+        return uc.currentUid;
+      }
+      uc.switchAthlete(uid);
+      if (uc.currentUid != uid) return uc.currentUid;
+      await _waitForBlock(uc, uid);
+      await _service.reopenWorkout(day!, uid);
+      return uc.currentUid;
+    }
+    uc.switchAthlete(uid);
+    // An open workout that cannot be left is reopened in place for the same
+    // day once the new athlete's block is known.
+    if (leaving && workout is ReloadableWorkout) {
       await _waitForBlock(uc, uid);
       await (workout as ReloadableWorkout).reopenForCurrentAthlete();
       await _service.waitForWorkout((WorkoutActionPort w) => w.actingUid == uid,

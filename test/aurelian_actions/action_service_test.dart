@@ -200,7 +200,7 @@ void main() {
           await run('athlete.switch', <String, Object?>{'query': 'Ruby Cakes'});
       expect(r['status'], 'success');
       expect(r['verified'], isTrue);
-      expect(r['summary'], 'Switched to rubycakes');
+      expect(r['summary'], startsWith('Switched to Ruby Cakes (rubycakes)'));
       expect(r.toString(), isNot(contains('ruby@')),
           reason: 'no identifiers beyond the label');
       expect(athletes.acting, 'ruby');
@@ -249,18 +249,40 @@ void main() {
       expect(d['summary'], 'Added Flat Bench Dumbbell Press to circuit 1');
     });
 
-    test('"Larson press" asks between the two Larsen entries', () async {
+    test(
+        '"Larson press" adds the usual Larsen bench; history or an answer picks the other',
+        () async {
+      workout.rows.clear();
       final r = await run(
           'exercise.add', <String, Object?>{'exercise': 'Larson press'});
-      expect(r['status'], 'ambiguous');
-      expect(r['candidates'],
-          <String>['Bench Press, Larsen Press', 'Larsen Bench Press']);
+      expect(r['status'], 'success');
+      expect(workout.byId('bench_larsen'), isNotNull);
+      expect((r['data'] as Map<String, dynamic>)['matched'],
+          contains('alias default'));
+      workout.rows.clear();
+      workout.usage = <String, int>{'larsen_bench': 6, 'bench_larsen': 1};
+      await run('exercise.add', <String, Object?>{'exercise': 'larsen'});
+      expect(workout.byId('larsen_bench'), isNotNull, reason: 'history');
+      workout.rows.clear();
+      workout.usage = <String, int>{};
       final c = await run('exercise.add', <String, Object?>{
         'exercise': 'Larson press',
         'choices': <String>['Larsen Bench Press'],
       });
       expect(c['status'], 'success');
       expect(workout.byId('larsen_bench'), isNotNull);
+    });
+
+    test('a destructive action never takes an alias default: it asks',
+        () async {
+      workout.rows
+        ..clear()
+        ..add(FakeExercise('bench_larsen', 'Bench Press, Larsen Press'))
+        ..add(FakeExercise('larsen_bench', 'Larsen Bench Press'));
+      final r =
+          await run('exercise.delete', <String, Object?>{'exercise': 'larsen'});
+      expect(r['status'], 'ambiguous');
+      expect(workout.rows.length, 2);
     });
 
     test('history narrows a broad name only for a clear favourite', () async {

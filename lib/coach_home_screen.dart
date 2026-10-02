@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
+import 'athlete_search.dart';
 import 'user_context.dart';
 import 'coach_mode/coach_mode_models.dart';
 import 'coach_mode/coach_mode_role_watcher.dart';
@@ -412,12 +413,20 @@ class _CoachHomeScreenState extends State<CoachHomeScreen>
 
     final q = _search.trim().toLowerCase();
 
+    // Full name, username, display name and e-mail; case, spacing and
+    // punctuation ignored; the same matcher Aurelian's voice switching uses.
     final filteredUids = _athletes.keys.where((uid) {
       final a = _athletes[uid] ?? {};
-      final email = safeLower(a['email']);
-      final name  = safeLower(a['displayName']);
-      final uidL  = uid.toLowerCase();
-      return uidL.contains(q) || email.contains(q) || name.contains(q);
+      return uid.toLowerCase().contains(q) ||
+          athleteMatchesSearch(
+            q,
+            AthleteSearchFields(
+              username: (a['username'] ?? '').toString(),
+              displayName: (a['displayName'] ?? '').toString(),
+              fullName: (a['fullName'] ?? '').toString(),
+              email: (a['email'] ?? '').toString(),
+            ),
+          );
     }).toList();
 
 // Sort by email (primary), then displayName, then uid

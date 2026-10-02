@@ -141,6 +141,32 @@ class AurelianActionService {
     }
   }
 
+  /// Waits (bounded) until no workout is open (after an exit). True if none is.
+  Future<bool> waitForNoWorkout(Duration timeout) async {
+    final DateTime until = _now().add(timeout);
+    while (_workout != null) {
+      if (!_now().isBefore(until)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    return true;
+  }
+
+  /// Opens Workout Entry the ordinary way for [uid] and goes to [day]; the
+  /// workout once it is there, else null. Used to return to the same day
+  /// after an athlete switch.
+  Future<WorkoutActionPort?> reopenWorkout(DateTime day, String uid) async {
+    if (await _ensureWorkout() == null) return null;
+    final WorkoutActionPort? w = await waitForWorkout(
+        (WorkoutActionPort w) => w.actingUid == uid, workoutWait);
+    if (w == null) return null;
+    if (await w.prepare() != null) return null;
+    if (!_sameDay(w.date, day)) {
+      if (!await w.changeDate(day)) return null;
+      if (await w.prepare() != null) return null;
+    }
+    return _sameDay(w.date, day) ? w : null;
+  }
+
   // ── Entry points ─────────────────────────────────────────────────────────
 
   /// Bridge entry: envelope JSON → result JSON (always a well-formed result).
@@ -401,9 +427,13 @@ class AurelianActionService {
     final String previous = athletes.actingUid;
     if (previous == target.uid) {
       return AurelianActionResult(
-          ActionStatus.success, 'Already on ${target.label}',
-          data: <String, Object?>{'athlete': target.label}, verified: true);
+          ActionStatus.success, 'Already on ${target.voiceLabel}',
+          data: <String, Object?>{'athlete': target.voiceLabel},
+          verified: true);
     }
+    // Where the coach was: a workout is left (saving it) and reopened on the
+    // same day for the new athlete.
+    final DateTime? workoutDay = _workout?.date;
     final String readBack = await athletes.switchTo(target.uid);
     if (readBack != target.uid) {
       return const AurelianActionResult.failure(
@@ -424,13 +454,26 @@ class AurelianActionService {
         return const AurelianActionResult.failure(
             "GoodLift didn't switch back");
       }
-      final String label = before?.label ?? 'the previous athlete';
+      final String label = before?.voiceLabel ?? 'the previous athlete';
       return AurelianActionResult(ActionStatus.success, 'Back on $label',
           data: <String, Object?>{'athlete': label}, verified: true);
     });
+    final WorkoutActionPort? reopened = _workout;
+    final bool sameDay = workoutDay != null &&
+        reopened != null &&
+        reopened.actingUid == target.uid &&
+        _sameDay(reopened.date, workoutDay);
+    final String where = workoutDay == null
+        ? ''
+        : sameDay
+            ? ' · workout for ${_dayLabel(workoutDay)} reopened'
+            : " · the workout couldn't be reopened";
     return AurelianActionResult(
-        ActionStatus.success, 'Switched to ${target.label}',
-        data: <String, Object?>{'athlete': target.label},
+        ActionStatus.success, 'Switched to ${target.voiceLabel}$where',
+        data: <String, Object?>{
+          'athlete': target.voiceLabel,
+          if (workoutDay != null && sameDay) 'date': isoDate(workoutDay),
+        },
         undoToken: undo,
         verified: true);
   }
@@ -447,7 +490,7 @@ class AurelianActionService {
       case AurelianAction.workoutOpen:
         return _openDay(port, p.string('date'));
       case AurelianAction.workoutRead:
-        return _read(port);
+        return _read(port, p);
       case AurelianAction.templateLoad:
         return _loadTemplate(e, port, confirmed);
       case AurelianAction.exerciseAdd:
@@ -563,9 +606,48 @@ class AurelianActionService {
         verified: true);
   }
 
-  AurelianActionResult _read(WorkoutActionPort port) {
+  AurelianActionResult _read(WorkoutActionPort port, ActionPayload p) {
     final List<WorkoutExerciseView> rows = port.exercises;
     final String? target = port.targetExerciseId;
+    // One exercise's sets ("read my bench sets", "what did you put into set
+    // one?"): the named exercise, or the current one.
+    final String? spoken = p.string('exercise');
+    final int? setNumber = p.integer('set');
+    if (spoken != null || setNumber != null) {
+      final t = _target(port, spoken, p.choices, destructive: false);
+      if (t.answer != null) return t.answer!;
+      final WorkoutExerciseView row = t.row!;
+      if (setNumber != null && setNumber > row.setCount) {
+        return _noSuchSet(row, setNumber);
+      }
+      String fmt(double v) => formatWeightNumber(v);
+      final List<Map<String, Object?>> sets = <Map<String, Object?>>[
+        for (final WorkoutSetView s in row.sets)
+          if (setNumber == null || s.index == setNumber - 1)
+            <String, Object?>{
+              'set': s.index + 1,
+              if (s.weightKg != null)
+                'weight': double.parse(fmt(row.unit.fromKg(s.weightKg!))),
+              if (s.reps != null) 'reps': s.reps,
+              if (s.rir != null) 'rir': s.rir,
+              if (s.velocity != null) 'velocity': s.velocity,
+            },
+      ];
+      final int logged =
+          row.sets.where((WorkoutSetView s) => s.hasValues).length;
+      return AurelianActionResult(
+          ActionStatus.success,
+          setNumber == null
+              ? '${row.name}: $logged of ${row.setCount} sets logged'
+              : '${row.name} · set $setNumber',
+          data: <String, Object?>{
+            'date': isoDate(port.date),
+            'exercise': row.name,
+            'unit': row.unit.suffix,
+            'sets': sets,
+          },
+          verified: true);
+    }
     final List<Map<String, Object?>> list = <Map<String, Object?>>[
       for (final WorkoutExerciseView r in rows.take(20))
         <String, Object?>{
@@ -586,6 +668,13 @@ class AurelianActionService {
           'date': isoDate(port.date),
           'exercises': list,
           'timer': port.generalTimer.running ? 'running' : 'stopped',
+          'timerSeconds': port.generalTimer.elapsedMs ~/ 1000,
+          if (port.runningSetTimer != null)
+            'setTimer': <String, Object?>{
+              'exercise':
+                  _row(port, port.runningSetTimer!.exerciseId)?.name ?? '',
+              'set': port.runningSetTimer!.setIndex + 1,
+            },
         },
         verified: true);
   }
@@ -603,10 +692,26 @@ class AurelianActionService {
       );
     }
     if (spoken == null) {
+      // The exercise the user is on (a card typed into, the one just added
+      // or acted on), the only one, or a "which one?" - never a silent
+      // default to the first exercise.
       final String? id = port.targetExerciseId;
-      final WorkoutExerciseView row =
-          id == null ? rows.first : _row(port, id) ?? rows.first;
-      return (row: row, answer: null);
+      final WorkoutExerciseView? chosen = id == null ? null : _row(port, id);
+      if (chosen != null) return (row: chosen, answer: null);
+      if (rows.length == 1) return (row: rows.single, answer: null);
+      for (final String choice in choices) {
+        final List<WorkoutExerciseView> picked =
+            rows.where((WorkoutExerciseView r) => r.name == choice).toList();
+        if (picked.length == 1) {
+          if (!destructive) port.setTarget(picked.single.exerciseId);
+          return (row: picked.single, answer: null);
+        }
+      }
+      return (
+        row: null,
+        answer: AurelianActionResult.ambiguous(
+            'Which exercise?', rows.map((WorkoutExerciseView x) => x.name))
+      );
     }
     final ExerciseResolution<WorkoutExerciseView> r =
         resolveExercise<WorkoutExerciseView>(
@@ -766,6 +871,10 @@ class AurelianActionService {
 
   // ── Exercises ────────────────────────────────────────────────────────────
 
+  /// How the last catalogue name was matched ("Bench Press, Barbell (alias)"),
+  /// for Aurelian's diagnostics.
+  String? _lastMatch;
+
   Future<({CatalogueEntry? entry, AurelianActionResult? answer})>
       _fromCatalogue(
           WorkoutActionPort port, String spoken, List<String> choices,
@@ -789,7 +898,11 @@ class AurelianActionService {
       usage: port.exerciseUsage(),
       choices: choices,
       allowFuzzy: fuzzy,
+      inWorkout:
+          port.exercises.map((WorkoutExerciseView r) => r.exerciseId).toSet(),
     );
+    _lastMatch =
+        r.chosen == null ? null : '"$spoken" → ${r.chosen!.name} (${r.via})';
     if (r.isAmbiguous) {
       return (
         entry: null,
@@ -858,7 +971,11 @@ class AurelianActionService {
     });
     return AurelianActionResult(
         ActionStatus.success, 'Added ${entry.name} to circuit ${ci + 1}',
-        data: <String, Object?>{'exercise': entry.name, 'circuit': ci + 1},
+        data: <String, Object?>{
+          'exercise': entry.name,
+          'circuit': ci + 1,
+          if (_lastMatch != null) 'matched': _lastMatch,
+        },
         undoToken: undo,
         verified: true);
   }
@@ -1188,7 +1305,8 @@ class AurelianActionService {
       int setIndex,
       List<FieldEdit> edits,
       String summary,
-      String label) async {
+      String label,
+      {bool addedSet = false}) async {
     final WorkoutSetView before = row.set(setIndex);
     await port.setFields(row.exerciseId, setIndex, edits);
     final WorkoutExerciseView? now = _row(port, row.exerciseId);
@@ -1227,6 +1345,20 @@ class AurelianActionService {
               }),
       ];
       await port.setFields(row.exerciseId, setIndex, back);
+      // A set this change added goes again (only while it is empty and last).
+      if (addedSet) {
+        final WorkoutExerciseView? cur = _row(port, row.exerciseId);
+        if (cur != null &&
+            cur.setCount == setIndex + 1 &&
+            cur.set(setIndex).isEmpty) {
+          await port.removeSet(row.exerciseId, setIndex);
+          return _row(port, row.exerciseId)?.setCount == setIndex
+              ? AurelianActionResult(ActionStatus.success,
+                  '${row.name} · set ${setIndex + 1} removed', verified: true)
+              : const AurelianActionResult.failure(
+                  "GoodLift didn't remove the set");
+        }
+      }
       final WorkoutSetView restored =
           _row(port, row.exerciseId)?.set(setIndex) ??
               WorkoutSetView(index: setIndex);
@@ -1262,8 +1394,31 @@ class AurelianActionService {
     final t =
         _target(port, p.string('exercise'), p.choices, destructive: false);
     if (t.answer != null) return t.answer!;
-    final WorkoutExerciseView row = t.row!;
-    final int n = p.integer('set')!;
+    WorkoutExerciseView row = t.row!;
+    // No set said: the next set without values ("150 for five" logs the next
+    // set); a new set when every set has values.
+    int n = p.integer('set') ??
+        (row.sets
+                    .where((WorkoutSetView s) =>
+                        s.index < row.setCount && !s.hasValues)
+                    .map((WorkoutSetView s) => s.index)
+                    .fold<int?>(
+                        null, (int? a, int b) => a == null || b < a ? b : a) ??
+                row.setCount) +
+            1;
+    // The set right after the last one is added first, as "add set" would.
+    bool added = false;
+    if (n == row.setCount + 1 && !row.bb3Planned) {
+      final int count = row.setCount;
+      await port.addSet(row.exerciseId);
+      final WorkoutExerciseView? grown = _row(port, row.exerciseId);
+      if (grown == null || grown.setCount != count + 1) {
+        return const AurelianActionResult.failure(
+            "GoodLift didn't add the set");
+      }
+      row = grown;
+      added = true;
+    }
     final String? unit = p.string('unit');
     // The same validation and unit conversion as the voice and typed paths.
     final SetEntryPlan plan = planSetEntry(
@@ -1282,7 +1437,10 @@ class AurelianActionService {
       velocityShown: row.velocityShown,
       normalEntry: !row.timed,
     );
-    if (!plan.isValid) return AurelianActionResult.invalid(plan.error!);
+    if (!plan.isValid) {
+      if (added) await port.removeSet(row.exerciseId, row.setCount - 1);
+      return AurelianActionResult.invalid(plan.error!);
+    }
     return _writeSet(
         port,
         row,
@@ -1290,8 +1448,9 @@ class AurelianActionService {
         <FieldEdit>[
           for (final SetFieldEdit e in plan.edits) FieldEdit(e.fieldKey, e.text)
         ],
-        plan.summary,
-        'set change');
+        added ? '${plan.summary} (new set)' : plan.summary,
+        'set change',
+        addedSet: added);
   }
 
   Future<AurelianActionResult> _setNote(
@@ -1463,7 +1622,10 @@ class AurelianActionService {
       return AurelianActionResult.invalid(
           'Set $from of ${row.name} has no values to copy');
     }
-    final int? to = e.payload.integer('toSet');
+    // Copying to the set after the last one is a new set holding the copy.
+    final int? to = e.payload.integer('toSet') == row.setCount + 1
+        ? null
+        : e.payload.integer('toSet');
     if (to != null) {
       if (to == from) {
         return const AurelianActionResult.invalid('That is the same set');

@@ -50,30 +50,38 @@ confirmationToken? }`, ≤ 4096 characters. Statuses: `success`, `requires_confi
 `not_found`, `invalid`, `unauthorized`, `conflict`, `unsupported`, `failure`. `verified` is true only when
 GoodLift read the state back after the change and it matched; Aurelian reports success only then.
 
+An exercise not named (`exercise?` absent) is the one the user is on: the card last typed into, the
+one just added or acted on by voice, or the only exercise. With several exercises and none of those,
+GoodLift answers `ambiguous` ("Which exercise?") and never defaults to the first. Names resolve in this
+order: exact catalogue name; normalised name; alias (narrowed by the open workout, then the athlete's
+history, then — for a non-destructive action — the alias's usual variant, e.g. "pulldowns" → Lat Pull
+Down, Wide Arm); an exercise in the workout; history; a close spelling (non-destructive only). Results
+of `exercise.add` carry `data.matched` (what matched and how) for Aurelian's diagnostics.
+
 ## Phase one (implemented)
 
 | Action | Arguments | Notes |
 |---|---|---|
 | `athlete.current` | — | Label only, never ids. |
-| `athlete.switch` | `query` | Coach accounts only. Matches only the coach's roster (+ self): exact/partial username, full name, email, spelled letters, profile/business name, username without trailing digits, honorific + surname. One clear match switches through `UserContext.switchAthlete` (Coach Dashboard's state); several close ones → `ambiguous`; nothing confident → `not_found`. The current screen stays; an open workout reopens for the same day for the new athlete. Undo switches back if still current. |
+| `athlete.switch` | `query` | Coach accounts only. Matches only the coach's roster (+ self), in priority order: exact e-mail (also with its separators ignored), exact username, exact full name, the same e-mail with extra digits, every word of a name, unique prefixes; a near spelling is only ever asked about. One clear match switches through `UserContext.switchAthlete` (the Coach Dashboard's own selection); several close ones → `ambiguous` with "Full Name (username)" labels (either name answers); nothing confident → `not_found`. From Home, Home refreshes for the athlete. From Workout Entry the workout is left through its ordinary exit (which saves), the athlete is switched, and Workout Entry reopens on the same day for them (`data.date`). Undo switches back if still current. The Coach Dashboard search box uses the same matcher (`lib/athlete_search.dart`). |
 | `workout.open` | `date?` (YYYY-MM-DD) | Home's Enter Workout path (membership/readiness checks), then the date. |
-| `workout.read` | — | Day, exercises (name, circuit, sets, logged, done, timed), workout timer. |
+| `workout.read` | `exercise?`, `set?` | Day, exercises (name, circuit, sets, logged, done, timed, current), workout timer (`timerSeconds`) and a running set stopwatch. With `exercise` (or `set`, for the current exercise): that exercise's set values (`sets`: set, weight in its unit, reps, RIR, velocity). |
 | `template.load` | `template?` | Named, or today's (active block, block day number or weekday). Several → `ambiguous`. Over logged data → confirmation. Undo only when the day had no logged data (removes the template's exercises, restores the previous ones) — never a snapshot rewrite. |
 | `exercise.add` | `exercise`, `circuit?` | Into an existing circuit or the next new one. |
-| `exercise.delete` | `exercise` | Populated → confirmation (mirrors the Delete dialog). Undo re-adds it and replays its sets, notes and completion through the ordinary paths. |
-| `exercise.replace` | `exercise`, `replacement` | Populated → confirmation. Undo replaces back and replays. |
-| `exercise.move` | `exercise`, `circuit` | Existing circuit or the next new one. Undo moves back if it was not moved again. |
+| `exercise.delete` | `exercise?` (the current exercise when absent) | Populated → confirmation (mirrors the Delete dialog). Undo re-adds it and replays its sets, notes and completion through the ordinary paths. |
+| `exercise.replace` | `exercise?`, `replacement` | Populated → confirmation. Undo replaces back and replays. |
+| `exercise.move` | `exercise?`, `circuit` | Existing circuit or the next new one. Undo moves back if it was not moved again. |
 | `exercise.note` | `exercise?`, `text` | The note dialog's save path. |
 | `exercise.complete` | `exercise?`, `completed` | Explicit only; the Done coordinator; needs a logged set to mark completed. |
 | `circuit.add` | `exercise` | A new circuit starting with that exercise. |
 | `circuit.rename` | `circuit`, `name` | `unsupported`: GoodLift circuits are numbered, not named. |
 | `circuit.delete` | `circuit` | Deletes its exercises; populated → confirmation; undo restores them. |
-| `set.update` | `exercise?`, `set`, any of `weight`, `unit?`, `reps`, `rir`, `velocity` | `planSetEntry` validation and units (the exercise's unit unless said); the typed-entry save path for each value. Undo restores only the fields it wrote, only while they still hold what it wrote. |
+| `set.update` | `exercise?`, `set?`, any of `weight`, `unit?`, `reps`, `rir`, `velocity` | `planSetEntry` validation and units (the exercise's unit unless said); the typed-entry save path for each value. No `set`: the next set without values (a new set when all have values). The set right after the last one is added first. Never marks the exercise completed. Undo restores only the fields it wrote, only while they still hold what it wrote (and removes a set it added while still empty). |
 | `set.note` | `exercise?`, `set`, `text` | The set-note dialog's save path. |
 | `set.add` | `exercise?` | Undo removes the set while it is still empty. |
 | `set.delete` | `exercise?`, `set` | Logged values → confirmation (as the Remove Set button). BB3-planned rows refused (as the button). Undo only for the last set (a middle set's successors were renumbered; GoodLift's own Undo covers that). |
 | `set.clear` | `exercise?`, `set` | Clears logged values (set, note and video stay). |
-| `set.copy` | `exercise?`, `set`, `toSet?` | Into a new set, or over another (populated → confirmation). |
+| `set.copy` | `exercise?`, `set`, `toSet?` | Into a new set (also for `toSet` = the set after the last), or over another (populated → confirmation). |
 | `timer.exercise.start` | `exercise?`, `set` | Timed exercises only (plank): starts that set's own stopwatch (`Wes2SetTimerHub`), exactly as tapping it. Undo cancels without saving. |
 | `timer.exercise.stop` | `exercise?` | Stops the running set stopwatch and saves the seconds through the cell's own stop path. |
 | `timer.general.start` / `.stop` | — | The general Enter Workout timer (three-dot menu), not a set stopwatch. |

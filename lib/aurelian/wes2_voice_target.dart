@@ -8,6 +8,10 @@ library;
 class Wes2VoiceTarget {
   String? _exerciseId;
 
+  /// The target was chosen (a voice action, an added exercise, a card the
+  /// user typed into) rather than defaulted to the first exercise.
+  bool _explicit = false;
+
   String? get exerciseId => _exerciseId;
 
   /// The target among [rowIds]: the chosen one while it is still in the
@@ -17,10 +21,23 @@ class Wes2VoiceTarget {
     final String? current = _exerciseId;
     if (current != null && rowIds.contains(current)) return current;
     _exerciseId = rowIds.first;
+    _explicit = false;
     return _exerciseId;
   }
 
-  void select(String exerciseId) => _exerciseId = exerciseId;
+  /// The target only when it was actually chosen and is still in the
+  /// workout; null when it would merely default to the first exercise.
+  String? chosen(List<String> rowIds) {
+    final String? current = _exerciseId;
+    return _explicit && current != null && rowIds.contains(current)
+        ? current
+        : null;
+  }
+
+  void select(String exerciseId) {
+    _exerciseId = exerciseId;
+    _explicit = true;
+  }
 
   /// Moves to the next exercise; null when already on the last (target unchanged).
   String? next(List<String> rowIds) => _step(rowIds, 1);
@@ -34,6 +51,7 @@ class Wes2VoiceTarget {
     final int i = rowIds.indexOf(current) + delta;
     if (i < 0 || i >= rowIds.length) return null;
     _exerciseId = rowIds[i];
+    _explicit = true;
     return _exerciseId;
   }
 }

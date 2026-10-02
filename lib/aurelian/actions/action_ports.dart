@@ -40,6 +40,19 @@ class AthleteCandidate {
     }
     return 'this athlete';
   }
+
+  /// A spoken label that carries both ways of saying who it is: "Michael Helps
+  /// (Helpzie)" when the full name and username differ, else [label].
+  String get voiceLabel {
+    final String full = fullName.trim();
+    final String user = username.trim();
+    if (full.isNotEmpty &&
+        user.isNotEmpty &&
+        full.toLowerCase() != user.toLowerCase()) {
+      return '$full ($user)';
+    }
+    return label;
+  }
 }
 
 abstract class AthleteActionPort {
@@ -249,6 +262,13 @@ abstract class WorkoutActionPort {
 
   /// Stops it WITHOUT saving (undo of a start).
   Future<bool> cancelSetTimer();
+}
+
+/// A workout screen that can be left through its own exit, which saves it
+/// (WES2's Home route: focus dropped, the latest field saved, the draft kept).
+abstract class ExitableWorkout {
+  /// Leaves the workout for Home the ordinary way; false when it could not.
+  Future<bool> exitToHome();
 }
 
 /// A workout screen that can reopen itself for another athlete after an

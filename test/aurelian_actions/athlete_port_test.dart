@@ -31,6 +31,24 @@ class _ReopeningWorkout extends FakeWorkout implements ReloadableWorkout {
   }
 }
 
+/// WES2 as it really behaves: left through its own exit (which saves), and
+/// opened again from Home for whoever is selected.
+class _ExitingWorkout extends FakeWorkout implements ExitableWorkout {
+  _ExitingWorkout(this.service, String uid, {super.day}) : super(uid: uid);
+
+  final AurelianActionService service;
+  bool exited = false;
+  bool savedOnExit = false;
+
+  @override
+  Future<bool> exitToHome() async {
+    savedOnExit = true;
+    exited = true;
+    service.unregisterWorkout(this);
+    return true;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -97,7 +115,8 @@ void main() {
     final AurelianActionResultLike r = await _run(
         service, 'athlete.switch', <String, Object?>{'query': 'Ruby Cakes'});
     expect(r.status, 'success');
-    expect(r.summary, 'Switched to rubycakes');
+    expect(r.summary,
+        'Switched to Ruby Cakes (rubycakes) · workout for Wed 30 Sep reopened');
     expect(uc.currentUid, 'ruby');
     expect(workout.reopened, 1);
     expect(service.workoutPort!.actingUid, 'ruby');
@@ -108,6 +127,49 @@ void main() {
     expect(back.status, 'success');
     expect(uc.currentUid, 'coach');
     expect(service.workoutPort!.actingUid, 'coach');
+  });
+
+  test(
+      'from Workout Entry: exit (saving), switch, reopen the same day for the new athlete',
+      () async {
+    final _ExitingWorkout first =
+        _ExitingWorkout(service, 'coach', day: DateTime(2026, 10, 2));
+    service.registerWorkout(first);
+    final List<_ExitingWorkout> opened = <_ExitingWorkout>[];
+    // Home's path: Enter Workout opens on today for the selected athlete.
+    service.openWorkout = () async {
+      final _ExitingWorkout w =
+          _ExitingWorkout(service, uc.currentUid, day: DateTime(2026, 10, 3));
+      opened.add(w);
+      Future<void>.microtask(() => service.registerWorkout(w));
+      return true;
+    };
+    uc.addListener(() {
+      if (uc.currentUid == 'ruby' && uc.activeBlockId == null) {
+        Future<void>.microtask(() => uc.debugSetBlockMeta(
+            activeBlockId: 'b-ruby', startDate: DateTime(2026, 9, 1)));
+      }
+    });
+    final AurelianActionResultLike r = await _run(
+        service, 'athlete.switch', <String, Object?>{'query': 'rubycakes'});
+    expect(r.status, 'success');
+    expect(first.exited, isTrue);
+    expect(first.savedOnExit, isTrue);
+    expect(uc.currentUid, 'ruby');
+    expect(opened.single.actingUid, 'ruby');
+    expect(service.workoutPort!.date, DateTime(2026, 10, 2),
+        reason: 'same day');
+    expect(r.summary,
+        'Switched to Ruby Cakes (rubycakes) · workout for Fri 2 Oct reopened');
+  });
+
+  test('from Home: the switch selects the athlete and stays on Home', () async {
+    final AurelianActionResultLike r = await _run(
+        service, 'athlete.switch', <String, Object?>{'query': 'Ruby Cakes'});
+    expect(r.status, 'success');
+    expect(r.summary, 'Switched to Ruby Cakes (rubycakes)');
+    expect(uc.currentUid, 'ruby');
+    expect(service.workoutPort, isNull);
   });
 }
 

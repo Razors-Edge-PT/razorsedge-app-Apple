@@ -86,7 +86,11 @@ enum AurelianAction {
   workoutOpen('workout.open', ActionRisk.navigation, <String, _Arg>{
     'date': _Arg(_ArgType.isoDate),
   }),
-  workoutRead('workout.read', ActionRisk.readOnly, <String, _Arg>{}),
+  workoutRead('workout.read', ActionRisk.readOnly, <String, _Arg>{
+    'exercise': _exerciseOpt,
+    'set': _Arg(_ArgType.setNumber),
+    'choices': _choices,
+  }),
   templateLoad('template.load', ActionRisk.destructive, <String, _Arg>{
     'template': _Arg(_ArgType.name),
     'choices': _choices,
@@ -97,16 +101,16 @@ enum AurelianAction {
     'choices': _choices,
   }),
   exerciseDelete('exercise.delete', ActionRisk.destructive, <String, _Arg>{
-    'exercise': _exerciseReq,
+    'exercise': _exerciseOpt,
     'choices': _choices,
   }),
   exerciseReplace('exercise.replace', ActionRisk.destructive, <String, _Arg>{
-    'exercise': _exerciseReq,
+    'exercise': _exerciseOpt,
     'replacement': _Arg(_ArgType.name, required: true),
     'choices': _choices,
   }),
   exerciseMove('exercise.move', ActionRisk.personalMutation, <String, _Arg>{
-    'exercise': _exerciseReq,
+    'exercise': _exerciseOpt,
     'circuit': _Arg(_ArgType.circuit, required: true),
     'choices': _choices,
   }),
@@ -134,7 +138,8 @@ enum AurelianAction {
   }),
   setUpdate('set.update', ActionRisk.personalMutation, <String, _Arg>{
     'exercise': _exerciseOpt,
-    'set': _setReq,
+    // Null: the next set without values (a new set when every set has them).
+    'set': _Arg(_ArgType.setNumber),
     'weight': _Arg(_ArgType.weight),
     'unit': _Arg(_ArgType.unit),
     'reps': _Arg(_ArgType.reps),

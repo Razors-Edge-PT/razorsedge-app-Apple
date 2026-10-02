@@ -1233,6 +1233,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
     Wes2FieldKey fieldKey,
     String rawText,
   ) {
+    // The card being typed into is where an unnamed voice command goes.
+    _voiceTarget.select(exerciseId);
     // ── Tutorial auto-advancement (additive — does not alter save variables) ─
     if (rawText.trim().isNotEmpty) {
       if (_tutorialStep == 3 && fieldKey == Wes2FieldKey.weight) {
@@ -4537,7 +4539,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
 /// and touch share one canonical path to the local draft and the durable
 /// outbox. Decisions (matching, confirmation, undo, read-back) live in the
 /// service, which reads this screen's state back after each change.
-class _Wes2ActionPort implements WorkoutActionPort, ReloadableWorkout {
+class _Wes2ActionPort
+    implements WorkoutActionPort, ReloadableWorkout, ExitableWorkout {
   _Wes2ActionPort(this._s);
 
   final _Wes2ScreenState _s;
@@ -4595,8 +4598,11 @@ class _Wes2ActionPort implements WorkoutActionPort, ReloadableWorkout {
     ];
   }
 
+  /// Only a chosen target (a voice action, an added exercise, the card last
+  /// typed into): with several exercises and none chosen, the action service
+  /// asks which one instead of defaulting to the first.
   @override
-  String? get targetExerciseId => _s._voiceTarget.resolve(_s._rowIds());
+  String? get targetExerciseId => _s._voiceTarget.chosen(_s._rowIds());
 
   @override
   void setTarget(String exerciseId) {
@@ -4826,6 +4832,16 @@ class _Wes2ActionPort implements WorkoutActionPort, ReloadableWorkout {
   Future<bool> cancelSetTimer() async {
     final String? key = Wes2SetTimerHub.instance.runningKey;
     return key != null && Wes2SetTimerHub.instance.cancel(key);
+  }
+
+  /// The GoodLift logo's route: focus dropped (the open field saves), the
+  /// draft written, back to the existing Home.
+  @override
+  Future<bool> exitToHome() async {
+    if (!_s.mounted) return true;
+    _s._saveDraftNow();
+    await _s._exitDirectlyToHome();
+    return true;
   }
 
   @override
