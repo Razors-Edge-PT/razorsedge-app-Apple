@@ -765,28 +765,47 @@ class AurelianActionService {
             : _templateNamed(spoken, all);
     if (pick.ask.isNotEmpty) {
       final List<TemplateEntry> ask = pick.ask;
+      final Map<String, TemplateEntry> labels = templateLabels(ask);
       for (final String choice in e.payload.choices) {
-        final List<TemplateEntry> hit =
-            ask.where((TemplateEntry t) => t.name == choice).toList();
-        if (hit.length == 1) {
-          return _applyTemplate(e, port, hit.single, confirmed);
-        }
+        final TemplateEntry? hit = templateForAnswer(choice, labels);
+        if (hit != null) return _applyTemplate(e, port, hit, confirmed);
       }
       return AurelianActionResult.ambiguous(
-          ask.length == 1 ? 'Load ${ask.single.name}?' : 'Which template?',
-          ask.map((TemplateEntry t) => t.name));
+          ask.length == 1
+              ? 'Load ${labels.keys.single}?'
+              : 'Which template? ${labels.keys.join(', ')}',
+          labels.keys);
     }
     final TemplateEntry? chosen = pick.chosen;
     if (chosen == null) {
+      final int? day = spokenTemplateDay(spoken);
       return AurelianActionResult.notFound(spoken == null
           ? 'No template matches today'
-          : 'No template called "$spoken"');
+          : day != null
+              ? 'No template is set for day $day'
+              : 'No template called "$spoken"');
     }
     return _applyTemplate(e, port, chosen, confirmed);
   }
 
   ({TemplateEntry? chosen, List<TemplateEntry> ask}) _templateNamed(
       String spoken, List<TemplateEntry> all) {
+    // "day 2" (from "load day two", "the second day"): the template whose day
+    // metadata - or name - says day 2, from the active block when it has one.
+    final int? day = spokenTemplateDay(spoken);
+    if (day != null) {
+      final List<TemplateEntry> hits =
+          all.where((TemplateEntry t) => templateDayNumber(t) == day).toList();
+      final List<TemplateEntry> active =
+          hits.where((TemplateEntry t) => t.inActiveBlock).toList();
+      final List<TemplateEntry> pool = active.isNotEmpty ? active : hits;
+      if (pool.length == 1) {
+        return (chosen: pool.single, ask: const <TemplateEntry>[]);
+      }
+      if (pool.length > 1) {
+        return (chosen: null, ask: pool.take(kActionMaxCandidates).toList());
+      }
+    }
     final ExerciseMatch<TemplateEntry> m =
         matchExercise<TemplateEntry>(spoken, all, (TemplateEntry t) => t.name);
     if (m.isUnique) return (chosen: m.single, ask: const <TemplateEntry>[]);
@@ -878,7 +897,9 @@ class AurelianActionService {
   Future<({CatalogueEntry? entry, AurelianActionResult? answer})>
       _fromCatalogue(
           WorkoutActionPort port, String spoken, List<String> choices,
-          {Set<String> exclude = const <String>{}, bool fuzzy = true}) async {
+          {Set<String> exclude = const <String>{},
+          bool fuzzy = true,
+          bool aliasDefault = true}) async {
     final List<CatalogueEntry>? all = await port.catalogue();
     if (all == null) {
       return (
@@ -898,6 +919,7 @@ class AurelianActionService {
       usage: port.exerciseUsage(),
       choices: choices,
       allowFuzzy: fuzzy,
+      allowAliasDefault: aliasDefault,
       inWorkout:
           port.exercises.map((WorkoutExerciseView r) => r.exerciseId).toSet(),
     );
@@ -1869,20 +1891,10 @@ class AurelianActionService {
   final List<TemplateEntry> pool = all.any((TemplateEntry t) => t.inActiveBlock)
       ? all.where((TemplateEntry t) => t.inActiveBlock).toList()
       : all;
-  int? dayNumber(TemplateEntry t) {
-    for (final String? s in <String?>[t.day, t.name]) {
-      final RegExpMatch? m =
-          RegExp(r'\bday\s*(\d+)\b', caseSensitive: false).firstMatch(s ?? '');
-      if (m != null) return int.tryParse(m.group(1)!);
-    }
-    final RegExpMatch? lead = RegExp(r'^\s*(\d+)\b').firstMatch(t.day ?? '');
-    return lead == null ? null : int.tryParse(lead.group(1)!);
-  }
-
   final List<TemplateEntry> hits = pool.where((TemplateEntry t) {
     final String d = (t.day ?? '').trim().toLowerCase();
     if (d == weekday || t.name.toLowerCase().contains(weekday)) return true;
-    return blockDayNumber != null && dayNumber(t) == blockDayNumber;
+    return blockDayNumber != null && templateDayNumber(t) == blockDayNumber;
   }).toList();
   if (hits.length == 1) {
     return (chosen: hits.single, ask: const <TemplateEntry>[]);
@@ -1892,4 +1904,83 @@ class AurelianActionService {
     chosen: null,
     ask: (hits.isNotEmpty ? hits : pool).take(kActionMaxCandidates).toList()
   );
+}
+
+/// The block day a template is for: "Day 2" in its day metadata or its name,
+/// or a day value that starts with the number ("2").
+int? templateDayNumber(TemplateEntry t) {
+  for (final String? s in <String?>[t.day, t.name]) {
+    final RegExpMatch? m =
+        RegExp(r'\bday\s*(\d+)\b', caseSensitive: false).firstMatch(s ?? '');
+    if (m != null) return int.tryParse(m.group(1)!);
+  }
+  final RegExpMatch? lead = RegExp(r'^\s*(\d+)\b').firstMatch(t.day ?? '');
+  return lead == null ? null : int.tryParse(lead.group(1)!);
+}
+
+/// The day number of a spoken "day 2" / "day two" template reference (Aurelian
+/// sends digits), else null.
+int? spokenTemplateDay(String? spoken) {
+  if (spoken == null) return null;
+  final RegExpMatch? m = RegExp(r'^(?:the\s+)?day\s*(\d+)$')
+      .firstMatch(normaliseExerciseName(spoken));
+  return m == null ? null : int.tryParse(m.group(1)!);
+}
+
+/// What a "which template?" offers: each template's visible name exactly as
+/// GoodLift shows it. Only when two read the same is the smallest useful
+/// distinction added - its assigned day, then its block - so neither is ever
+/// picked silently.
+Map<String, TemplateEntry> templateLabels(List<TemplateEntry> templates) {
+  final Map<String, int> names = <String, int>{};
+  for (final TemplateEntry t in templates) {
+    names[t.name] = (names[t.name] ?? 0) + 1;
+  }
+  final Map<String, TemplateEntry> out = <String, TemplateEntry>{};
+  for (final TemplateEntry t in templates) {
+    String label = t.name;
+    if ((names[t.name] ?? 0) > 1) {
+      final List<TemplateEntry> same =
+          templates.where((TemplateEntry o) => o.name == t.name).toList();
+      final String day = (t.day ?? '').trim();
+      final bool dayTells = day.isNotEmpty &&
+          same.where((TemplateEntry o) => (o.day ?? '').trim() == day).length ==
+              1;
+      final bool blockTells = same
+              .where((TemplateEntry o) => o.inActiveBlock == t.inActiveBlock)
+              .length ==
+          1;
+      if (dayTells) {
+        label = '${t.name} ($day)';
+      } else if (blockTells) {
+        label =
+            '${t.name} (${t.inActiveBlock ? 'current block' : 'another block'})';
+      }
+    }
+    int n = 2;
+    final String base = label;
+    while (out.containsKey(label)) {
+      label = '$base #${n++}';
+    }
+    out[label] = t;
+  }
+  return out;
+}
+
+/// The template an answer names: its label exactly, else - conservatively -
+/// the one template whose visible name matches the answer's words.
+TemplateEntry? templateForAnswer(
+    String answer, Map<String, TemplateEntry> labels) {
+  final TemplateEntry? exact = labels[answer];
+  if (exact != null) return exact;
+  final String said = normaliseExerciseName(answer);
+  if (said.isEmpty) return null;
+  final List<TemplateEntry> byName = labels.entries
+      .where((MapEntry<String, TemplateEntry> e) =>
+          normaliseExerciseName(e.key) == said ||
+          normaliseExerciseName(e.value.name) == said)
+      .map((MapEntry<String, TemplateEntry> e) => e.value)
+      .toSet()
+      .toList();
+  return byName.length == 1 ? byName.single : null;
 }

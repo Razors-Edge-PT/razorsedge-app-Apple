@@ -137,7 +137,9 @@ ExerciseResolution<T> resolveExercise<T>(
   List<String> choices = const <String>[],
   bool allowFuzzy = false,
   bool useHistory = true,
+  bool? allowAliasDefault,
 }) {
+  final bool aliasDefault = allowAliasDefault ?? allowFuzzy;
   final String Function(T) label = labelOf ?? nameOf;
   ExerciseResolution<T> settle(List<T> hits, String via) {
     if (hits.length == 1) {
@@ -208,7 +210,7 @@ ExerciseResolution<T> resolveExercise<T>(
       }
       final ExerciseResolution<T>? narrowed = narrow(hits);
       if (narrowed != null) return narrowed;
-      if (allowFuzzy) {
+      if (aliasDefault) {
         hits.sort((T a, T b) => wanted
             .indexOf(normaliseExerciseName(nameOf(a)))
             .compareTo(wanted.indexOf(normaliseExerciseName(nameOf(b)))));

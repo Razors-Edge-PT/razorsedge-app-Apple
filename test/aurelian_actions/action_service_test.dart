@@ -664,6 +664,24 @@ void main() {
           reason: 'no snapshot rewrite over logged data');
     });
 
+    test('"load day two" selects the active block template whose day is Day 2',
+        () async {
+      workout.rows.clear();
+      workout.templateList = const <TemplateEntry>[
+        TemplateEntry(id: 'old', name: 'Lower', day: 'Day 2'),
+        TemplateEntry(
+            id: 't1', name: 'Upper', day: 'Day 1', inActiveBlock: true),
+        TemplateEntry(
+            id: 't2', name: 'Lower', day: 'Day 2', inActiveBlock: true),
+      ];
+      workout.templateRows['t2'] =
+          () => <FakeExercise>[FakeExercise('squat_bb', 'Back Squat, Barbell')];
+      final r =
+          await run('template.load', <String, Object?>{'template': 'day 2'});
+      expect(r['status'], 'success');
+      expect(workout.calls, contains('loadTemplate:t2'));
+    });
+
     test('several templates for today are asked about', () async {
       workout.templateList = const <TemplateEntry>[
         TemplateEntry(id: 't1', name: 'Upper A', day: 'Thursday'),
