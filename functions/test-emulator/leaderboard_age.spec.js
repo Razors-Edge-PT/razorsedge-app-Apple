@@ -42,6 +42,7 @@ test.after(async () => {
     for (const col of ['leaderboards', 'leaderboardsAge', 'leaderboardPublic', 'leaderboardMedals']) {
       await db().recursiveDelete(db().collection(col).doc(p));
     }
+    await db().recursiveDelete(db().collection('leaderboardPublic').doc(p + '_age'));
   }
   for (const uid of [...created, 'LWXGJ5SlIzM4OxEkOdTuv6d1c5b2']) {
     await db().recursiveDelete(db().collection('users').doc(uid));
@@ -162,6 +163,13 @@ test('the age board ranks EVERY athlete: a raw rank-21 athlete enters the adjust
   const b = await board(p);
   assert.equal(b.rankedCount, 21);
   assert.equal(b.incompleteCount, 1);
+  const publicAge = (await ageFs.publicRef(p + '_age').get()).data();
+  assert.equal(publicAge.schemaVersion, 2);
+  assert.equal(publicAge.rankedCount, 21); assert.equal(publicAge.incompleteCount, 1);
+  assert.equal(publicAge.entries.length, 20);
+  assert.equal(publicAge.entries[0].adjustedTotalUnits, 124.96 * P, 'raw rank-21 athlete leads the public age board too');
+  assert.equal(publicAge.entries[0].rank, 1);
+  assert.ok(publicAge.entries.every((e) => !('uid' in e) && !('dob' in e) && !('silverEligible' in e)));
 });
 
 test('public snapshot: raw order, public usernames only, medals, silver; unchanged → freshness only', async () => {
@@ -193,4 +201,10 @@ test('public snapshot: raw order, public usernames only, medals, silver; unchang
   const fresh = (await ageFs.publicRef(p).get()).data();
   assert.equal(fresh.generatedAt, new Date(nowMs + 180000).toISOString());
   assert.deepEqual(fresh.entries, snap.entries);
+  const publicAge = (await ageFs.publicRef(p + '_age').get()).data();
+  assert.equal(publicAge.generatedAt, fresh.generatedAt);
+  assert.equal(publicAge.entries[0].username, 'GoodLift athlete');
+  assert.ok(!JSON.stringify(publicAge).includes('Legal Fallback'));
+  assert.ok(!JSON.stringify(publicAge).includes('silverEligible'));
+  assert.equal(second.ageChanged, false);
 });

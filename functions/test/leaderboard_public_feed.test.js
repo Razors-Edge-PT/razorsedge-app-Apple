@@ -215,3 +215,59 @@ test('age reconciliation: missing, stale-model, drifted, silver candidates and o
   assert.equal(counts.checked, 5);
   assert.equal(counts.deleted, 1);
 });
+
+test('public age snapshot keeps server age order, raw medals and counts, with no private fields or silver', () => {
+  const entries = [
+    { ...rawEntry('older', 80), ageComplete: true, ageModelVersion: age.AGE_MODEL_VERSION, adjustedTotalUnits: 1250000, silverEligible: true },
+    { ...rawEntry('young', 100), ageComplete: true, ageModelVersion: age.AGE_MODEL_VERSION, adjustedTotalUnits: 1000000 },
+    { ...rawEntry('missing', 90), ageComplete: false, ageModelVersion: age.AGE_MODEL_VERSION },
+    { ...rawEntry('old-model', 90), ageComplete: true, ageModelVersion: 'old', adjustedTotalUnits: 1000000 },
+    { ...rawEntry('excluded', 90), ageComplete: true, ageModelVersion: age.AGE_MODEL_VERSION, adjustedTotalUnits: 900000 },
+  ];
+  const out = feed.buildPublicAgeSnapshot({ periodKey: 'all_time', ageEntries: entries,
+    publicProfiles: new Map([['older', { username: 'PublicOlder', fullName: 'Private' }]]),
+    medalSnapshot: { categories: { hipHinge: [{ uid: 'young', place: 1 }] } },
+    generatedAt: new Date(NOW).toISOString(), ageModelVersion: age.AGE_MODEL_VERSION,
+    rankedCount: 2, incompleteCount: 1, isEligible: (uid) => uid !== 'excluded' });
+  assert.deepEqual(out.entries, [
+    { rank: 1, username: 'PublicOlder', adjustedTotalUnits: 1250000, medals: [] },
+    { rank: 2, username: 'GoodLift athlete', adjustedTotalUnits: 1000000, medals: [{ categoryKey: 'hipHinge', place: 1 }] },
+  ]);
+  assert.equal(out.rankedCount, 2); assert.equal(out.incompleteCount, 1);
+  const injected = { ...out, dob: 'private', entries: out.entries.map((e) => ({ ...e, uid: 'private', silverEligible: true, ageBand: 'M3' })) };
+  assert.deepEqual(feed.sanitizeAgeSnapshot(injected, 'all_time', age.AGE_MODEL_VERSION), out);
+  for (const key of ['uid', 'dob', 'sex', 'silverEligible', 'ageBand', 'photoURL', 'rawTotalPointsUnits']) {
+    assert.equal(JSON.stringify(out).includes('"' + key + '"'), false, key);
+  }
+  assert.equal(feed.sanitizeAgeSnapshot({ ...out, ageModelVersion: 'old' }, 'all_time', age.AGE_MODEL_VERSION), null);
+  assert.equal(feed.sanitizeAgeSnapshot({ ...out, rankedCount: 1 }, 'all_time', age.AGE_MODEL_VERSION), null);
+  assert.equal(feed.sanitizeAgeSnapshot({ ...out, incompleteCount: -1 }, 'all_time', age.AGE_MODEL_VERSION), null);
+  assert.equal(feed.sanitizeAgeSnapshot({ ...out, entries: [...out.entries].reverse() }, 'all_time', age.AGE_MODEL_VERSION), null);
+});
+
+test('age view has bounded parameters and a separate snapshot/cache key; raw defaults stay compatible', async () => {
+  assert.deepEqual(feed.parsePublicRequest('GET', 'period=all_time&view=age'), { period: 'all_time', view: 'age' });
+  assert.deepEqual(feed.parsePublicRequest('GET', 'view=raw'), { period: 'current', view: 'raw' });
+  for (const q of ['view=age&view=raw', 'view=', 'view=private', 'view=age&uid=private']) {
+    assert.equal(feed.parsePublicRequest('GET', q).status, 400);
+  }
+  assert.equal(feed.snapshotKeyFor('current', '2026-10', 'age'), '2026-10_age');
+  assert.equal(feed.snapshotKeyFor('all_time', '2026-10', 'age'), 'all_time_age');
+  const now = NOW + 300000;
+  const stored = { schemaVersion: 2, view: 'age', periodKey: '2026-10', generatedAt: new Date(now).toISOString(),
+    ageModelVersion: age.AGE_MODEL_VERSION, rankedCount: 1, incompleteCount: 1,
+    entries: [{ rank: 1, username: 'PublicOlder', adjustedTotalUnits: 1250000, medals: [] }] };
+  const reads = [];
+  const deps = { nowMs: () => now, readSnapshot: async (key) => { reads.push(key); return key.endsWith('_age') ? stored :
+    { schemaVersion: 1, periodKey: '2026-10', generatedAt: new Date(now).toISOString(), entries: [] }; } };
+  const ageRes = fakeRes();
+  await ageFs.handlePublicRequest({ method: 'GET', originalUrl: '/publicLeaderboard?view=age' }, ageRes, deps);
+  assert.equal(ageRes.statusCode, 200); assert.deepEqual(JSON.parse(ageRes.body), stored);
+  const rawRes = fakeRes();
+  await ageFs.handlePublicRequest({ method: 'GET', originalUrl: '/publicLeaderboard' }, rawRes, deps);
+  assert.equal(JSON.parse(rawRes.body).schemaVersion, 1);
+  assert.deepEqual(reads, ['2026-10_age', '2026-10']);
+  const head = fakeRes();
+  await ageFs.handlePublicRequest({ method: 'HEAD', originalUrl: '/publicLeaderboard?view=age' }, head, deps);
+  assert.equal(head.statusCode, 200); assert.equal(head.body, undefined); assert.equal(reads.length, 2);
+});

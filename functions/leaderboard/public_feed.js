@@ -1,15 +1,16 @@
-// Pure core of the public raw leaderboard feed for goodliftapp.com (schema 1,
-// goodlift-website docs/public-leaderboard-contract.md). No Firebase imports.
+// Pure core of the public leaderboard feed for goodliftapp.com (raw schema 1,
+// age schema 2; see PUBLIC_FEED.md). No Firebase imports.
 //
 // The feed is a strict ALLOWLIST: a snapshot row is built field by field from
-// the raw top-20 entries, the board's existing medal snapshot, the athletes'
-// actual public usernames and the server-derived silver set. Nothing else —
+// the server-ranked raw or age entries, the board's existing medal snapshot,
+// actual public usernames and (raw only) the server-derived silver set. Nothing else —
 // no uid, birth date, age, band, sex, email, legal name, avatar URL, record or
 // administrative field — can reach it, whatever extra fields the sources hold.
 
 'use strict';
 
 const PUBLIC_SCHEMA_VERSION = 1;
+const PUBLIC_AGE_SCHEMA_VERSION = 2;
 const PUBLIC_MAX_ROWS = 20;
 const FALLBACK_USERNAME = 'GoodLift athlete';
 const CATEGORY_KEYS = Object.freeze(['horizontalPress', 'verticalPull', 'overheadPress', 'hipHinge', 'squatPattern']);
@@ -78,6 +79,58 @@ function rowsFingerprint(snapshot) {
   return JSON.stringify(snapshot && Array.isArray(snapshot.entries) ? snapshot.entries : null);
 }
 
+/** Public age rankings are copied from the complete server-ranked projection,
+ * never calculated from the raw top 20 or a public birth date. Raw medals stay
+ * raw medals; the Silverback flag is deliberately absent from this view.
+ */
+function buildPublicAgeSnapshot({ periodKey, ageEntries, publicProfiles, medalSnapshot, generatedAt, ageModelVersion, rankedCount, incompleteCount, isEligible }) {
+  const medals = medalsByUid(medalSnapshot);
+  const entries = [];
+  for (const e of ageEntries || []) {
+    if (entries.length >= PUBLIC_MAX_ROWS) break;
+    if (!e || typeof e.uid !== 'string' || !e.ageComplete || e.ageModelVersion !== ageModelVersion) continue;
+    if (typeof isEligible === 'function' && !isEligible(e.uid)) continue;
+    if (!Number.isSafeInteger(e.adjustedTotalUnits) || e.adjustedTotalUnits <= 0) continue;
+    entries.push({
+      rank: entries.length + 1,
+      username: publicUsernameOf(publicProfiles && publicProfiles.get ? publicProfiles.get(e.uid) : null),
+      adjustedTotalUnits: e.adjustedTotalUnits,
+      medals: medals.get(e.uid) || [],
+    });
+  }
+  return { schemaVersion: PUBLIC_AGE_SCHEMA_VERSION, view: 'age', periodKey,
+    generatedAt, ageModelVersion, rankedCount, incompleteCount, entries };
+}
+
+/** Strict allowlist applied again at the anonymous HTTP boundary. */
+function sanitizeAgeSnapshot(stored, expectedPeriodKey, ageModelVersion) {
+  if (!stored || stored.schemaVersion !== PUBLIC_AGE_SCHEMA_VERSION || stored.view !== 'age' ||
+      stored.periodKey !== expectedPeriodKey || stored.ageModelVersion !== ageModelVersion ||
+      typeof stored.generatedAt !== 'string' || Number.isNaN(Date.parse(stored.generatedAt)) ||
+      !Array.isArray(stored.entries) || stored.entries.length > PUBLIC_MAX_ROWS ||
+      !Number.isSafeInteger(stored.rankedCount) || stored.rankedCount < stored.entries.length ||
+      !Number.isSafeInteger(stored.incompleteCount) || stored.incompleteCount < 0) return null;
+  const entries = [];
+  for (let i = 0; i < stored.entries.length; i += 1) {
+    const e = stored.entries[i];
+    if (!e || e.rank !== i + 1 || !Number.isSafeInteger(e.adjustedTotalUnits) || e.adjustedTotalUnits <= 0 ||
+        (i && stored.entries[i - 1].adjustedTotalUnits < e.adjustedTotalUnits)) return null;
+    const medals = [];
+    const seen = new Set();
+    for (const m of Array.isArray(e.medals) ? e.medals : []) {
+      if (!m || !CATEGORY_KEYS.includes(m.categoryKey) || ![1, 2, 3].includes(m.place) || seen.has(m.categoryKey)) continue;
+      seen.add(m.categoryKey);
+      medals.push({ categoryKey: m.categoryKey, place: m.place });
+    }
+    entries.push({ rank: i + 1,
+      username: typeof e.username === 'string' && e.username.trim() ? e.username.trim().slice(0, 60) : FALLBACK_USERNAME,
+      adjustedTotalUnits: e.adjustedTotalUnits, medals });
+  }
+  return { schemaVersion: PUBLIC_AGE_SCHEMA_VERSION, view: 'age', periodKey: expectedPeriodKey,
+    generatedAt: stored.generatedAt, ageModelVersion, rankedCount: stored.rankedCount,
+    incompleteCount: stored.incompleteCount, entries };
+}
+
 /**
  * Re-applies the allowlist to a stored snapshot before it is served (defence
  * in depth: a stray field written by any future code never escapes). Returns
@@ -112,37 +165,46 @@ function sanitizeSnapshot(stored, expectedPeriodKey) {
 
 /**
  * Validates a public request. [method] the HTTP method; [rawQuery] the raw
- * query string (no leading '?'). Returns { period: 'current' | 'all_time' } or
- * { status, error }.
+ * query string (no leading '?'). Returns { period, view? } or { status, error }.
+ * No view parameter preserves the existing raw response.
  */
 function parsePublicRequest(method, rawQuery) {
   if (method !== 'GET' && method !== 'HEAD') return { status: 405, error: 'method-not-allowed' };
   const q = typeof rawQuery === 'string' ? rawQuery : '';
   const params = new URLSearchParams(q);
   const keys = [...params.keys()];
-  if (keys.some((k) => k !== 'period')) return { status: 400, error: 'unknown-parameter' };
+  if (keys.some((k) => k !== 'period' && k !== 'view')) return { status: 400, error: 'unknown-parameter' };
   const values = params.getAll('period');
-  if (values.length > 1) return { status: 400, error: 'duplicate-parameter' };
+  const views = params.getAll('view');
+  if (values.length > 1 || views.length > 1) return { status: 400, error: 'duplicate-parameter' };
   const period = values.length === 0 ? 'current' : values[0];
   if (period !== 'current' && period !== 'all_time') return { status: 400, error: 'unknown-period' };
+  if (views.length) {
+    if (views[0] !== 'raw' && views[0] !== 'age') return { status: 400, error: 'unknown-view' };
+    return { period, view: views[0] };
+  }
   return { period };
 }
 
 /** The snapshot document id for a public period at [currentMonthKey]. */
-function snapshotKeyFor(period, currentMonthKey) {
-  if (period === 'all_time') return 'all_time';
-  return PERIOD_RE.test(currentMonthKey) ? currentMonthKey : null;
+function snapshotKeyFor(period, currentMonthKey, view = 'raw') {
+  if (view !== 'raw' && view !== 'age') return null;
+  const key = period === 'all_time' ? 'all_time' : PERIOD_RE.test(currentMonthKey) ? currentMonthKey : null;
+  return key ? key + (view === 'age' ? '_age' : '') : null;
 }
 
 module.exports = {
   PUBLIC_SCHEMA_VERSION,
+  PUBLIC_AGE_SCHEMA_VERSION,
   PUBLIC_MAX_ROWS,
   FALLBACK_USERNAME,
   publicUsernameOf,
   medalsByUid,
   buildPublicSnapshot,
+  buildPublicAgeSnapshot,
   rowsFingerprint,
   sanitizeSnapshot,
+  sanitizeAgeSnapshot,
   parsePublicRequest,
   snapshotKeyFor,
 };
