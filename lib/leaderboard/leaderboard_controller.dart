@@ -13,6 +13,18 @@
 /// first page and never blocking it: rows show as soon as they arrive and
 /// gain their medals when the (one-document) snapshot lands. A failed medal
 /// load keeps whatever medals were last shown.
+///
+/// ── Optional age-adjusted view ───────────────────────────────────────────
+/// RAW IS ALWAYS THE DEFAULT. The age view is local presentation state only:
+/// never stored (no SharedPreferences, Firestore or restoration), and
+/// [resetToRaw] — called on leaving the leaderboard tab, pushing another
+/// route, app background/pause/detach and disposal — turns it off and
+/// discards any age page still in flight, so a late result can never replace
+/// the raw board. Each period keeps its own age board, loaded on demand from
+/// the server-ranked age projection; the raw boards are untouched by it.
+///
+/// Each period also keeps its board extras ([LeaderboardBoardInfo]): the
+/// raw-board silver set (shown on raw rows only) and the age view's counts.
 library;
 
 import 'dart:async';
@@ -33,6 +45,15 @@ class _PeriodState {
   int generation = 0;
   LeaderboardMedals? medals;
   int medalGeneration = 0;
+  LeaderboardBoardInfo info = LeaderboardBoardInfo.empty;
+  int infoGeneration = 0;
+
+  // The age-adjusted view of this period.
+  LeaderboardStatus ageStatus = LeaderboardStatus.idle;
+  List<LeaderboardEntry> ageEntries = const <LeaderboardEntry>[];
+  bool ageFromCache = false;
+  Object? ageError;
+  int ageGeneration = 0;
 }
 
 class LeaderboardController extends ChangeNotifier {
@@ -51,12 +72,56 @@ class LeaderboardController extends ChangeNotifier {
   };
   bool _disposed = false;
 
+  bool _ageView = false;
+
   LeaderboardPeriod get period => _period;
   _PeriodState get _s => _states[_period]!;
-  LeaderboardStatus get status => _s.status;
-  List<LeaderboardEntry> get entries => _s.entries;
-  bool get isFromCache => _s.isFromCache;
-  Object? get error => _s.error;
+
+  /// True while the optional age-adjusted view is shown (never the default).
+  bool get ageView => _ageView;
+
+  LeaderboardStatus get status => _ageView ? _s.ageStatus : _s.status;
+  List<LeaderboardEntry> get entries => _ageView ? _s.ageEntries : _s.entries;
+  bool get isFromCache => _ageView ? _s.ageFromCache : _s.isFromCache;
+  Object? get error => _ageView ? _s.ageError : _s.error;
+
+  /// The shown board's extras (silver set, age-view counts).
+  LeaderboardBoardInfo get boardInfo => _s.info;
+
+  /// Raw-board silver for [uid]. Never in the age view.
+  bool silverFor(String uid) => !_ageView && _s.info.silverUids.contains(uid);
+
+  /// [uid]'s row on the shown period's RAW board, if loaded (the age view's
+  /// medal details show the raw breakdown).
+  LeaderboardEntry? rawEntryFor(String uid) {
+    for (final LeaderboardEntry e in _s.entries) {
+      if (e.uid == uid) return e;
+    }
+    return null;
+  }
+
+  /// Turns the age-adjusted view on or off for every period.
+  Future<void> setAgeView(bool on) async {
+    if (on == _ageView) return;
+    _ageView = on;
+    _notify();
+    if (on && _s.ageStatus == LeaderboardStatus.idle) await _loadAge(_period);
+  }
+
+  Future<void> toggleAgeView() => setAgeView(!_ageView);
+
+  /// Back to the raw default; any age page still loading is discarded.
+  void resetToRaw() {
+    for (final _PeriodState st in _states.values) {
+      st.ageGeneration += 1;
+      if (st.ageStatus == LeaderboardStatus.loading) {
+        st.ageStatus = LeaderboardStatus.idle;
+      }
+    }
+    if (!_ageView) return;
+    _ageView = false;
+    _notify();
+  }
 
   /// The shown board's medals; null until its snapshot has loaded.
   LeaderboardMedals? get medals => _s.medals;
@@ -82,11 +147,14 @@ class LeaderboardController extends ChangeNotifier {
     _period = next;
     _notify();
     await start();
+    if (_ageView && _s.ageStatus == LeaderboardStatus.idle) {
+      await _loadAge(_period);
+    }
   }
 
-  Future<void> retry() => _loadFirst(_period);
+  Future<void> retry() => _ageView ? _loadAge(_period) : _loadFirst(_period);
 
-  Future<void> refresh() => _loadFirst(_period);
+  Future<void> refresh() => _ageView ? _loadAge(_period) : _loadFirst(_period);
 
   Future<void> _loadFirst(LeaderboardPeriod p) async {
     final _PeriodState s = _states[p]!;
@@ -95,15 +163,16 @@ class LeaderboardController extends ChangeNotifier {
     s.error = null;
     _notify();
     unawaited(_loadMedals(p));
+    unawaited(_loadInfo(p));
     try {
-      final LeaderboardPageResult page = await _repo.fetchPage(p,
-          limit: LeaderboardRepository.boardSize);
+      final LeaderboardPageResult page =
+          await _repo.fetchPage(p, limit: LeaderboardRepository.boardSize);
       if (gen != s.generation) return;
       // The server's order, ranks 1–20; never a row beyond the board.
-      s.entries = List<LeaderboardEntry>.unmodifiable(
-          page.entries.where((LeaderboardEntry e) =>
-              e.rank <= LeaderboardRepository.boardSize).take(
-              LeaderboardRepository.boardSize));
+      s.entries = List<LeaderboardEntry>.unmodifiable(page.entries
+          .where(
+              (LeaderboardEntry e) => e.rank <= LeaderboardRepository.boardSize)
+          .take(LeaderboardRepository.boardSize));
       s.isFromCache = page.isFromCache;
       s.status = page.entries.isEmpty
           ? LeaderboardStatus.empty
@@ -114,6 +183,47 @@ class LeaderboardController extends ChangeNotifier {
       s.status = LeaderboardStatus.error;
     }
     _notify();
+  }
+
+  Future<void> _loadAge(LeaderboardPeriod p) async {
+    final _PeriodState s = _states[p]!;
+    final int gen = ++s.ageGeneration;
+    s.ageStatus = LeaderboardStatus.loading;
+    s.ageError = null;
+    _notify();
+    unawaited(_loadInfo(p));
+    try {
+      final LeaderboardPageResult page =
+          await _repo.fetchAgePage(p, limit: LeaderboardRepository.boardSize);
+      // Superseded, or the view was reset to raw meanwhile: never shown.
+      if (gen != s.ageGeneration) return;
+      s.ageEntries = List<LeaderboardEntry>.unmodifiable(page.entries
+          .where((LeaderboardEntry e) =>
+              e.ageAdjusted && e.rank <= LeaderboardRepository.boardSize)
+          .take(LeaderboardRepository.boardSize));
+      s.ageFromCache = page.isFromCache;
+      s.ageStatus = s.ageEntries.isEmpty
+          ? LeaderboardStatus.empty
+          : LeaderboardStatus.ready;
+    } catch (e) {
+      if (gen != s.ageGeneration) return;
+      s.ageError = e;
+      s.ageStatus = LeaderboardStatus.error;
+    }
+    _notify();
+  }
+
+  Future<void> _loadInfo(LeaderboardPeriod p) async {
+    final _PeriodState s = _states[p]!;
+    final int gen = ++s.infoGeneration;
+    try {
+      final LeaderboardBoardInfo info = await _repo.fetchBoardInfo(p);
+      if (gen != s.infoGeneration) return;
+      s.info = info;
+      _notify();
+    } catch (_) {
+      // Keep the last extras shown; rows are unaffected.
+    }
   }
 
   Future<void> _loadMedals(LeaderboardPeriod p) async {

@@ -682,12 +682,16 @@ const showcaseOnWeightWrite = onDocumentWritten(
 );
 
 /**
- * Re-scores V2 RE Points when the athlete's scoring sex changes.
+ * Re-scores V2 RE Points when the athlete's scoring sex changes, and refreshes
+ * the optional age-adjusted leaderboard entries and raw-board silver flag when
+ * the private birth date (`dob`) changes — a birth-date correction can change
+ * age-adjusted scores even though raw RE Points do not.
  *
  * users/{uid} is written often (preferences, identity), so this returns
  * before any read unless `sex` changed in a way that changes the coefficient
- * (re_points.scoringSexOf). It writes only under users/{uid}/showcase and
- * users_public, never users/{uid} itself, so it cannot re-trigger itself.
+ * (re_points.scoringSexOf) or `dob` changed. It writes only under
+ * users/{uid}/showcase, users_public and leaderboardsAge, never users/{uid}
+ * itself, so it cannot re-trigger itself.
  */
 const showcaseOnSexChange = onDocumentUpdated(
   { document: 'users/{uid}', retry: true },
@@ -700,15 +704,30 @@ const showcaseOnSexChange = onDocumentUpdated(
       ? event.data.after.data() || {}
       : null;
     if (!after) return;
-    if (scoringSexOf(before.sex) === scoringSexOf(after.sex)) return;
-    try {
-      // Every record and every leaderboard day is scored with the coefficient
-      // for this sex: one bounded rebuild job (fold + leaderboard) does both.
-      const result = await refreshV2Transactionally(uid, { sex: true });
-      logger.info('showcase re-score requested for sex change', { uid, reason: result.reason });
-    } catch (err) {
-      logger.error('showcaseOnSexChange failed', { uid, error: err });
-      throw err;
+    const sexChanged = scoringSexOf(before.sex) !== scoringSexOf(after.sex);
+    const dobOf = (d) => (d.dob === undefined || d.dob === null ? null : String(d.dob).trim());
+    const dobChanged = dobOf(before) !== dobOf(after);
+    if (!sexChanged && !dobChanged) return;
+    if (sexChanged) {
+      try {
+        // Every record and every leaderboard day is scored with the coefficient
+        // for this sex: one bounded rebuild job (fold + leaderboard) does both.
+        const result = await refreshV2Transactionally(uid, { sex: true });
+        logger.info('showcase re-score requested for sex change', { uid, reason: result.reason });
+      } catch (err) {
+        logger.error('showcaseOnSexChange failed', { uid, error: err });
+        throw err;
+      }
+    }
+    if (dobChanged) {
+      try {
+        // The birth date itself is never copied: only derived age entries
+        // and the silver set of the two live boards are recomputed.
+        await require('../leaderboard/age_firestore').refreshAthleteAge(uid, 'dob-change');
+      } catch (err) {
+        logger.error('showcaseOnSexChange age refresh failed', { uid, error: err });
+        throw err;
+      }
     }
   },
 );

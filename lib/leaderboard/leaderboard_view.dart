@@ -20,13 +20,20 @@
 /// inside the row's pre-medal height (medal_row_layout.dart). Tapping a medal
 /// opens its detail and never the profile; the rest of the row keeps opening
 /// the profile exactly as before.
+///
+/// A three-dot menu at the right of the period selector offers the optional
+/// **Age-adjusted view** (leaderboard_controller.dart). Raw is always the
+/// default: this view resets to raw when the app goes to the background, when
+/// another route is pushed over it (a profile or a medal detail included) and
+/// when it is disposed. Raw rows of athletes with the server-derived silver
+/// achievement get a subtle steel/silver finish; the age view never shows it.
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../main.dart' show showAppSnack;
+import '../main.dart' show routeObserver, showAppSnack;
 import '../profile/ui/profile_theme.dart';
 import '../social/access_grants.dart';
 import '../social/buddy_repository.dart';
@@ -64,7 +71,8 @@ class LeaderboardView extends StatefulWidget {
   State<LeaderboardView> createState() => _LeaderboardViewState();
 }
 
-class _LeaderboardViewState extends State<LeaderboardView> {
+class _LeaderboardViewState extends State<LeaderboardView>
+    with WidgetsBindingObserver, RouteAware {
   late final LeaderboardController _c;
   bool _owns = false;
 
@@ -79,7 +87,8 @@ class _LeaderboardViewState extends State<LeaderboardView> {
 
   /// The server's answer for a just-made request, shown until the live
   /// state agrees — so Add friend is never offered twice for one person.
-  final Map<String, BuddyRelationship> _answered = <String, BuddyRelationship>{};
+  final Map<String, BuddyRelationship> _answered =
+      <String, BuddyRelationship>{};
 
   @override
   void initState() {
@@ -93,6 +102,7 @@ class _LeaderboardViewState extends State<LeaderboardView> {
       _owns = true;
     }
     _c.start();
+    WidgetsBinding.instance.addObserver(this);
     // ONE listener set for the whole board, never one per row.
     _socialSub = _buddies.watchState().listen((BuddyState s) {
       if (!mounted) return;
@@ -112,11 +122,49 @@ class _LeaderboardViewState extends State<LeaderboardView> {
     }
   }
 
+  ModalRoute<void>? _route;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ModalRoute<void>? route = ModalRoute.of(context);
+    if (route != null && route != _route) {
+      if (_route != null) routeObserver.unsubscribe(this);
+      _route = route;
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  /// The view's own options menu is a popup route too: it must not count.
+  bool _menuOpen = false;
+
+  /// Another route (a profile, a medal detail, anything) now covers the board.
+  @override
+  void didPushNext() {
+    if (!_menuOpen) _c.resetToRaw();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      _c.resetToRaw();
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (_route != null) routeObserver.unsubscribe(this);
     unawaited(_socialSub?.cancel());
     unawaited(_overrideSub?.cancel());
-    if (_owns) _c.dispose();
+    // A host-retained controller must not keep the age view either.
+    if (_owns) {
+      _c.dispose();
+    } else {
+      _c.resetToRaw();
+    }
     super.dispose();
   }
 
@@ -155,18 +203,31 @@ class _LeaderboardViewState extends State<LeaderboardView> {
       BuddyRelationship.incoming => LeaderboardRowAction.accept,
       _ => LeaderboardRowAction.none,
     };
+    // Raw contributions only: an age-view row carries none (its medals are
+    // the raw awards, and their breakdown is the raw board's).
+    final LeaderboardEntry? rawRow = e.ageAdjusted ? _c.rawEntryFor(e.uid) : e;
     return LeaderboardRow(
       key: ValueKey<String>('leaderboard-row-${e.uid}'),
       entry: e,
-      onTap: opens ? () => widget.onOpenProfile(e.uid) : null,
+      silver: _c.silverFor(e.uid) && !e.ageAdjusted,
+      onTap: opens
+          ? () {
+              _c.resetToRaw();
+              widget.onOpenProfile(e.uid);
+            }
+          : null,
       medals: _c.medalsFor(e.uid),
-      onMedalTap: (LeaderboardMedal m) => showMedalDetail(
-        context,
-        medal: m,
-        athleteName: e.displayName,
-        recordSource: _c.medalRecordSource,
-        contributions: m.isAllTime ? null : e.contributionsFor(m.categoryKey),
-      ),
+      onMedalTap: (LeaderboardMedal m) {
+        _c.resetToRaw();
+        showMedalDetail(
+          context,
+          medal: m,
+          athleteName: e.displayName,
+          recordSource: _c.medalRecordSource,
+          contributions:
+              m.isAllTime ? null : rawRow?.contributionsFor(m.categoryKey),
+        );
+      },
       action: action,
       busy: _busy.contains(e.uid),
       onAction: switch (action) {
@@ -188,7 +249,36 @@ class _LeaderboardViewState extends State<LeaderboardView> {
     final String when = _c.period == LeaderboardPeriod.allTime
         ? 'All time'
         : describeMonthKey(key);
-    return 'Total RE Points · $when';
+    return _c.ageView
+        ? 'Age-adjusted RE Points · $when'
+        : 'Total RE Points · $when';
+  }
+
+  /// The active age view, said plainly: what changed, what did not, and who
+  /// is not ranked in it.
+  Widget _ageBanner(BuildContext context) {
+    final int? left = _c.boardInfo.incompleteCount;
+    final String missing = left == null || left == 0
+        ? ''
+        : ' $left ${left == 1 ? 'athlete is' : 'athletes are'} not ranked in '
+            'this view until a valid birth date is set.';
+    return Container(
+      key: const ValueKey<String>('leaderboard-age-banner'),
+      margin: const EdgeInsets.only(top: ProfileSpacing.xs),
+      padding: const EdgeInsets.symmetric(
+          horizontal: ProfileSpacing.sm, vertical: ProfileSpacing.xs),
+      decoration: BoxDecoration(
+        color: ProfilePalette.surface,
+        borderRadius: BorderRadius.circular(ProfileSpacing.radiusSmall),
+        border: Border.all(color: ProfilePalette.outline),
+      ),
+      child: Text(
+        'Age-adjusted view: points are weighted by age on each performance '
+        'date (M1 40–49, M2 50–59, M3 60–69, M4 70–79, M5 80+; USA '
+        'Powerlifting masters curve). Medals are the raw awards.$missing',
+        style: ProfileText.caption(context),
+      ),
+    );
   }
 
   @override
@@ -198,9 +288,24 @@ class _LeaderboardViewState extends State<LeaderboardView> {
       builder: (BuildContext context, _) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _PeriodSelector(
-            period: _c.period,
-            onSelected: (LeaderboardPeriod p) => _c.selectPeriod(p),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _PeriodSelector(
+                  period: _c.period,
+                  onSelected: (LeaderboardPeriod p) => _c.selectPeriod(p),
+                ),
+              ),
+              _ViewMenu(
+                ageView: _c.ageView,
+                onOpened: () => _menuOpen = true,
+                onClosed: () => _menuOpen = false,
+                onAgeView: (bool on) {
+                  _menuOpen = false;
+                  _c.setAgeView(on);
+                },
+              ),
+            ],
           ),
           const SizedBox(height: ProfileSpacing.sm),
           Text(
@@ -208,8 +313,13 @@ class _LeaderboardViewState extends State<LeaderboardView> {
             key: const ValueKey<String>('leaderboard-caption'),
             style: ProfileText.caption(context),
           ),
+          if (_c.ageView) _ageBanner(context),
           if (_c.isFromCache && _c.status == LeaderboardStatus.ready)
-            Text('Offline — showing the last loaded standings.',
+            Text(
+                _c.ageView
+                    ? 'Offline — showing the last loaded age-adjusted standings.'
+                    : 'Offline — showing the last loaded standings.',
+                key: const ValueKey<String>('leaderboard-offline'),
                 style: ProfileText.caption(context)),
           const SizedBox(height: ProfileSpacing.sm),
           ..._body(context),
@@ -235,9 +345,11 @@ class _LeaderboardViewState extends State<LeaderboardView> {
         return <Widget>[
           _Message(
             key: const ValueKey<String>('leaderboard-empty'),
-            text: _c.period == LeaderboardPeriod.thisMonth
-                ? 'No RE Points scored this month yet.'
-                : 'No RE Points scored yet.',
+            text: _c.ageView
+                ? 'No athletes can be ranked in the age-adjusted view yet.'
+                : _c.period == LeaderboardPeriod.thisMonth
+                    ? 'No RE Points scored this month yet.'
+                    : 'No RE Points scored yet.',
           ),
         ];
       case LeaderboardStatus.error:
@@ -285,6 +397,63 @@ class _PeriodSelector extends StatelessWidget {
   }
 }
 
+/// The three-dot menu at the right of the period selector: the optional
+/// age-adjusted view (checked while it is on).
+class _ViewMenu extends StatelessWidget {
+  const _ViewMenu({
+    required this.ageView,
+    required this.onAgeView,
+    required this.onOpened,
+    required this.onClosed,
+  });
+
+  final bool ageView;
+
+  /// Sets the view explicitly: the opposite of what the menu showed checked.
+  final ValueChanged<bool> onAgeView;
+  final VoidCallback onOpened;
+  final VoidCallback onClosed;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      key: const ValueKey<String>('leaderboard-menu'),
+      tooltip: 'Leaderboard options',
+      icon: const Icon(Icons.more_vert),
+      iconSize: 24,
+      padding: const EdgeInsets.all(ProfileSpacing.sm),
+      constraints: const BoxConstraints(minWidth: 200),
+      onOpened: onOpened,
+      onCanceled: onClosed,
+      onSelected: (String v) {
+        if (v == 'age') onAgeView(!ageView);
+      },
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        CheckedPopupMenuItem<String>(
+          key: const ValueKey<String>('leaderboard-menu-age'),
+          value: 'age',
+          checked: ageView,
+          child: const Text('Age-adjusted view'),
+        ),
+      ],
+    );
+  }
+}
+
+/// The raw-board silver achievement: a restrained diagonal steel-to-silver
+/// finish across the whole row, a fine cool edge and a soft static highlight.
+/// Static — no shimmer or animation — so reduced-motion needs nothing more.
+const BoxDecoration kSilverRowDecoration = BoxDecoration(
+  borderRadius: BorderRadius.all(Radius.circular(ProfileSpacing.radiusSmall)),
+  gradient: LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: <Color>[Color(0xFF29313D), Color(0xFF4C5664), Color(0xFF323B48)],
+    stops: <double>[0.0, 0.42, 1.0],
+  ),
+  border: Border.fromBorderSide(BorderSide(color: Color(0x8CB7C3D0))),
+);
+
 /// What a row offers besides its public standing.
 enum LeaderboardRowAction { none, add, requested, accept }
 
@@ -300,9 +469,13 @@ class LeaderboardRow extends StatelessWidget {
     this.busy = false,
     this.medals = const <LeaderboardMedal>[],
     this.onMedalTap,
+    this.silver = false,
   });
 
   final LeaderboardEntry entry;
+
+  /// Raw-board silver achievement (never in the age view).
+  final bool silver;
 
   /// This athlete's medals on the shown board, in category order.
   final List<LeaderboardMedal> medals;
@@ -351,7 +524,8 @@ class LeaderboardRow extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Text(entry.pointsLabel, style: ProfileText.recordValue(context)),
-            Text('RE pts', style: ProfileText.caption(context)),
+            Text(entry.ageAdjusted ? 'adj. RE pts' : 'RE pts',
+                style: ProfileText.caption(context)),
           ],
         ),
       ),
@@ -361,7 +535,9 @@ class LeaderboardRow extends StatelessWidget {
     final Widget standing = Semantics(
       button: onTap != null,
       label: 'Rank ${entry.rank}, ${entry.displayName}, '
-          '${entry.pointsLabel} RE Points$medalLabel$actionLabel',
+          '${entry.pointsLabel} ${entry.ageAdjusted ? 'age-adjusted ' : ''}'
+          'RE Points${silver ? ', silver achievement' : ''}'
+          '$medalLabel$actionLabel',
       // The row's own label; the relationship control and the medals keep
       // their semantics so they stay reachable with a screen reader.
       excludeSemantics: action == LeaderboardRowAction.none && !hasMedals,
@@ -429,7 +605,12 @@ class LeaderboardRow extends StatelessWidget {
         ),
       ),
     );
-    return standing;
+    if (!silver) return standing;
+    return DecoratedBox(
+      key: ValueKey<String>('leaderboard-silver-${entry.uid}'),
+      decoration: kSilverRowDecoration,
+      child: standing,
+    );
   }
 }
 
@@ -438,8 +619,7 @@ class LeaderboardRow extends StatelessWidget {
 double _firstCharWidth(BuildContext context, String name, TextStyle style) {
   final Characters chars = name.characters;
   final TextPainter p = TextPainter(
-    text: TextSpan(
-        text: '${chars.isEmpty ? '' : chars.first}…', style: style),
+    text: TextSpan(text: '${chars.isEmpty ? '' : chars.first}…', style: style),
     textDirection: TextDirection.ltr,
     textScaler: MediaQuery.textScalerOf(context),
     maxLines: 1,

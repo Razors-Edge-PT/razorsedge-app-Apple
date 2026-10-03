@@ -80,6 +80,50 @@ class LeaderboardRepository {
     );
   }
 
+  /// The top [limit] of [period]'s optional AGE-ADJUSTED view: every eligible
+  /// athlete is ranked server-side (adjusted total desc, the raw tie date,
+  /// uid) and only complete entries of the current age model are queried — the
+  /// raw top 20 is never re-sorted locally.
+  Future<LeaderboardPageResult> fetchAgePage(LeaderboardPeriod period,
+      {int limit = boardSize}) async {
+    final QuerySnapshot<Map<String, dynamic>> snap = await _db
+        .collection(kLeaderboardsAgeCollection)
+        .doc(periodKey(period))
+        .collection('entries')
+        .where('ageModelVersion', isEqualTo: kAgeModelVersion)
+        .where('ageComplete', isEqualTo: true)
+        .orderBy('adjustedTotalUnits', descending: true)
+        .orderBy('tieBreakDateKey')
+        .orderBy('uid')
+        .limit(limit)
+        .get();
+    final List<LeaderboardEntry> entries = <LeaderboardEntry>[];
+    int rank = 1;
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in snap.docs) {
+      final LeaderboardEntry? e =
+          ageEntryFromMap(doc.id, doc.data(), rank: rank);
+      if (e == null) continue;
+      entries.add(e);
+      rank += 1;
+    }
+    return LeaderboardPageResult(
+      entries: entries,
+      hasMore: false,
+      isFromCache: snap.metadata.isFromCache,
+    );
+  }
+
+  /// [period]'s board extras: the raw-board silver set and the age view's
+  /// counts. ONE small server-written document.
+  Future<LeaderboardBoardInfo> fetchBoardInfo(LeaderboardPeriod period) async {
+    final DocumentSnapshot<Map<String, dynamic>> snap = await _db
+        .collection(kLeaderboardsAgeCollection)
+        .doc(periodKey(period))
+        .get();
+    return LeaderboardBoardInfo.fromMap(snap.data(),
+        isFromCache: snap.metadata.isFromCache);
+  }
+
   /// The category medals of [period]: ONE small server-written document per
   /// board. Like the entries it goes through Firestore's persistence, so a
   /// board's medals seen once are still shown offline.

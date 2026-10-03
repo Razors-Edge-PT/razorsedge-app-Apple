@@ -205,3 +205,44 @@ test('old app versions: the unchanged ranked entry query still works beside the 
       .get(),
   );
 });
+
+test('age view: board and entries readable by signed-in users only; never client-written', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('leaderboardsAge/2026-10').set({
+      periodKey: '2026-10', ageModelVersion: 'goodlift-age-usapl-2026-10-v1', silverUids: [OTHER], rankedCount: 1, incompleteCount: 0,
+    });
+    await ctx.firestore().doc(`leaderboardsAge/2026-10/entries/${OTHER}`).set({
+      uid: OTHER, ageModelVersion: 'goodlift-age-usapl-2026-10-v1', ageComplete: true, adjustedTotalUnits: 10, tieBreakDateKey: '2026-10-01',
+    });
+  });
+  await assertSucceeds(as(OWNER).doc('leaderboardsAge/2026-10').get());
+  await assertSucceeds(
+    as(OWNER).collection('leaderboardsAge/2026-10/entries')
+      .where('ageModelVersion', '==', 'goodlift-age-usapl-2026-10-v1').where('ageComplete', '==', true)
+      .orderBy('adjustedTotalUnits', 'desc').orderBy('tieBreakDateKey').orderBy('uid').limit(20).get(),
+  );
+  await assertFails(anon().doc('leaderboardsAge/2026-10').get());
+  await assertFails(anon().doc(`leaderboardsAge/2026-10/entries/${OTHER}`).get());
+  for (const uid of [OWNER, OTHER, SUPER]) {
+    await assertFails(as(uid).doc('leaderboardsAge/2026-10').set({ silverUids: [uid] }, { merge: true }));
+    await assertFails(as(uid).doc(`leaderboardsAge/2026-10/entries/${uid}`).set({ adjustedTotalUnits: 999 }));
+    await assertFails(as(uid).doc(`leaderboardsAge/2026-10/entries/${OTHER}`).delete());
+  }
+});
+
+test('public website snapshots are closed to every client (served only by the HTTP function)', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc('leaderboardPublic/all_time').set({ schemaVersion: 1, periodKey: 'all_time', entries: [] });
+  });
+  for (const db of [as(OWNER), as(SUPER), anon()]) {
+    await assertFails(db.doc('leaderboardPublic/all_time').get());
+    await assertFails(db.doc('leaderboardPublic/all_time').set({ entries: [] }));
+  }
+});
+
+test('private demographics stay private: another athlete cannot read users/{uid}.dob', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc(`users/${OTHER}`).set({ dob: '01-01-1950', sex: 'male' });
+  });
+  await assertFails(as(OWNER).doc(`users/${OTHER}`).get());
+});

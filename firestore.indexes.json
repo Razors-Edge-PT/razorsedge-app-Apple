@@ -313,6 +313,32 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ageModelVersion",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ageComplete",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "adjustedTotalUnits",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "tieBreakDateKey",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "uid",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [

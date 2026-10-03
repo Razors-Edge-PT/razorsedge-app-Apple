@@ -230,6 +230,34 @@ void main() {
         reason: 'detached when the section goes');
   });
 
+  testWidgets('leaving the Leaderboard tab returns its retained board to raw',
+      (WidgetTester tester) async {
+    final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+    await seedFeed(db);
+    await seedBoard(db);
+    final HomeCommunityController controller = HomeCommunityController();
+    await pump(tester,
+        feed: FeedRepository(firestore: db, overrideUid: kMe),
+        search: UserSearchRepository(firestore: db),
+        board: LeaderboardRepository(firestore: db, clock: () => kNow),
+        controller: controller);
+    controller.select(HomeCommunityTab.leaderboard);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey<String>('leaderboard-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Age-adjusted view'));
+    await tester.pumpAndSettle();
+    expect(find.text('Age-adjusted RE Points · September 2026'), findsOneWidget);
+    controller.select(HomeCommunityTab.feed);
+    await tester.pumpAndSettle();
+    controller.select(HomeCommunityTab.leaderboard);
+    await tester.pumpAndSettle();
+    expect(find.text('Total RE Points · September 2026'), findsOneWidget,
+        reason: 'raw again: the age view is never remembered');
+    expect(find.byKey(const ValueKey<String>('leaderboard-age-banner')),
+        findsNothing);
+  });
+
   testWidgets('switching to All Time changes the result',
       (WidgetTester tester) async {
     final FakeFirebaseFirestore db = FakeFirebaseFirestore();

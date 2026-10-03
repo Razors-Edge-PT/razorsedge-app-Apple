@@ -399,6 +399,28 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Optional age-adjusted view of the current month / all time, and the
+    // raw-board silver set (functions/leaderboard/age_firestore.js). The board
+    // document holds the model version, counts and the uids with raw-board
+    // silver; each entry holds adjusted points, completeness and the minimal
+    // public identity an entry already exposes. No birth date or age is ever
+    // stored here. Readable like the raw board; written ONLY by the functions.
+    match /leaderboardsAge/{periodKey} {
+      allow read: if isSignedIn();
+      allow write: if false;
+
+      match /entries/{entryUid} {
+        allow read: if isSignedIn();
+        allow write: if false;
+      }
+    }
+
+    // Public website snapshots: served ONLY through the publicLeaderboard HTTP
+    // function (Admin SDK). No client access.
+    match /leaderboardPublic/{periodKey} {
+      allow read, write: if false;
+    }
+
     // Per-athlete bounded rebuild jobs (functions/showcase/rebuild_job.js).
     // Server-only: a client that could write one could stall or restart
     // another athlete's rebuild.

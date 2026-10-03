@@ -19,6 +19,64 @@ const String kAllTimePeriodKey = 'all_time';
 /// not browsable yet.
 enum LeaderboardPeriod { thisMonth, allTime }
 
+/// The age model the optional age-adjusted view reads
+/// (functions/leaderboard/age.js AGE_MODEL_VERSION). Entries and boards
+/// written under any other version are never shown.
+const String kAgeModelVersion = 'goodlift-age-usapl-2026-10-v1';
+
+/// Server-written age view (functions/leaderboard/age_firestore.js).
+const String kLeaderboardsAgeCollection = 'leaderboardsAge';
+
+/// Per-board extras of the age projection: the athletes with the raw-board
+/// silver achievement and the age view's counts. Only uids — never a birth
+/// date, an age or a band.
+class LeaderboardBoardInfo {
+  const LeaderboardBoardInfo({
+    this.silverUids = const <String>{},
+    this.rankedCount,
+    this.incompleteCount,
+    this.isFromCache = false,
+  });
+
+  /// Raw-board silver (strictly older than 60, strictly above 280 all-time or
+  /// 2,000 monthly raw points), computed server-side.
+  final Set<String> silverUids;
+
+  /// Athletes ranked in the age view, and those left out of it because their
+  /// required data (a valid birth date) is missing.
+  final int? rankedCount;
+  final int? incompleteCount;
+  final bool isFromCache;
+
+  static const LeaderboardBoardInfo empty = LeaderboardBoardInfo();
+
+  /// Parses `leaderboardsAge/{periodKey}`; anything from another model
+  /// version counts as nothing.
+  static LeaderboardBoardInfo fromMap(Map<String, dynamic>? d,
+      {bool isFromCache = false}) {
+    if (d == null || d['ageModelVersion'] != kAgeModelVersion) {
+      return LeaderboardBoardInfo(isFromCache: isFromCache);
+    }
+    int? count(String k) {
+      final Object? v = d[k];
+      return v is num && v.isFinite && v >= 0 ? v.round() : null;
+    }
+
+    final Object? raw = d['silverUids'];
+    return LeaderboardBoardInfo(
+      silverUids: raw is List
+          ? <String>{
+              for (final Object? u in raw)
+                if (u is String && u.isNotEmpty) u
+            }
+          : const <String>{},
+      rankedCount: count('rankedCount'),
+      incompleteCount: count('incompleteCount'),
+      isFromCache: isFromCache,
+    );
+  }
+}
+
 extension LeaderboardPeriodLabel on LeaderboardPeriod {
   String get label =>
       this == LeaderboardPeriod.thisMonth ? 'This Month' : 'All Time';
@@ -109,9 +167,8 @@ class MonthlyExerciseContribution {
     if (sessions is! num || !sessions.isFinite || sessions < 1) return null;
     final String? exerciseId = id is String && id.isNotEmpty ? id : null;
     // The app's catalogue name wins; the server's copy is the fallback.
-    final String? resolved = exerciseId == null
-        ? null
-        : reExerciseById(exerciseId)?.displayName;
+    final String? resolved =
+        exerciseId == null ? null : reExerciseById(exerciseId)?.displayName;
     final String? stored =
         name is String && name.trim().isNotEmpty ? name.trim() : null;
     final String? displayName = resolved ?? stored;
@@ -143,11 +200,11 @@ Map<String, List<MonthlyExerciseContribution>>? parseCategoryBreakdown(
           c,
     ];
     // The server's order, re-applied: points descending, then name.
-    parsed.sort((MonthlyExerciseContribution a,
-            MonthlyExerciseContribution b) =>
-        b.pointsUnits != a.pointsUnits
-            ? b.pointsUnits.compareTo(a.pointsUnits)
-            : a.displayName.compareTo(b.displayName));
+    parsed.sort(
+        (MonthlyExerciseContribution a, MonthlyExerciseContribution b) =>
+            b.pointsUnits != a.pointsUnits
+                ? b.pointsUnits.compareTo(a.pointsUnits)
+                : a.displayName.compareTo(b.displayName));
     out[key] = List<MonthlyExerciseContribution>.unmodifiable(parsed);
   }
   return Map<String, List<MonthlyExerciseContribution>>.unmodifiable(out);
@@ -163,6 +220,8 @@ class LeaderboardEntry {
     this.photoURL,
     this.tieBreakDateKey,
     this.categoryBreakdown,
+    this.ageAdjusted = false,
+    this.rawPointsUnits,
   });
 
   final String uid;
@@ -179,10 +238,14 @@ class LeaderboardEntry {
   /// Null for all time and for monthly entries written before it existed.
   final Map<String, List<MonthlyExerciseContribution>>? categoryBreakdown;
 
+  /// A row of the optional age-adjusted view: [totalPointsUnits] is then the
+  /// ADJUSTED total and [rawPointsUnits] the athlete's raw total.
+  final bool ageAdjusted;
+  final int? rawPointsUnits;
+
   /// [categoryKey]'s contributions, or null when this entry has none recorded.
   List<MonthlyExerciseContribution>? contributionsFor(String categoryKey) {
-    final Map<String, List<MonthlyExerciseContribution>>? b =
-        categoryBreakdown;
+    final Map<String, List<MonthlyExerciseContribution>>? b = categoryBreakdown;
     if (b == null) return null;
     return b[categoryKey] ?? const <MonthlyExerciseContribution>[];
   }
@@ -215,6 +278,34 @@ class LeaderboardEntry {
       categoryBreakdown: parseCategoryBreakdown(d['categoryExerciseBreakdown']),
     );
   }
+}
+
+/// Parses an age-view entry (`leaderboardsAge/{periodKey}/entries/{uid}`):
+/// the adjusted total ranks it. Null when unusable, incomplete or from another
+/// age model.
+LeaderboardEntry? ageEntryFromMap(String docId, Map<String, dynamic>? d,
+    {required int rank}) {
+  if (d == null || d['ageModelVersion'] != kAgeModelVersion) return null;
+  if (d['ageComplete'] != true) return null;
+  final Object? adjusted = d['adjustedTotalUnits'];
+  if (adjusted is! num || !adjusted.isFinite || adjusted <= 0) return null;
+  final Object? raw = d['rawTotalPointsUnits'];
+  final Object? uid = d['uid'];
+  String? str(String k) {
+    final Object? v = d[k];
+    return (v is String && v.trim().isNotEmpty) ? v.trim() : null;
+  }
+
+  return LeaderboardEntry(
+    uid: (uid is String && uid.isNotEmpty) ? uid : docId,
+    rank: rank,
+    totalPointsUnits: adjusted.round(),
+    username: str('username'),
+    photoURL: str('photoURL'),
+    tieBreakDateKey: str('tieBreakDateKey'),
+    ageAdjusted: true,
+    rawPointsUnits: raw is num && raw.isFinite ? raw.round() : null,
+  );
 }
 
 /// One fetched page.

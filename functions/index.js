@@ -862,6 +862,16 @@ exports.leaderboardReconcileDaily = leaderboard.leaderboardReconcileDaily;
 // when it can change the podium. See leaderboard/medals_firestore.js.
 exports.leaderboardMedalsOnEntryWrite = require('./leaderboard/medals_firestore').leaderboardMedalsOnEntryWrite;
 
+// Optional age-adjusted leaderboard view, the raw-board silver set and the
+// public website feed (goodliftapp.com/leaderboard). Derived, server-written:
+// leaderboardsAge/{periodKey}(/entries/{uid}) and leaderboardPublic/{periodKey}.
+// See leaderboard/age_firestore.js.
+const leaderboardAge = require('./leaderboard/age_firestore');
+exports.leaderboardAgeOnEntryWrite = leaderboardAge.leaderboardAgeOnEntryWrite;
+exports.leaderboardAgeReconcileDaily = leaderboardAge.leaderboardAgeReconcileDaily;
+exports.leaderboardPublicPublisher = leaderboardAge.leaderboardPublicPublisher;
+exports.publicLeaderboard = leaderboardAge.publicLeaderboard;
+
 const identity = require('./identity');
 exports.profileChangeUsername = identity.profileChangeUsername;
 

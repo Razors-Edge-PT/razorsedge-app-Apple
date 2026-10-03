@@ -92,6 +92,8 @@ class _HomeCommunitySectionState extends State<HomeCommunitySection> {
   void _select(HomeCommunityTab next) {
     if (next == _tab) return;
     setState(() {
+      // Leaving the leaderboard tab: its retained controller goes back to raw.
+      if (_tab == HomeCommunityTab.leaderboard) _leaderboard?.resetToRaw();
       _tab = next;
       if (next == HomeCommunityTab.leaderboard) {
         _leaderboard ??= LeaderboardController(
