@@ -13,8 +13,8 @@
 //      A present id ALWAYS decides, even when it resolves to nothing.
 //   2. EXACT LEGACY NAME ALIAS — only for rows carrying NO id at all, against
 //      a closed, case-insensitive list. Never fuzzy, never prefix: "Triceps Dip
-//      Machine", "Bulgarian Split Squat, Deficit", "Pull-Up" and the bilateral
-//      "Overhead Dumbbell Press" all stay out.
+//      Machine", "Jump Chin Up" and the bilateral "Overhead Dumbbell Press" all
+//      stay out.
 //
 // ── `slot` ──────────────────────────────────────────────────────────────────
 // Every exercise has a stable `slot` key. It is what the showcase records and
@@ -91,7 +91,7 @@ const RE_EXERCISES = [
     category: CATEGORY_KEYS.VERTICAL_PULL,
     exerciseId: 'XM9026peNIu0R8qh7UqY',
     displayName: 'Chin-Up',
-    // "Pull-Up" is a DIFFERENT catalogue exercise and is deliberately absent.
+    // The other grips are their own entries below, scored exactly like this.
     legacyNameAliases: ['Chin-Up', 'Chin Up'],
     factor: 1.0,
     bodyweightLoaded: true,
@@ -200,9 +200,59 @@ const RE_EXERCISES = [
     exerciseId: 'VUEvvjuo4cxBghNuux66',
     displayName: 'Bulgarian Split Squat, Barbell',
     legacyNameAliases: ['Bulgarian Split Squat, Barbell'],
-    factor: 1.25,
+    // The base Bulgarian Split Squat factor; the stored weight stays the
+    // barbell's total.
+    factor: 2.5,
     bodyweightLoaded: false,
     loadSemantics: LoadSemantics.TOTAL,
+  },
+  // Appended, not inserted: the rebuild job persists a fold index into this
+  // order, and each category keeps its existing preference order in front.
+  // ── Vertical Pull: the other unassisted / externally weighted grips, scored
+  //    exactly as the Chin-Up (factor, bodyweight plus added load). Jump,
+  //    assisted, banded and negative variants and pulldowns stay out. ──
+  {
+    slot: 'pullUp',
+    category: CATEGORY_KEYS.VERTICAL_PULL,
+    exerciseId: 'RFyjAjezFs8Rf7CQoaXz',
+    displayName: 'Pull-Up',
+    legacyNameAliases: ['Pull-Up', 'Pull Up'],
+    factor: 1.0,
+    bodyweightLoaded: true,
+    loadSemantics: LoadSemantics.BODYWEIGHT_PLUS_ADDED,
+  },
+  {
+    slot: 'pullUpWideArm',
+    category: CATEGORY_KEYS.VERTICAL_PULL,
+    exerciseId: '63ryIPxgXVPX7jLtAecC',
+    displayName: 'Pull-Up, Wide Arm',
+    legacyNameAliases: ['Pull-Up, Wide Arm'],
+    factor: 1.0,
+    bodyweightLoaded: true,
+    loadSemantics: LoadSemantics.BODYWEIGHT_PLUS_ADDED,
+  },
+  {
+    slot: 'chinUpNeutralGrip',
+    category: CATEGORY_KEYS.VERTICAL_PULL,
+    exerciseId: 'yggnlBfsTeAnhBAhLkqF',
+    displayName: 'Neutral Grip Chin-Up',
+    legacyNameAliases: ['Neutral Grip Chin-Up'],
+    factor: 1.0,
+    bodyweightLoaded: true,
+    loadSemantics: LoadSemantics.BODYWEIGHT_PLUS_ADDED,
+  },
+  // ── Squat Pattern ──
+  {
+    slot: 'bulgarianSplitSquatDeficit',
+    category: CATEGORY_KEYS.SQUAT_PATTERN,
+    exerciseId: 'xbePAZEtQIFEjvu2YaPV',
+    displayName: 'Bulgarian Split Squat, Deficit',
+    legacyNameAliases: ['Bulgarian Split Squat, Deficit'],
+    // The base factor. Like the base exercise (and unlike ", Barbell") the
+    // catalogue names no implement, so its weight is one dumbbell.
+    factor: 2.5,
+    bodyweightLoaded: false,
+    loadSemantics: LoadSemantics.PER_DUMBBELL,
   },
 ];
 

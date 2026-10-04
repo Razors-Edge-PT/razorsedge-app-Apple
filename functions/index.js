@@ -853,7 +853,8 @@ exports.showcaseOnExerciseUnitWrite = showcase.showcaseOnExerciseUnitWrite;
 // weigh-in and sex triggers above update the per-day scores and the monthly
 // entries; this trigger keeps the all-time entry and the visible identity in
 // step with users_public; the daily job retries queued work, re-queues stale
-// entries and closes finished months. See leaderboard/firestore_store.js.
+// entries, closes finished months and maintains the age projections (the
+// only daily schedule for both). See leaderboard/firestore_store.js.
 const leaderboard = require('./leaderboard/firestore_store');
 exports.leaderboardOnPublicProfileWrite = leaderboard.leaderboardOnPublicProfileWrite;
 exports.leaderboardReconcileDaily = leaderboard.leaderboardReconcileDaily;
@@ -868,7 +869,6 @@ exports.leaderboardMedalsOnEntryWrite = require('./leaderboard/medals_firestore'
 // See leaderboard/age_firestore.js.
 const leaderboardAge = require('./leaderboard/age_firestore');
 exports.leaderboardAgeOnEntryWrite = leaderboardAge.leaderboardAgeOnEntryWrite;
-exports.leaderboardAgeReconcileDaily = leaderboardAge.leaderboardAgeReconcileDaily;
 exports.leaderboardPublicPublisher = leaderboardAge.leaderboardPublicPublisher;
 exports.publicLeaderboard = leaderboardAge.publicLeaderboard;
 

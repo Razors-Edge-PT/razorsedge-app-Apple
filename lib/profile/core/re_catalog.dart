@@ -128,7 +128,7 @@ const List<ReExercise> kReExercises = <ReExercise>[
     category: ReCategoryKey.verticalPull,
     exerciseId: 'XM9026peNIu0R8qh7UqY',
     displayName: 'Chin-Up',
-    // "Pull-Up" is a DIFFERENT catalogue exercise and is deliberately absent.
+    // The other grips are their own entries below, scored exactly like this.
     legacyNameAliases: <String>['Chin-Up', 'Chin Up'],
     factor: 1.0,
     bodyweightLoaded: true,
@@ -223,7 +223,57 @@ const List<ReExercise> kReExercises = <ReExercise>[
     exerciseId: 'VUEvvjuo4cxBghNuux66',
     displayName: 'Bulgarian Split Squat, Barbell',
     legacyNameAliases: <String>['Bulgarian Split Squat, Barbell'],
-    factor: 1.25,
+    // The base Bulgarian Split Squat factor; the stored weight stays the
+    // barbell's total.
+    factor: 2.5,
+  ),
+  // Appended, not inserted: the server's rebuild job persists a fold index
+  // into this order, and each category keeps its existing preference order in
+  // front.
+  // ── Vertical Pull: the other unassisted / externally weighted grips, scored
+  //    exactly as the Chin-Up (factor, bodyweight plus added load). Jump,
+  //    assisted, banded and negative variants and pulldowns stay out. ──
+  ReExercise(
+    slot: 'pullUp',
+    category: ReCategoryKey.verticalPull,
+    exerciseId: 'RFyjAjezFs8Rf7CQoaXz',
+    displayName: 'Pull-Up',
+    legacyNameAliases: <String>['Pull-Up', 'Pull Up'],
+    factor: 1.0,
+    bodyweightLoaded: true,
+    loadSemantics: ReLoadSemantics.bodyweightPlusAdded,
+  ),
+  ReExercise(
+    slot: 'pullUpWideArm',
+    category: ReCategoryKey.verticalPull,
+    exerciseId: '63ryIPxgXVPX7jLtAecC',
+    displayName: 'Pull-Up, Wide Arm',
+    legacyNameAliases: <String>['Pull-Up, Wide Arm'],
+    factor: 1.0,
+    bodyweightLoaded: true,
+    loadSemantics: ReLoadSemantics.bodyweightPlusAdded,
+  ),
+  ReExercise(
+    slot: 'chinUpNeutralGrip',
+    category: ReCategoryKey.verticalPull,
+    exerciseId: 'yggnlBfsTeAnhBAhLkqF',
+    displayName: 'Neutral Grip Chin-Up',
+    legacyNameAliases: <String>['Neutral Grip Chin-Up'],
+    factor: 1.0,
+    bodyweightLoaded: true,
+    loadSemantics: ReLoadSemantics.bodyweightPlusAdded,
+  ),
+  // ── Squat Pattern ──
+  ReExercise(
+    slot: 'bulgarianSplitSquatDeficit',
+    category: ReCategoryKey.squatPattern,
+    exerciseId: 'xbePAZEtQIFEjvu2YaPV',
+    displayName: 'Bulgarian Split Squat, Deficit',
+    legacyNameAliases: <String>['Bulgarian Split Squat, Deficit'],
+    // The base factor. Like the base exercise (and unlike ", Barbell") the
+    // catalogue names no implement, so its weight is one dumbbell.
+    factor: 2.5,
+    loadSemantics: ReLoadSemantics.perDumbbell,
   ),
 ];
 

@@ -56,6 +56,40 @@
           "factor": 0.85,
           "bodyweightLoaded": false,
           "loadSemantics": "total"
+        },
+        {
+          "slot": "pullUp",
+          "exerciseId": "RFyjAjezFs8Rf7CQoaXz",
+          "displayName": "Pull-Up",
+          "legacyNameAliases": [
+            "Pull-Up",
+            "Pull Up"
+          ],
+          "factor": 1,
+          "bodyweightLoaded": true,
+          "loadSemantics": "bodyweightPlusAdded"
+        },
+        {
+          "slot": "pullUpWideArm",
+          "exerciseId": "63ryIPxgXVPX7jLtAecC",
+          "displayName": "Pull-Up, Wide Arm",
+          "legacyNameAliases": [
+            "Pull-Up, Wide Arm"
+          ],
+          "factor": 1,
+          "bodyweightLoaded": true,
+          "loadSemantics": "bodyweightPlusAdded"
+        },
+        {
+          "slot": "chinUpNeutralGrip",
+          "exerciseId": "yggnlBfsTeAnhBAhLkqF",
+          "displayName": "Neutral Grip Chin-Up",
+          "legacyNameAliases": [
+            "Neutral Grip Chin-Up"
+          ],
+          "factor": 1,
+          "bodyweightLoaded": true,
+          "loadSemantics": "bodyweightPlusAdded"
         }
       ]
     },
@@ -173,9 +207,20 @@
           "legacyNameAliases": [
             "Bulgarian Split Squat, Barbell"
           ],
-          "factor": 1.25,
+          "factor": 2.5,
           "bodyweightLoaded": false,
           "loadSemantics": "total"
+        },
+        {
+          "slot": "bulgarianSplitSquatDeficit",
+          "exerciseId": "xbePAZEtQIFEjvu2YaPV",
+          "displayName": "Bulgarian Split Squat, Deficit",
+          "legacyNameAliases": [
+            "Bulgarian Split Squat, Deficit"
+          ],
+          "factor": 2.5,
+          "bodyweightLoaded": false,
+          "loadSemantics": "perDumbbell"
         }
       ]
     }

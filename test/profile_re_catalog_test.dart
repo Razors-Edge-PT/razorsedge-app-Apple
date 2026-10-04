@@ -124,14 +124,71 @@ void main() {
     expect(matchReExercise(rawName: 'Sumo Deadlift')!.slot, 'deadliftSumo');
     expect(matchReExercise(rawName: 'Bulgarian Split Squat')!.slot,
         'bulgarianSplitSquatDumbbell');
+    expect(matchReExercise(rawName: 'Bulgarian Split Squat, Deficit')!.slot,
+        'bulgarianSplitSquatDeficit');
+    expect(matchReExercise(rawName: 'Pull-Up')!.slot, 'pullUp');
+    // A present id decides: the Jump Chin Up id named "Chin-Up" stays out.
+    expect(
+        matchReExercise(rawId: 'JYl4Zl7wKrJGJOxb7sQP', rawName: 'Chin-Up'),
+        isNull);
     for (final String n in <String>[
       'Triceps Dip Machine',
-      'Bulgarian Split Squat, Deficit',
       'Overhead Dumbbell Press',
-      'Pull-Up',
+      'Jump Chin Up',
+      'Assisted Pull-Up',
+      'Band-Assisted Pull-Up',
+      'Negative Pull-Up',
+      'Muscle Up',
+      'Lat Pull Down, Wide Arm',
     ]) {
       expect(matchReExercise(rawName: n), isNull, reason: n);
     }
+  });
+
+  test('pull/chin grips use exactly the Chin-Up factor, category and loading',
+      () {
+    final ReExercise chin = reExerciseById('XM9026peNIu0R8qh7UqY')!;
+    expect(chin.slot, 'chinUp');
+    expect(chin.factor, 1.0);
+    expect(chin.category, ReCategoryKey.verticalPull);
+    expect(chin.bodyweightLoaded, isTrue);
+    expect(chin.loadSemantics, ReLoadSemantics.bodyweightPlusAdded);
+    for (final String id in <String>[
+      'RFyjAjezFs8Rf7CQoaXz', // Pull-Up
+      '63ryIPxgXVPX7jLtAecC', // Pull-Up, Wide Arm
+      'yggnlBfsTeAnhBAhLkqF', // Neutral Grip Chin-Up
+    ]) {
+      final ReExercise e = reExerciseById(id)!;
+      expect(e.factor, chin.factor, reason: id);
+      expect(e.category, chin.category, reason: id);
+      expect(e.bodyweightLoaded, isTrue, reason: id);
+      expect(e.loadSemantics, chin.loadSemantics, reason: id);
+      expect(isBodyweightLoadedSlot(e.slot), isTrue, reason: id);
+      expect(matchReExercise(rawId: id, rawName: 'x')!.slot, e.slot);
+    }
+    for (final String id in <String>[
+      'JYl4Zl7wKrJGJOxb7sQP', // Jump Chin Up
+      'ebB7qvvDHQG8bwyP2Rws', // Muscle Up
+      'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
+    ]) {
+      expect(reExerciseById(id), isNull, reason: id);
+    }
+    expect(reExerciseById('1XOIXxeLFhgmgjZS9Cyq')!.factor, 0.85);
+  });
+
+  test('all three Bulgarian ids share the base factor; load meaning per implement',
+      () {
+    final ReExercise base = reExerciseById('ISXQqOEXLjMrPEs0xjgJ')!;
+    final ReExercise barbell = reExerciseById('VUEvvjuo4cxBghNuux66')!;
+    final ReExercise deficit = reExerciseById('xbePAZEtQIFEjvu2YaPV')!;
+    for (final ReExercise e in <ReExercise>[base, barbell, deficit]) {
+      expect(e.factor, 2.5, reason: e.slot);
+      expect(e.category, ReCategoryKey.squatPattern, reason: e.slot);
+      expect(e.bodyweightLoaded, isFalse, reason: e.slot);
+    }
+    expect(base.loadSemantics, ReLoadSemantics.perDumbbell);
+    expect(barbell.loadSemantics, ReLoadSemantics.total);
+    expect(deficit.loadSemantics, ReLoadSemantics.perDumbbell);
   });
 
   group('selectDefaultExerciseId', () {

@@ -14,7 +14,8 @@
 //   showcaseOnWeightWrite    → applyForWeighIn      (the dates it can affect)
 //   showcaseOnSexChange      → applyRequest full    (every date re-scored)
 //   leaderboardOnPublicProfileWrite (users_public)  → all-time entry + identity
-//   leaderboardReconcileDaily (scheduled)           → queue, stale, month close
+//   leaderboardReconcileDaily (scheduled)           → queue, stale, month close,
+//                                                     then the age maintenance
 // A failed recomputation is queued, never lost; every path is idempotent.
 
 'use strict';
@@ -43,6 +44,7 @@ const {
 const { isBuilt, applyRequest, refreshAllTime } = require('./store');
 const { runReconciliation, requestsOfItem, mergeQueueItem } = require('./reconcile');
 const medalsFs = require('./medals_firestore');
+const ageFs = require('./age_firestore');
 const { isLeaderboardEligibleUid } = require('./eligibility');
 
 const QUEUE_COLLECTION = 'leaderboardRecalcQueue';
@@ -494,9 +496,48 @@ function reconcileDeps(nowMs) {
 }
 
 /**
- * Once a day: close finished months, re-queue stale visible entries, and
- * retry queued recomputations — bounded, paginated, idempotent. It never scans
- * users or workouts.
+ * The daily maintenance: the raw reconciliation first, then the age
+ * maintenance (leaderboard/age_firestore.js — model version, missing/drifted
+ * entries, today's silver birthdays, orphans). Each is attempted whatever the
+ * other did; per-item failures are logged by each and returned in its result.
+ * If either path THROWS, the error is logged with its path and, once both have
+ * been attempted, rethrown so the scheduler's retry re-runs both (each is
+ * idempotent). [deps] is injected by tests.
+ */
+async function runDailyLeaderboardMaintenance(nowMs, deps) {
+  const d = deps || {
+    raw: (at) => runReconciliation(reconcileDeps(at)),
+    age: (at) => ageFs.runDailyAgeMaintenance(at),
+  };
+  const out = { raw: null, age: null, errors: [] };
+  try {
+    out.raw = await d.raw(nowMs);
+    logger.info('leaderboard reconciliation', out.raw.counts);
+    if (out.raw.failures.length) logger.warn('leaderboard reconciliation failures', { failures: out.raw.failures });
+  } catch (err) {
+    out.errors.push({ path: 'raw', error: err });
+    logger.error('leaderboard raw maintenance failed', { error: err });
+  }
+  try {
+    out.age = await d.age(nowMs);
+  } catch (err) {
+    out.errors.push({ path: 'age', error: err });
+    logger.error('leaderboard age maintenance failed', { error: err });
+  }
+  if (out.errors.length) {
+    const failed = out.errors.map((e) => e.path).join(' and ');
+    const err = new Error(`leaderboard daily maintenance failed: ${failed}`);
+    err.failures = out.errors;
+    throw err;
+  }
+  return out;
+}
+
+/**
+ * Once a day: close finished months, re-queue stale visible entries, retry
+ * queued recomputations and maintain the age projections — bounded,
+ * paginated, idempotent. It never scans users or workouts. The ONLY schedule
+ * for both: the age maintenance has no job of its own.
  */
 const leaderboardReconcileDaily = onSchedule(
   {
@@ -506,9 +547,7 @@ const leaderboardReconcileDaily = onSchedule(
     timeoutSeconds: 540,
   },
   async () => {
-    const { counts, failures } = await runReconciliation(reconcileDeps(Date.now()));
-    logger.info('leaderboard reconciliation', counts);
-    if (failures.length) logger.warn('leaderboard reconciliation failures', { failures });
+    await runDailyLeaderboardMaintenance(Date.now());
   },
 );
 
@@ -516,6 +555,7 @@ module.exports = {
   QUEUE_COLLECTION,
   leaderboardOnPublicProfileWrite,
   leaderboardReconcileDaily,
+  runDailyLeaderboardMaintenance,
   handlePublicProfileWrite,
   leaderboardStore,
   applyRequestForUser,

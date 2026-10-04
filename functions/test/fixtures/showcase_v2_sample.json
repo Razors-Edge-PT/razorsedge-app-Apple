@@ -1,7 +1,7 @@
 {
   "schema": "profileShowcaseV2",
   "e1rmFormulaVersion": 1,
-  "rePointsFormulaVersion": 2,
+  "rePointsFormulaVersion": 3,
   "aggregationVersion": 2,
   "categories": {
     "horizontalPress": {
@@ -430,8 +430,8 @@
           "slot": "bulgarianSplitSquatBarbell",
           "exerciseId": "VUEvvjuo4cxBghNuux66",
           "displayName": "Bulgarian Split Squat, Barbell",
-          "factor": 1.25,
-          "rePoints": 87.8723,
+          "factor": 2.5,
+          "rePoints": 175.7447,
           "e1rm": {
             "slot": "bulgarianSplitSquatBarbell",
             "exerciseId": "VUEvvjuo4cxBghNuux66",
@@ -464,7 +464,7 @@
             "e1rm": 105.88235294117648,
             "formulaVersion": 1,
             "fingerprint": "ef3c6dbbe553983ded3a0e20ae83698e",
-            "rePoints": 87.8723
+            "rePoints": 175.7447
           }
         }
       }

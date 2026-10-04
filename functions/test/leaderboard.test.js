@@ -44,6 +44,12 @@ const ID = {
   sumo: '10pEctikt6PP8eAg9Eip',
   squat: 'heeBViVINHO6tUScSd6y',
   bssDb: 'ISXQqOEXLjMrPEs0xjgJ',
+  bssBb: 'VUEvvjuo4cxBghNuux66',
+  bssDeficit: 'xbePAZEtQIFEjvu2YaPV',
+  pullUp: 'RFyjAjezFs8Rf7CQoaXz',
+  pullUpWide: '63ryIPxgXVPX7jLtAecC',
+  chinNeutral: 'yggnlBfsTeAnhBAhLkqF',
+  jumpChin: 'JYl4Zl7wKrJGJOxb7sQP',
 };
 
 const row = (exerciseId, sets) => ({ exerciseId, name: 'x', sets });
@@ -107,7 +113,7 @@ function athlete(uid, options) {
 test('scoring config is the profile catalogue (same factors, incl. 0.85 and 2.61)', () => {
   assert.strictEqual(reExerciseById(ID.lat).factor, 0.85);
   assert.strictEqual(reExerciseById(ID.ohpDb).factor, 2.61);
-  assert.strictEqual(RE_EXERCISES.length, 13);
+  assert.strictEqual(RE_EXERCISES.length, 17);
   assert.ok(LEADERBOARD_FORMULA_VERSION.includes(`re${RE_POINTS_FORMULA_VERSION}`));
 });
 
@@ -228,6 +234,43 @@ test('dumbbell loads are not doubled', async () => {
   const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
   await a.log('2026-09-02', workout(row(ID.bssDb, [{ weight: 30, reps: 1 }])));
   assert.strictEqual(a.day('2026-09-02').categories.squatPattern.pointsUnits, units(30, 2.5, 80));
+});
+
+test('pull/chin grips: monthly and all-time Vertical Pull use the Chin-Up scoring', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  // Day 1: a weighted wide-arm pull-up beats the chin-up; a jump chin-up never scores.
+  await a.log('2026-09-02', workout(
+    row(ID.chin, [{ weight: 10, reps: 1, setIndex: 0 }]),
+    row(ID.pullUpWide, [{ weight: 20, reps: 1, setIndex: 0 }]),
+    row(ID.jumpChin, [{ weight: 40, reps: 1, setIndex: 0 }]),
+  ));
+  // Day 2: bodyweight-only pull-up; day 3: neutral grip with added load.
+  await a.log('2026-09-03', workout(row(ID.pullUp, [{ weight: 0, reps: 1, setIndex: 0 }])));
+  await a.log('2026-09-04', workout(row(ID.chinNeutral, [{ weight: 15, reps: 1, setIndex: 0 }])));
+  assert.strictEqual(a.day('2026-09-02').categories.verticalPull.exerciseId, ID.pullUpWide);
+  assert.strictEqual(a.day('2026-09-02').categories.verticalPull.pointsUnits, units(100, 1, 80));
+  assert.strictEqual(a.day('2026-09-03').categories.verticalPull.pointsUnits, units(80, 1, 80));
+  assert.strictEqual(a.day('2026-09-04').categories.verticalPull.pointsUnits, units(95, 1, 80));
+  const m = a.month('2026-09');
+  assert.strictEqual(m.categoryTotalsUnits.verticalPull, units(100, 1, 80) + units(80, 1, 80) + units(95, 1, 80));
+  const at = a.allTime();
+  assert.strictEqual(at.categoryBestUnits.verticalPull, units(100, 1, 80));
+  assert.strictEqual(at.winningExerciseIds.verticalPull, ID.pullUpWide);
+});
+
+test('Bulgarian variants: base factor on each, dumbbell vs barbell load as stored', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  await a.log('2026-09-02', workout(row(ID.bssDeficit, [{ weight: 30, reps: 1 }])));
+  await a.log('2026-09-03', workout(row(ID.bssBb, [{ weight: 70, reps: 1 }])));
+  assert.strictEqual(a.day('2026-09-02').categories.squatPattern.pointsUnits, units(30, 2.5, 80));
+  assert.strictEqual(a.day('2026-09-03').categories.squatPattern.pointsUnits, units(70, 2.5, 80));
+  assert.strictEqual(a.month('2026-09').categoryTotalsUnits.squatPattern, units(30, 2.5, 80) + units(70, 2.5, 80));
+  assert.strictEqual(a.allTime().winningExerciseIds.squatPattern, ID.bssBb);
+});
+
+test('the factor-table change makes stored entries stale (version re3)', () => {
+  assert.strictEqual(RE_POINTS_FORMULA_VERSION, 3);
+  assert.ok(LEADERBOARD_FORMULA_VERSION.includes('-re3-'));
 });
 
 test('missing bodyweight scores nothing, exactly as on the profile', async () => {

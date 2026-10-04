@@ -17,9 +17,10 @@
 //   leaderboardAgeOnEntryWrite   raw entry written (current month / all time)
 //                                → that athlete's age entry + silver flag
 //   showcaseOnSexChange          users/{uid}.dob changed → refreshAthleteAge
-//   leaderboardAgeReconcileDaily (Auckland 03:45) model-version / missing /
-//                                drifted entries, today's silver (birthdays),
-//                                orphans — bounded, idempotent
+//   runDailyAgeMaintenance       called by leaderboardReconcileDaily (Auckland
+//                                03:30, firestore_store.js): model-version /
+//                                missing / drifted entries, today's silver
+//                                (birthdays), orphans — bounded, idempotent
 //   leaderboardPublicPublisher   hourly: raw/age public snapshots and the
 //                                age boards' counts (bounded reads)
 //   publicLeaderboard            anonymous GET: ONE snapshot read, cached briefly
@@ -264,20 +265,25 @@ async function listAgeEntries(periodKey, limit) {
   return q.docs.map((d) => Object.assign({}, d.data(), { uid: d.id }));
 }
 
-const leaderboardAgeReconcileDaily = onSchedule(
-  { schedule: 'every day 03:45', timeZone: TZ, retryCount: 1, timeoutSeconds: 540, maxInstances: 1 },
-  async () => {
-    const nowMs = Date.now();
-    const { counts, failures } = await runAgeReconciliation({
-      boards: () => liveBoards(nowMs),
-      listRawEntries,
-      listAgeEntries,
-      recompute: (uid, p) => recomputeAthleteBoard(uid, p, nowMs),
-    });
-    logger.info('leaderboard age reconciliation', counts);
-    if (failures.length) logger.warn('leaderboard age reconciliation failures', { failures });
-  },
-);
+/**
+ * The daily age maintenance against Firestore: today's live boards (the
+ * current Auckland month — rollover included — and all time). An ordinary
+ * async helper with no schedule of its own: leaderboardReconcileDaily
+ * (firestore_store.js) calls it once a day after the raw maintenance.
+ * Per-athlete failures are counted, logged and returned, never thrown.
+ */
+async function runDailyAgeMaintenance(nowMs) {
+  const at = nowMs || Date.now();
+  const { counts, failures } = await runAgeReconciliation({
+    boards: () => liveBoards(at),
+    listRawEntries,
+    listAgeEntries,
+    recompute: (uid, p) => recomputeAthleteBoard(uid, p, at),
+  });
+  logger.info('leaderboard age reconciliation', counts);
+  if (failures.length) logger.warn('leaderboard age reconciliation failures', { failures });
+  return { counts, failures };
+}
 
 // ── Public website feed ───────────────────────────────────────────────────
 
@@ -457,7 +463,7 @@ module.exports = {
   publishAll,
   handlePublicRequest,
   leaderboardAgeOnEntryWrite,
-  leaderboardAgeReconcileDaily,
+  runDailyAgeMaintenance,
   leaderboardPublicPublisher,
   publicLeaderboard,
   liveBoards,

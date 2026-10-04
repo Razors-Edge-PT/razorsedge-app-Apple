@@ -11,6 +11,7 @@ import 'onboarding/onboarding_cue_service.dart';
 import 'user_context.dart';
 import 'WES2_widgets/WES2_app_bar.dart';
 import 'WES2_widgets/WES2_tutorial_banner.dart';
+import 'WES2_widgets/wes2_greeting.dart';
 import 'WES2_controller.dart';
 import 'WES2_models.dart';
 import 'profile/profile_services.dart';
@@ -316,17 +317,9 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
       }
 
       // Greeting from profile.gender (not sex)
-      String greeting = 'Welcome';
       final profile = data['profile'];
-      if (profile is Map<String, dynamic>) {
-        final gender =
-            (profile['gender'] as String?)?.toLowerCase().trim() ?? '';
-        if (gender == 'female' || gender == 'woman' || gender == 'girl') {
-          greeting = 'Welcome queen';
-        } else if (gender == 'male' || gender == 'man' || gender == 'boy') {
-          greeting = 'Welcome king';
-        }
-      }
+      final String greeting = wes2GreetingForGender(
+          profile is Map<String, dynamic> ? profile['gender'] : null);
 
       if (mounted) {
         setState(() {

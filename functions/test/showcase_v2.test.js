@@ -37,6 +37,10 @@ const ID = {
   squat: 'heeBViVINHO6tUScSd6y',
   bssDb: 'ISXQqOEXLjMrPEs0xjgJ',
   bssBb: 'VUEvvjuo4cxBghNuux66',
+  bssDeficit: 'xbePAZEtQIFEjvu2YaPV',
+  pullUp: 'RFyjAjezFs8Rf7CQoaXz',
+  pullUpWide: '63ryIPxgXVPX7jLtAecC',
+  chinNeutral: 'yggnlBfsTeAnhBAhLkqF',
 };
 
 function row(exerciseId, sets) {
@@ -94,8 +98,31 @@ test('barbell Bulgarian split squat uses the full recorded barbell load', () => 
   const snap = buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw), sex: Sex.MALE });
   const bss = entry(snap, 'squatPattern', ID.bssBb);
   assert.strictEqual(bss.e1rm.e1rm, 100);
-  assert.strictEqual(bss.factor, 1.25);
-  assert.strictEqual(bss.rePoints, pts(100, 1.25, 80));
+  assert.strictEqual(bss.factor, 2.5);
+  assert.strictEqual(bss.rePoints, pts(100, 2.5, 80));
+});
+
+test('deficit Bulgarian split squat: base factor on ONE dumbbell, never doubled', () => {
+  const bw = weighIns([['2026-01-01', 80]]);
+  const history = {
+    '2026-01-02': workout(
+      row(ID.bssDb, [{ weight: 30, reps: 1 }]),
+      row(ID.bssDeficit, [{ weight: 30, reps: 1 }]),
+      row(ID.bssBb, [{ weight: 60, reps: 1 }]),
+    ),
+  };
+  const snap = buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw), sex: Sex.MALE });
+  const deficit = entry(snap, 'squatPattern', ID.bssDeficit);
+  assert.strictEqual(deficit.e1rm.weight, 30);
+  assert.strictEqual(deficit.e1rm.e1rm, 30);
+  assert.strictEqual(deficit.factor, 2.5);
+  // Same stored dumbbell, same factor: exactly the base exercise's points.
+  assert.strictEqual(deficit.rePoints, entry(snap, 'squatPattern', ID.bssDb).rePoints);
+  assert.strictEqual(deficit.rePoints, pts(30, 2.5, 80));
+  // The barbell's stored TOTAL is scored as recorded (60, not 120).
+  const bb = entry(snap, 'squatPattern', ID.bssBb);
+  assert.strictEqual(bb.e1rm.e1rm, 60);
+  assert.strictEqual(bb.rePoints, pts(60, 2.5, 80));
 });
 
 test('unilateral DB OHP scores with 2.61; E1RM uses the existing curve, RIR ignored', () => {
@@ -114,6 +141,9 @@ test('unilateral DB OHP scores with 2.61; E1RM uses the existing curve, RIR igno
 for (const [label, id, category, factor] of [
   ['Chin-Up', ID.chin, 'verticalPull', 1.0],
   ['Triceps Dip', ID.dip, 'overheadPress', 0.63],
+  ['Pull-Up', ID.pullUp, 'verticalPull', 1.0],
+  ['Pull-Up, Wide Arm', ID.pullUpWide, 'verticalPull', 1.0],
+  ['Neutral Grip Chin-Up', ID.chinNeutral, 'verticalPull', 1.0],
 ]) {
   test(`${label}: weighted WES2 set scores the combined bodyweight + added load`, () => {
     const bw = weighIns([['2026-01-01', 80]]);
@@ -184,6 +214,48 @@ for (const [label, id, category, factor] of [
     assert.strictEqual(e.rePoints, null);
   });
 }
+
+test('pull/chin grips score identically to the Chin-Up for the same sets', () => {
+  const bw = weighIns([['2026-01-01', 82]]);
+  const sets = [{ weight: 110, reps: 3, weightAdded: 28 }];
+  const wes2 = [{ weight: 25, reps: 5, setIndex: 0 }];
+  for (const id of [ID.pullUp, ID.pullUpWide, ID.chinNeutral]) {
+    const history = {
+      '2026-01-05': workout(row(ID.chin, sets), row(id, sets)),
+      '2026-01-06': workout(row(ID.chin, wes2), row(id, wes2)),
+    };
+    const snap = buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw) });
+    const chin = entry(snap, 'verticalPull', ID.chin);
+    const grip = entry(snap, 'verticalPull', id);
+    assert.strictEqual(grip.rePoints, chin.rePoints, id);
+    assert.strictEqual(grip.factor, chin.factor, id);
+    assert.strictEqual(grip.e1rm.totalE1rm, chin.e1rm.totalE1rm, id);
+    assert.strictEqual(grip.e1rm.loadBasis, chin.e1rm.loadBasis, id);
+  }
+});
+
+test('the category winner is the best pull/chin grip, Chin-Up first on a tie', () => {
+  const bw = weighIns([['2026-01-01', 80]]);
+  const history = {
+    '2026-01-02': workout(
+      row(ID.chin, [{ weight: 10, reps: 1, setIndex: 0 }]),
+      row(ID.pullUpWide, [{ weight: 20, reps: 1, setIndex: 0 }]),
+      row(ID.lat, [{ weight: 60, reps: 1 }]),
+    ),
+  };
+  const snap = buildShowcaseV2(history, { bodyweightByDate: bwByDateFor(history, bw) });
+  const wide = entry(snap, 'verticalPull', ID.pullUpWide);
+  assert.strictEqual(wide.rePoints, pts(100, 1.0, 80));
+  assert.strictEqual(selectDefaultExerciseId('verticalPull', snap.categories.verticalPull.exercises), ID.pullUpWide);
+  const tie = {
+    '2026-01-02': workout(
+      row(ID.pullUp, [{ weight: 20, reps: 1, setIndex: 0 }]),
+      row(ID.chin, [{ weight: 20, reps: 1, setIndex: 0 }]),
+    ),
+  };
+  const tied = buildShowcaseV2(tie, { bodyweightByDate: bwByDateFor(tie, bw) });
+  assert.strictEqual(selectDefaultExerciseId('verticalPull', tied.categories.verticalPull.exercises), ID.chin);
+});
 
 test('Chin-Up V2 records are identical to the V1 records for the same history', () => {
   const bw = weighIns([['2026-01-01', 82], ['2026-02-01', 84]]);

@@ -65,7 +65,11 @@ test('exact ids, factors and category membership', () => {
     ['hipHinge', 'LGhFj8o0sG3X12296UAh', 'Hip Thrust, Barbell', 0.55],
     ['squatPattern', 'heeBViVINHO6tUScSd6y', 'Back Squat, Barbell', 0.8],
     ['squatPattern', 'ISXQqOEXLjMrPEs0xjgJ', 'Bulgarian Split Squat, Dumbbell', 2.5],
-    ['squatPattern', 'VUEvvjuo4cxBghNuux66', 'Bulgarian Split Squat, Barbell', 1.25],
+    ['squatPattern', 'VUEvvjuo4cxBghNuux66', 'Bulgarian Split Squat, Barbell', 2.5],
+    ['verticalPull', 'RFyjAjezFs8Rf7CQoaXz', 'Pull-Up', 1.0],
+    ['verticalPull', '63ryIPxgXVPX7jLtAecC', 'Pull-Up, Wide Arm', 1.0],
+    ['verticalPull', 'yggnlBfsTeAnhBAhLkqF', 'Neutral Grip Chin-Up', 1.0],
+    ['squatPattern', 'xbePAZEtQIFEjvu2YaPV', 'Bulgarian Split Squat, Deficit', 2.5],
   ]);
 });
 
@@ -105,9 +109,9 @@ test('the five V1 lifts keep their V1 slot keys and ids (stable fingerprints)', 
   }
 });
 
-test('bodyweight-loaded flag is definition-driven: Chin-Up and Triceps Dip only', () => {
+test('bodyweight-loaded flag is definition-driven: the pull/chin grips and Triceps Dip only', () => {
   const bw = RE_EXERCISES.filter((e) => e.bodyweightLoaded).map((e) => e.slot);
-  assert.deepStrictEqual(bw, ['chinUp', 'tricepsDip']);
+  assert.deepStrictEqual(bw, ['chinUp', 'tricepsDip', 'pullUp', 'pullUpWideArm', 'chinUpNeutralGrip']);
   assert.strictEqual(isBodyweightSlot('chinUp'), true);
   assert.strictEqual(isBodyweightSlot('tricepsDip'), true);
   for (const e of RE_EXERCISES.filter((x) => !x.bodyweightLoaded)) {
@@ -119,8 +123,88 @@ test('bodyweight-loaded flag is definition-driven: Chin-Up and Triceps Dip only'
 test('per-dumbbell exercises are declared as such', () => {
   const per = RE_EXERCISES.filter((e) => e.loadSemantics === LoadSemantics.PER_DUMBBELL)
     .map((e) => e.slot);
-  assert.deepStrictEqual(per, ['dbBenchFlat', 'ohpUnilateral', 'bulgarianSplitSquatDumbbell']);
+  assert.deepStrictEqual(per, ['dbBenchFlat', 'ohpUnilateral', 'bulgarianSplitSquatDumbbell', 'bulgarianSplitSquatDeficit']);
   assert.strictEqual(reExerciseBySlot('bulgarianSplitSquatBarbell').loadSemantics, LoadSemantics.TOTAL);
+});
+
+// ── Pull-up / chin-up grips: exactly the Chin-Up's scoring ──────────────────
+
+const CHIN_UP_ID = 'XM9026peNIu0R8qh7UqY';
+const PULL_CHIN_GRIPS = {
+  RFyjAjezFs8Rf7CQoaXz: 'Pull-Up',
+  '63ryIPxgXVPX7jLtAecC': 'Pull-Up, Wide Arm',
+  yggnlBfsTeAnhBAhLkqF: 'Neutral Grip Chin-Up',
+};
+
+test('the existing Chin-Up is unchanged: factor 1.0, Vertical Pull, bodyweight plus added', () => {
+  const chin = reExerciseById(CHIN_UP_ID);
+  assert.strictEqual(chin.slot, 'chinUp');
+  assert.strictEqual(chin.factor, 1.0);
+  assert.strictEqual(chin.category, 'verticalPull');
+  assert.strictEqual(chin.bodyweightLoaded, true);
+  assert.strictEqual(chin.loadSemantics, LoadSemantics.BODYWEIGHT_PLUS_ADDED);
+  assert.deepStrictEqual(chin.legacyNameAliases, ['Chin-Up', 'Chin Up']);
+  // Still the category's primary (first) exercise.
+  assert.strictEqual(reExercisesOfCategory('verticalPull')[0].slot, 'chinUp');
+});
+
+test('every supplied pull/chin grip uses the Chin-Up factor, category and load semantics', () => {
+  const chin = reExerciseById(CHIN_UP_ID);
+  for (const [id, name] of Object.entries(PULL_CHIN_GRIPS)) {
+    const e = reExerciseById(id);
+    assert.ok(e, name);
+    assert.strictEqual(e.displayName, name);
+    assert.strictEqual(e.factor, chin.factor, name);
+    assert.strictEqual(e.category, chin.category, name);
+    assert.strictEqual(e.bodyweightLoaded, chin.bodyweightLoaded, name);
+    assert.strictEqual(e.loadSemantics, chin.loadSemantics, name);
+    assert.strictEqual(isBodyweightSlot(e.slot), true, name);
+    assert.strictEqual(matchReExercise(id, 'anything').slot, e.slot, name);
+    assert.strictEqual(matchReExercise(null, name).slot, e.slot, name);
+  }
+});
+
+test('assisted, jumping, negative, muscle-up and pulldown variants stay unscored', () => {
+  for (const [id, name] of [
+    ['JYl4Zl7wKrJGJOxb7sQP', 'Jump Chin Up'],
+    ['ebB7qvvDHQG8bwyP2Rws', 'Muscle Up'],
+    ['Url65Q2RxZa00dkDpUdl', 'Lat Pull Down, Wide Arm'],
+    ['zlxqqQPiOhOwfQitq1vP', 'Lat Pull Down, Wide Arm, Neutral Grip'],
+    ['nbhT3v7xmO7WGGKCF74t', 'Machine Lat Pull Down'],
+  ]) {
+    assert.strictEqual(reExerciseById(id), null, name);
+    assert.strictEqual(matchReExercise(id, 'Chin-Up'), null, name);
+    assert.strictEqual(matchReExercise(null, name), null, name);
+  }
+  for (const name of [
+    'Assisted Pull-Up', 'Band-Assisted Pull-Up', 'Banded Pull-Up', 'Machine Assisted Pull-Up',
+    'Jumping Pull-Up', 'Negative Pull-Up', 'Eccentric Chin-Up', 'Feet-Supported Pull-Up',
+    'Inverted Row', 'Jump Chin Up',
+  ]) {
+    assert.strictEqual(matchReExercise(null, name), null, name);
+  }
+  // The independently scored supinated pulldown keeps its own factor.
+  assert.strictEqual(reExerciseById('1XOIXxeLFhgmgjZS9Cyq').factor, 0.85);
+});
+
+// ── Bulgarian split squats: the base coefficient and category ───────────────
+
+test('all three Bulgarian split squat ids share the base factor and Squat Pattern', () => {
+  const base = reExerciseById('ISXQqOEXLjMrPEs0xjgJ');
+  assert.strictEqual(base.factor, 2.5);
+  assert.strictEqual(base.category, 'squatPattern');
+  for (const id of ['ISXQqOEXLjMrPEs0xjgJ', 'VUEvvjuo4cxBghNuux66', 'xbePAZEtQIFEjvu2YaPV']) {
+    const e = reExerciseById(id);
+    assert.strictEqual(e.factor, base.factor, id);
+    assert.strictEqual(e.category, base.category, id);
+    assert.strictEqual(e.bodyweightLoaded, false, id);
+  }
+  // Load meaning is per implement: one dumbbell, the whole barbell, one dumbbell.
+  assert.strictEqual(base.loadSemantics, LoadSemantics.PER_DUMBBELL);
+  assert.strictEqual(reExerciseById('VUEvvjuo4cxBghNuux66').loadSemantics, LoadSemantics.TOTAL);
+  assert.strictEqual(reExerciseById('xbePAZEtQIFEjvu2YaPV').loadSemantics, LoadSemantics.PER_DUMBBELL);
+  // Ordinary (non-Bulgarian) split squats are not added.
+  for (const id of ['Wo8la9B8Cnbqhf9igfEt', 'wVNyffCmGtEh0Gz8X8Mp']) assert.strictEqual(reExerciseById(id), null, id);
 });
 
 test('matching: case-folded ids decide; a present unknown id is never rescued', () => {
@@ -128,18 +212,22 @@ test('matching: case-folded ids decide; a present unknown id is never rescued', 
   assert.strictEqual(matchReExercise('  FtayDmR5BVnGS1FXlXLL ', null).slot, 'tricepsDip');
   // A real id for some other exercise, named like a catalogue exercise.
   assert.strictEqual(matchReExercise('t66qeWQqnuEtaoyZqRp0', 'Triceps Dip'), null);
-  assert.strictEqual(matchReExercise('RFyjAjezFs8Rf7CQoaXz', 'Chin-Up'), null);
+  assert.strictEqual(matchReExercise('JYl4Zl7wKrJGJOxb7sQP', 'Chin-Up'), null);
+  // A present id decides over the name: the Pull-Up id named "Chin-Up".
+  assert.strictEqual(matchReExercise('RFyjAjezFs8Rf7CQoaXz', 'Chin-Up').slot, 'pullUp');
 });
 
 test('matching: id-less legacy rows use the closed exact alias list only', () => {
   assert.strictEqual(matchReExercise(null, 'Sumo Deadlift').slot, 'deadliftSumo');
   assert.strictEqual(matchReExercise('', 'bulgarian split squat').slot, 'bulgarianSplitSquatDumbbell');
   assert.strictEqual(matchReExercise(undefined, 'Triceps Dip').slot, 'tricepsDip');
+  assert.strictEqual(matchReExercise(null, 'Bulgarian Split Squat, Deficit').slot, 'bulgarianSplitSquatDeficit');
+  assert.strictEqual(matchReExercise(null, 'pull-up').slot, 'pullUp');
   for (const name of [
     'Triceps Dip Machine',
-    'Bulgarian Split Squat, Deficit',
     'Overhead Dumbbell Press',
-    'Pull-Up',
+    'Pull-Ups',
+    'Jump Chin Up',
     'Lat Pull Down, Wide Arm',
     'Incline Bench Dumbbell Press',
     'Hip Thrust, Unilateral',

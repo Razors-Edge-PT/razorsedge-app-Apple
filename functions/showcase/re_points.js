@@ -19,8 +19,11 @@
  * changes, so every stored V2 snapshot is rebuilt rather than mixing values.
  *   1 — first release (DB overhead press 2.61, lat pull down 0.85).
  *   2 — Flat Bench Dumbbell Press 2.35 → 2.11, Triceps Dip 0.73 → 0.63.
+ *   3 — Pull-Up, Wide Arm Pull-Up and Neutral Grip Chin-Up scored as the
+ *       Chin-Up; Bulgarian Split Squat Barbell 1.25 → 2.5 and Deficit added
+ *       at 2.5 (the base factor).
  */
-const RE_POINTS_FORMULA_VERSION = 2;
+const RE_POINTS_FORMULA_VERSION = 3;
 
 const Sex = { MALE: 'male', FEMALE: 'female' };
 
