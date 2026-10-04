@@ -28,7 +28,7 @@ firebase deploy --only "functions:leaderboardPublicPublisher,functions:publicLea
 
 No Flutter rebuild/version bump, repeat backfill, rules/index change or other
 function deployment is needed. The scheduled publisher creates age snapshots
-on its next three-minute cycle. Existing raw snapshot fields remain unchanged.
+at the next hour (minute 0 in Auckland time). Existing raw snapshot fields remain unchanged.
 
 Domain Restricted Sharing stays in place. After deploying, confirm Cloud Run
 service `publicleaderboard`, region `us-central1`, project `goodlift-us-storage`,
@@ -55,3 +55,36 @@ firebase emulators:exec --only firestore --project rules-test "node --test --tes
 
 The spec covers a raw rank-21 athlete reaching age rank 1, exclusions, public
 field allowlists and unchanged-snapshot freshness in both views.
+
+## Cost settings and deployment checks
+
+The website publisher now runs hourly (`0 * * * *`), not every three minutes.
+Its existing Scheduler job is reused, with zero retries. Publisher settings:
+256 MiB, fractional CPU (`gcf_gen1`, 1/6 CPU), minInstances 0, maxInstances 1,
+concurrency 1 and timeout 15 seconds. The public HTTP function uses the same
+CPU/memory/instance limits and a five-second timeout. In-memory HTTP caching
+is one hour; all responses remain bounded by a 150-minute snapshot age limit.
+Cloudflare adds an hourly cache slot and the page checks every 15 minutes.
+
+After deploying verify the actual Scheduler cron, fractional CPU allocation,
+instance limits and timeouts on both services. Make one bounded test invocation
+of the existing publisher if needed to populate snapshots, rather than restoring
+a frequent schedule or running repeated backfills. Verify cold and warm
+anonymous reads work within five seconds. If a limit fails, report it rather
+than silently raising the limits.
+
+The target is US$0.25/month for additional website leaderboard operation at
+current usage. Check the actual Firestore location, free quota usage and measured
+function durations before calling that target verified. For illustration only,
+744 hourly runs in a 31-day month at 15 seconds each, 1/6 CPU and 256 MiB cost
+about US$0.052 in active compute before allowances (excluding startup and HTTP
+traffic). At the present board sizes, publisher Firestore operations are about
+US$0.029/month at us-central1 rates before allowances. The existing Scheduler
+job may already cost US$0.10/month after the account's free jobs.
+
+These are estimates, not a hard cap: visitor/direct HTTP requests, per-location
+Cloudflare caches, startup, build/container storage and other shared usage also
+count. Ordinary budget alerts do not stop spending. Do not impose a project-wide
+Cloud Run spend cap or disable project billing: that could interrupt unrelated
+GoodLift functions. Report projected incremental cost and the remaining risk;
+do not mark the US$0.25/month target verified without billing evidence.

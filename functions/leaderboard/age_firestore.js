@@ -20,7 +20,7 @@
 //   leaderboardAgeReconcileDaily (Auckland 03:45) model-version / missing /
 //                                drifted entries, today's silver (birthdays),
 //                                orphans — bounded, idempotent
-//   leaderboardPublicPublisher   every 3 minutes: both public snapshots and the
+//   leaderboardPublicPublisher   hourly: raw/age public snapshots and the
 //                                age boards' counts (bounded reads)
 //   publicLeaderboard            anonymous GET: ONE snapshot read, cached briefly
 //
@@ -28,7 +28,7 @@
 // The birth date is read with a field mask (users/{uid}.dob only) and never
 // copied anywhere. Age entries carry only the minimal public identity already
 // on the raw entry, the adjusted points, the model version and completeness.
-// The public snapshot carries only the schema-1 allowlist.
+// Public snapshots carry only the raw schema-1 or age schema-2 allowlist.
 
 'use strict';
 
@@ -376,7 +376,8 @@ async function publishAll(nowMs) {
 }
 
 const leaderboardPublicPublisher = onSchedule(
-  { schedule: 'every 3 minutes', timeZone: TZ, retryCount: 0, timeoutSeconds: 120, maxInstances: 1, memory: '256MiB' },
+  { schedule: '0 * * * *', timeZone: TZ, retryCount: 0, timeoutSeconds: 15,
+    minInstances: 0, maxInstances: 1, memory: '256MiB', cpu: 'gcf_gen1', concurrency: 1 },
   async () => {
     const res = await publishAll(Date.now());
     logger.debug('leaderboard public snapshots', { res });
@@ -384,8 +385,9 @@ const leaderboardPublicPublisher = onSchedule(
 );
 
 /** A snapshot older than this is not served (the publisher has stopped). */
-const MAX_SNAPSHOT_AGE_MS = 60 * 60 * 1000;
-const CACHE_MS = 15 * 1000;
+// An hourly snapshot has grace for a delayed cycle; never serve it indefinitely.
+const MAX_SNAPSHOT_AGE_MS = 150 * 60 * 1000;
+const CACHE_MS = 60 * 60 * 1000;
 const cache = new Map(); // key -> { atMs, body }
 
 function sendJson(res, status, body, cacheControl, head) {
@@ -416,7 +418,7 @@ async function handlePublicRequest(req, res, deps) {
   if (!key) return unavailable();
   let body = null;
   const hit = cache.get(key);
-  if (hit && nowMs - hit.atMs < CACHE_MS) {
+  if (hit && nowMs - hit.atMs < CACHE_MS && nowMs - Date.parse(hit.body.generatedAt) <= MAX_SNAPSHOT_AGE_MS) {
     body = hit.body;
   } else {
     try {
@@ -430,12 +432,14 @@ async function handlePublicRequest(req, res, deps) {
     }
     if (body) cache.set(key, { atMs: nowMs, body });
   }
-  if (!body) return unavailable();
-  return sendJson(res, 200, body, 'public, max-age=60, s-maxage=60', head);
+  // Check freshness on cache hits too: a long cache cannot extend validity.
+  if (!body || nowMs - Date.parse(body.generatedAt) > MAX_SNAPSHOT_AGE_MS) return unavailable();
+  return sendJson(res, 200, body, 'public, max-age=3600, s-maxage=3600', head);
 }
 
 const publicLeaderboard = onRequest(
-  { region: 'us-central1', invoker: 'public', minInstances: 0, maxInstances: 5, concurrency: 80, memory: '256MiB', timeoutSeconds: 10 },
+  { region: 'us-central1', invoker: 'public', minInstances: 0, maxInstances: 1,
+    concurrency: 1, cpu: 'gcf_gen1', memory: '256MiB', timeoutSeconds: 5 },
   (req, res) => handlePublicRequest(req, res).catch(() => {
     if (!res.headersSent) sendJson(res, 503, { error: 'leaderboard-unavailable' }, 'no-store', req.method === 'HEAD');
   }),

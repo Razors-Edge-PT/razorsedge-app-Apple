@@ -9,6 +9,22 @@ const age = require('../leaderboard/age');
 
 const P = 10000;
 
+test('deployed public feed metadata stays within the website cost policy', () => {
+  const publisher = ageFs.leaderboardPublicPublisher.__endpoint;
+  const http = ageFs.publicLeaderboard.__endpoint;
+  assert.equal(publisher.scheduleTrigger.schedule, '0 * * * *', 'one scheduled run per hour');
+  assert.equal(publisher.scheduleTrigger.retryConfig.retryCount, 0, 'no retry cost multiplier');
+  for (const endpoint of [publisher, http]) {
+    assert.equal(endpoint.minInstances, 0, 'no paid warm instance');
+    assert.ok(endpoint.maxInstances <= 1, 'no parallel instance fan-out');
+    assert.ok(endpoint.concurrency <= 1, 'fractional CPU requires single-request concurrency');
+    assert.equal(endpoint.cpu, 'gcf_gen1', 'retain fractional CPU at this memory size');
+    assert.ok(endpoint.availableMemoryMb <= 256);
+  }
+  assert.ok(publisher.timeoutSeconds <= 15);
+  assert.ok(http.timeoutSeconds <= 5);
+});
+
 function rawEntry(uid, points, extra) {
   return Object.assign({
     uid,
@@ -132,7 +148,7 @@ test('handler: one snapshot read, JSON + nosniff + bounded public cache', async 
   assert.deepEqual(reads, ['2026-10']);
   assert.match(res.headers['content-type'], /^application\/json/);
   assert.equal(res.headers['x-content-type-options'], 'nosniff');
-  assert.equal(res.headers['cache-control'], 'public, max-age=60, s-maxage=60');
+  assert.equal(res.headers['cache-control'], 'public, max-age=3600, s-maxage=3600');
   assert.deepEqual(JSON.parse(res.body), stored);
 });
 
@@ -253,7 +269,7 @@ test('age view has bounded parameters and a separate snapshot/cache key; raw def
   }
   assert.equal(feed.snapshotKeyFor('current', '2026-10', 'age'), '2026-10_age');
   assert.equal(feed.snapshotKeyFor('all_time', '2026-10', 'age'), 'all_time_age');
-  const now = NOW + 300000;
+  const now = NOW + 4 * 60 * 60 * 1000;
   const stored = { schemaVersion: 2, view: 'age', periodKey: '2026-10', generatedAt: new Date(now).toISOString(),
     ageModelVersion: age.AGE_MODEL_VERSION, rankedCount: 1, incompleteCount: 1,
     entries: [{ rank: 1, username: 'PublicOlder', adjustedTotalUnits: 1250000, medals: [] }] };
@@ -270,4 +286,26 @@ test('age view has bounded parameters and a separate snapshot/cache key; raw def
   const head = fakeRes();
   await ageFs.handlePublicRequest({ method: 'HEAD', originalUrl: '/publicLeaderboard?view=age' }, head, deps);
   assert.equal(head.statusCode, 200); assert.equal(head.body, undefined); assert.equal(reads.length, 2);
+});
+
+test('hourly feeds survive the next publish boundary, but a cached feed cannot extend its validity', async () => {
+  let now = NOW + 8 * 60 * 60 * 1000;
+  let reads = 0;
+  const stored = { schemaVersion: 2, view: 'age', periodKey: 'all_time',
+    generatedAt: new Date(now - 149 * 60 * 1000).toISOString(),
+    ageModelVersion: age.AGE_MODEL_VERSION, rankedCount: 0, incompleteCount: 0, entries: [] };
+  const run = async () => {
+    const res = fakeRes();
+    await ageFs.handlePublicRequest({ method: 'GET', originalUrl: '/publicLeaderboard?period=all_time&view=age' }, res,
+      { nowMs: () => now, readSnapshot: async () => { reads++; return stored; } });
+    return res;
+  };
+  assert.equal((await run()).statusCode, 200, 'an hourly snapshot has a bounded delay allowance');
+  now += 2 * 60 * 1000;
+  const expired = await run();
+  assert.equal(reads, 2, 'an expired cached snapshot rechecks the source for recovery');
+  assert.equal(expired.statusCode, 503, 'the source still obeys the 150-minute age limit');
+  assert.equal(expired.headers['cache-control'], 'no-store');
+  stored.generatedAt = new Date(now).toISOString();
+  assert.equal((await run()).statusCode, 200, 'a recovered publisher is served immediately');
 });
