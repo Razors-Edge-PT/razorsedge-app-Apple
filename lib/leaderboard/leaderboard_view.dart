@@ -257,14 +257,10 @@ class _LeaderboardViewState extends State<LeaderboardView>
         : 'Total RE Points · $when';
   }
 
-  /// The active age view, said plainly: what changed, what did not, and who
-  /// is not ranked in it.
+  /// The active age view, in the website's words: a small heading and one
+  /// line beneath it.
   Widget _ageBanner(BuildContext context) {
-    final int? left = _c.boardInfo.incompleteCount;
-    final String missing = left == null || left == 0
-        ? ''
-        : ' $left ${left == 1 ? 'athlete is' : 'athletes are'} not ranked in '
-            'this view until a valid birth date is set.';
+    final TextStyle body = ProfileText.caption(context);
     return Container(
       key: const ValueKey<String>('leaderboard-age-banner'),
       margin: const EdgeInsets.only(top: ProfileSpacing.xs),
@@ -275,11 +271,18 @@ class _LeaderboardViewState extends State<LeaderboardView>
         borderRadius: BorderRadius.circular(ProfileSpacing.radiusSmall),
         border: Border.all(color: ProfilePalette.outline),
       ),
-      child: Text(
-        'Age-adjusted view: points are weighted by age on each performance '
-        'date (M1 40–49, M2 50–59, M3 60–69, M4 70–79, M5 80+; USA '
-        'Powerlifting masters curve). Medals are the raw awards.$missing',
-        style: ProfileText.caption(context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            'Age-adjusted rankings',
+            style: body.copyWith(
+                color: ProfilePalette.textSecondary,
+                fontWeight: FontWeight.w700),
+          ),
+          Text("Scores use GoodLift's masters age factors.", style: body),
+        ],
       ),
     );
   }

@@ -159,9 +159,22 @@ void main() {
     expect(c.ageView, isTrue);
     expect(find.text('Age-adjusted RE Points · October 2026'), findsOneWidget);
     expect(banner, findsOneWidget);
-    expect(find.textContaining('1 athlete is not ranked in this view'),
+    // The website's concise copy: a heading and one line, nothing else.
+    expect(
+        find.descendant(
+            of: banner, matching: find.text('Age-adjusted rankings')),
         findsOneWidget);
-    expect(find.textContaining('Medals are the raw awards'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: banner,
+            matching: find.text("Scores use GoodLift's masters age factors.")),
+        findsOneWidget);
+    expect(find.descendant(of: banner, matching: find.byType(Text)),
+        findsNWidgets(2));
+    expect(find.textContaining('not ranked in this view'), findsNothing);
+    expect(find.textContaining('Medals are the raw awards'), findsNothing);
+    expect(find.textContaining('M1 40'), findsNothing);
+    expect(find.textContaining('USA Powerlifting'), findsNothing);
     // The raw rank-21 athlete is first; the incomplete and stale-model ones are absent.
     expect(c.entries.first.uid, 'r20');
     expect(c.entries.first.rank, 1);
@@ -180,6 +193,47 @@ void main() {
     expect(c.ageView, isFalse);
     expect(row('r20'), findsNothing);
     expect(silver('r1'), findsOneWidget);
+    c.dispose();
+  });
+
+  testWidgets(
+      'the age panel is two short lines on both boards, also on a narrow phone',
+      (WidgetTester tester) async {
+    final FakeFirebaseFirestore db = FakeFirebaseFirestore();
+    await seedBoards(db);
+    await seedRaw(db, kAllTimePeriodKey, 'r0', 5000000);
+    await seedAge(db, kAllTimePeriodKey, 'r0', 5500000, 5000000);
+    final LeaderboardController c = await pumpBoard(tester, db);
+    tester.view.physicalSize = const Size(320, 6000);
+    await tester.pumpAndSettle();
+    await chooseAgeView(tester);
+
+    Future<void> expectPanel(String caption) async {
+      expect(find.text(caption), findsOneWidget,
+          reason: 'the line above the panel is kept');
+      final Rect panel = tester.getRect(banner);
+      final Rect heading = tester.getRect(find.text('Age-adjusted rankings'));
+      final Rect line = tester
+          .getRect(find.text("Scores use GoodLift's masters age factors."));
+      expect(heading.left, line.left);
+      expect(line.top, moreOrLessEquals(heading.bottom, epsilon: 0.5),
+          reason: 'directly underneath the heading');
+      expect(panel.left, lessThanOrEqualTo(heading.left));
+      expect(panel.right, greaterThanOrEqualTo(line.right),
+          reason: 'the line fits the panel without clipping');
+      // The test font is about twice as wide as the app's, so the second
+      // line wraps here; on a phone it is the heading and one line.
+      expect(panel.height, lessThan(80),
+          reason: 'a short panel: the two sentences and their padding');
+      expect(tester.takeException(), isNull);
+    }
+
+    await expectPanel('Age-adjusted RE Points · October 2026');
+    await tester.tap(
+        find.byKey(const ValueKey<String>('leaderboard-period-allTime')));
+    await tester.pumpAndSettle();
+    expect(c.ageView, isTrue);
+    await expectPanel('Age-adjusted RE Points · All time');
     c.dispose();
   });
 
