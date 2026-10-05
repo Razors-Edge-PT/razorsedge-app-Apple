@@ -22,6 +22,7 @@ import 'package:localtest222/login_screen.dart';
 import 'signup_validation.dart';
 import 'signup_username_guard.dart';
 import 'onboarding_identity_payload.dart';
+import 'sex_options.dart';
 import 'periodization_model_utils.dart';
 
 /// The app's single username-availability read: `users_public` keyed by the
@@ -1030,19 +1031,12 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                       borderSide: const BorderSide(color: Colors.redAccent, width: 2),
                                     ),
                                   ),
-                                  items: const [
-                                    DropdownMenuItem(
-                                      value: 'M',
-                                      child: Text('Male', style: TextStyle(color: Colors.black87)),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 'F',
-                                      child: Text('Female', style: TextStyle(color: Colors.black87)),
-                                    ),
-                                    DropdownMenuItem(
-                                      value: 'N',
-                                      child: Text('Yes.', style: TextStyle(color: Colors.black87)),
-                                    ),
+                                  items: [
+                                    for (final option in kSexOptionLabels.entries)
+                                      DropdownMenuItem(
+                                        value: option.key,
+                                        child: Text(option.value, style: const TextStyle(color: Colors.black87)),
+                                      ),
                                   ],
                                   // Choosing an option counts as interaction,
                                   // so a skipped Sex turns red rather than

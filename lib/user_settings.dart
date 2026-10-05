@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'demographics_cache.dart';
+import 'sex_options.dart';
 import 'package:localtest222/user_context.dart'; // <-- your UserContext
 import 'themes_screen.dart';
 import 'account_deletion_screen.dart';
@@ -958,10 +959,10 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                     // Sex
                     DropdownButtonFormField<String>(
                       value: _sex,
-                      items: const [
-                        DropdownMenuItem(value: 'M', child: Text('Male')),
-                        DropdownMenuItem(value: 'F', child: Text('Female')),
-                        DropdownMenuItem(value: 'N', child: Text('Robot')),
+                      items: [
+                        for (final option in kSexOptionLabels.entries)
+                          DropdownMenuItem(
+                              value: option.key, child: Text(option.value)),
                       ],
                       onChanged: (v) => setState(() => _sex = v),
                       decoration: InputDecoration(

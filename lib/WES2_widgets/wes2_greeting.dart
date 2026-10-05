@@ -5,7 +5,7 @@
 ///
 /// Matching is trimmed and case-insensitive. In order:
 ///   1. an explicit answer other than male/female in EITHER field (N — shown
-///      as "Yes." / "Robot" —, prefer not to say, other, non-binary, a custom
+///      as "Yes." —, prefer not to say, other, non-binary, a custom
 ///      or unrecognised value, …)                      → 'Welcome sovereign'
 ///   2. an explicit male/female profile.gender         → 'Welcome king/queen'
 ///   3. an onboarding sex of M/F                        → 'Welcome king/queen'
