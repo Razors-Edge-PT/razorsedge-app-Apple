@@ -316,10 +316,8 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
         }
       }
 
-      // Greeting from profile.gender (not sex)
-      final profile = data['profile'];
-      final String greeting = wes2GreetingForGender(
-          profile is Map<String, dynamic> ? profile['gender'] : null);
+      // Greeting from this same doc's sex + profile.gender (display only)
+      final String greeting = wes2GreetingForUserDoc(data);
 
       if (mounted) {
         setState(() {
