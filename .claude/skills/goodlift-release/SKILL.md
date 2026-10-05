@@ -79,6 +79,29 @@ From the verified release checkout, run:
 flutter build appbundle --release
 ```
 
+### Aurelian-enabled builds only
+
+Applies only when the user explicitly authorises a build that must support the Aurelian bridge (`docs/aurelian_bridge.md`). A release build trusts no Aurelian caller unless that build sets `aurelian.callerCerts.release`; keep that default for every other build and never make the debug certificate a release fallback in `build.gradle`.
+
+- Confirm with the user the exact approved caller certificate (SHA-256) for this build. Compare it with a current signed Aurelian APK or the installed app when one is available. It is not the GoodLift upload certificate.
+- Supply it explicitly for the build as a process-only Gradle project property, in the same PowerShell process as the build. Flutter regenerates the ignored `android/local.properties`, which has silently dropped this setting before; do not rely on that file alone, and do not set a user-wide or machine-wide variable.
+
+```powershell
+$name = 'ORG_GRADLE_PROJECT_aurelian.callerCerts.release'
+$previous = [Environment]::GetEnvironmentVariable($name, 'Process')
+try {
+    [Environment]::SetEnvironmentVariable($name, '<approved 64-hex fingerprint>', 'Process')
+    flutter build appbundle --release
+    if ($LASTEXITCODE -ne 0) { throw 'GoodLift release build failed.' }
+}
+finally {
+    [Environment]::SetEnvironmentVariable($name, $previous, 'Process')
+}
+```
+
+- Verify the compiled allowlist, not the input: `AURELIAN_CALLER_CERTS` in the generated release `BuildConfig.java` and in `com.goodlift.razorsedge.BuildConfig` inside the AAB's DEX must hold exactly the approved certificate(s). Confirm the bridge test harness (`tool/aurelian_bridge_harness`) is not in the artifact.
+- An Aurelian-enabled build whose compiled allowlist is empty or different is not ready for upload. Record the certificate, the method and any unperformed device check in the release record.
+
 Use the existing upload signing configuration. If the build causes tracked changes, inspect them and restore source/release consistency before declaring completion; never quietly ship an artifact from uncommitted source.
 
 Verify the actual newly built artifact:

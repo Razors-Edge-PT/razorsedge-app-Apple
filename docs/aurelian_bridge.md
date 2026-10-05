@@ -110,6 +110,12 @@ build without the property drops every bridge request (logged once per request),
 GoodLift never trusts a debug-signed Aurelian by accident. Certificate fingerprints are public
 identifiers, never key material.
 
+Flutter regenerates `android/local.properties` and has dropped the release property before, silently
+producing a release build with an empty allowlist. For an explicitly authorised Aurelian-enabled
+release, also pass it for that one build as the process-only environment variable
+`ORG_GRADLE_PROJECT_aurelian.callerCerts.release` and check the compiled `AURELIAN_CALLER_CERTS`
+(`.claude/skills/goodlift-release/SKILL.md`, "Aurelian-enabled builds only").
+
 Aurelian is still signed with that machine's **debug** key, whose keystore uses Android's well-known
 default password. Trusting it is acceptable only for internal-testing builds installed on Richard's own
 devices. Before any GoodLift build that trusts Aurelian reaches Production, give Aurelian a dedicated
