@@ -150,6 +150,9 @@ class _LeaderboardViewState extends State<LeaderboardView>
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
       _c.resetToRaw();
+    } else if (state == AppLifecycleState.resumed) {
+      // A long-lived session would otherwise keep the medals it first loaded.
+      unawaited(_c.reloadMedals());
     }
   }
 
@@ -440,19 +443,22 @@ class _ViewMenu extends StatelessWidget {
   }
 }
 
-/// The raw-board silver achievement: a restrained diagonal steel-to-silver
-/// finish across the whole row, a fine cool edge and a soft static highlight.
-/// Static — no shimmer or animation — so reduced-motion needs nothing more.
+/// The raw-board silver achievement: a faint diagonal silver tint over the
+/// row's own dark ground, with no edge or outline, so the row stays part of
+/// the board rather than reading as a selected card. Static — no shimmer or
+/// animation — so reduced-motion needs nothing more.
 const BoxDecoration kSilverRowDecoration = BoxDecoration(
   borderRadius: BorderRadius.all(Radius.circular(ProfileSpacing.radiusSmall)),
   gradient: LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: <Color>[Color(0xFF29313D), Color(0xFF4C5664), Color(0xFF323B48)],
+    colors: <Color>[Color(0x0DC7D0DA), Color(0x1AC7D0DA), Color(0x0FC7D0DA)],
     stops: <double>[0.0, 0.42, 1.0],
   ),
-  border: Border.fromBorderSide(BorderSide(color: Color(0x8CB7C3D0))),
 );
+
+/// Shown under a silver row's points, left of "RE pts", in the same caption.
+const String kSilverbackLabel = 'Silverback -';
 
 /// What a row offers besides its public standing.
 enum LeaderboardRowAction { none, add, requested, accept }
@@ -514,6 +520,8 @@ class LeaderboardRow extends StatelessWidget {
     // Bounded, and scaled down only when it could not otherwise fit (very
     // large accessibility text on a narrow phone), so the row never
     // overflows; at ordinary sizes it is exactly as before.
+    final Widget unit = Text(entry.ageAdjusted ? 'adj. RE pts' : 'RE pts',
+        style: ProfileText.caption(context));
     final Widget points = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 112),
       child: FittedBox(
@@ -524,8 +532,29 @@ class LeaderboardRow extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             Text(entry.pointsLabel, style: ProfileText.recordValue(context)),
-            Text(entry.ageAdjusted ? 'adj. RE pts' : 'RE pts',
-                style: ProfileText.caption(context)),
+            if (!silver)
+              unit
+            else
+              // Within the points' own width: only this caption line shrinks
+              // if it cannot fit, never the points above or the name beside.
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 112),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(kSilverbackLabel,
+                          key: ValueKey<String>(
+                              'leaderboard-silverback-label-${entry.uid}'),
+                          style: ProfileText.caption(context)),
+                      const SizedBox(width: ProfileSpacing.xs),
+                      unit,
+                    ],
+                  ),
+                ),
+              ),
           ],
         ),
       ),

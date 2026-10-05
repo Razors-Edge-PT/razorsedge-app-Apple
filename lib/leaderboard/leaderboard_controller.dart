@@ -12,7 +12,9 @@
 /// Each period also keeps its board's category medals, loaded BESIDE the
 /// first page and never blocking it: rows show as soon as they arrive and
 /// gain their medals when the (one-document) snapshot lands. A failed medal
-/// load keeps whatever medals were last shown.
+/// load keeps whatever medals were last shown. The snapshot is read again
+/// whenever an already-loaded board is selected and when the app resumes, so
+/// a session never keeps a board's first (possibly empty) medals for good.
 ///
 /// ── Optional age-adjusted view ───────────────────────────────────────────
 /// RAW IS ALWAYS THE DEFAULT. The age view is local presentation state only:
@@ -142,10 +144,20 @@ class LeaderboardController extends ChangeNotifier {
     if (_s.status == LeaderboardStatus.idle) await _loadFirst(_period);
   }
 
+  /// Reads the shown board's medal snapshot again (one document). The rows
+  /// are not refetched; a failed read keeps the medals already shown.
+  Future<void> reloadMedals() async {
+    if (_s.status == LeaderboardStatus.idle) return;
+    await _loadMedals(_period);
+  }
+
   Future<void> selectPeriod(LeaderboardPeriod next) async {
     if (next == _period) return;
     _period = next;
     _notify();
+    // A board loaded earlier keeps its rows, but its medals are read again:
+    // they may have been empty or older when it was first shown.
+    unawaited(reloadMedals());
     await start();
     if (_ageView && _s.ageStatus == LeaderboardStatus.idle) {
       await _loadAge(_period);
