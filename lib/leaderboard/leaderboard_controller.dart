@@ -75,9 +75,28 @@ class LeaderboardController extends ChangeNotifier {
   bool _disposed = false;
 
   bool _ageView = false;
+  LeaderboardSexFilter _sexFilter = LeaderboardSexFilter.all;
+  final Map<String, _PeriodState> _sexStates = <String, _PeriodState>{};
+
+  LeaderboardSexFilter get sexFilter => _sexFilter;
+
+  _PeriodState _stateFor(LeaderboardPeriod p, LeaderboardSexFilter sex) =>
+      sex == LeaderboardSexFilter.all
+          ? _states[p]!
+          : _sexStates.putIfAbsent('${sex.name}:${p.name}', () => _PeriodState());
+
+  Future<void> setSexFilter(LeaderboardSexFilter sex) async {
+    if (sex == _sexFilter) return;
+    _sexFilter = sex;
+    _notify();
+    await start();
+    if (_ageView && _s.ageStatus == LeaderboardStatus.idle) {
+      await _loadAge(_period);
+    }
+  }
 
   LeaderboardPeriod get period => _period;
-  _PeriodState get _s => _states[_period]!;
+  _PeriodState get _s => _stateFor(_period, _sexFilter);
 
   /// True while the optional age-adjusted view is shown (never the default).
   bool get ageView => _ageView;
@@ -112,16 +131,20 @@ class LeaderboardController extends ChangeNotifier {
 
   Future<void> toggleAgeView() => setAgeView(!_ageView);
 
-  /// Back to the raw default; any age page still loading is discarded.
+  /// Back to raw / All; any age page still loading is discarded.
   void resetToRaw() {
-    for (final _PeriodState st in _states.values) {
+    for (final _PeriodState st in <_PeriodState>[
+      ..._states.values, ..._sexStates.values
+    ]) {
       st.ageGeneration += 1;
       if (st.ageStatus == LeaderboardStatus.loading) {
         st.ageStatus = LeaderboardStatus.idle;
       }
     }
-    if (!_ageView) return;
+    final bool changed = _ageView || _sexFilter != LeaderboardSexFilter.all;
     _ageView = false;
+    _sexFilter = LeaderboardSexFilter.all;
+    if (!changed) return;
     _notify();
   }
 
@@ -169,7 +192,8 @@ class LeaderboardController extends ChangeNotifier {
   Future<void> refresh() => _ageView ? _loadAge(_period) : _loadFirst(_period);
 
   Future<void> _loadFirst(LeaderboardPeriod p) async {
-    final _PeriodState s = _states[p]!;
+    final LeaderboardSexFilter sex = _sexFilter;
+    final _PeriodState s = _stateFor(p, sex);
     final int gen = ++s.generation;
     s.status = LeaderboardStatus.loading;
     s.error = null;
@@ -178,7 +202,9 @@ class LeaderboardController extends ChangeNotifier {
     unawaited(_loadInfo(p));
     try {
       final LeaderboardPageResult page =
-          await _repo.fetchPage(p, limit: LeaderboardRepository.boardSize);
+          sex == LeaderboardSexFilter.all
+              ? await _repo.fetchPage(p, limit: LeaderboardRepository.boardSize)
+              : await _repo.fetchSexPage(p, sex);
       if (gen != s.generation) return;
       // The server's order, ranks 1–20; never a row beyond the board.
       s.entries = List<LeaderboardEntry>.unmodifiable(page.entries
@@ -198,7 +224,8 @@ class LeaderboardController extends ChangeNotifier {
   }
 
   Future<void> _loadAge(LeaderboardPeriod p) async {
-    final _PeriodState s = _states[p]!;
+    final LeaderboardSexFilter sex = _sexFilter;
+    final _PeriodState s = _stateFor(p, sex);
     final int gen = ++s.ageGeneration;
     s.ageStatus = LeaderboardStatus.loading;
     s.ageError = null;
@@ -206,7 +233,9 @@ class LeaderboardController extends ChangeNotifier {
     unawaited(_loadInfo(p));
     try {
       final LeaderboardPageResult page =
-          await _repo.fetchAgePage(p, limit: LeaderboardRepository.boardSize);
+          sex == LeaderboardSexFilter.all
+              ? await _repo.fetchAgePage(p, limit: LeaderboardRepository.boardSize)
+              : await _repo.fetchSexPage(p, sex, ageAdjusted: true);
       // Superseded, or the view was reset to raw meanwhile: never shown.
       if (gen != s.ageGeneration) return;
       s.ageEntries = List<LeaderboardEntry>.unmodifiable(page.entries
@@ -226,7 +255,8 @@ class LeaderboardController extends ChangeNotifier {
   }
 
   Future<void> _loadInfo(LeaderboardPeriod p) async {
-    final _PeriodState s = _states[p]!;
+    final LeaderboardSexFilter sex = _sexFilter;
+    final _PeriodState s = _stateFor(p, sex);
     final int gen = ++s.infoGeneration;
     try {
       final LeaderboardBoardInfo info = await _repo.fetchBoardInfo(p);
@@ -239,7 +269,8 @@ class LeaderboardController extends ChangeNotifier {
   }
 
   Future<void> _loadMedals(LeaderboardPeriod p) async {
-    final _PeriodState s = _states[p]!;
+    final LeaderboardSexFilter sex = _sexFilter;
+    final _PeriodState s = _stateFor(p, sex);
     final int gen = ++s.medalGeneration;
     try {
       final LeaderboardMedals m = await _repo.fetchMedals(p);

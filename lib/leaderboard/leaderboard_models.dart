@@ -19,6 +19,17 @@ const String kAllTimePeriodKey = 'all_time';
 /// not browsable yet.
 enum LeaderboardPeriod { thisMonth, allTime }
 
+/// Ephemeral presentation choice; never a profile or stored preference.
+enum LeaderboardSexFilter { all, male, female }
+
+extension LeaderboardSexFilterLabel on LeaderboardSexFilter {
+  String get label => switch (this) {
+        LeaderboardSexFilter.all => 'All',
+        LeaderboardSexFilter.male => 'Male',
+        LeaderboardSexFilter.female => 'Female',
+      };
+}
+
 /// The age model the optional age-adjusted view reads
 /// (functions/leaderboard/age.js AGE_MODEL_VERSION). Entries and boards
 /// written under any other version are never shown.

@@ -38,11 +38,17 @@ const freshUid = (tag) => {
 
 test.after(async () => {
   if (!admin.apps.length) return;
-  for (const p of ['2041-05', '2041-06', '2041-07', '2041-08']) {
+  for (const p of ['2041-05', '2041-06', '2041-07', '2041-08', '2041-09']) {
     for (const col of ['leaderboards', 'leaderboardsAge', 'leaderboardPublic', 'leaderboardMedals']) {
       await db().recursiveDelete(db().collection(col).doc(p));
     }
     await db().recursiveDelete(db().collection('leaderboardPublic').doc(p + '_age'));
+    for (const sex of ['male', 'female']) {
+      for (const col of ['leaderboards', 'leaderboardsAge', 'leaderboardPublic']) {
+        await db().recursiveDelete(db().collection(col).doc(`${p}_${sex}`));
+      }
+      await db().recursiveDelete(db().collection('leaderboardPublic').doc(`${p}_age_${sex}`));
+    }
   }
   for (const uid of [...created, 'LWXGJ5SlIzM4OxEkOdTuv6d1c5b2']) {
     await db().recursiveDelete(db().collection('users').doc(uid));
@@ -207,4 +213,46 @@ test('public snapshot: raw order, public usernames only, medals, silver; unchang
   assert.ok(!JSON.stringify(publicAge).includes('Legal Fallback'));
   assert.ok(!JSON.stringify(publicAge).includes('silverEligible'));
   assert.equal(second.ageChanged, false);
+});
+
+test('published sex boards rank the full pool, include unknown choices only in All and combine age weighting', async () => {
+  const p = '2041-09', nowMs = Date.parse('2041-09-20T00:00:00Z');
+  const men = [], women = [];
+  for (let i = 0; i < 22; i++) {
+    const uid = freshUid(`male_${i}`); men.push(uid);
+    await seedMonth(p, uid, { dob: '01-01-2010', days: [['2041-09-05', { hipHinge: 2000 - i }]] });
+    await db().collection('users').doc(uid).set({ sex: 'M' }, { merge: true });
+    await ageFs.recomputeAthleteBoard(uid, p, nowMs);
+  }
+  for (let i = 0; i < 22; i++) {
+    const uid = freshUid(`female_${i}`); women.push(uid);
+    await seedMonth(p, uid, { dob: i === 21 ? undefined : i === 20 ? '01-01-1966' : '01-01-2010',
+      days: [['2041-09-05', { hipHinge: 1000 - i }]] });
+    await db().collection('users').doc(uid).set({ sex: 'F' }, { merge: true });
+    await ageFs.recomputeAthleteBoard(uid, p, nowMs);
+  }
+  const unknown = freshUid('yes');
+  await seedMonth(p, unknown, { dob: '01-01-2010', days: [['2041-09-05', { hipHinge: 3000 }]] });
+  await db().collection('users').doc(unknown).set({ sex: 'N' }, { merge: true });
+  await ageFs.recomputeAthleteBoard(unknown, p, nowMs);
+  await ageFs.publishBoard(p, nowMs);
+  const all = (await ageFs.publicRef(p).get()).data();
+  assert.equal(all.entries.length, 20); assert.equal(all.entries[0].totalPointsUnits, 3000 * P);
+  const female = (await db().collection('leaderboards').doc(p + '_female').get()).data();
+  const femaleAge = (await db().collection('leaderboardsAge').doc(p + '_female').get()).data();
+  assert.equal(female.entries.length, 20); assert.equal(female.entries[0].uid, women[0]);
+  assert.ok(female.entries.every(e => women.includes(e.uid)), 'no unknown/male row');
+  assert.equal(femaleAge.entries.length, 20); assert.equal(femaleAge.entries[0].uid, women[20], 'raw rank 21 within female group becomes age rank 1');
+  assert.ok(!femaleAge.entries.some(e => e.uid === women[21]), 'incomplete age is excluded');
+  const publicAge = (await ageFs.publicRef(p + '_age_female').get()).data();
+  assert.equal(publicAge.sexFilter, 'female'); assert.equal(publicAge.rankedCount, 21);
+  assert.equal(publicAge.incompleteCount, 1);
+  assert.deepEqual(publicAge.entries.map(e => e.rank), Array.from({ length: 20 }, (_, i) => i + 1));
+  assert.ok(publicAge.entries.every(e => !('sex' in e) && !('uid' in e) && !('dob' in e)));
+  const rawBefore = (await db().collection('leaderboards').doc(p).collection('entries').doc(women[0]).get()).data();
+  await db().collection('users').doc(women[0]).update({ sex: 'M' });
+  await ageFs.publishBoard(p, nowMs + 1000);
+  const updated = (await db().collection('leaderboards').doc(p + '_female').get()).data();
+  assert.ok(!updated.entries.some(e => e.uid === women[0]), 'profile corrections move the presentation group');
+  assert.deepEqual((await db().collection('leaderboards').doc(p).collection('entries').doc(women[0]).get()).data(), rawBefore);
 });

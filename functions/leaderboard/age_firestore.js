@@ -7,6 +7,8 @@
 //   leaderboardsAge/{periodKey}                 board: { ageModelVersion,
 //       silverUids, rankedCount, incompleteCount, countsUpdatedAt }  (signed-in read)
 //   leaderboardsAge/{periodKey}/entries/{uid}   age-ranked projection          (signed-in read)
+//   leaderboards/{periodKey}_{male|female}       filtered app raw snapshot
+//   leaderboardsAge/{periodKey}_{male|female}    filtered app age snapshot
 //   leaderboardPublic/{periodKey}               public website snapshot        (server only)
 // periodKey is the current Auckland month 'YYYY-MM' or 'all_time'. Every one
 // is DERIVED from the raw entries, the raw day scores and the private birth
@@ -26,6 +28,7 @@
 //   publicLeaderboard            anonymous GET: ONE snapshot read, cached briefly
 //
 // ── Privacy ─────────────────────────────────────────────────────────────────
+// Sex is read only to select the board group; it is not copied onto rows.
 // The birth date is read with a field mask (users/{uid}.dob only) and never
 // copied anywhere. Age entries carry only the minimal public identity already
 // on the raw entry, the adjusted points, the model version and completeness.
@@ -41,6 +44,7 @@ const admin = require('firebase-admin');
 
 const age = require('./age');
 const feed = require('./public_feed');
+const { SEX_FILTERS, sexFilterOf, selectSexEntries, appSexBoard } = require('./sex_filter');
 const { ALL_TIME_PERIOD, isMonthPeriod } = require('./reducer');
 const { isLeaderboardEligibleUid } = require('./eligibility');
 const { canonicalJson } = require('../showcase/store');
@@ -287,91 +291,103 @@ async function runDailyAgeMaintenance(nowMs) {
 
 // ── Public website feed ───────────────────────────────────────────────────
 
-/** The raw top 20 in the app's exact server order (same composite index). */
-async function rawTop(periodKey) {
-  const q = await db().collection('leaderboards').doc(periodKey).collection('entries')
-    .where('totalPointsUnits', '>', 0)
-    .orderBy('totalPointsUnits', 'desc').orderBy('tieBreakDateKey').orderBy('uid')
-    .limit(feed.PUBLIC_MAX_ROWS + 5)
-    .get();
-  return q.docs.map((d) => Object.assign({}, d.data(), { uid: (d.data() || {}).uid || d.id }));
-}
-
-/** Same complete, current-model age query as the app, across ALL athletes. */
-async function ageTop(periodKey) {
-  const q = await ageBoardRef(periodKey).collection('entries')
-    .where('ageModelVersion', '==', age.AGE_MODEL_VERSION).where('ageComplete', '==', true)
-    .orderBy('adjustedTotalUnits', 'desc').orderBy('tieBreakDateKey').orderBy('uid')
-    .limit(feed.PUBLIC_MAX_ROWS + 5).get();
-  return q.docs.map((d) => Object.assign({}, d.data(), { uid: d.id }));
-}
-
-/**
- * Publishes raw and age snapshots and refreshes the age board's counts.
- * Bounded: two ≤25-entry queries, 1 medal snapshot, 1 age board, ≤40 usernames,
- * 2 count aggregations, 3 writes. Row no-op: an unchanged board only has
- * its freshness (generatedAt) refreshed.
- */
-async function publishBoard(periodKey, nowMs) {
-  const [raws, adjusted] = await Promise.all([rawTop(periodKey), ageTop(periodKey)]);
-  const top = raws.filter((e) => isLeaderboardEligibleUid(e.uid)).slice(0, feed.PUBLIC_MAX_ROWS);
-  const ageEntries = adjusted.filter((e) => isLeaderboardEligibleUid(e.uid)).slice(0, feed.PUBLIC_MAX_ROWS);
-  const ageKey = feed.snapshotKeyFor(periodKey === ALL_TIME_PERIOD ? 'all_time' : 'current', periodKey, 'age');
-  const [medalSnap, boardSnap, prevSnap, prevAgeSnap] = await db().getAll(
-    db().collection(MEDALS_COLLECTION).doc(periodKey), ageBoardRef(periodKey), publicRef(periodKey), publicRef(ageKey));
-  const profiles = new Map();
-  const uids = [...new Set([...top, ...ageEntries].map((e) => e.uid))];
-  if (uids.length) {
-    const snaps = await db().getAll(...uids.map((uid) => db().collection('users_public').doc(uid)), { fieldMask: ['username'] });
-    for (const s of snaps) profiles.set(s.id, s.exists ? { username: s.get('username') } : null);
+/** Page through the full server order; a sex's top 20 can lie below rank 20. */
+async function rankedEntries(query) {
+  const entries = [];
+  let last;
+  for (;;) {
+    let pageQuery = query.limit(300);
+    if (last) pageQuery = pageQuery.startAfter(last);
+    const page = await pageQuery.get();
+    entries.push(...page.docs.map(d => Object.assign({}, d.data(), { uid: d.id }))
+      .filter(e => isLeaderboardEligibleUid(e.uid)));
+    if (page.size < 300) break;
+    last = page.docs[page.docs.length - 1];
   }
+  return entries;
+}
+
+async function publishBoard(periodKey, nowMs) {
+  const [raws, adjusted] = await Promise.all([
+    rankedEntries(db().collection('leaderboards').doc(periodKey).collection('entries')
+      .where('totalPointsUnits', '>', 0)
+      .orderBy('totalPointsUnits', 'desc').orderBy('tieBreakDateKey').orderBy('uid')),
+    rankedEntries(ageBoardRef(periodKey).collection('entries')
+      .where('ageModelVersion', '==', age.AGE_MODEL_VERSION).where('ageComplete', '==', true)
+      .orderBy('adjustedTotalUnits', 'desc').orderBy('tieBreakDateKey').orderBy('uid')),
+  ]);
+  const uids = [...new Set([...raws, ...adjusted].map(e => e.uid))];
+  const sexes = new Map();
+  // Only the explicit profile choice is used. Unknown and "Yes." stay in All.
+  for (let i = 0; i < uids.length; i += 300) {
+    const snaps = await db().getAll(...uids.slice(i, i + 300).map(uid => db().collection('users').doc(uid)), { fieldMask: ['sex'] });
+    for (const snap of snaps) sexes.set(snap.id, sexFilterOf(snap.exists ? snap.get('sex') : null));
+  }
+  const groups = SEX_FILTERS.map(sex => ({ sex,
+    raw: selectSexEntries(raws, sexes, sex, feed.PUBLIC_MAX_ROWS),
+    age: selectSexEntries(adjusted, sexes, sex, feed.PUBLIC_MAX_ROWS) }));
+  const profiles = new Map();
+  const shownUids = [...new Set(groups.flatMap(g => [...g.raw, ...g.age].map(e => e.uid)))];
+  for (let i = 0; i < shownUids.length; i += 300) {
+    const snaps = await db().getAll(...shownUids.slice(i, i + 300).map(uid => db().collection('users_public').doc(uid)), { fieldMask: ['username'] });
+    for (const snap of snaps) profiles.set(snap.id, snap.exists ? { username: snap.get('username') } : null);
+  }
+  const period = periodKey === ALL_TIME_PERIOD ? 'all_time' : 'current';
+  const keys = groups.flatMap(g => ['raw', 'age'].map(view => feed.snapshotKeyFor(period, periodKey, view, g.sex)));
+  const [medalSnap, boardSnap, ...previous] = await db().getAll(
+    db().collection(MEDALS_COLLECTION).doc(periodKey), ageBoardRef(periodKey), ...keys.map(publicRef));
   const board = boardSnap.exists ? boardSnap.data() : {};
   const silverUids = board.ageModelVersion === age.AGE_MODEL_VERSION && Array.isArray(board.silverUids) ? board.silverUids : [];
   const generatedAt = new Date(nowMs || Date.now()).toISOString();
-  const next = feed.buildPublicSnapshot({
-    periodKey,
-    rawEntries: top,
-    publicProfiles: profiles,
-    medalSnapshot: medalSnap.exists ? medalSnap.data() : null,
-    silverUids: new Set(silverUids),
-    generatedAt,
-    isEligible: isLeaderboardEligibleUid,
-  });
-  const prev = prevSnap.exists ? prevSnap.data() : null;
-  const unchanged = prev && feed.rowsFingerprint(prev) === feed.rowsFingerprint(next) && prev.periodKey === periodKey;
-
-  // The age board's counts (the app's "N athletes aren't ranked in this view").
+  const medalSnapshot = medalSnap.exists ? medalSnap.data() : null;
   const col = ageBoardRef(periodKey).collection('entries').where('ageModelVersion', '==', age.AGE_MODEL_VERSION);
   const [ranked, incomplete] = await Promise.all([
     col.where('ageComplete', '==', true).count().get(),
     col.where('ageComplete', '==', false).count().get(),
   ]);
-  const nextAge = feed.buildPublicAgeSnapshot({
-    periodKey, ageEntries, publicProfiles: profiles,
-    medalSnapshot: medalSnap.exists ? medalSnap.data() : null, generatedAt,
-    ageModelVersion: age.AGE_MODEL_VERSION, rankedCount: ranked.data().count,
-    incompleteCount: incomplete.data().count, isEligible: isLeaderboardEligibleUid,
-  });
-  const prevAge = prevAgeSnap.exists ? prevAgeSnap.data() : null;
-  const ageUnchanged = prevAge && prevAge.schemaVersion === feed.PUBLIC_AGE_SCHEMA_VERSION && prevAge.view === 'age' &&
-    prevAge.periodKey === periodKey && prevAge.ageModelVersion === age.AGE_MODEL_VERSION &&
-    prevAge.rankedCount === nextAge.rankedCount && prevAge.incompleteCount === nextAge.incompleteCount &&
-    feed.rowsFingerprint(prevAge) === feed.rowsFingerprint(nextAge);
+  const completeUids = new Set(adjusted.map(e => e.uid));
   const batch = db().batch();
-  if (unchanged) batch.update(publicRef(periodKey), { generatedAt });
-  else batch.set(publicRef(periodKey), next);
-  if (ageUnchanged) batch.update(publicRef(ageKey), { generatedAt });
-  else batch.set(publicRef(ageKey), nextAge);
-  batch.set(ageBoardRef(periodKey), {
-    periodKey,
-    ageModelVersion: age.AGE_MODEL_VERSION,
-    rankedCount: ranked.data().count,
-    incompleteCount: incomplete.data().count,
-    countsUpdatedAt: serverTime(),
-  }, { merge: true });
+  const results = [];
+  let slot = 0;
+  for (const group of groups) {
+    const rankedCount = group.sex === 'all' ? ranked.data().count
+      : adjusted.filter(e => sexes.get(e.uid) === group.sex).length;
+    const incompleteCount = group.sex === 'all' ? incomplete.data().count
+      : raws.filter(e => sexes.get(e.uid) === group.sex && !completeUids.has(e.uid)).length;
+    const next = feed.buildPublicSnapshot({ periodKey, rawEntries: group.raw, publicProfiles: profiles,
+      medalSnapshot, silverUids: new Set(silverUids), generatedAt, isEligible: isLeaderboardEligibleUid });
+    const nextAge = feed.buildPublicAgeSnapshot({ periodKey, ageEntries: group.age, publicProfiles: profiles,
+      medalSnapshot, generatedAt, ageModelVersion: age.AGE_MODEL_VERSION, rankedCount,
+      incompleteCount, isEligible: isLeaderboardEligibleUid });
+    const changes = [];
+    for (const snapshot of [next, nextAge]) {
+      // The group is a board-level selector; no row-level sex/private fields.
+      if (group.sex !== 'all') snapshot.sexFilter = group.sex;
+      const prev = previous[slot].exists ? previous[slot].data() : null;
+      const unchanged = prev && canonicalJson({ ...prev, generatedAt: null }) === canonicalJson({ ...snapshot, generatedAt: null });
+      if (unchanged) batch.update(publicRef(keys[slot]), { generatedAt });
+      else batch.set(publicRef(keys[slot]), snapshot);
+      changes.push(!unchanged);
+      slot += 1;
+    }
+    if (group.sex !== 'all') {
+      for (const view of ['raw', 'age']) {
+        const snapshot = appSexBoard({ periodKey, sex: group.sex, view,
+          entries: group[view], generatedAt, ageModelVersion: age.AGE_MODEL_VERSION });
+        // Existing signed-in board rules cover these derived root documents.
+        // No indexes, profile permissions or raw entries are changed.
+        const ref = db().collection(view === 'age' ? AGE_COLLECTION : 'leaderboards').doc(`${periodKey}_${group.sex}`);
+        batch.set(ref, snapshot);
+      }
+    }
+    results.push({ sex: group.sex, rows: next.entries.length, changed: changes[0],
+      ageRows: nextAge.entries.length, ageChanged: changes[1] });
+  }
+  batch.set(ageBoardRef(periodKey), { periodKey, ageModelVersion: age.AGE_MODEL_VERSION,
+    rankedCount: ranked.data().count, incompleteCount: incomplete.data().count,
+    countsUpdatedAt: serverTime() }, { merge: true });
   await batch.commit();
-  return { periodKey, rows: next.entries.length, changed: !unchanged,
-    ageRows: nextAge.entries.length, ageChanged: !ageUnchanged };
+  return { periodKey, ...results[0], groups: results.slice(1) };
 }
 
 /** Both live boards (current Auckland month — rollover included — and all time). */
@@ -419,7 +435,7 @@ async function handlePublicRequest(req, res, deps) {
     return sendJson(res, parsed.status, { error: parsed.error }, 'no-store', head);
   }
   const periodKey = feed.snapshotKeyFor(parsed.period, today(nowMs).monthKey);
-  const key = feed.snapshotKeyFor(parsed.period, today(nowMs).monthKey, parsed.view || 'raw');
+  const key = feed.snapshotKeyFor(parsed.period, today(nowMs).monthKey, parsed.view || 'raw', parsed.sex || 'all');
   const unavailable = () => sendJson(res, 503, { error: 'leaderboard-unavailable' }, 'no-store', head);
   if (!key) return unavailable();
   let body = null;
@@ -431,6 +447,10 @@ async function handlePublicRequest(req, res, deps) {
       const stored = d.readSnapshot ? await d.readSnapshot(key) : (await publicRef(key).get()).data();
       body = parsed.view === 'age' ? feed.sanitizeAgeSnapshot(stored, periodKey, age.AGE_MODEL_VERSION)
         : feed.sanitizeSnapshot(stored, periodKey);
+      if (body && (parsed.sex || 'all') !== 'all') {
+        if (stored.sexFilter !== parsed.sex) body = null;
+        else body.sexFilter = parsed.sex;
+      }
       if (body && nowMs - Date.parse(body.generatedAt) > MAX_SNAPSHOT_AGE_MS) body = null;
     } catch (err) {
       logger.warn('publicLeaderboard read failed', { key, error: String(err && err.message) });

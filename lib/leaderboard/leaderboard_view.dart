@@ -252,9 +252,11 @@ class _LeaderboardViewState extends State<LeaderboardView>
     final String when = _c.period == LeaderboardPeriod.allTime
         ? 'All time'
         : describeMonthKey(key);
+    final String group = _c.sexFilter == LeaderboardSexFilter.all
+        ? '' : ' · ${_c.sexFilter.label}';
     return _c.ageView
-        ? 'Age-adjusted RE Points · $when'
-        : 'Total RE Points · $when';
+        ? 'Age-adjusted RE Points · $when$group'
+        : 'Total RE Points · $when$group';
   }
 
   /// The active age view, in the website's words: a small heading and one
@@ -304,6 +306,11 @@ class _LeaderboardViewState extends State<LeaderboardView>
               ),
               _ViewMenu(
                 ageView: _c.ageView,
+                sexFilter: _c.sexFilter,
+                onSexFilter: (LeaderboardSexFilter sex) {
+                  _menuOpen = false;
+                  _c.setSexFilter(sex);
+                },
                 onOpened: () => _menuOpen = true,
                 onClosed: () => _menuOpen = false,
                 onAgeView: (bool on) {
@@ -351,7 +358,9 @@ class _LeaderboardViewState extends State<LeaderboardView>
         return <Widget>[
           _Message(
             key: const ValueKey<String>('leaderboard-empty'),
-            text: _c.ageView
+            text: _c.sexFilter != LeaderboardSexFilter.all
+                ? 'No ${_c.sexFilter.label.toLowerCase()} athletes have scores for this view yet.'
+                : _c.ageView
                 ? 'No athletes can be ranked in the age-adjusted view yet.'
                 : _c.period == LeaderboardPeriod.thisMonth
                     ? 'No RE Points scored this month yet.'
@@ -408,12 +417,16 @@ class _PeriodSelector extends StatelessWidget {
 class _ViewMenu extends StatelessWidget {
   const _ViewMenu({
     required this.ageView,
+    required this.sexFilter,
+    required this.onSexFilter,
     required this.onAgeView,
     required this.onOpened,
     required this.onClosed,
   });
 
   final bool ageView;
+  final LeaderboardSexFilter sexFilter;
+  final ValueChanged<LeaderboardSexFilter> onSexFilter;
 
   /// Sets the view explicitly: the opposite of what the menu showed checked.
   final ValueChanged<bool> onAgeView;
@@ -433,8 +446,20 @@ class _ViewMenu extends StatelessWidget {
       onCanceled: onClosed,
       onSelected: (String v) {
         if (v == 'age') onAgeView(!ageView);
+        for (final LeaderboardSexFilter sex in LeaderboardSexFilter.values) {
+          if (v == sex.name) onSexFilter(sex);
+        }
       },
       itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+        const PopupMenuItem<String>(enabled: false, child: Text('Sex')),
+        for (final LeaderboardSexFilter sex in LeaderboardSexFilter.values)
+          CheckedPopupMenuItem<String>(
+            key: ValueKey<String>('leaderboard-menu-${sex.name}'),
+            value: sex.name,
+            checked: sexFilter == sex,
+            child: Text(sex.label),
+          ),
+        const PopupMenuDivider(),
         CheckedPopupMenuItem<String>(
           key: const ValueKey<String>('leaderboard-menu-age'),
           value: 'age',

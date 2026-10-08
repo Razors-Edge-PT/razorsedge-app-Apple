@@ -246,3 +246,19 @@ test('private demographics stay private: another athlete cannot read users/{uid}
   });
   await assertFails(as(OWNER).doc(`users/${OTHER}`).get());
 });
+
+test('derived sex-board root snapshots retain signed-in read and server-only write access', async () => {
+  for (const col of ['leaderboards', 'leaderboardsAge']) for (const sex of ['male', 'female']) {
+    const path = `${col}/2026-10_${sex}`;
+    await env.withSecurityRulesDisabled(async ctx => {
+      await ctx.firestore().doc(path).set({ sexBoardSchemaVersion: 1,
+        periodKey: '2026-10', sexFilter: sex, entries: [{ uid: OWNER }] });
+    });
+    await assertSucceeds(as(OTHER).doc(path).get());
+    await assertFails(anon().doc(path).get());
+    for (const uid of [OWNER, OTHER, SUPER]) {
+      await assertFails(as(uid).doc(path).set({ entries: [] }));
+      await assertFails(as(uid).doc(path).delete());
+    }
+  }
+});

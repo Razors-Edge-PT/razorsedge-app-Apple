@@ -9,6 +9,7 @@
 
 'use strict';
 
+const { SEX_FILTERS } = require('./sex_filter');
 const PUBLIC_SCHEMA_VERSION = 1;
 const PUBLIC_AGE_SCHEMA_VERSION = 2;
 const PUBLIC_MAX_ROWS = 20;
@@ -165,7 +166,7 @@ function sanitizeSnapshot(stored, expectedPeriodKey) {
 
 /**
  * Validates a public request. [method] the HTTP method; [rawQuery] the raw
- * query string (no leading '?'). Returns { period, view? } or { status, error }.
+ * query string (no leading '?'). Returns { period, view?, sex? } or { status, error }.
  * No view parameter preserves the existing raw response.
  */
 function parsePublicRequest(method, rawQuery) {
@@ -173,24 +174,28 @@ function parsePublicRequest(method, rawQuery) {
   const q = typeof rawQuery === 'string' ? rawQuery : '';
   const params = new URLSearchParams(q);
   const keys = [...params.keys()];
-  if (keys.some((k) => k !== 'period' && k !== 'view')) return { status: 400, error: 'unknown-parameter' };
+  if (keys.some((k) => k !== 'period' && k !== 'view' && k !== 'sex')) return { status: 400, error: 'unknown-parameter' };
   const values = params.getAll('period');
   const views = params.getAll('view');
+  const sexes = params.getAll('sex');
+  if (sexes.length > 1) return { status: 400, error: 'duplicate-parameter' };
+  if (sexes.length && !SEX_FILTERS.includes(sexes[0])) return { status: 400, error: 'unknown-sex' };
+  const sex = sexes.length ? { sex: sexes[0] } : {};
   if (values.length > 1 || views.length > 1) return { status: 400, error: 'duplicate-parameter' };
   const period = values.length === 0 ? 'current' : values[0];
   if (period !== 'current' && period !== 'all_time') return { status: 400, error: 'unknown-period' };
   if (views.length) {
     if (views[0] !== 'raw' && views[0] !== 'age') return { status: 400, error: 'unknown-view' };
-    return { period, view: views[0] };
+    return { period, view: views[0], ...sex };
   }
-  return { period };
+  return { period, ...sex };
 }
 
 /** The snapshot document id for a public period at [currentMonthKey]. */
-function snapshotKeyFor(period, currentMonthKey, view = 'raw') {
-  if (view !== 'raw' && view !== 'age') return null;
+function snapshotKeyFor(period, currentMonthKey, view = 'raw', sex = 'all') {
+  if ((view !== 'raw' && view !== 'age') || !SEX_FILTERS.includes(sex)) return null;
   const key = period === 'all_time' ? 'all_time' : PERIOD_RE.test(currentMonthKey) ? currentMonthKey : null;
-  return key ? key + (view === 'age' ? '_age' : '') : null;
+  return key ? key + (view === 'age' ? '_age' : '') + (sex === 'all' ? '' : `_${sex}`) : null;
 }
 
 module.exports = {

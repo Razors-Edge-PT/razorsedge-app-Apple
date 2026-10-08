@@ -113,6 +113,65 @@ class LeaderboardRepository {
     );
   }
 
+  /// Server-generated top 20 of the selected sex, across the full ranked
+  /// pool. One document; no filtering of the overall top 20, private profile
+  /// reads, new indexes or client-side scoring. Published hourly with the web.
+  Future<LeaderboardPageResult> fetchSexPage(
+    LeaderboardPeriod period,
+    LeaderboardSexFilter sex, {
+    bool ageAdjusted = false,
+    int limit = boardSize,
+  }) async {
+    if (sex == LeaderboardSexFilter.all) {
+      return ageAdjusted
+          ? fetchAgePage(period, limit: limit)
+          : fetchPage(period, limit: limit);
+    }
+    final String key = periodKey(period);
+    final DocumentSnapshot<Map<String, dynamic>> snap = await _db
+        .collection(ageAdjusted ? kLeaderboardsAgeCollection : 'leaderboards')
+        .doc('${key}_${sex.name}')
+        .get();
+    final Map<String, dynamic>? data = snap.data();
+    final Object? rows = data?['entries'];
+    if (data == null ||
+        data['sexBoardSchemaVersion'] != 1 ||
+        data['periodKey'] != key ||
+        data['sexFilter'] != sex.name ||
+        data['view'] != (ageAdjusted ? 'age' : 'raw') ||
+        rows is! List ||
+        rows.length > boardSize ||
+        (ageAdjusted && data['ageModelVersion'] != kAgeModelVersion)) {
+      throw StateError('Sex-filtered leaderboard unavailable');
+    }
+    final DateTime? generatedAt = DateTime.tryParse(
+      data['generatedAt'] is String ? data['generatedAt'] as String : '',
+    );
+    // Seen-once boards remain available offline, matching the normal board.
+    if (generatedAt == null ||
+        (!snap.metadata.isFromCache &&
+            _clock().difference(generatedAt).inMinutes > 150)) {
+      throw StateError('Sex-filtered leaderboard needs an update');
+    }
+    final List<LeaderboardEntry> entries = <LeaderboardEntry>[];
+    for (final Object? row in rows.take(limit)) {
+      if (row is! Map) throw StateError('Invalid leaderboard row');
+      final Map<String, dynamic> fields = Map<String, dynamic>.from(row);
+      final Object? uid = fields['uid'];
+      if (uid is! String || uid.isEmpty) throw StateError('Invalid athlete');
+      final LeaderboardEntry? entry = ageAdjusted
+          ? ageEntryFromMap(uid, fields, rank: entries.length + 1)
+          : LeaderboardEntry.fromMap(uid, fields, rank: entries.length + 1);
+      if (entry == null) throw StateError('Invalid leaderboard score');
+      entries.add(entry);
+    }
+    return LeaderboardPageResult(
+      entries: entries,
+      hasMore: false,
+      isFromCache: snap.metadata.isFromCache,
+    );
+  }
+
   /// [period]'s board extras: the raw-board silver set and the age view's
   /// counts. ONE small server-written document.
   Future<LeaderboardBoardInfo> fetchBoardInfo(LeaderboardPeriod period) async {
