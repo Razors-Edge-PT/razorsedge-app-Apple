@@ -1,4 +1,5 @@
-# Sync main first, then run this from C:\Projects\goodlift_app\GoodLift_production in PowerShell.
+# Fetch origin/main and create a fresh release branch in this worktree first.
+# Run this from C:\Projects\goodlift_app\GoodLift_production in PowerShell.
 # Uses the existing Firebase/ADC login and Android upload signing inputs.
 # Richard uploads the resulting AAB to Play Internal Testing.
 $ErrorActionPreference = 'Stop'

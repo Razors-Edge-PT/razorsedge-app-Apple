@@ -9,6 +9,7 @@ Razor's Edge (RE) is a Flutter fitness coaching app for workout logging and peri
 - **Firebase Project**: `goodlift-us-storage`
 - **Bundle ID**: `com.goodlift.razorsedge`
 - **Canonical Windows working checkout**: `C:\Projects\goodlift_app\GoodLift_production` (Richard confirmed 8 October 2026). Use this path for desktop sync, release and AAB commands. The older `C:\Projects\RE-test` path in release examples is stale.
+- **Windows worktrees**: `main` is checked out at `C:\Projects\goodlift_app\RE-test`. In the canonical `GoodLift_production` checkout, fetch `origin/main` and create a fresh release branch from it. Do not try to switch that checkout to an already occupied `main` branch.
 - **Flutter SDK**: >=3.4.4 <4.0.0
 
 ## Common Commands

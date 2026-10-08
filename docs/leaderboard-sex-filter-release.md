@@ -38,7 +38,9 @@ backend rollout so the new controls do not point at an unsupported API.
 The implementation environment has no authorized Firebase account, so cloud
 rollout and the signed Android build require the existing desktop credentials.
 
-From C:\Projects\goodlift_app\GoodLift_production after a normal fast-forward pull of main, run:
+The local main branch is already checked out in C:\Projects\goodlift_app\RE-test.
+In C:\Projects\goodlift_app\GoodLift_production, fetch origin/main and create a
+fresh release branch from it, then run:
 
 ```powershell
 & .\tool\release_leaderboard_filters.ps1
