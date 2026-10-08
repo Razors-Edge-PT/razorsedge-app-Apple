@@ -339,19 +339,82 @@ void main() {
           reason: 'a feed tile must never fetch a video');
     });
 
-    testWidgets('a video with no poster shows a quiet placeholder, not a '
-        'useless Retry', (WidgetTester t) async {
-      store.seedAll();
+    testWidgets('a genuinely missing poster stays playable and explains itself',
+        (WidgetTester t) async {
+      int lookups = 0;
+      int opened = 0;
+      profileUrlRefresher = StorageUrlRefresher(lookup: (String path) async {
+        lookups++;
+        expect(path, 'users/owner-uid/posts/v1/thumb.jpg');
+        return null;
+      });
       await t.pumpWidget(wrap(SizedBox(
         width: 300,
-        child: FeedCard(item: video(), now: DateTime.utc(2026, 5, 1)),
+        child: FeedCard(item: video(), onOpen: () => opened++,
+          now: DateTime.utc(2026, 5, 1)),
       )));
       await t.pumpAndSettle();
 
-      expect(store.requestedKeys, isEmpty,
-          reason: 'there is nothing safe to fetch, so nothing is fetched');
+      expect(lookups, 1);
+      expect(store.downloadUrls, isEmpty,
+          reason: 'the video itself must never be downloaded for its preview');
+      expect(find.text('Video · Tap to watch'), findsOneWidget);
       expect(find.text('Retry'), findsNothing,
           reason: 'retrying cannot conjure a poster that was never uploaded');
+      await t.tap(find.text('Video · Tap to watch'));
+      expect(opened, 1);
+    });
+
+    testWidgets('missing or legacy clip-valued thumbnail URL recovers the JPEG',
+        (WidgetTester t) async {
+      const String poster = 'https://example.test/thumb.jpg';
+      int lookups = 0;
+      profileUrlRefresher = StorageUrlRefresher(lookup: (String path) async {
+        lookups++;
+        expect(path, 'users/owner-uid/posts/v1/thumb.jpg');
+        return poster;
+      });
+      await t.pumpWidget(wrap(SizedBox(width: 300,
+        child: FeedCard(item: video(thumbUrl: 'https://example.test/original.mp4')),
+      )));
+      await t.pumpAndSettle();
+      expect(lookups, 1);
+      expect(store.downloadUrls, <String>[poster]);
+      expect(find.byType(Image), findsOneWidget);
+      expect(find.text('Video · Tap to watch'), findsNothing);
+    });
+
+    testWidgets('a recovered poster survives a cold offline restart',
+        (WidgetTester t) async {
+      final FeedItem item = video();
+      store.seed(item.displayCacheKey);
+      int lookups = 0;
+      profileUrlRefresher = StorageUrlRefresher(lookup: (_) async {
+        lookups++;
+        return null;
+      });
+      await t.pumpWidget(wrap(SizedBox(width: 300,
+        child: FeedCard(item: item),
+      )));
+      await t.pumpAndSettle();
+      expect(find.byType(Image), findsOneWidget);
+      expect(lookups, 0);
+      expect(store.downloadUrls, isEmpty);
+    });
+
+    testWidgets('late poster lookup cannot update a disposed card',
+        (WidgetTester t) async {
+      final Completer<String?> pending = Completer<String?>();
+      profileUrlRefresher = StorageUrlRefresher(lookup: (_) => pending.future);
+      await t.pumpWidget(wrap(SizedBox(width: 300,
+        child: FeedCard(item: video()),
+      )));
+      await t.pump();
+      await t.pumpWidget(wrap(const Text('left feed')));
+      pending.complete('https://example.test/thumb.jpg');
+      await t.pumpAndSettle();
+      expect(t.takeException(), isNull);
+      expect(store.downloadUrls, isEmpty);
     });
 
     testWidgets('a photo tile draws the small variant', (WidgetTester t) async {
@@ -735,3 +798,4 @@ final Uint8List _onePixelJpeg = Uint8List.fromList(<int>[
   0x10, 0x05, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
   0xD2, 0xCF, 0x20, 0xFF, 0xD9,
 ]);
+

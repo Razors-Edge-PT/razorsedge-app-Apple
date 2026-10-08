@@ -27,6 +27,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../profile/core/media_identity.dart';
 import '../profile/core/media_models.dart';
+import '../profile/core/media_urls.dart';
+import '../profile/data/media_url_refresh.dart';
 
 /// One card in the feed.
 class FeedItem {
@@ -83,8 +85,16 @@ class FeedItem {
   }
 
   /// The Storage object behind [displayUrl], when it is known.
-  String get displayStoragePath =>
-      isVideo ? thumbStoragePath : (storagePath.isNotEmpty ? storagePath : '');
+  String get displayStoragePath {
+    if (!isVideo) return storagePath;
+    if (isImageUrl(thumbStoragePath.trim())) return thumbStoragePath.trim();
+    // Older feed projections can omit the poster path even when its object
+    // exists. Derive only the sibling JPEG, never use the clip as an image.
+    final String original = storagePath.trim().isNotEmpty
+        ? storagePath.trim()
+        : storagePathFromDownloadUrl(smallUrl) ?? '';
+    return thumbnailStoragePathFor(original) ?? '';
+  }
 
   /// The cache identity of what this card draws.
   ///
@@ -280,3 +290,4 @@ class FeedRepository {
   static List<String> distinctOwners(Iterable<FeedItem> items) =>
       items.map((FeedItem i) => i.ownerUid).where((String u) => u.isNotEmpty).toSet().toList(growable: false);
 }
+

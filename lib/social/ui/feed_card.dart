@@ -18,11 +18,11 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../../profile/core/media_urls.dart';
 import '../../profile/ui/cached_network_image.dart';
 import '../../profile/ui/profile_theme.dart';
 import '../feed_repository.dart';
 import '../user_search_result.dart';
+import 'feed_thumbnail.dart';
 import 'user_row.dart';
 
 /// How far past the bottom of the screen a card starts loading its picture,
@@ -201,11 +201,6 @@ class _Media extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Decided here rather than inside the image: a post with nothing safe to
-    // draw — a video whose poster never uploaded — gets a quiet placeholder,
-    // not an error with a Retry button that cannot possibly help.
-    final String? source = safeThumbnailUrl(item.displayUrl);
-
     return Semantics(
       button: onOpen != null,
       label: item.isVideo
@@ -218,29 +213,22 @@ class _Media extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: <Widget>[
-              if (source == null)
-                _NoMedia(isVideo: item.isVideo)
-              else
-                _WhenNearViewport(
+              _WhenNearViewport(
+                placeholder: const _MediaPlaceholder(),
+                builder: (BuildContext context) => FeedThumbnail(
+                  item: item,
                   placeholder: const _MediaPlaceholder(),
-                  builder: (BuildContext context) => CachedProfileImage(
-                    url: source,
-                    // The same object's key on every surface. Sharing it is
-                    // what makes an already-seen photo appear with no download.
-                    cacheKey: item.displayCacheKey,
-                    storagePath: item.displayStoragePath,
-                    fit: BoxFit.cover,
-                    placeholder: const _MediaPlaceholder(),
-                    errorBuilder: (
-                      BuildContext context,
-                      MediaLoadFailure failure,
-                      VoidCallback retry,
-                    ) =>
-                        failure == MediaLoadFailure.unusableSource
-                            ? _NoMedia(isVideo: item.isVideo)
-                            : _MediaFailure(failure: failure, onRetry: retry),
-                  ),
+                  fallback: _NoMedia(isVideo: item.isVideo),
+                  errorBuilder: (
+                    BuildContext context,
+                    MediaLoadFailure failure,
+                    VoidCallback retry,
+                  ) =>
+                      failure == MediaLoadFailure.unusableSource
+                          ? _NoMedia(isVideo: item.isVideo)
+                          : _MediaFailure(failure: failure, onRetry: retry),
                 ),
+              ),
               if (item.isVideo)
                 const Positioned(
                   right: ProfileSpacing.sm,
@@ -363,7 +351,7 @@ class _WhenNearViewportState extends State<_WhenNearViewport> {
   }
 }
 
-/// A post with nothing to draw: a video whose poster frame never uploaded.
+/// A playable video whose poster could not be found after bounded recovery.
 ///
 /// Deliberately not an error. The clip is fine and opening the card plays it;
 /// there is simply no still to show, and offering Retry for bytes that do not
@@ -376,12 +364,19 @@ class _NoMedia extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ColoredBox(
         color: ProfilePalette.surface,
-        child: Center(
-          child: Icon(
-            isVideo ? Icons.movie_outlined : Icons.image_outlined,
-            size: 28,
-            color: ProfilePalette.textMuted,
-          ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(
+              isVideo ? Icons.movie_outlined : Icons.image_outlined,
+              size: 28,
+              color: ProfilePalette.textMuted,
+            ),
+            if (isVideo) ...<Widget>[
+              const SizedBox(height: ProfileSpacing.sm),
+              Text('Video · Tap to watch', style: ProfileText.caption(context)),
+            ],
+          ],
         ),
       );
 }
@@ -470,3 +465,4 @@ class _VideoBadge extends StatelessWidget {
     );
   }
 }
+

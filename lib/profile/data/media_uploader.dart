@@ -396,9 +396,9 @@ class MediaUploader {
   /// Uploads the locally generated poster frame to the deterministic sibling
   /// path and returns its download URL, or null when there is none.
   ///
-  /// A missing or unuploadable thumbnail is NOT a failure: the post is still
-  /// worth publishing, and the grid falls back to a video placeholder. What it
-  /// must never do is silently substitute the video URL.
+  /// A video whose codec cannot produce a local still remains publishable.
+  /// When a still exists, upload failures must reach the outbox retry path:
+  /// silently swallowing them permanently publishes a clip with no preview.
   Future<String?> uploadThumbnail(OutboxItem item) async {
     if (item.mediaType != MediaType.video) return null;
     final String? thumbPath = thumbnailStoragePathFor(item.storagePath);
@@ -408,16 +408,12 @@ class MediaUploader {
     }
     final File thumbFile = File(localThumb);
     if (!thumbFile.existsSync()) return null;
-    try {
-      final Reference ref = _storage.ref(thumbPath);
-      await ref.putFile(
-        thumbFile,
-        SettableMetadata(contentType: contentTypeForPath(thumbPath)),
-      );
-      return await ref.getDownloadURL();
-    } catch (_) {
-      return null;
-    }
+    final Reference ref = _storage.ref(thumbPath);
+    await ref.putFile(
+      thumbFile,
+      SettableMetadata(contentType: contentTypeForPath(thumbPath)),
+    );
+    return await ref.getDownloadURL();
   }
 
   /// Records a failure, and decides whether it cost the row an attempt.
@@ -716,3 +712,4 @@ enum _ItemOutcome {
   /// Not now: offline, or the session is not ready. No attempt was consumed.
   deferred,
 }
+
