@@ -38,7 +38,7 @@ backend rollout so the new controls do not point at an unsupported API.
 The implementation environment has no authorized Firebase account, so cloud
 rollout and the signed Android build require the existing desktop credentials.
 
-From C:\Projects\RE-test after a normal fast-forward pull of main, run:
+From C:\Projects\goodlift_app\GoodLift_production after a normal fast-forward pull of main, run:
 
 ```powershell
 & .\tool\release_leaderboard_filters.ps1
@@ -53,7 +53,7 @@ Pages deployment, and builds the signed AAB with existing upload signing.
 It stops on errors and preserves an existing canonical AAB before rebuilding.
 
 Expected versioned artifact:
-C:\Projects\RE-test\build\app\outputs\bundle\release\GoodLift-1.7.54+124-release.aab
+C:\Projects\goodlift_app\GoodLift_production\build\app\outputs\bundle\release\GoodLift-1.7.54+124-release.aab
 
 Signing is checked and SHA-256 printed by the script. Embedded package/version,
 comparison with the trusted upload certificate, the highest Play versionCode,
