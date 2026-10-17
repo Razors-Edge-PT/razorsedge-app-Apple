@@ -38,8 +38,9 @@ Map<String, dynamic> buildIdentityPayloadFields({
   if (username != null) {
     final trimmed = username.trim();
     fields['username'] = trimmed;
-    // Same normalisation as the rest of the app's username index — see
-    // isUsernameAvailableInPublicIndex() in create_new_account_screen.dart.
+    // Legacy shape (trim + lowercase). Signup no longer passes a username
+    // here: the profileChangeUsername callable writes the canonical reserved
+    // username/usernameLower, and a raw rewrite could disagree with it.
     fields['usernameLower'] = trimmed.toLowerCase();
   }
 
@@ -61,14 +62,11 @@ Map<String, dynamic> buildIdentityPayloadFields({
 /// Returns the `createdAt` key that should be merged into `users` /
 /// `users_public`, or nothing at all.
 ///
-/// [isNewAccount] must be the SAME boolean the caller already computed for
-/// the final username guard (`isAccountCreationPath()` in
-/// signup_username_guard.dart) — reusing it, rather than deriving a second,
-/// possibly-conflicting notion of "is this a new account", is what makes it
-/// impossible for a genuine new account to accidentally skip the stamp: both
-/// checks gate on the exact same "no current user, or an anonymous session
-/// being upgraded" condition that the real auth-creation branches below it
-/// are about to act on.
+/// [isNewAccount] comes from the signup attempt's own record, never from the
+/// auth state: the signup coordinator passes true until the stamp has been
+/// committed for that account (and only if the server has none yet), so a
+/// retry after a partial failure stamps it exactly once; edit mode
+/// (Templates / drawer) always passes false.
 ///
 /// True → `createdAt` is (re-)stamped, exactly once, at real account
 /// creation. False → the key is omitted entirely (never written as `null` or

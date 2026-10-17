@@ -60,6 +60,8 @@ class UsernameChangeResult {
     this.username,
     this.message,
     this.authDisplayNameUpdated = false,
+    this.usernameLower,
+    this.errorCode,
   });
 
   final UsernameChangeOutcome outcome;
@@ -73,6 +75,15 @@ class UsernameChangeResult {
   /// Whether the Firebase Auth displayName follow-up also succeeded. Firestore
   /// is authoritative either way — this is reported, never assumed.
   final bool authDisplayNameUpdated;
+
+  /// The server's canonical normalised name (NFKC + lowercase), when the
+  /// change succeeded. The Dart normaliser is trim + lowercase only, so this
+  /// is the value to compare against stored `usernameLower`.
+  final String? usernameLower;
+
+  /// The callable / platform error code for a non-success outcome, so a
+  /// caller can tell a permission or configuration failure from the network.
+  final String? errorCode;
 
   bool get isSuccess =>
       outcome == UsernameChangeOutcome.changed ||
@@ -316,13 +327,17 @@ class IdentityRepository {
 
     try {
       final HttpsCallableResult<dynamic> res = await _functions
-          .httpsCallable('profileChangeUsername')
+          .httpsCallable(
+            'profileChangeUsername',
+            options: HttpsCallableOptions(timeout: const Duration(seconds: 25)),
+          )
           .call<dynamic>(<String, dynamic>{'username': displayUsername(raw)});
 
       final Map<Object?, Object?> data =
           (res.data as Map<Object?, Object?>?) ?? const <Object?, Object?>{};
       final String username =
           (data['username'] as String?) ?? displayUsername(raw);
+      final String? usernameLower = data['usernameLower'] as String?;
       final bool changed = data['changed'] == true;
       final bool authUpdated = data['authDisplayNameUpdated'] == true;
 
@@ -342,14 +357,24 @@ class IdentityRepository {
             ? UsernameChangeOutcome.changed
             : UsernameChangeOutcome.unchanged,
         username: username,
+        usernameLower: usernameLower,
         authDisplayNameUpdated: authUpdated,
       );
     } on FirebaseFunctionsException catch (e) {
       return _mapCallableError(e);
+    } on TimeoutException {
+      // The transaction may still have committed; a retry recognises the
+      // reservation as this account's own.
+      return const UsernameChangeResult(
+        UsernameChangeOutcome.needsConnection,
+        message: kUsernameNeedsConnectionMessage,
+        errorCode: 'deadline-exceeded',
+      );
     } catch (e) {
       return UsernameChangeResult(
         UsernameChangeOutcome.failed,
         message: kUsernameCheckFailedMessage,
+        errorCode: e.runtimeType.toString(),
       );
     }
   }
@@ -360,24 +385,30 @@ class IdentityRepository {
         return const UsernameChangeResult(
           UsernameChangeOutcome.taken,
           message: kUsernameTakenMessage,
+          errorCode: 'already-exists',
         );
       case 'invalid-argument':
         return UsernameChangeResult(
           UsernameChangeOutcome.invalid,
           message: e.message ?? 'That username can’t be used.',
+          errorCode: 'invalid-argument',
         );
       case 'unavailable':
       case 'deadline-exceeded':
         // No connection, or one too poor to complete a transaction. Nothing
         // was written; say so plainly rather than implying the name is taken.
-        return const UsernameChangeResult(
+        return UsernameChangeResult(
           UsernameChangeOutcome.needsConnection,
           message: kUsernameNeedsConnectionMessage,
+          errorCode: e.code,
         );
       default:
+        // unauthenticated / permission-denied / internal / not-found / App
+        // Check: a backend-side refusal, not the member's connection.
         return UsernameChangeResult(
           UsernameChangeOutcome.failed,
           message: kUsernameCheckFailedMessage,
+          errorCode: e.code,
         );
     }
   }

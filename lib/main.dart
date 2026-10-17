@@ -50,6 +50,8 @@ import 'push/push_notification_service.dart';
 import 'push/push_ready_scope.dart';
 import 'aurelian/aurelian_bridge_scope.dart';
 import 'aurelian/aurelian_bus.dart';
+import 'signup/firebase_signup_services.dart';
+import 'signup/signup_coordinator.dart';
 
 
 
@@ -182,6 +184,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => StartupTrace.firstFrame());
     _authSub = FirebaseAuth.instance.authStateChanges().listen(_onAuthEvent);
+    SignupCoordinator.instance.addListener(_onSignupChanged);
 
     // ── Synchronous fast path ────────────────────────────────────────────────
     // For a remembered (already-restored) user, route immediately instead of
@@ -264,6 +267,7 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
+    SignupCoordinator.instance.removeListener(_onSignupChanged);
     _detachCoachEntitlement();
     super.dispose();
   }
@@ -295,10 +299,34 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     }
   }
 
+  // ─── signup coordination ──────────────────────────────────────────────────
+
+  /// Routes a signup the coordinator has just verified as complete. Until
+  /// then the new account is held (see [_handleValidUser]); this is the one
+  /// place it is released to the normal authenticated destination.
+  void _onSignupChanged() {
+    final uid = SignupCoordinator.instance.takeCompletedUid();
+    if (uid == null || !mounted) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.isAnonymous || user.uid != uid) return;
+    unawaited(writeAuthBreadcrumb('signupCompleted → route'));
+    unawaited(_handleValidUser(user, ++_authGen));
+  }
+
   // ─── valid-user path ──────────────────────────────────────────────────────
 
   Future<void> _handleValidUser(User user, int gen) async {
     if (gen != _authGen || !mounted) return;
+
+    // A signup in progress owns this account until its mandatory setup is
+    // verified. Authenticating now would swap navigators and destroy the
+    // signup pages mid-setup, and the explicit-logout gate below would sign
+    // a member who is signing up after a logout straight back out. Stay on
+    // the signup navigator; _onSignupChanged routes once setup completes.
+    if (SignupCoordinator.instance.holdsAuthRoutingFor(user.uid)) {
+      debugPrint('[AUTHROOT] holding routing — signup in progress gen=$gen');
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
     if (gen != _authGen || !mounted) return;
@@ -540,6 +568,15 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         !liveUser.isAnonymous) {
       debugPrint('[AUTHNULL] ignoring transient null — authenticated user '
           '${liveUser.uid} still present gen=$gen');
+      return;
+    }
+
+    // Signing up happens on the unauthenticated navigator. A signed-out or
+    // anonymous event there (e.g. a signup being cancelled) must not swap in
+    // the restore spinner, which would destroy the signup pages.
+    if (_phase == _AuthPhase.unauthenticated &&
+        SignupCoordinator.instance.suppressesSignedOutEvents) {
+      debugPrint('[AUTHNULL] signup on screen — staying unauthenticated gen=$gen');
       return;
     }
 
@@ -953,6 +990,9 @@ void main() async {
   // Aurelian voice bridge (Android only): commands wait natively until an
   // AurelianBridgeScope inside the membership gate is mounted.
   AurelianBridgeChannel.attach();
+
+  // App-lifetime signup owner: survives every route AppRoot builds.
+  SignupCoordinator.install(createFirebaseSignupCoordinator());
 
   StartupTrace.runAppCalled();
   runApp(

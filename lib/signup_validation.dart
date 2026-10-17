@@ -53,10 +53,9 @@ String? validateUsername(String? raw) {
 /// [available] is null when the check has not run or could not complete. That
 /// is deliberately not an error here: this check is a *convenience*, and
 /// blocking Continue because a Firestore read failed would be needlessly
-/// hostile. The authoritative check runs immediately before the account is
-/// committed — see `checkUsernameStillAvailable()` in
-/// signup_username_guard.dart, which fails closed rather than write an
-/// unverified name.
+/// hostile. Uniqueness is decided by the profileChangeUsername transaction at
+/// Finish, and signup never completes without that reservation — see
+/// signup_username_guard.dart.
 String? usernameAvailabilityError(bool? available) =>
     available == false ? "That username's already taken — try another." : null;
 

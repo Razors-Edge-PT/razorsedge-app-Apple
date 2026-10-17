@@ -71,10 +71,12 @@ String usernameIndexKey(String normalized) =>
 const String kUsernameTakenMessage =
     "That username's already taken — try another.";
 
-/// Shown when uniqueness could not be confirmed. Deliberately does NOT claim
-/// the name is taken.
+/// Shown when the server refused or failed the change for a reason other than
+/// the connection (permission, configuration, internal error). Deliberately
+/// does NOT claim the name is taken, and does not blame the member's internet:
+/// a genuine connection problem gets [kUsernameNeedsConnectionMessage].
 const String kUsernameCheckFailedMessage =
-    "We couldn't check that username right now. Check your connection and try again.";
+    "We couldn't confirm that username right now. Nothing was changed — please try again in a moment.";
 
 /// Shown when the device is offline.
 ///

@@ -1,284 +1,129 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:localtest222/signup/signup_coordinator.dart';
+import 'package:localtest222/signup/signup_errors.dart';
 import 'package:localtest222/signup_username_guard.dart';
 
-/// The final username uniqueness guard that runs immediately before the live
-/// signup flow commits `usernameLower`.
+import 'signup/signup_test_harness.dart';
+
+/// Username uniqueness in signup.
 ///
-/// Page 1's live/debounced check is convenience only — it can go stale, and it
-/// deliberately does not block Continue when the read fails. These tests pin
-/// the behaviour of the last line of defence.
+/// This file used to pin a pre-account `users_public` "final guard" that
+/// failed closed on any read error. On a logged-out device that read is
+/// always permission-denied, so the guard blocked every signup. The intent it
+/// protected is kept, now enforced by the server reservation:
+///
+///  * a definitive collision can never complete a signup or write the name;
+///  * a check that cannot reach a verdict never completes either, and is not
+///    reported as "taken";
+///  * nothing a client reads beforehand can stand in for the reservation.
 void main() {
-  group('final username re-check', () {
-    test('a name that became taken after Page 1 is caught', () async {
-      // Page 1 saw this as available; by the time Finish runs, it is not.
-      final outcome = await checkUsernameStillAvailable(
-        'lifter',
-        (lower) async => false,
-      );
-
-      expect(outcome, UsernameGuardOutcome.taken);
-      expect(
-        actionForGuardOutcome(outcome),
-        SignupCommitAction.returnToUsernameField,
-      );
-    });
-
-    test('a still-free name proceeds', () async {
-      final outcome = await checkUsernameStillAvailable(
-        'lifter',
-        (lower) async => true,
-      );
-
-      expect(outcome, UsernameGuardOutcome.available);
-      expect(actionForGuardOutcome(outcome), SignupCommitAction.proceed);
-    });
-
-    test('uses the same normalised lowercase semantics as the rest of the app',
+  group('a definitive collision cannot complete', () {
+    test('taken → back to the Username field, nothing completed or written',
         () async {
-      final seen = <String>[];
-      await checkUsernameStillAvailable('  MiXeD Case  ', (lower) async {
-        seen.add(lower);
-        return true;
-      });
+      final h = SignupHarness();
+      h.server.reserve('lifter', 'other_uid');
+      final a = h.beginFilled(username: 'Lifter');
 
-      expect(seen, ['mixed case']);
+      final r = await h.coordinator.submit(a);
+
+      expect(r.isSuccess, isFalse);
+      expect(r.failure!.kind, SignupFailureKind.usernameTaken);
+      expect(r.failure!.returnsToPageOne, isTrue);
+      expect(h.coordinator.takeCompletedUid(), isNull);
+      final user = await h.doc('users/${a.authUid}');
+      expect(user?['usernameLower'], isNull,
+          reason: 'a refused name leaves no profile claiming it');
+      expect(h.server.holderOf('lifter'), 'other_uid');
     });
-  });
 
-  group('a definitive collision cannot be written', () {
-    test('taken never yields proceed', () async {
-      final outcome = await checkUsernameStillAvailable(
-        'taken',
-        (lower) async => false,
+    test('an "available" hint cannot override the server verdict', () async {
+      final h = SignupHarness();
+      final optimistic = SignupCoordinator(
+        auth: h.auth,
+        backend: h.backend,
+        hooks: RecordingHooks(),
+        usernameHint: (_) async => true, // stale Page 1 hint
       );
+      h.server.reserve('lifter', 'other_uid');
+      final a = optimistic.beginAttempt();
+      a.draft.identity
+        ..username = 'lifter'
+        ..email = 'x@example.test'
+        ..password = 'secret123';
 
-      expect(
-        actionForGuardOutcome(outcome),
-        isNot(SignupCommitAction.proceed),
-        reason: 'a definitive collision must never reach the profile write',
-      );
+      final r = await optimistic.submit(a);
+
+      expect(r.failure!.kind, SignupFailureKind.usernameTaken);
+    });
+
+    test('case-insensitive: the same name in another case is the same name',
+        () async {
+      final h = SignupHarness();
+      h.server.reserve('Lifter', 'other_uid');
+      final r = await h.coordinator.submit(h.beginFilled(username: 'LIFTER'));
+      expect(r.failure!.kind, SignupFailureKind.usernameTaken);
     });
 
     test('the collision is reported with the exact agreed copy', () {
-      expect(kUsernameTakenMessage,
-          "That username's already taken — try another.");
+      expect(kUsernameTakenMessage, "That username's already taken — try another.");
+      expect(signupFailureMessage(SignupFailureKind.usernameTaken),
+          kUsernameTakenMessage);
     });
   });
 
-  group('a failed availability read fails closed', () {
-    test('a throwing read is checkFailed, not taken', () async {
-      final outcome = await checkUsernameStillAvailable(
-        'lifter',
-        (lower) async => throw Exception('permission-denied'),
-      );
+  group('no verdict never completes, and is never reported as taken', () {
+    for (final code in [
+      'unavailable',
+      'deadline-exceeded',
+      'permission-denied',
+      'unauthenticated',
+      'internal',
+    ]) {
+      test(code, () async {
+        final h = SignupHarness();
+        h.server.failNextWith = code;
+        final r = await h.coordinator.submit(h.beginFilled());
+        expect(r.isSuccess, isFalse);
+        expect(r.failure!.kind, isNot(SignupFailureKind.usernameTaken));
+        expect(r.failure!.message.toLowerCase(), isNot(contains('taken')));
+        expect(r.failure!.retryable, isTrue);
+        expect(h.coordinator.takeCompletedUid(), isNull);
+      });
+    }
 
-      expect(
-        outcome,
-        UsernameGuardOutcome.checkFailed,
-        reason: 'an unreadable index must never be reported as "taken"',
-      );
-      expect(outcome, isNot(UsernameGuardOutcome.taken));
-    });
-
-    test('a failed read does NOT silently allow signup to continue', () async {
-      final outcome = await checkUsernameStillAvailable(
-        'lifter',
-        (lower) async => throw Exception('offline'),
-      );
-
-      expect(
-        actionForGuardOutcome(outcome),
-        SignupCommitAction.showRetryableError,
-      );
-      expect(
-        actionForGuardOutcome(outcome),
-        isNot(SignupCommitAction.proceed),
-        reason: 'failing open here is exactly the duplicate-username bug',
-      );
-    });
-
-    test('a synchronous throw is caught too', () async {
-      final outcome = await checkUsernameStillAvailable(
-        'lifter',
-        (lower) => throw StateError('boom'),
-      );
-
-      expect(outcome, UsernameGuardOutcome.checkFailed);
-    });
-
-    test(
-        'the failure message is friendly, retryable, and does not claim "taken"',
-        () {
-      expect(
-        kUsernameCheckFailedMessage,
-        "We couldn't check that username right now. Check your connection and try again.",
-      );
-      expect(
-          kUsernameCheckFailedMessage.toLowerCase(), isNot(contains('taken')));
-    });
-
-    test('every outcome maps to exactly one action', () {
-      for (final outcome in UsernameGuardOutcome.values) {
-        expect(() => actionForGuardOutcome(outcome), returnsNormally);
+    test('only the network case blames the connection', () {
+      for (final kind in SignupFailureKind.values) {
+        final mentionsConnection =
+            signupFailureMessage(kind).toLowerCase().contains('connection');
+        expect(mentionsConnection, kind == SignupFailureKind.network,
+            reason: kind.name);
       }
-      expect(
-        UsernameGuardOutcome.values
-            .map(actionForGuardOutcome)
-            .where((a) => a == SignupCommitAction.proceed)
-            .length,
-        1,
-        reason: 'only "available" may proceed to a write',
-      );
     });
   });
 
-  group('both account-creation branches are guarded', () {
-    test('createUserWithEmailAndPassword branch (no current user)', () {
-      expect(
-        isAccountCreationPath(hasCurrentUser: false, isAnonymous: false),
-        isTrue,
-      );
+  group('no pre-account availability read', () {
+    test('signup completes with no session at all before the account exists',
+        () async {
+      final h = SignupHarness();
+      expect(h.auth.currentUser, isNull);
+      final r = await h.coordinator.submit(h.beginFilled());
+      expect(r.isSuccess, isTrue, reason: '${r.failure}');
     });
 
-    test('anonymous credential-linking branch', () {
-      expect(
-        isAccountCreationPath(hasCurrentUser: true, isAnonymous: true),
-        isTrue,
-      );
-    });
-
-    test('an established non-anonymous user is not a creation path', () {
-      // Page 2 opened in edit mode from Templates / the drawer: nothing is
-      // created, and the user's own record must not read as a collision.
-      expect(
-        isAccountCreationPath(hasCurrentUser: true, isAnonymous: false),
-        isFalse,
-      );
-    });
-  });
-
-  group('the guard is wired ahead of both branches in the live flow', () {
-    // The guard's placement is the thing that makes "both branches" true. A
-    // unit test cannot reach _finish() (it needs a live Firebase), so this
-    // pins the ordering in the source instead: if someone later moves the
-    // check inside one branch, or below the profile write, this fails.
-    late String finishBody;
-
-    setUpAll(() {
-      final source =
-          File('lib/create_new_account_screen.dart').readAsStringSync();
-      final start = source.indexOf('Future<void> _finish() async {');
-      expect(start, greaterThan(-1), reason: '_finish() not found');
-      final end = source.indexOf('Future<void> _recomputeTemplateCandidates');
-      expect(end, greaterThan(start));
-      finishBody = source.substring(start, end);
-    });
-
-    test('_finish calls the guard exactly once', () {
-      expect('checkUsernameStillAvailable('.allMatches(finishBody).length, 1);
-    });
-
-    test('the guard runs before the anonymous-link branch', () {
-      final guard = finishBody.indexOf('checkUsernameStillAvailable(');
-      final link = finishBody.indexOf('linkWithCredential(');
-      expect(link, greaterThan(-1));
-      expect(guard, lessThan(link));
-    });
-
-    test('the guard runs before the create-new branch', () {
-      final guard = finishBody.indexOf('checkUsernameStillAvailable(');
-      final create = finishBody.indexOf('createUserWithEmailAndPassword(');
-      expect(create, greaterThan(-1));
-      expect(guard, lessThan(create));
-    });
-
-    test('the guard runs before username/usernameLower are written', () {
-      // username/usernameLower are written via buildIdentityPayloadFields()
-      // (see onboarding_identity_payload.dart) rather than inline — that
-      // call site is where the write actually happens.
-      final guard = finishBody.indexOf('checkUsernameStillAvailable(');
-      final write = finishBody.indexOf('buildIdentityPayloadFields(');
-      expect(write, greaterThan(-1));
-      expect(guard, lessThan(write));
-    });
-
-    test('the guard sits outside the auth if/else, covering both branches', () {
-      final guard = finishBody.indexOf('checkUsernameStillAvailable(');
-      final branch = finishBody.indexOf("if (current?.isAnonymous == true) {");
-      expect(branch, greaterThan(-1));
-      expect(
-        guard,
-        lessThan(branch),
-        reason: 'a guard inside one branch would miss the other',
-      );
-    });
-
-    test('a collision pops back to Page 1 instead of writing', () {
-      final guard = finishBody.indexOf('checkUsernameStillAvailable(');
-      final pop = finishBody.indexOf('pop(kSignupUsernameTakenResult)');
-      final write = finishBody.indexOf('buildIdentityPayloadFields(');
-      expect(pop, greaterThan(guard));
-      expect(pop, lessThan(write));
-    });
-
-    test('Page 1 handles the collision result by invalidating the field', () {
-      final source =
-          File('lib/create_new_account_screen.dart').readAsStringSync();
-      expect(source, contains('result != kSignupUsernameTakenResult'));
-      expect(source, contains('_usernameAvailableFlag = false'));
-    });
-  });
-
-  group('createdAt reuses the guard\'s account-creation definition', () {
-    // createdAt must be stamped exactly once, at real account creation, and
-    // never re-stamped by an onboarding-only edit. The task requirement is
-    // specifically that this NOT invent a second, possibly-conflicting
-    // definition of "is this a new account" — it must reuse the same
-    // isAccountCreationPath() call the username guard already established.
-    late String finishBody;
-
-    setUpAll(() {
-      final source =
-          File('lib/create_new_account_screen.dart').readAsStringSync();
-      final start = source.indexOf('Future<void> _finish() async {');
-      final end = source.indexOf('Future<void> _recomputeTemplateCandidates');
-      finishBody = source.substring(start, end);
-    });
-
-    test('isAccountCreationPath is called exactly once', () {
-      // Not twice with the same/different args — a single boolean, reused.
-      expect(
-        'isAccountCreationPath('.allMatches(finishBody).length,
-        1,
-        reason: 'a second call would risk a conflicting definition of '
-            '"is this a new account"',
-      );
-    });
-
-    test('the username guard and the createdAt write share one isNewAccount',
-        () {
-      final guardUse = finishBody.indexOf('if (isNewAccount)');
-      final createdAtUse =
-          finishBody.indexOf('buildCreatedAtField(isNewAccount: isNewAccount)');
-      expect(guardUse, greaterThan(-1));
-      expect(createdAtUse, greaterThan(-1));
-    });
-
-    test('isAccountCreationPath is computed before either use', () {
-      final computed = finishBody.indexOf('isAccountCreationPath(');
-      final guardUse = finishBody.indexOf('if (isNewAccount)');
-      final createdAtUse = finishBody.indexOf('buildCreatedAtField(');
-      expect(computed, lessThan(guardUse));
-      expect(computed, lessThan(createdAtUse));
-    });
-
-    test('createdAt is written via buildCreatedAtField, not inline', () {
-      // Guards against a regression back to an unconditional
-      // 'createdAt': FieldValue.serverTimestamp() in the payload map.
-      expect(finishBody, isNot(contains("'createdAt': FieldValue")));
-      expect(finishBody, contains('buildCreatedAtField(isNewAccount:'));
+    test('the signup sources contain no users_public availability query', () {
+      // The query that can never run logged-out must not come back as a
+      // signup gate. (Signed-in Settings keeps its own advisory hint.)
+      final sources = <File>[
+        File('lib/create_new_account_screen.dart'),
+        ...Directory('lib/signup').listSync().whereType<File>(),
+      ];
+      for (final f in sources) {
+        expect(f.readAsStringSync(),
+            isNot(contains("where('usernameLower', isEqualTo:")),
+            reason: f.path);
+      }
     });
   });
 }

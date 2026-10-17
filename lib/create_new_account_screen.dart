@@ -1,11 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'profile/data/identity_repository.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'auth_diag.dart';
-import 'auth_signout.dart';
 import 'dart:async'; // for Timer debounce
 import 'package:flutter/services.dart'; // for TextInputFormatter
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -15,42 +12,48 @@ import 'membership_gate.dart';
 import 'demographics_cache.dart';
 import 'block_repository.dart';
 import 'block_planner_repository.dart';
-import 'block_exercise_defaults_repository.dart';
 import 'block_creation_helper.dart';
 
 import 'package:localtest222/login_screen.dart';
 import 'signup_validation.dart';
-import 'signup_username_guard.dart';
 import 'onboarding_identity_payload.dart';
 import 'sex_options.dart';
 import 'periodization_model_utils.dart';
+import 'signup/first_block_seeder.dart';
+import 'signup/onboarding_models.dart';
+import 'signup/onboarding_writer.dart';
+import 'signup/signup_coordinator.dart';
+import 'signup/signup_errors.dart';
 
-/// The app's single username-availability read: `users_public` keyed by the
-/// normalised lowercase name. Both Page 1's live/debounced convenience check
-/// and Page 2's final commit-time guard go through this, so the two can never
-/// disagree about normalisation.
-///
-/// Throws if the read fails — callers decide what that means. Page 1 treats a
-/// failure as "unknown" and does not block; Page 2's final guard fails closed.
-Future<bool> isUsernameAvailableInPublicIndex(String usernameLower) async {
-  final q = await FirebaseFirestore.instance
-      .collection('users_public')
-      .where('usernameLower', isEqualTo: usernameLower)
-      .limit(1)
-      .get();
+export 'signup/onboarding_models.dart'
+    show TrainingExperience, BestEffort, OnboardingAnswers;
 
-  // If there's a hit, it's taken.
-  return q.docs.isEmpty;
-}
+// There is deliberately no pre-account username availability read here any
+// more. `users_public` and `usernames` are readable only by a signed-in
+// caller, and a logged-out device cannot be one (anonymous sign-in is not
+// enabled on the project), so the old Finish-time `users_public` query was
+// permission-denied for every new member and blocked signup with "check your
+// connection". Uniqueness is decided by the profileChangeUsername callable's
+// transaction after the account exists — see signup/signup_coordinator.dart.
 
 class CreateNewAccountScreen extends StatefulWidget {
-  const CreateNewAccountScreen({super.key});
+  const CreateNewAccountScreen({super.key, this.coordinator});
+
+  /// Injected in tests; the app uses [SignupCoordinator.instance].
+  final SignupCoordinator? coordinator;
 
   @override
   State<CreateNewAccountScreen> createState() => _CreateNewAccountScreenState();
 }
 
 class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
+  late final SignupCoordinator _coordinator =
+      widget.coordinator ?? SignupCoordinator.instance;
+
+  /// This signup attempt. Owns the draft for both pages, so nothing the member
+  /// enters depends on either route staying alive.
+  late final SignupAttempt _attempt;
+
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -76,6 +79,19 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   bool _usernameChecking = false;
   bool? _usernameAvailableFlag; // null = unknown, true = available, false = taken
   Timer? _usernameDebounce;
+
+  /// Bumped for every new username value. An availability answer is applied
+  /// only if its token is still current AND the field still holds the exact
+  /// value it was asked about, so a slow response for "alex" can never mark
+  /// "alexa" taken or available.
+  int _usernameCheckSeq = 0;
+
+  /// The exact (trimmed) value [_usernameAvailableFlag] describes.
+  String? _usernameFlagFor;
+
+  /// Field errors reported by the server at Finish (duplicate email, weak
+  /// password, invalid username). Cleared as soon as the field changes.
+  final Map<String, String> _serverFieldErrors = <String, String>{};
 
   final FocusNode _emailFocusNode = FocusNode();
   final FocusNode _usernameFocusNode = FocusNode();
@@ -133,86 +149,38 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     _passwordFocusNode.dispose();
     _confirmPasswordFocusNode.dispose();
 
+    // Leaving Page 1 (back to Login) is a genuine cancellation: the draft is
+    // wiped. A completed attempt is merely released.
+    unawaited(_coordinator.cancelAttempt(_attempt));
+
     super.dispose();
   }
 
-  Future<void> _cleanupNewUserOnFailure() async {
-    try { await FirebaseAuth.instance.currentUser?.delete(); }
-    catch (e, st) {
-      print('⚠️ Cleanup failed: $e\n$st');
-      await performSignOut(
-        reason: SignOutReason.accountCreationCleanup,
-        caller: 'CreateNewAccount.cleanup',
-        google: false, // parity with prior behaviour (Firebase-only)
-      );
-    }
-  }
-
-  // Accepts "dd-mm-yyyy" or "yyyy-mm-dd"; returns normalized "dd-mm-yyyy" or null.
-  String? _normalizeDob(String input) {
-    final s = input.trim();
-    final ddmm = RegExp(r'^(\d{2})-(\d{2})-(\d{4})$');      // dd-mm-yyyy
-    final ymd  = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$');      // yyyy-mm-dd
-
-    int y, m, d;
-    if (ddmm.hasMatch(s)) {
-      final m1 = ddmm.firstMatch(s)!;
-      d = int.parse(m1.group(1)!);
-      m = int.parse(m1.group(2)!);
-      y = int.parse(m1.group(3)!);
-    } else if (ymd.hasMatch(s)) {
-      final m2 = ymd.firstMatch(s)!;
-      y = int.parse(m2.group(1)!);
-      m = int.parse(m2.group(2)!);
-      d = int.parse(m2.group(3)!);
-    } else {
-      return null;
+  /// Mirrors every Page 1 field into the attempt's draft as it changes, so
+  /// the coordinator always submits exactly what is on screen.
+  void _bindDraft() {
+    final d = _attempt.draft.identity;
+    void bind(TextEditingController c, void Function(String) write) {
+      c.addListener(() => write(c.text));
     }
 
-    // Validate date + age range
-    try {
-      final dt = DateTime(y, m, d);
-      if (dt.year != y || dt.month != m || dt.day != d) return null; // invalid like 31/02
-      final now = DateTime.now();
-      final oldest = DateTime(now.year - 120, now.month, now.day);
-      if (dt.isAfter(now) || dt.isBefore(oldest)) return null;
-    } catch (_) {
-      return null;
-    }
-
-    final dd = d.toString().padLeft(2, '0');
-    final mm = m.toString().padLeft(2, '0');
-    // Store/display as dd-mm-yyyy
-    return '$dd-$mm-$y';
-  }
-
-
-
-
-  Future<bool> _isUsernameAvailable(String username) =>
-      isUsernameAvailableInPublicIndex(username.trim().toLowerCase());
-
-  Future<void> _ensureAnonAuthForAvailability() async {
-    final auth = FirebaseAuth.instance;
-    final user = auth.currentUser;
-    if (user == null) {
-      try {
-        await auth.signInAnonymously();
-        print('👤 [Signup] Signed in anonymously for availability checks.');
-      } catch (e, st) {
-        print('⚠️ [Signup] Anonymous sign-in failed: $e\n$st');
-        // We’ll still let the form work; avail checks will fail if rules require auth.
-      }
-    }
+    bind(_usernameController, (v) => d.username = v);
+    bind(_fullNameController, (v) => d.fullName = v);
+    bind(_emailController, (v) => d.email = v);
+    bind(_passwordController, (v) => d.password = v);
+    bind(_confirmPasswordController, (v) => d.confirmPassword = v);
   }
 
   void _onUsernameChanged(String raw) {
     _usernameDebounce?.cancel();
     final v = raw.trim();
+    final token = ++_usernameCheckSeq;
+    _serverFieldErrors.remove(SignupField.username);
 
     // Reset quick flags
     setState(() {
       _usernameAvailableFlag = null;
+      _usernameFlagFor = null;
       _usernameChecking = false;
     });
 
@@ -225,21 +193,27 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       return;
     }
 
-    _usernameDebounce = Timer(const Duration(milliseconds: 450), () async {
+    _usernameDebounce = Timer(const Duration(milliseconds: 450), () {
       if (!mounted) return;
-      setState(() => _usernameChecking = true);
-      try {
-        final ok = await _isUsernameAvailable(v); // now hits users_public
-        if (mounted) setState(() => _usernameAvailableFlag = ok);
-        print('🔎 [Username] "$v" → ${ok ? 'available' : 'taken'}');
-      } catch (e, st) {
-        print('❌ [Username] availability check failed: $e\n$st');
-        // keep flag null → silent failure, validator still handles on submit
-      } finally {
-        if (mounted) setState(() => _usernameChecking = false);
-      }
-      if (mounted) _revalidate(SignupField.username);
+      _checkUsername(v, token);
     });
+  }
+
+  /// Advisory availability for [value]. Applied only while [token] is current
+  /// and the field still holds [value]; otherwise silently discarded.
+  Future<void> _checkUsername(String value, int token) async {
+    setState(() => _usernameChecking = true);
+    final bool? ok = await _coordinator.usernameHint(value);
+    if (!mounted) return;
+    final stillCurrent = token == _usernameCheckSeq &&
+        _usernameController.text.trim() == value;
+    if (!stillCurrent) return;
+    setState(() {
+      _usernameChecking = false;
+      _usernameAvailableFlag = ok; // null = unknown: never blocks Continue
+      _usernameFlagFor = ok == null ? null : value;
+    });
+    _revalidate(SignupField.username);
   }
 
   /// Completes the username availability check immediately rather than waiting
@@ -255,20 +229,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       return;
     }
     // Already resolved for this exact value.
-    if (_usernameAvailableFlag != null && !_usernameChecking) return;
+    if (_usernameAvailableFlag != null && _usernameFlagFor == v) return;
 
-    if (mounted) setState(() => _usernameChecking = true);
-    try {
-      final ok = await _isUsernameAvailable(v);
-      if (mounted) setState(() => _usernameAvailableFlag = ok);
-    } catch (e, st) {
-      print('❌ [Username] availability check failed: $e\n$st');
-      // Leave the flag null. Continue is not blocked by a check that could not
-      // complete: this one is a convenience. The authoritative guard runs just
-      // before the account is committed and fails closed.
-    } finally {
-      if (mounted) setState(() => _usernameChecking = false);
-    }
+    // Advisory only. An unknown result leaves Continue allowed; the account
+    // is never completed without the server reservation on Finish.
+    await _checkUsername(v, ++_usernameCheckSeq);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -285,7 +250,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     switch (field) {
       case SignupField.username:
         return validateUsername(_usernameController.text) ??
-            usernameAvailabilityError(_usernameAvailableFlag);
+            _serverFieldErrors[SignupField.username] ??
+            usernameAvailabilityError(
+                _usernameFlagFor == _usernameController.text.trim()
+                    ? _usernameAvailableFlag
+                    : null);
       case SignupField.fullName:
         return validateFullName(_fullNameController.text);
       case SignupField.dob:
@@ -293,9 +262,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       case SignupField.sex:
         return validateSex(_selectedSex);
       case SignupField.email:
-        return validateEmail(_emailController.text);
+        return validateEmail(_emailController.text) ??
+            _serverFieldErrors[SignupField.email];
       case SignupField.password:
-        return validatePassword(_passwordController.text);
+        return validatePassword(_passwordController.text) ??
+            _serverFieldErrors[SignupField.password];
       case SignupField.confirmPassword:
         return validateConfirmPassword(
             _confirmPasswordController.text, _passwordController.text);
@@ -378,6 +349,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     // Normalise to a plain calendar day (no time component).
     final day = DateTime(picked.year, picked.month, picked.day);
     _dobDate = day;
+    _attempt.draft.identity.dob = day;
     _dobController.text = formatDobForStorage(day);
     // Choosing a date counts as interacting with the field.
     _touchAndValidate(SignupField.dob);
@@ -499,129 +471,6 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     }
   }
 
-  void _register() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final email = _emailController.text.trim();
-      final password = _passwordController.text.trim();
-      final username = _usernameController.text.trim();
-      final fullName = _fullNameController.text.trim();
-      final dobRaw   = _dobController.text.trim();
-      final sex      = _selectedSex; // 'M' | 'F' | 'N'
-
-      // Normalize and validate DOB again (belt & braces; validator already runs)
-      final dobNormalized = _normalizeDob(dobRaw);
-      if (dobNormalized == null) {
-        setState(() { _errorMessage = 'Please enter a valid date of birth.'; _isLoading = false; });
-        return;
-      }
-
-      // Clear the explicit-logout flag BEFORE creating the account. Creating a
-      // user signs them in and fires authStateChanges; AppRoot's handler gates
-      // valid-user routing on this flag, so it must already be false (e.g. when
-      // a previously logged-out user creates a fresh account).
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('goodlift_explicit_logout', false);
-      await prefs.setString('goodlift_last_login_provider', 'password');
-
-      // Create the user
-      await FirebaseAuth.instance.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-
-      final user = FirebaseAuth.instance.currentUser;
-      AuthDiag.afterLogin(provider: 'password(create)', uid: user?.uid);
-      if (user != null) {
-        // displayName = username
-        if (username.isNotEmpty) {
-          await user.updateDisplayName(username);
-        }
-
-        // Claim the username through the central identity service. This
-        // ATOMICALLY reserves it and writes username/usernameLower onto both
-        // user documents, so two people signing up with the same name at the
-        // same moment cannot both succeed — which a "read the index, then
-        // write" check could never guarantee. It also fails closed when it
-        // cannot reach the backend, rather than assuming the name is free.
-        final UsernameChangeResult claim =
-            await IdentityRepository.shared.changeUsername(username);
-
-        if (!claim.isSuccess) {
-          await _cleanupNewUserOnFailure();
-          setState(() {
-            _errorMessage = claim.outcome == UsernameChangeOutcome.taken
-                ? 'That username is taken by your nemesis. Please choose another.'
-                : (claim.message ?? 'That username could not be saved.');
-            _isLoading = false;
-          });
-          return;
-        }
-
-        // username / usernameLower are deliberately absent: the callable above
-        // owns them, and writing them again here could only ever disagree
-        // with the reservation index.
-        final payload = {
-          'email': user.email,
-          'fullName': fullName,
-          'dob': dobNormalized,   // stored as dd-mm-yyyy (string)
-          'sex': sex,             // 'M'|'F'|'N'
-          'createdAt': FieldValue.serverTimestamp(),
-        };
-
-        // Write to users
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .set(payload, SetOptions(merge: true));
-
-        // Mirror to users_public (same info, per your note)
-        await FirebaseFirestore.instance
-            .collection('users_public')
-            .doc(user.uid)
-            .set(payload, SetOptions(merge: true));
-      }
-
-      // No navigation here. Creating the account signed the user in, which
-      // fires authStateChanges; AppRoot creates UserContext, mounts the
-      // authenticated Navigator under ChangeNotifierProvider<UserContext>, and
-      // selects the startup route. Pushing '/home' on this (unauthenticated)
-      // Navigator would mount it with no UserContext above → ProviderNotFound.
-
-    } on FirebaseAuthException catch (e) {
-      String message;
-      switch (e.code) {
-        case 'email-already-in-use':
-          message = 'This email is already in use.';
-          break;
-        case 'invalid-email':
-          message = 'Invalid email format.';
-          break;
-        case 'weak-password':
-          message = 'Password is too weak.';
-          break;
-        default:
-          message = 'Registration failed. (${e.message})';
-      }
-      setState(() { _errorMessage = message; });
-    } catch (e, st) {
-      // Debug print full error + stack trace
-      print('❌ [Register] Unexpected error: $e\n$st');
-      setState(() { _errorMessage = 'An unexpected error occurred.'; });
-    }
-    finally {
-      if (mounted) {
-        setState(() { _isLoading = false; });
-      }
-    }
-  }
-
   // NOTE — deliberate absence of an email duplicate preflight.
   //
   // `fetchSignInMethodsForEmail` was removed in firebase_auth 6.x, so the old
@@ -659,68 +508,86 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
     // Keep the Form in agreement with our own validation.
     _formKey.currentState?.validate();
 
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    // The draft already mirrors every field; sex and DOB are set from their
+    // own pickers. Page 2 reads identity and credentials from it at Finish.
+    final identity = _attempt.draft.identity
+      ..sex = _selectedSex
+      ..dob = _dobDate;
 
-    // Page 2 runs the authoritative username uniqueness check just before it
-    // commits the account. If the name was claimed in the meantime it pops back
-    // with this result rather than writing it, so Page 1 — still mounted below,
-    // with every field the user typed intact — can turn the field red.
-    Future<Object?>? pageTwoResult;
+    setState(() => _errorMessage = null);
 
-    try {
-      final email = _emailController.text.trim();
-      final password = _passwordController.text.trim();
-      final username = _usernameController.text.trim();
-      final fullName = _fullNameController.text.trim();
-      final sex      = _selectedSex; // 'M' | 'F' | 'N'
-
-      // DOB comes from the picker, so it is already a real calendar date.
-      // Persisted format is unchanged: dd-mm-yyyy.
-      final dobNormalized = formatDobForStorage(_dobDate!);
-
-      // Navigate to Page 2 (no account creation yet)
-      if (!mounted) return;
-      pageTwoResult = Navigator.push<Object?>(
-        context,
-        MaterialPageRoute(
-          builder: (_) => OnboardingPageTwo(
-            // pass everything needed to create the account later
-            email: email,
-            password: password,
-            username: username,
-            fullName: fullName,
-            dob: dobNormalized, // dd-mm-yyyy
-            sex: sex,
-          ),
+    // A fresh Page 2 route binds to the SAME draft, so returning here and
+    // coming back restores every answer.
+    final Object? result = await Navigator.push<Object?>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OnboardingPageTwo(
+          signup: _attempt,
+          email: identity.email.trim(),
+          password: identity.password,
+          username: identity.username.trim(),
+          fullName: identity.fullName.trim(),
+          dob: identity.dobStorage, // dd-mm-yyyy
+          sex: identity.sex,
         ),
-      );
-    } catch (e, st) {
-      print('❌ [_continueToOnboarding] $e\n$st');
-      setState(() { _errorMessage = 'Something went wrong. Please try again.'; });
-    } finally {
-      if (mounted) setState(() { _isLoading = false; });
+      ),
+    );
+    if (!mounted || result is! SignupFailure) return;
+    await _showFailureOnPageOne(result);
+  }
+
+  /// A Finish failure that only Page 1 can fix: put it on the field that owns
+  /// it and take the member there. Page 2's answers stay in the draft.
+  Future<void> _showFailureOnPageOne(SignupFailure failure) async {
+    final String field;
+    switch (failure.kind) {
+      case SignupFailureKind.usernameTaken:
+        field = SignupField.username;
+        _usernameCheckSeq++; // discard any in-flight advisory answer
+        setState(() {
+          _usernameAvailableFlag = false;
+          _usernameFlagFor = _usernameController.text.trim();
+        });
+        break;
+      case SignupFailureKind.usernameInvalid:
+        field = SignupField.username;
+        _serverFieldErrors[field] = failure.message;
+        break;
+      case SignupFailureKind.emailInUse:
+      case SignupFailureKind.invalidEmail:
+        field = SignupField.email;
+        _serverFieldErrors[field] = failure.message;
+        break;
+      case SignupFailureKind.weakPassword:
+        field = SignupField.password;
+        _serverFieldErrors[field] = failure.message;
+        break;
+      default:
+        setState(() => _errorMessage = failure.message);
+        return;
     }
-
-    if (pageTwoResult == null) return;
-    final result = await pageTwoResult;
-    if (!mounted || result != kSignupUsernameTakenResult) return;
-
-    // Someone claimed the name between Continue and account creation. Show the
-    // same message the live check uses — via the field's own error, so it is
-    // never rendered twice — and take the user straight to it.
-    setState(() => _usernameAvailableFlag = false);
-    _touchAndValidate(SignupField.username);
-    await _revealField(SignupField.username);
+    _touchAndValidate(field);
+    await _revealField(field);
   }
 
 
   @override
   void initState() {
     super.initState();
-    _ensureAnonAuthForAvailability();
+    _attempt = _coordinator.beginAttempt();
+    _bindDraft();
+
+    // Server-reported errors belong to the value they were reported for.
+    _emailController.addListener(() {
+      if (_serverFieldErrors.remove(SignupField.email) != null) {
+        _revalidate(SignupField.email);
+      }
+    });
+    _passwordController.addListener(() {
+      if (_serverFieldErrors.remove(SignupField.password) != null) {
+        _revalidate(SignupField.password);
+      }
+    });
 
     // Validate each field the moment the user leaves it. Nothing is validated
     // before it has been touched, so an untouched page opens clean.
@@ -738,6 +605,10 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       if (mounted) _touchAndValidate(SignupField.username);
     });
   }
+
+  /// Once this attempt has created the account, its email and password are
+  /// fixed: a retry must resume that same account, never start a second one.
+  bool get _credentialsLocked => _attempt.accountCreated;
 
 
 
@@ -1043,6 +914,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   // silently blocking Continue.
                                   onChanged: (v) {
                                     setState(() => _selectedSex = v);
+                                    _attempt.draft.identity.sex = v;
                                     _touchAndValidate(SignupField.sex);
                                   },
                                 ),
@@ -1051,6 +923,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                 TextFormField(
                                   key: _fieldKeys[SignupField.email],
                                   controller: _emailController,
+                                  enabled: !_credentialsLocked,
                                   focusNode: _emailFocusNode,
                                   keyboardType: TextInputType.emailAddress,
                                   style: const TextStyle(color: Colors.black54),
@@ -1058,6 +931,9 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   decoration: InputDecoration(
                                     labelText: 'Email',
                                     labelStyle: const TextStyle(color: Colors.blueAccent),
+                                    helperText: _credentialsLocked
+                                        ? 'Your account was created with this email.'
+                                        : null,
                                     errorText: _fieldErrors[SignupField.email],
                                     errorStyle: const TextStyle(fontSize: 12),
                                     hintText: 'Enter your email',
@@ -1092,6 +968,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                 TextFormField(
                                   key: _fieldKeys[SignupField.password],
                                   controller: _passwordController,
+                                  enabled: !_credentialsLocked,
                                   focusNode: _passwordFocusNode,
                                   obscureText: !_passwordVisible,
                                   style: const TextStyle(color: Colors.black54),
@@ -1149,6 +1026,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                 TextFormField(
                                   key: _fieldKeys[SignupField.confirmPassword],
                                   controller: _confirmPasswordController,
+                                  enabled: !_credentialsLocked,
                                   focusNode: _confirmPasswordFocusNode,
                                   obscureText: !_confirmPasswordVisible,
                                   style: const TextStyle(color: Colors.black54),
@@ -1270,91 +1148,8 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
 // All fields are optional in the model; UI enforces "required" where needed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-enum TrainingExperience { never, lt6mo, oneYear, twoPlus }
-
-class BestEffort {
-  final String liftKey;     // e.g. 'bench_barbell', 'bench_db', 'squat', 'leg_press', 'chinup', 'lat_pulldown', 'deadlift'
-  final double? weightKg;
-  final int? reps;
-  const BestEffort({ this.liftKey = '', this.weightKg, this.reps });
-
-  Map<String, dynamic> toJson() => {
-    'liftKey': liftKey,
-    'weightKg': weightKg,
-    'reps': reps,
-  };
-
-  factory BestEffort.fromJson(Map<String, dynamic> j) => BestEffort(
-    liftKey: (j['liftKey'] ?? '') as String,
-    weightKg: (j['weightKg'] as num?)?.toDouble(),
-    reps: (j['reps'] as num?)?.toInt(),
-  );
-}
-
-class OnboardingAnswers {
-  final List<String>? goalsRanked;
-  final List<String>? bodyFocus;
-  final Map<String, int>? painNow;
-  final List<String>? injuries;
-  final TrainingExperience? experience;
-  final List<BestEffort>? bestEfforts;
-  final int? minTrainingDaysPerWeek; // existing
-  final int? trainingEffort; // 👈 NEW
-  final DateTime? createdAt;
-  final String? version;
-
-  const OnboardingAnswers({
-    this.goalsRanked,
-    this.bodyFocus,
-    this.painNow,
-    this.injuries,
-    this.experience,
-    this.bestEfforts,
-    this.minTrainingDaysPerWeek,
-    this.trainingEffort, // 👈 NEW
-    this.createdAt,
-    this.version,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'goalsRanked': goalsRanked,
-    'bodyFocus': bodyFocus,
-    'painNow': painNow,
-    'injuries': injuries,
-    'experience': experience?.name,
-    'bestEfforts': bestEfforts?.map((b) => b.toJson()).toList(),
-    'minTrainingDaysPerWeek': minTrainingDaysPerWeek,
-    'trainingEffort': trainingEffort, // 👈 NEW
-    'createdAt': (createdAt ?? DateTime.now()).toUtc().toIso8601String(),
-    'version': version ?? 'v1',
-  };
-
-
-  factory OnboardingAnswers.fromJson(Map<String, dynamic> j) => OnboardingAnswers(
-    goalsRanked: (j['goalsRanked'] as List?)?.map((e) => e.toString()).toList(),
-    bodyFocus: (j['bodyFocus'] as List?)?.map((e) => e.toString()).toList(),
-    painNow: (j['painNow'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v as num).toInt())),
-    injuries: (j['injuries'] as List?)?.map((e) => e.toString()).toList(),
-    experience: _expFromString(j['experience']),
-    bestEfforts: (j['bestEfforts'] as List?)
-        ?.map((e) => BestEffort.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList(),
-    minTrainingDaysPerWeek: (j['minTrainingDaysPerWeek'] as num?)?.toInt(), // 👈 NEW
-    trainingEffort: (j['trainingEffort'] as num?)?.toInt(), // 👈 add this
-    createdAt: (j['createdAt'] != null) ? DateTime.tryParse(j['createdAt'].toString()) : null,
-    version: j['version']?.toString(),
-  );
-
-
-  static TrainingExperience? _expFromString(dynamic v) {
-    final s = v?.toString();
-    if (s == null) return null;
-    return TrainingExperience.values.firstWhere(
-          (e) => e.name == s,
-      orElse: () => TrainingExperience.never,
-    );
-  }
-}
+// TrainingExperience, BestEffort and OnboardingAnswers live in
+// signup/onboarding_models.dart (re-exported above).
 
 class OnboardingPageTwo extends StatefulWidget {
   final String email;
@@ -1364,6 +1159,12 @@ class OnboardingPageTwo extends StatefulWidget {
   final String? fullName;
   final String? dob;       // dd-mm-yyyy
 
+  /// The signup attempt this page belongs to, or null in edit mode (Templates
+  /// / drawer). Signup mode is decided by this, never by the auth state: an
+  /// established account and a half-finished signup can both have a
+  /// non-anonymous currentUser.
+  final SignupAttempt? signup;
+
   const OnboardingPageTwo({
     Key? key,
     required this.email,
@@ -1372,6 +1173,7 @@ class OnboardingPageTwo extends StatefulWidget {
     this.username,
     this.fullName,
     this.dob,
+    this.signup,
   }) : super(key: key);
 
   @override
@@ -1391,21 +1193,22 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     OnboardingSection.env: GlobalKey(),
   };
 
-  // ── A) Goals: start with full list; user reorders to set priority.
-  List<String> _goals = [
-    'Get stronger',
-    'Build more muscle',
-    'Get fitter',
-    'Powerlifting',
-    'Get leaner',
-    'Feel healthier / move better',
-    'Tone and shape',
-    'Defeat my gym nemesis',
-    'Power-Building',
-    'Bench Press Specialist',
-  ].toList();
+  /// Every editable value on this page. During signup this is the attempt's
+  /// draft, which outlives this route; in edit mode it is a fresh local copy
+  /// that hydration fills from Firestore. The fields below are views onto it,
+  /// so all of the existing UI code reads and writes the draft directly and
+  /// no answer can be lost when this route is destroyed.
+  late final OnboardingFormData _form =
+      widget.signup?.draft.onboarding ?? OnboardingFormData();
 
-  List<String> _notImportantGoals = [];
+  SignupAttempt? get _signup => widget.signup;
+
+  // ── A) Goals: full list; user reorders to set priority.
+  List<String> get _goals => _form.goals;
+  set _goals(List<String> v) => _form.goals = v;
+
+  List<String> get _notImportantGoals => _form.notImportantGoals;
+  set _notImportantGoals(List<String> v) => _form.notImportantGoals = v;
 
 
   // ── B) Body focus (conditional if “muscle/toned” is relevant): simple checklist for v1
@@ -1417,12 +1220,12 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
     'Chest','Abs','Hamstrings','Quads','Calves','Glutes','Back','Shoulders','Arms',
   ];
 
-  final Set<String> _bodyFocus = <String>{};
   // 0 = off, 1 = light, 2 = medium, 3 = strong
-  final Map<String, int> _bodyFocusLevel = <String, int>{};
+  Map<String, int> get _bodyFocusLevel => _form.bodyFocusLevel;
 
   // Toggle to reveal child muscles
-  bool _moreSpecific = false;
+  bool get _moreSpecific => _form.moreSpecific;
+  set _moreSpecific(bool v) => _form.moreSpecific = v;
 
 // Parent → child muscles
   final Map<String, List<String>> _subGroups = const {
@@ -1438,15 +1241,19 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   };
 
 // Child emphasis levels: parent → (child → 0..3)
-  final Map<String, Map<String, int>> _childFocusLevel = {};
+  Map<String, Map<String, int>> get _childFocusLevel => _form.childFocusLevel;
 
 
 
   // Shoulder / elbow detail flags
-  bool _shoulderPainOverhead = false;
-  bool _shoulderPainFront   = false;
-  bool _elbowPainInside     = false;
-  bool _elbowPainOutside    = false;
+  bool get _shoulderPainOverhead => _form.shoulderPainOverhead;
+  set _shoulderPainOverhead(bool v) => _form.shoulderPainOverhead = v;
+  bool get _shoulderPainFront => _form.shoulderPainFront;
+  set _shoulderPainFront(bool v) => _form.shoulderPainFront = v;
+  bool get _elbowPainInside => _form.elbowPainInside;
+  set _elbowPainInside(bool v) => _form.elbowPainInside = v;
+  bool get _elbowPainOutside => _form.elbowPainOutside;
+  set _elbowPainOutside(bool v) => _form.elbowPainOutside = v;
 
   // ── C) Injuries: checkboxes + per-item pain slider (1–10) when checked
   final List<String> _injuryKeys = const [
@@ -1462,9 +1269,13 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   ];
 
   // ── Equipment / environment
-  String? _env; // 'commercial' | 'powerlifting' | 'home' | 'travelling'
-  final Set<String> _equipSelected = <String>{};
-  int? _dbMax; // dumbbell max (e.g., 40, 50, 60)
+  // 'commercial' | 'powerlifting' | 'home' | 'travelling'
+  String? get _env => _form.env;
+  set _env(String? v) => _form.env = v;
+  Set<String> get _equipSelected => _form.equipSelected;
+  // dumbbell max (e.g., 40, 50, 60; -1 = None)
+  int? get _dbMax => _form.dbMax;
+  set _dbMax(int? v) => _form.dbMax = v;
 
 // Label lists per environment
   static const List<String> _powerEquip = [
@@ -1535,446 +1346,56 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
   };
 
 
-  int? _ptHistory; // 0..3 (null = not chosen)
+  int? get _ptHistory => _form.ptHistory; // 0..3 (null = not chosen)
+  set _ptHistory(int? v) => _form.ptHistory = v;
 
-  final Set<String> _injuries = <String>{};
-  final Map<String, double> _painSlider = {}; // store slider as double 1..10; round to int when saving
+  Set<String> get _injuries => _form.injuries;
+  // store slider as double 1..10; round to int when saving
+  Map<String, double> get _painSlider => _form.painSlider;
 
   // ── D) Experience: radio
-  TrainingExperience? _experience;
+  TrainingExperience? get _experience => _form.experience;
+  set _experience(TrainingExperience? v) => _form.experience = v;
 
-  // ── E) Optional best efforts (free text; we’ll parse “100 x 5” loosely)
-  final TextEditingController _benchCtrl = TextEditingController();
-  final TextEditingController _squatCtrl = TextEditingController();
-  final TextEditingController _pullCtrl  = TextEditingController(); // chinup/lat pulldown
-  final TextEditingController _deadCtrl  = TextEditingController();
+  // ── E) Optional best efforts (rows currently hidden). Each controller
+  // writes through to the form as it changes, so raw text survives route
+  // destruction; the selected variants are kept on [_form] too.
+  // Separate weight + reps controllers for each
+  late final TextEditingController _benchWeightCtrl = _bound(BestEffortField.benchWeight);
+  late final TextEditingController _benchRepsCtrl = _bound(BestEffortField.benchReps);
 
-  String _benchVariant = 'Bench Press';
-  String _squatVariant = 'Back Squat';
-  String _pullVariant  = 'Lat Pull Down, Supinated';
-  String _deadVariant  = 'Deadlift';
+  late final TextEditingController _squatWeightCtrl = _bound(BestEffortField.squatWeight);
+  late final TextEditingController _squatRepsCtrl = _bound(BestEffortField.squatReps);
 
-  // ▼ New: separate weight + reps controllers for each
-  final TextEditingController _benchWeightCtrl = TextEditingController();
-  final TextEditingController _benchRepsCtrl   = TextEditingController();
+  late final TextEditingController _pullWeightCtrl = _bound(BestEffortField.pullWeight);
+  late final TextEditingController _pullRepsCtrl = _bound(BestEffortField.pullReps);
 
-  final TextEditingController _squatWeightCtrl = TextEditingController();
-  final TextEditingController _squatRepsCtrl   = TextEditingController();
+  late final TextEditingController _deadWeightCtrl = _bound(BestEffortField.deadWeight);
+  late final TextEditingController _deadRepsCtrl = _bound(BestEffortField.deadReps);
 
-  final TextEditingController _pullWeightCtrl  = TextEditingController();
-  final TextEditingController _pullRepsCtrl    = TextEditingController();
+  final List<TextEditingController> _boundControllers = <TextEditingController>[];
 
-  final TextEditingController _deadWeightCtrl  = TextEditingController();
-  final TextEditingController _deadRepsCtrl    = TextEditingController();
+  TextEditingController _bound(String key) {
+    final c = TextEditingController(text: _form.bestEffortText[key] ?? '');
+    c.addListener(() => _form.bestEffortText[key] = c.text);
+    _boundControllers.add(c);
+    return c;
+  }
 
-  int? _minTrainingDays; // 2–7, chosen on this page
+  int? get _minTrainingDays => _form.minTrainingDays; // 2–7, chosen on this page
+  set _minTrainingDays(int? v) => _form.minTrainingDays = v;
 
 
-  bool _saving = false;
+  late bool _saving = widget.signup?.isSubmitting ?? false;
 
   bool get _muscleOrTonedChosen {
     // if “Build more muscle” OR “Get leaner” OR “Feel more toned” appears high, we can encourage body focus
     return _goals.contains('Build more muscle') || _goals.contains('Get leaner');
   }
 
-  int? _trainingEffort; // 1..4, optional
+  int? get _trainingEffort => _form.trainingEffort; // 1..4, optional
+  set _trainingEffort(int? v) => _form.trainingEffort = v;
   List<String> _trainingEffortLabels = const []; // built from sex + dob
-
-  Future<void> _ensureAtLeastOneBlockExists() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    final swTotal = Stopwatch()..start();
-
-    final uid = user.uid;
-    final blocksRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('planned_blocks');
-
-    final existingBlocks = await blocksRef.get();
-
-    if (existingBlocks.docs.isEmpty) {
-      // ── Fetch username & sex from /users/{uid} ───────────────────────────────
-      final usersRef = FirebaseFirestore.instance.collection('users').doc(uid);
-      final userSnap = await usersRef.get();
-      final data = userSnap.data() ?? {};
-
-      // 🔒 Gate: wait until /users has core fields (prevents female default)
-      final hasCore = userSnap.exists &&
-          (data['username'] != null || data['fullName'] != null);
-
-      if (!hasCore) {
-        debugPrint('🛑 [Home] Block gate: /users/$uid incomplete → retry in 800ms');
-        // tiny, non-blocking retry; won’t slow first paint
-        unawaited(Future.delayed(const Duration(milliseconds: 800), () async {
-          await _ensureAtLeastOneBlockExists();
-        }));
-        return;
-      }
-
-      print('🔎 [Home] Reading /users/$uid  exists=${userSnap.exists}');
-      print('🔎 [Home] /users/$uid keys=${data.keys.toList()}');
-
-      final usernameFromDoc = (data['username'] as String?)?.trim();
-      final sexRawFromDoc   = (data['sex'] as String?)?.trim();
-
-      // Fallbacks so we still name the block if the user doc isn't ready yet:
-      final auth = FirebaseAuth.instance.currentUser!;
-      final fallbackUsername = (auth.displayName?.trim().isNotEmpty == true)
-          ? auth.displayName!.trim()
-          : (auth.email?.split('@').first ?? '').trim();
-
-      final username = (usernameFromDoc?.isNotEmpty == true)
-          ? usernameFromDoc
-          : (fallbackUsername.isNotEmpty ? fallbackUsername : null);
-
-      final sex = (sexRawFromDoc == null || sexRawFromDoc.isEmpty)
-          ? 'N'  // default → treated as female branch per your rules
-          : sexRawFromDoc.toUpperCase();
-
-      print('🧬 [Home] Using uid=$uid username="$username" sex="$sex"');
-
-      final isFemale = sex == 'F' || sex == 'N';
-      print('🧬 [Home] Template branch = ${isFemale ? 'FEMALE' : 'MALE'}');
-
-      // Block names
-      final block1Name = (username != null && username.isNotEmpty)
-          ? "${username}'s First Block"
-          : "1st Block";
-      final block2Name = (username != null && username.isNotEmpty)
-          ? "${username}'s 2nd Block"
-          : "2nd Block";
-
-      print('🆕 [Home] No blocks found — creating "$block1Name" and "$block2Name"...');
-
-      // ── Dates: start = Monday of the current week ("Monday just gone") ──────
-      final now = DateTime.now();
-
-      // Normalize to date-only (midnight) to avoid time-of-day drift in Firestore dates
-      final today = DateTime(now.year, now.month, now.day);
-
-      // DateTime.weekday: Mon=1 ... Sun=7
-      final startDate1 = today.subtract(Duration(days: today.weekday - DateTime.monday));
-
-      // 26 weeks = 182 days total. If start is day 0, last day is start + 181.
-      final endDate1 = startDate1.add(const Duration(days: 181));
-
-      // Next blocks start the day after the previous ends
-      final startDate2 = endDate1.add(const Duration(days: 1));
-      final endDate2   = startDate2.add(const Duration(days: 181));
-
-      final startDate3 = endDate2.add(const Duration(days: 1));
-      final endDate3   = startDate3.add(const Duration(days: 181));
-
-      debugPrint('📅 [Home] Block1 start=${startDate1.toIso8601String()} end=${endDate1.toIso8601String()} (today=${today.toIso8601String()})');
-
-
-
-      // ── Base exercise IDs (shared by both sexes) ─────────────────────────────
-      const baseExercises = <String>[
-        'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
-        'kTs5fLSTKjUkUZL10iii', // Flat Bench Dumbbell Press
-        'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
-        'y5q9OU9OBzZQMkfPzFrf', // Romanian Deadlift
-        'v2XlZUvFfBUhogOdKtJ8', // Leg Press
-        'lVDG90yN6Z8aPjRNV2wc', // Overhead Barbell Press
-        '2yJSfLMfOnNDSeZ7DqZT', // Overhead Dumbbell Press
-        '9siQpXF2KLCj7M9kCy2m', // Seated Shoulder Dumbbell Press
-        '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
-        'Url65Q2RxZa00dkDpUdl', // Lat Pull Down, Wide Arm
-        'JbthLLjMF6xRvvaUY8PU', // Lat Pull Down, Unilateral
-        'ETm055bydWtUCxTMu3MR', // Seated Leg Curl
-        'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
-        'QkEgE8gnIva2kkNJEfxw', // Leg Extension
-        'ZKpGshMxFl2dxNmYSATj', // Leg Extension, Unilateral
-        'ci3KpMTEacH4bw8ZumJW', // Standing Calf Raise
-        'spGqXXReJNHMcc62YgZX', // Seated Calf Raise
-
-        '0dZrCqZ8M7Q1sAn0zeeb', // Dumbbell Biceps Curl
-        'zn5PgKNRrWo1MTE4wnCy', // Bayesian Biceps Curl
-        'E6jPE8YYR0KA3xtVaKJo', // Triceps Push Down
-        'QacImADmlpljltUvB0dD', // Overhead Cable Triceps Extension
-        'eeEXnmSXv90q0rUgGECq', // KP Face Pull
-        'KPewxxYYrhsOp84lIQr5', // Suspended High Row
-        'P88Vj5pBydqmiEzFowag', // Hanging Straight Leg Raise
-        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
-        'FtayDmR5BVnGS1FX1XLL', // Triceps Dip
-        'OJaMXFKgMnM0X5xttBE1', // Cable Face Pull
-        '6SGWrCKfe7KQLThRYXQ6', // One Arm Row, Dumbbell
-        'Z1LpfaEBvHBDMsJ54pgw', // Hack Squat
-        'z5gs1ilr4DpKlSZaRNG5', // Overhead Cable Triceps Extension, Unilateral
-        'LVMQEQl6ZWBcgEUdk2tP', // Leg Press Calf Raise
-        'ISXQqOEXLjMrPEs0xjgJ', // Bulgarian Split Squat
-        'ocNWJv7xLrlinGmjG6cV', // Machine Row, Supported
-        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
-        'RdsGazgdH0xgpjek0n3u', // Overhead Dumbbell Press, Unilateral
-        'xWpCQO504iGfU3LKLZlD', // Cable High Row, Unilateral
-        'XM9026peNIu0R8qh7UqY', // Chin-Up
-
-
-      ];
-
-      // ── Male-specific exercises ─────────────────────────────────────────────
-      const maleSpecificExercises = <String>[
-        '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
-        'TBSudbow1OLdX6mSCC6S', // Machine Chest Fly
-        '72HAT6Od4iJodEFxzw62', // Machine Reverse Fly
-        'igNo9pSuaOFt0GVX0zBG', // Cable Lateral Raise
-        'ZKrfhPhJIiC1hRuwBEw1', // Bayesian Fly
-        'RcC48r0oLsNCH798d3jc', // Butterfly Dumbbell Raise
-        'ewJBWuDzj1CxfQ3vI3QS', // Reverse Bayesian Fly
-        '8saP9lWMoQffuh30A99K', // Lat Prayer
-        '0s4yMXygBXZZJH66Yi6h', // Seated Face Pull, Unilateral
-      ];
-
-      // ── Female-specific exercises ───────────────────────────────────────────
-      const femaleSpecificExercises = <String>[
-        'vrSYibzR5DHzl6Gzp4ER', // Machine Shoulder Press, Pin Loaded
-        '3dWgorRmtgzsV0U4qu47', // Glute Cable Kick Back
-        'kxgQUX7Cr75l1kOwRaqc', // Spider-Girl Plank
-        'YaQ0FCQEUAk4ALwAPhv2', // Machine Hip Thrust
-        'visub8iG0LIXYYCv5Qom', // Hip Thrust, Unilateral
-        'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
-        'hCpQR1NgeEAp31lVRWLw', // Machine Hip Adduction
-        '7WBffXwK7vJcMi3mtJTF', // Machine Hip Abduction
-        't66qeWQqnuEtaoyZqRp0', // Triceps Dip Machine
-        'zpNb7HgXjtcrzR14F3iF', // Cable One Arm Row
-        '8CIXN12uS2xwF4JzVLq3', // Long Lever Plank
-        'SoHQVtsCQreaHM8LUI5F', // Bicycle Crunch
-        'qU2wXMth4duOhhzTUWet', // Decline Crunch
-      ];
-
-      // ── Build merged list based on sex ─────────────────────────────────────
-      final seededExerciseIds = [
-        ...baseExercises,
-        if (isFemale) ...femaleSpecificExercises else ...maleSpecificExercises,
-      ];
-
-      // Sex-derived candidate pool for templateCandidateExerciseIds
-      final candidateIds = computeTemplateCandidateIds(isFemale: isFemale);
-      debugPrint('✅ [Onboarding] First-login: using candidateIds=${candidateIds.length}, no full exercise scan');
-
-      // ── Block 2 exercise adjustments (sex-specific ± tweaks) ─────────────────────
-// Base = all exercises from Block 1. Then apply -exclusions +additions.
-
-      const femaleAdditionsB2 = <String>[
-        // e.g., 'LGhFj8o0sG3X12296UAh', // Hip Thrust, Barbell
-        // e.g., 'F76PnvlLLVF6hviuhRfH', // Seated Dumbbell Biceps Curl
-      ];
-
-      const maleAdditionsB2 = <String>[
-        // e.g., '6d9Ud7ffAHpljWsSKrFe', // Seated Face Pull
-      ];
-
-      const femaleExclusionsB2 = <String>[
-        // e.g., 'heeBViVINHO6tUScSd6y', // Back Squat, Barbell
-      ];
-
-      const maleExclusionsB2 = <String>[
-        // e.g., 'wIcMsf2J9cswJRs1GuYX', // Lying Leg Curl
-      ];
-
-// Apply Block 2 adjustments dynamically
-      final block2ExerciseIds = <String>{
-        ...seededExerciseIds.where(
-              (id) => !(isFemale ? femaleExclusionsB2 : maleExclusionsB2).contains(id),
-        ),
-        ...(isFemale ? femaleAdditionsB2 : maleAdditionsB2),
-      }.toList(growable: false);
-
-
-      // ── Block 3 exercise adjustments (sex-specific ± tweaks) ───────────────────────
-// Use these four lists to easily fine-tune Block 3 composition.
-// Base = all exercises from Block 1/2. Then apply -exclusions +additions.
-
-      const femaleAdditions = <String>[
-        'I4021icWTx3EAnAe1eHf', // Box Jump Squat
-        // e.g., 'zpNb7HgXjtcrzR14F3iF', // Cable One Arm Row
-      ];
-
-      const maleAdditions = <String>[
-        'EFbQl9i9NdYi13F3DqHr', // Push Up, Suspended
-        'Ah9XLjbWvLJOWxb6e1H0', // Triceps Push Down, Unilateral
-
-      ];
-
-      const femaleExclusions = <String>[
-        'uY8uJaSFK9czKIX4TLc4', // Machine Chest Press
-      ];
-
-      const maleExclusions = <String>[
-        'eyh76KELuuO805rZBpMa', // 45 Degree Hip Extension
-      ];
-
-// Compute Block 3 exercises dynamically
-      final block3ExerciseIds = <String>{
-        ...seededExerciseIds.where(
-              (id) => !(isFemale ? femaleExclusions : maleExclusions).contains(id),
-        ),
-        ...(isFemale ? femaleAdditions : maleAdditions),
-      }.toList(growable: false);
-
-
-
-      // Helper to build a block payload (lightweight sentinel — no full exercise arrays)
-      Map<String, dynamic> buildBlock({
-        required String name,
-        required bool isActive,
-        required DateTime start,
-        required DateTime end,
-        required List<String> candidateExerciseIds,
-      }) {
-        return {
-          'name': name,
-          'isActive': isActive,
-          'createdAt': Timestamp.now(),
-          'startDate': Timestamp.fromDate(start),
-          'endDate': Timestamp.fromDate(end),
-          'selectedDays': ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-          'allExercisesAvailable': true,
-          'excludedExerciseIds': <String>[],
-          'templateCandidateExerciseIds': candidateExerciseIds,
-        };
-      }
-
-      // ── Create Block 1 (active) ─────────────────────────────────────────────
-      final block1Payload = buildBlock(
-        name: block1Name,
-        isActive: true,
-        start: startDate1,
-        end: endDate1,
-        candidateExerciseIds: candidateIds,
-      );
-
-      final swCreate1 = Stopwatch()..start();
-      final block1Ref = await blocksRef.add(block1Payload);
-      swCreate1.stop();
-      final block1Id = block1Ref.id;
-      print('✅ [Home] Block 1 created id=$block1Id (${swCreate1.elapsed.inMilliseconds} ms)');
-
-      await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
-        uid: uid,
-        blockId: block1Id,
-        exerciseIds: seededExerciseIds,
-      );
-
-
-      // Pointer write to current_block → Block 1
-      final swPtr = Stopwatch()..start();
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .collection('block_planner')
-          .doc('current_block')
-          .set({
-        'blockId': block1Id,
-        'blockName': block1Name,
-        'templateCandidateExerciseIds': candidateIds,
-        'blockMeta': {
-          'blockStartDate': startDate1.toIso8601String(),
-          'blockEndDate': endDate1.toIso8601String(),
-        },
-      }, SetOptions(merge: true));
-      swPtr.stop();
-      print('📌 [Home] Set current_block pointer → $block1Id (${swPtr.elapsed.inMilliseconds} ms)');
-
-      // Eagerly write week_0 so WES2/BB3 can read the current week immediately.
-      {
-        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-        const weekdays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-        final week0Ref = block1Ref.collection('weeks').doc('week_0');
-        final eagerBatch = FirebaseFirestore.instance.batch();
-        eagerBatch.set(week0Ref, {'exists': true}, SetOptions(merge: true));
-        for (int day = 0; day < 7; day++) {
-          final date = startDate1.add(Duration(days: day));
-          eagerBatch.set(week0Ref.collection('days').doc('day_$day'), {
-            'date': Timestamp.fromDate(date),
-            'circuitStartIndices': [0],
-            'exercises': [],
-            'workoutName': '${weekdays[day]} ${date.day} ${months[date.month - 1]} - Week 1',
-            'exists': true,
-          }, SetOptions(merge: true));
-        }
-        await eagerBatch.commit();
-        debugPrint('🧱 [Onboarding] Block 1 week_0 ready (eager)');
-      }
-      // Defer weeks 1–25 for Block 1 to background.
-      unawaited(scaffoldBlockInBackground(block1Ref, startDate1, startWeek: 1));
-
-      // ── Create Block 2 (upcoming, not active) ───────────────────────────────
-      final block2Payload = buildBlock(
-        name: block2Name,
-        isActive: false,
-        start: startDate2,
-        end: endDate2,
-        candidateExerciseIds: candidateIds,
-      );
-
-      final swCreate2 = Stopwatch()..start();
-      final block2Ref = await blocksRef.add(block2Payload);
-      swCreate2.stop();
-      final block2Id = block2Ref.id;
-      print('✅ [Onboarding] Block 2 created id=$block2Id (${swCreate2.elapsed.inMilliseconds} ms)');
-
-      // Defer Block 2 seed + full scaffold to background — block doc is already created.
-      unawaited(() async {
-        try {
-          await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
-            uid: uid,
-            blockId: block2Id,
-            exerciseIds: block2ExerciseIds,
-          );
-          await scaffoldBlockInBackground(block2Ref, startDate2);
-        } catch (e, st) {
-          debugPrint('❌ [Onboarding] Block 2 background init failed: $e\n$st');
-        }
-      }());
-
-      debugPrint('🧪[B3 pre-add] seed=${seededExerciseIds.length} adj=${block3ExerciseIds.length} '
-          'hasAdd(EFbQl9i9NdYi13F3DqHr)=${block3ExerciseIds.contains('EFbQl9i9NdYi13F3DqHr')} '
-          'hasEx(eyh76KELuuO805rZBpMa)=${block3ExerciseIds.contains('eyh76KELuuO805rZBpMa')}');
-
-      // ── Create Block 3 (upcoming, not active) ─────────────────────────────────────
-      final block3Name = (username != null && username.isNotEmpty)
-          ? "${username}'s 3rd Block"
-          : "3rd Block";
-
-      final block3Payload = buildBlock(
-        name: block3Name,
-        isActive: false,
-        start: startDate3,
-        end: endDate3,
-        candidateExerciseIds: candidateIds,
-      );
-
-      final swCreate3 = Stopwatch()..start();
-      final block3Ref = await blocksRef.add(block3Payload);
-      swCreate3.stop();
-      final block3Id = block3Ref.id;
-      print('✅ [Onboarding] Block 3 created id=$block3Id (${swCreate3.elapsed.inMilliseconds} ms)');
-
-      // Defer Block 3 seed + full scaffold to background — block doc is already created.
-      unawaited(() async {
-        try {
-          await BlockExerciseDefaultsRepository.seedDefaultsForBlock(
-            uid: uid,
-            blockId: block3Id,
-            exerciseIds: block3ExerciseIds,
-          );
-          await scaffoldBlockInBackground(block3Ref, startDate3);
-        } catch (e, st) {
-          debugPrint('❌ [Onboarding] Block 3 background init failed: $e\n$st');
-        }
-      }());
-
-    }
-
-
-
-    swTotal.stop();
-    print('⏱️ [Home] _ensureAtLeastOneBlockExists total: ${swTotal.elapsed.inMilliseconds} ms');
-  }
 
   /// Lists what is still missing, in the order the questions appear, paired
   /// with the section that owns it. Empty means valid.
@@ -1999,52 +1420,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         hasEnvironment: _env != null,
       );
 
-  /// Reports an account-creation failure that the user can actually act on.
-  /// Firebase is the authority on whether an email is already registered —
-  /// Page 1 deliberately does not preflight it, because every client-side way
-  /// to do so is an account-enumeration primitive — so this is where a
-  /// duplicate finally surfaces, and it has to be specific.
-  void _showAuthFailure(FirebaseAuthException e) {
-    debugPrint('❌ [Onboarding Finish] auth failed: ${e.code} — ${e.message}');
-    if (!mounted) return;
-    final duplicate =
-        e.code == 'email-already-in-use' || e.code == 'credential-already-in-use';
-    final String message;
-    switch (e.code) {
-      case 'email-already-in-use':
-      case 'credential-already-in-use':
-        message = 'That email already has a GoodLift account.';
-        break;
-      case 'invalid-email':
-        message = "That doesn't look like a valid email address.";
-        break;
-      case 'weak-password':
-        message = 'Password needs at least 6 characters.';
-        break;
-      case 'network-request-failed':
-        message = 'No connection — check your network and try again.';
-        break;
-      default:
-        message = 'Could not create your account. (${e.message})';
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          duration: Duration(seconds: duplicate ? 8 : 5),
-          action: duplicate
-              ? SnackBarAction(
-                  label: 'Log in',
-                  onPressed: () {
-                    Navigator.of(context).popUntil((r) => r.isFirst);
-                  },
-                )
-              : null,
-        ),
-      );
-  }
-
   /// Scrolls the header of [section] into view. Silently does nothing when the
   /// section is not currently built (some are conditional), in which case the
   /// snack bar still names the problem.
@@ -2061,18 +1436,10 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
   @override
   void dispose() {
-    _benchCtrl.dispose();
-    _squatCtrl.dispose();
-    _pullCtrl.dispose();
-    _deadCtrl.dispose();
-    _benchWeightCtrl.dispose();
-    _benchRepsCtrl.dispose();
-    _squatWeightCtrl.dispose();
-    _squatRepsCtrl.dispose();
-    _pullWeightCtrl.dispose();
-    _pullRepsCtrl.dispose();
-    _deadWeightCtrl.dispose();
-    _deadRepsCtrl.dispose();
+    // Only controllers that were actually created (they are lazy).
+    for (final c in _boundControllers) {
+      c.dispose();
+    }
 
     super.dispose();
   }
@@ -2097,6 +1464,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
   Future<void> _finish() async {
+    if (_saving) return; // one submission at a time
     final missing = _missingRequirements();
     if (missing.isNotEmpty) {
       // Name the specific thing to fix rather than a generic form-level error,
@@ -2117,165 +1485,76 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       return;
     }
 
+    final signup = _signup;
+    if (signup != null) {
+      await _finishSignup(signup);
+    } else {
+      await _finishEdit();
+    }
+  }
+
+  /// Signup Finish. The coordinator creates/resumes the account, reserves the
+  /// username through the server transaction and writes everything, verifying
+  /// it on the server. This page only reports the outcome; on success AppRoot
+  /// routes to the normal destination, so there is deliberately no navigation
+  /// here (pushing '/home' on the unauthenticated navigator would mount it
+  /// with no UserContext above it).
+  Future<void> _finishSignup(SignupAttempt attempt) async {
+    setState(() => _saving = true);
+    final SignupResult result = await attempt.owner.submit(attempt);
+    if (!mounted) return;
+
+    if (result.isSuccess) {
+      // Keep the spinner up until AppRoot swaps in the member's app.
+      return;
+    }
+
+    setState(() => _saving = false);
+    final failure = result.failure!;
+    if (failure.returnsToPageOne) {
+      // Page 1 puts the message on the field that owns it. Every answer on
+      // this page stays in the attempt's draft for when the member returns.
+      Navigator.of(context).pop(failure);
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(failure.message),
+          duration: const Duration(seconds: 8),
+          action: failure.retryable
+              ? SnackBarAction(label: 'Retry', onPressed: _finish)
+              : null,
+        ),
+      );
+  }
+
+  /// Save Changes for an established member (Templates / drawer). Creates no
+  /// account and claims no username.
+  Future<void> _finishEdit() async {
     setState(() => _saving = true);
 
     try {
-      // 1) Create account now (if not already signed in)
-      final auth = FirebaseAuth.instance;
-      UserCredential? cred;
-      final current = auth.currentUser;
-
-      // The single definition of "this Finish call is creating a brand-new
-      // account" — reused below both by the username guard and by the
-      // createdAt stamp, so the two can never disagree about which mode this
-      // is. True exactly when one of the two auth branches further down is
-      // about to run (no current user, or an anonymous session being
-      // upgraded); false for an established non-anonymous user, i.e. Page 2
-      // opened in edit mode from Templates / the drawer.
-      final isNewAccount = isAccountCreationPath(
-        hasCurrentUser: current != null,
-        isAnonymous: current?.isAnonymous == true,
-      );
-
-      // ── Final username uniqueness guard ──────────────────────────────────
-      // Page 1's live check is convenience only and can go stale. This is the
-      // authoritative one, and it sits BEFORE the branch below on purpose:
-      //
-      //  * it therefore covers BOTH creation paths (anonymous link and
-      //    create-new) by construction — neither can be missed;
-      //  * nothing has been created yet, so a collision can pop cleanly back to
-      //    Page 1 with the user's details intact. After auth succeeds AppRoot
-      //    swaps in the authenticated navigator and Page 1 no longer exists.
-      //
-      // Skipped for an established non-anonymous user (edit mode): that path
-      // creates no account and must not be blocked by a check against the
-      // user's own record.
-      if (isNewAccount) {
-        final outcome = await checkUsernameStillAvailable(
-          widget.username ?? '',
-          isUsernameAvailableInPublicIndex,
-        );
-        debugPrint('🔒 [Onboarding Finish] final username guard: ${outcome.name}');
-        if (!mounted) return;
-        switch (actionForGuardOutcome(outcome)) {
-          case SignupCommitAction.proceed:
-            break;
-          case SignupCommitAction.returnToUsernameField:
-            // Nothing written, nothing created. Page 1 turns the field red.
-            Navigator.of(context).pop(kSignupUsernameTakenResult);
-            return;
-          case SignupCommitAction.showRetryableError:
-            // Fail closed: an unreadable index proves nothing about
-            // uniqueness, so we must not write the name. Form state is kept so
-            // Finish can simply be tapped again.
-            ScaffoldMessenger.of(context)
-              ..hideCurrentSnackBar()
-              ..showSnackBar(
-                const SnackBar(
-                  content: Text(kUsernameCheckFailedMessage),
-                  duration: Duration(seconds: 6),
-                ),
-              );
-            return;
-        }
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null || user.isAnonymous) {
+        throw StateError('Training preferences need a signed-in account');
       }
 
-      if (current?.isAnonymous == true) {
-        // Upgrade the anonymous session to a real email/password account.
-        // Preserves the UID so any data written during signup stays valid.
-        final emailCred = EmailAuthProvider.credential(
-          email: widget.email,
-          password: widget.password,
-        );
-        try {
-          cred = await current!.linkWithCredential(emailCred);
-          final username = (widget.username ?? '').trim();
-          if (username.isNotEmpty) {
-            await cred.user?.updateDisplayName(username);
-          }
-        } on FirebaseAuthException catch (linkErr) {
-          // Email already belongs to another account, or the credentials
-          // themselves are rejected — do not write anything to Firestore.
-          _showAuthFailure(linkErr);
-          return; // outer finally resets _saving
-        }
-      } else if (current == null) {
-        // Reached when the anonymous sign-in on Page 1 could not complete.
-        // This path needs the same specific failure reporting as the link
-        // path above; without it a duplicate email surfaced as the generic
-        // "Could not finish setup. Please try again."
-        try {
-          cred = await auth.createUserWithEmailAndPassword(
-            email: widget.email,
-            password: widget.password,
-          );
-        } on FirebaseAuthException catch (createErr) {
-          _showAuthFailure(createErr);
-          return; // outer finally resets _saving
-        }
-
-        // displayName = username (optional)
-        final user = auth.currentUser;
-        final username = (widget.username ?? '').trim();
-        if (user != null && username.isNotEmpty) {
-          await user.updateDisplayName(username);
-        }
-      }
-
-      final user = auth.currentUser;
-      if (user == null) {
-        throw Exception('No user after registration');
-      }
-
-      // ── Atomic username reservation ──────────────────────────────────────
-      // The guard above runs BEFORE the account exists, so it can only ever be
-      // advisory: it reads the index and the name can be claimed in the gap
-      // before this account writes it. Now that we are authenticated, the
-      // callable settles it for real — one backend transaction reserves the
-      // name and writes username/usernameLower onto both user documents, so
-      // two simultaneous signups for one name cannot both win.
-      //
-      // It runs BEFORE the profile payload below: a refused name must leave no
-      // profile behind claiming it.
-      if (isNewAccount) {
-        final UsernameChangeResult claim =
-            await IdentityRepository.shared.changeUsername(widget.username ?? '');
-        if (!mounted) return;
-        if (!claim.isSuccess) {
-          if (claim.outcome == UsernameChangeOutcome.taken) {
-            Navigator.of(context).pop(kSignupUsernameTakenResult);
-          } else {
-            ScaffoldMessenger.of(context)
-              ..hideCurrentSnackBar()
-              ..showSnackBar(
-                SnackBar(
-                  content: Text(claim.message ?? kUsernameCheckFailedMessage),
-                  duration: const Duration(seconds: 6),
-                ),
-              );
-          }
-          return; // outer finally resets _saving
-        }
-      }
-
-      // 🔐 Ensure membership doc exists for this new account.
       // Idempotent: if Stripe/webhook already created it, we don't overwrite.
       await ensureMembershipDoc(user.uid);
 
-      // 2) Write profile payload to users & users_public
+      // Write profile payload to users & users_public.
       //
       // Identity fields (username/usernameLower/fullName/sex/dob) are added
       // ONLY when this widget instance actually carries a value for them.
-      // Edit mode (Templates / drawer) passes null for whichever identity
-      // field it isn't letting the user change — merge() only protects a
-      // field whose key is absent, so writing an explicit null/'' here would
-      // silently wipe the user's existing value. See
-      // onboarding_identity_payload.dart.
+      // Edit mode passes null for whichever identity field it isn't letting
+      // the user change — merge() only protects a field whose key is absent,
+      // so writing an explicit null/'' here would silently wipe the user's
+      // existing value. See onboarding_identity_payload.dart.
       //
-      // createdAt is the same class of bug: it must be stamped exactly once,
-      // at real account creation, and never re-stamped by a later onboarding
-      // edit — merge() would otherwise overwrite the user's true creation
-      // time with the edit time on every "Save Changes".
+      // createdAt is never re-stamped by an edit: merge() would otherwise
+      // overwrite the user's true creation time on every "Save Changes".
       final payload = {
         'email': user.email,
         ...buildIdentityPayloadFields(
@@ -2284,241 +1563,31 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
           sex: widget.sex,   // 'M'|'F'|'N'
           dob: widget.dob,   // dd-mm-yyyy string
         ),
-        ...buildCreatedAtField(isNewAccount: isNewAccount),
+        ...buildCreatedAtField(isNewAccount: false),
       };
 
-      // ✅ Cache demographics locally for offline + fast access across the app
+      // Cache demographics locally for offline + fast access across the app.
       await DemographicsCache.save(
         uid: user.uid,
         sex: widget.sex,
         dob: widget.dob, // dd-mm-yyyy
       );
 
-
       final db = FirebaseFirestore.instance;
       await db.collection('users').doc(user.uid).set(payload, SetOptions(merge: true));
       await db.collection('users_public').doc(user.uid).set(payload, SetOptions(merge: true));
 
-      // 3) Build & save onboarding answers
-      final answers = OnboardingAnswers(
-        goalsRanked: _goals.toList(),
-        bodyFocus: _bodyFocus.isEmpty ? null : _bodyFocus.toList(),
-        injuries: _injuries.isEmpty ? null : _injuries.toList(),
-        painNow: _injuries.isEmpty
-            ? null
-            : Map.fromEntries(_injuries.map((k) => MapEntry(k, (_painSlider[k] ?? 1).round()))),
-        experience: _experience,
-        bestEfforts: _collectBestEfforts(),
-        minTrainingDaysPerWeek: _minTrainingDays,
-        trainingEffort: _trainingEffort,   // ✅ just add this line
-        createdAt: DateTime.now(),
-        version: 'v1',
-      );
+      final submission = OnboardingSubmission.fromForm(_form);
+      await writeFitnessOnboarding(db, user.uid, submission);
 
+      // An established member already has blocks, so this is a read.
+      final fallbackName = (user.displayName?.trim().isNotEmpty == true)
+          ? user.displayName!.trim()
+          : (user.email?.split('@').first ?? '').trim();
+      await FirstBlockSeeder(firestore: db)
+          .ensureForEditMode(user.uid, authFallbackName: fallbackName);
 
-      final onbRef = db.collection('users').doc(user.uid)
-          .collection('profile').doc('fitness_onboarding');
-
-      // 🔄 Clear old painNow entries so deselected injuries don't linger
-      await onbRef.set({
-        'painNow': FieldValue.delete(),
-      }, SetOptions(merge: true));
-
-      // Now write the fresh onboarding answers (including the new painNow map)
-      await onbRef.set(answers.toJson(), SetOptions(merge: true));
-
-      // Save shoulder / elbow pain detail flags (flat keys)
-      final Map<String, dynamic> painDetailFlags = {};
-
-      if (_injuries.contains('Shoulders')) {
-        painDetailFlags['shoulderPainOverhead'] = _shoulderPainOverhead;
-        painDetailFlags['shoulderPainFront'] = _shoulderPainFront;
-      }
-      if (_injuries.contains('Elbows')) {
-        painDetailFlags['elbowPainInside'] = _elbowPainInside;
-        painDetailFlags['elbowPainOutside'] = _elbowPainOutside;
-      }
-
-      if (painDetailFlags.isNotEmpty) {
-        await onbRef.set(painDetailFlags, SetOptions(merge: true));
-      }
-
-      await onbRef.set({
-        'bodyFocusLevel': _bodyFocusLevel,
-      }, SetOptions(merge: true));
-
-
-
-      // Save child/sub-group levels (if any)
-      if (_childFocusLevel.isNotEmpty) {
-        final filtered = <String, Map<String, int>>{};
-        _childFocusLevel.forEach((parent, kidsMap) {
-          // Keep all kids, including 0
-          final copy = Map<String, int>.fromEntries(
-            kidsMap.entries.map((e) => MapEntry(e.key, e.value as int)),
-          );
-          if (copy.isNotEmpty) {
-            filtered[parent] = copy;
-          }
-        });
-
-        if (filtered.isNotEmpty) {
-          await onbRef.set({
-            'bodyFocusChildren': filtered,
-          }, SetOptions(merge: true));
-        }
-      }
-
-
-
-
-
-      // Persist final goals order + the "not important" bin
-      await onbRef.set({
-        'goalsRanked': _goals,                 // (already in answers; keep for clarity)
-        'goalsNotImportant': _notImportantGoals,
-      }, SetOptions(merge: true));
-
-
-      // Save equipment snapshot
-      final String? env = _env;
-      final List<String> items = _equipSelected.toList();
-
-      await onbRef.set({
-        'environment': env, // 'commercial' | 'powerlifting' | 'home' | 'travelling'
-        'equipment': {
-          'items': items,         // selected checkboxes
-          'dumbbellsMax': _dbMax, // nullable int (e.g., 40/50/60)
-        },
-      }, SetOptions(merge: true));
-
-      // 3a) Save PT experience (if answered)
-      if (_ptHistory != null) {
-        // Map selection 0..3 to stable buckets + canonical text
-        const buckets = ['none', 'lt3', '4to16', 'gt16'];
-        const canonicalText = ['No', '<3 sessions', '4–16 sessions', '16+ sessions'];
-
-        await onbRef.set({
-          'ptHistory': {
-            'index': _ptHistory,                // 0..3
-            'bucket': buckets[_ptHistory!],     // 'none' | 'lt3' | '4to16' | 'gt16'
-            'text': canonicalText[_ptHistory!], // canonical, UI-agnostic
-            'savedAt': FieldValue.serverTimestamp(),
-          },
-        }, SetOptions(merge: true));
-      }
-
-      // 3b) Save weekly training frequency (explicit mirror of answers.minTrainingDaysPerWeek)
-      await onbRef.set({
-        'weeklyFrequency': _minTrainingDays,        // int 2..7
-        'minTrainingDaysPerWeek': _minTrainingDays, // legacy/alias for backward compatibility
-        'weeklyFrequencySavedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-// (Optional but handy) also surface it on the top-level users doc for fast reads
-      await db.collection('users').doc(user.uid).set({
-        'weeklyFrequency': _minTrainingDays,
-      }, SetOptions(merge: true));
-
-      // ─────────────────────────────────────────────────────────────
-      // 4) Ensure first planned block exists, then write best-effort PRs
-      //    into users/<uid>/planned_blocks/<blockId>.exerciseSettings
-      // ─────────────────────────────────────────────────────────────
-
-      // IMPORTANT: call your existing block seeding logic here (move the function
-      // into this page, or import it). This ensures new users have Block 1 created.
-      await _ensureAtLeastOneBlockExists();
-
-      // Resolve the active/current blockId from the pointer doc
-      final currentBlockSnap = await db
-          .collection('users')
-          .doc(user.uid)
-          .collection('block_planner')
-          .doc('current_block')
-          .get();
-
-      final currentBlockData = currentBlockSnap.data() ?? {};
-      final String? blockIdToUse = currentBlockData['blockId'] as String?;
-
-      if (blockIdToUse == null || blockIdToUse.trim().isEmpty) {
-        debugPrint('❌ [Onboarding Finish] No current blockId found after seeding.');
-      } else {
-        // Map liftKey (from _collectBestEfforts) → exerciseId in Firestore
-        const Map<String, String> liftKeyToExerciseId = {
-          // Bench variants
-          'bench_barbell': 'AmfUWbF1DH3I7qPAdh5k', // Bench Press, Barbell
-          'bench_db': 'kTs5fLSTKjUkUZL10iii',      // Flat Bench Dumbbell Press
-          'chest_press': 'uY8uJaSFK9czKIX4TLc4',   // Machine Chest Press
-
-          // Squat variants
-          'back_squat': 'heeBViVINHO6tUScSd6y',    // Back Squat, Barbell
-          'leg_press': 'v2XlZUvFfBUhogOdKtJ8',     // Leg Press
-
-          // Pull variants
-          'lat_pulldown_supinated': '1XOIXxeLFhgmgjZS9Cyq', // Lat Pull Down, Supinated
-          'lat_pulldown_wide': 'Url65Q2RxZa00dkDpUdl',      // Lat Pull Down, Wide Arm
-
-          // Deadlift
-          'deadlift': 'MsGl7e9yanDeEnYX0e4X', // Deadlift, Conventional
-        };
-
-        // Build updates
-        final bestEfforts = _collectBestEfforts();
-
-        // Helper to format weight: 150.0 -> "150", 45.5 -> "45.5"
-        String _fmtWeight(double w) {
-          final isInt = w % 1 == 0;
-          return isInt ? w.toInt().toString() : w.toString();
-        }
-
-        final Map<String, dynamic> updates = {};
-
-        for (final be in bestEfforts) {
-          final exerciseId = liftKeyToExerciseId[be.liftKey];
-          if (exerciseId == null) {
-            debugPrint('⚠️ [Onboarding Finish] Unknown liftKey: ${be.liftKey}');
-            continue;
-          }
-
-          final weight = be.weightKg;
-          if (weight == null) continue; // per your rule: skip if weight missing
-
-          final int reps = (be.reps == null || be.reps! <= 0) ? 1 : be.reps!;
-          final manual = '${_fmtWeight(weight)} X $reps';
-
-          final double e1rm = PeriodizationModelUtils.calculateE1RM(
-            weight,
-            reps.toDouble(),
-            0.0, // ignore RIR, default 0
-          );
-
-          // Ensure the canonical root map exists.
-          updates['exerciseSettings'] ??= <String, dynamic>{};
-
-// Ensure per-exercise maps exist
-          (updates['exerciseSettings'] as Map<String, dynamic>)
-              .putIfAbsent(exerciseId, () => <String, dynamic>{});
-
-// Write values
-          (updates['exerciseSettings'][exerciseId] as Map<String, dynamic>)['maxWeightByReps_manual'] = manual;
-          (updates['exerciseSettings'][exerciseId] as Map<String, dynamic>)['e1rm'] = e1rm;
-
-        }
-
-        if (updates.isNotEmpty) {
-          await db
-              .collection('users')
-              .doc(user.uid)
-              .collection('planned_blocks')
-              .doc(blockIdToUse)
-              .set(updates, SetOptions(merge: true));
-
-          debugPrint('✅ [Onboarding Finish] Wrote best-efforts into block=$blockIdToUse');
-        } else {
-          debugPrint('ℹ️ [Onboarding Finish] No best-effort values provided; skipping block writes.');
-        }
-      }
-
+      await writeBestEffortsToCurrentBlock(db, user.uid, submission.bestEfforts);
 
       if (!mounted) return;
       // In edit mode, recompute templateCandidateExerciseIds for the active block
@@ -2611,7 +1680,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       final loadedPainNow           = (j['painNow'] as Map?)?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ?? <String,double>{};
 
       final loadedExperienceStr     = j['experience']?.toString();
-      final loadedExperience        = OnboardingAnswers._expFromString(loadedExperienceStr);
+      final loadedExperience        = OnboardingAnswers.experienceFromString(loadedExperienceStr);
 
       final loadedWeeklyFreq        = (j['weeklyFrequency'] ?? j['minTrainingDaysPerWeek']) as num?;
       final loadedTrainingEffort    = (j['trainingEffort'] as num?)?.toInt();
@@ -2693,92 +1762,6 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 
 
 
-  List<BestEffort> _collectBestEfforts() {
-    final out = <BestEffort>[];
-
-    // tiny helper to normalise UI text → backend-ish keys
-    String _mapBench(String v) {
-      switch (v) {
-        case 'Bench Press':
-          return 'bench_barbell';
-        case 'Flat DB Press':
-          return 'bench_db';
-        case 'Chest Press':
-          return 'chest_press';
-        default:
-          return v.replaceAll(' ', '_').toLowerCase();
-      }
-    }
-
-    String _mapSquat(String v) {
-      switch (v) {
-        case 'Back Squat':
-          return 'back_squat';
-        case 'Leg Press':
-          return 'leg_press';
-        default:
-          return v.replaceAll(' ', '_').toLowerCase();
-      }
-    }
-
-    String _mapPull(String v) {
-      switch (v) {
-        case 'Lat Pull Down, Supinated':
-          return 'lat_pulldown_supinated';
-        case 'Lat Pull Down, Wide Arm':
-          return 'lat_pulldown_wide';
-        case 'Chin Up':
-          return 'chinup';
-        default:
-          return v.replaceAll(' ', '_').toLowerCase();
-      }
-    }
-
-    String _mapDead(String v) {
-      // future-proofing if you add variants later
-      if (v == 'Deadlift') return 'deadlift';
-      return v.replaceAll(' ', '_').toLowerCase();
-    }
-
-    void addIfPresent({
-      required String liftKey,
-      required TextEditingController weightCtrl,
-      required TextEditingController repsCtrl,
-    }) {
-      final w = double.tryParse(weightCtrl.text.trim());
-      final r = int.tryParse(repsCtrl.text.trim());
-      if (w != null) {
-        out.add(BestEffort(liftKey: liftKey, weightKg: w, reps: r));
-      }
-    }
-
-    // 👇 now use the ACTUAL selection instead of the generic names
-    addIfPresent(
-      liftKey: _mapBench(_benchVariant),
-      weightCtrl: _benchWeightCtrl,
-      repsCtrl: _benchRepsCtrl,
-    );
-
-    addIfPresent(
-      liftKey: _mapSquat(_squatVariant),
-      weightCtrl: _squatWeightCtrl,
-      repsCtrl: _squatRepsCtrl,
-    );
-
-    addIfPresent(
-      liftKey: _mapPull(_pullVariant),
-      weightCtrl: _pullWeightCtrl,
-      repsCtrl: _pullRepsCtrl,
-    );
-
-    addIfPresent(
-      liftKey: _mapDead(_deadVariant),
-      weightCtrl: _deadWeightCtrl,
-      repsCtrl: _deadRepsCtrl,
-    );
-
-    return out;
-  }
 
   List<String> _buildEffortLabels(String? sex, String? dob) {
     int? year;
@@ -2899,7 +1882,11 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
       ),
     );
 
-    return Theme(
+    return PopScope(
+      // Back (button, gesture, system/predictive) is blocked only while a
+      // submission is in flight. The answers are in the draft either way.
+      canPop: !_saving,
+      child: Theme(
         data: localTheme,
         child: Scaffold(
           backgroundColor: Colors.blueGrey.shade50,
@@ -2944,6 +1931,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     const SizedBox(height: 8),
                     _GoalsRanker(
                       items: _goals,
+                      notImportant: _notImportantGoals,
                       onChanged: (main, notImportant) {
                         setState(() {
                           _goals = List.from(main);
@@ -4258,8 +3246,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     // Bench / DB
                     _BestEffortRow(
                       variants: const ['Bench Press', 'Flat DB Press', 'Chest Press'],
-                      selected: _benchVariant,
-                      onVariantChanged: (v) => setState(() => _benchVariant = v),
+                      selected: _form.benchVariant,
+                      onVariantChanged: (v) => setState(() => _form.benchVariant = v),
                       weightCtrl: _benchWeightCtrl,
                       repsCtrl: _benchRepsCtrl,
                     ),
@@ -4268,8 +3256,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 // Squat / Leg Press
                     _BestEffortRow(
                       variants: const ['Back Squat', 'Leg Press'],
-                      selected: _squatVariant,
-                      onVariantChanged: (v) => setState(() => _squatVariant = v),
+                      selected: _form.squatVariant,
+                      onVariantChanged: (v) => setState(() => _form.squatVariant = v),
                       weightCtrl: _squatWeightCtrl,
                       repsCtrl: _squatRepsCtrl,
                     ),
@@ -4281,8 +3269,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                         'Lat Pull Down, Supinated',
                         'Lat Pull Down, Wide Arm',
                       ],
-                      selected: _pullVariant,
-                      onVariantChanged: (v) => setState(() => _pullVariant = v),
+                      selected: _form.pullVariant,
+                      onVariantChanged: (v) => setState(() => _form.pullVariant = v),
                       weightCtrl: _pullWeightCtrl,
                       repsCtrl: _pullRepsCtrl,
                     ),
@@ -4293,8 +3281,8 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
 // Deadlift (single option still supported)
                     _BestEffortRow(
                       variants: const ['Deadlift'],
-                      selected: _deadVariant,
-                      onVariantChanged: (v) => setState(() => _deadVariant = v),
+                      selected: _form.deadVariant,
+                      onVariantChanged: (v) => setState(() => _form.deadVariant = v),
                       weightCtrl: _deadWeightCtrl,
                       repsCtrl: _deadRepsCtrl,
                     ),
@@ -4307,7 +3295,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton(
-                        onPressed: () {
+                        onPressed: _saving ? null : () {
                           if (isEditMode) {
                             // If navigated from Templates → go back there
                             if (entryFrom == 'templates') {
@@ -4318,8 +3306,10 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
                               Navigator.pushReplacementNamed(context, '/home');
                             }
                           } else {
-                            // Default behavior during onboarding
-                            Navigator.pop(context);
+                            // Default behavior during onboarding. maybePop
+                            // honours the PopScope below, so Back cannot
+                            // leave while setup is being committed.
+                            Navigator.maybePop(context);
                           }
                         },
                         style: OutlinedButton.styleFrom(
@@ -4373,6 +3363,7 @@ class _OnboardingPageTwoState extends State<OnboardingPageTwo> {
         ),
       ),
     )
+    ),
     );
 
   }
@@ -4428,6 +3419,10 @@ class _LabeledField extends StatelessWidget {
 // Drag-to-rank goals (kept lightweight)
 class _GoalsRanker extends StatefulWidget {
   final List<String> items;
+
+  /// The current "not important" bin. Passed in so a restored draft (or an
+  /// edit-mode hydration) is shown and is not wiped by the next reorder.
+  final List<String> notImportant;
   final void Function(List<String> main, List<String> notImportant) onChanged;
 
   // 👇 Add these two fields to the widget
@@ -4436,6 +3431,7 @@ class _GoalsRanker extends StatefulWidget {
 
   const _GoalsRanker({
     required this.items,
+    this.notImportant = const <String>[],
     required this.onChanged,
     this.sex,
     this.dob, // 👈 make sure both are optional but accepted
@@ -4454,8 +3450,20 @@ class _GoalsRankerState extends State<_GoalsRanker> {
   void initState() {
     super.initState();
     mainGoals = List.from(widget.items);
-    notImportantGoals = [];
+    notImportantGoals = List.from(widget.notImportant);
+  }
 
+  @override
+  void didUpdateWidget(covariant _GoalsRanker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Adopt order changes made outside this widget (draft restore, edit-mode
+    // hydration) so a later drag never reverts them.
+    if (!listEquals(widget.items, mainGoals)) {
+      mainGoals = List.from(widget.items);
+    }
+    if (!listEquals(widget.notImportant, notImportantGoals)) {
+      notImportantGoals = List.from(widget.notImportant);
+    }
   }
 
   // (Old ReorderableListView callback no longer used)

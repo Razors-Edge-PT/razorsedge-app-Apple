@@ -47,7 +47,10 @@ const freeMembershipUids = <String>{
 /// Ensure that /users/{uid}/profile/membership exists.
 /// - If missing → create with active=false, status="inactive".
 /// - If it already exists → do nothing (do NOT overwrite active=true).
-Future<void> ensureMembershipDoc(String uid) async {
+///
+/// Errors are logged and swallowed unless [throwOnError] is true — signup
+/// passes true so it never reports completion without this document.
+Future<void> ensureMembershipDoc(String uid, {bool throwOnError = false}) async {
   try {
     // Sequence behind App Check activation (see app_check_ready.dart). Settles
     // even on failure/timeout, so this never deadlocks.
@@ -76,6 +79,7 @@ Future<void> ensureMembershipDoc(String uid) async {
   } catch (e, st) {
     print('❌ ensureMembershipDoc ERROR for uid=$uid → $e');
     print(st);
+    if (throwOnError) rethrow;
   }
 }
 
