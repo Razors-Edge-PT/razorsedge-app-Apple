@@ -52,6 +52,7 @@ import 'aurelian/aurelian_bridge_scope.dart';
 import 'aurelian/aurelian_bus.dart';
 import 'signup/firebase_signup_services.dart';
 import 'signup/signup_coordinator.dart';
+import 'create_new_account_screen.dart' show CreateNewAccountScreen;
 
 
 
@@ -96,7 +97,15 @@ void showAppSnack(String message) {
 
 
 // Auth lifecycle phases for the root state machine.
-enum _AuthPhase { loading, restoring, tokenPending, authenticated, unauthenticated }
+enum _AuthPhase {
+  loading,
+  restoring,
+  tokenPending,
+  authenticated,
+  unauthenticated,
+  // A signed-in account whose signup setup never finished: resume it.
+  completingSignup,
+}
 
 class AppRoot extends StatefulWidget {
   const AppRoot({super.key});
@@ -173,6 +182,9 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
   // _handleValidUser before _phase becomes authenticated, so MyApp's initial
   // route stack is built directly into WES2 when appropriate (no Home flash).
   StartupDestination _startupDestination = StartupDestination.home;
+
+  // The account being taken through unfinished signup setup.
+  String? _recoveryUid;
 
   StreamSubscription<User?>? _authSub;
 
@@ -327,6 +339,13 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
       debugPrint('[AUTHROOT] holding routing — signup in progress gen=$gen');
       return;
     }
+    // A late event for an account that is no longer signed in (e.g. one a
+    // cancelled signup's late request created and signup already signed
+    // back out) must not route anywhere.
+    if (FirebaseAuth.instance.currentUser?.uid != user.uid) {
+      debugPrint('[AUTHROOT] ignoring stale valid-user event gen=$gen');
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
     if (gen != _authGen || !mounted) return;
@@ -343,16 +362,41 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // back out so the Firebase session matches the logged-out UI; a legitimate
     // interactive login has already cleared the flag (login_screen /
     // create_new_account_screen) BEFORE sign-in, so it passes the gate.
-    final allowed = await passesExplicitLogoutGate(
-      isExplicitLogout: () async => prefs.getBool(_kExplicitLogout) ?? false,
-      signOutUnexpected: _signOutUnexpectedUser,
+    //
+    // An account created by a signup whose setup never finished (cancelled,
+    // app terminated, request succeeded late) resumes that setup instead of
+    // reaching Home. Established members are answered without a network
+    // read (see SignupCoordinator.evaluateRecovery). When THIS device's own
+    // signup created the account, an explicit logout made before that
+    // signup does not apply to it.
+    final recovery = await SignupCoordinator.instance.evaluateRecovery(
+      signupUserFromFirebase(user),
+      passwordProvider: isPasswordAccount(user),
     );
     if (gen != _authGen || !mounted) return;
-    if (!allowed) {
-      unawaited(writeAuthBreadcrumb(
-          'handleValidUser explicitLogout=true → signOut+unauthenticated gen=$gen'));
-      _clearMemo();
-      setState(() => _phase = _AuthPhase.unauthenticated);
+
+    if (!(recovery.resume && recovery.trustedDevice)) {
+      final allowed = await passesExplicitLogoutGate(
+        isExplicitLogout: () async => prefs.getBool(_kExplicitLogout) ?? false,
+        signOutUnexpected: _signOutUnexpectedUser,
+      );
+      if (gen != _authGen || !mounted) return;
+      if (!allowed) {
+        unawaited(writeAuthBreadcrumb(
+            'handleValidUser explicitLogout=true → signOut+unauthenticated gen=$gen'));
+        _clearMemo();
+        setState(() => _phase = _AuthPhase.unauthenticated);
+        return;
+      }
+    }
+
+    if (recovery.resume) {
+      unawaited(writeAuthBreadcrumb('handleValidUser → completingSignup gen=$gen'));
+      _clearMemo(); // no UserContext for an account without setup
+      setState(() {
+        _recoveryUid = user.uid;
+        _phase = _AuthPhase.completingSignup;
+      });
       return;
     }
 
@@ -563,7 +607,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
     // authenticated UI to a restore spinner. A real logout leaves currentUser
     // null and still flows through below.
     final liveUser = FirebaseAuth.instance.currentUser;
-    if (_phase == _AuthPhase.authenticated &&
+    if ((_phase == _AuthPhase.authenticated ||
+            _phase == _AuthPhase.completingSignup) &&
         liveUser != null &&
         !liveUser.isAnonymous) {
       debugPrint('[AUTHNULL] ignoring transient null — authenticated user '
@@ -900,6 +945,8 @@ class _AppRootState extends State<AppRoot> with WidgetsBindingObserver {
         return _loadingApp(context);
       case _AuthPhase.unauthenticated:
         return const MyApp(isAuthenticated: false);
+      case _AuthPhase.completingSignup:
+        return _SignupRecoveryApp(uid: _recoveryUid!);
       case _AuthPhase.authenticated:
         if (_userContext == null) {
           return _loadingApp(context);
@@ -1059,6 +1106,34 @@ class AuthGate extends StatelessWidget {
 }
 
 
+
+/// The app shown while a signed-in account finishes its interrupted signup
+/// setup. Routing to Home happens only once SignupCoordinator reports the
+/// setup verified complete (AppRoot._onSignupChanged).
+class _SignupRecoveryApp extends StatelessWidget {
+  const _SignupRecoveryApp({required this.uid});
+
+  final String uid;
+
+  @override
+  Widget build(BuildContext context) {
+    final tc = context.watch<ThemeController>();
+    return MaterialApp(
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
+      title: 'Re App',
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('en', 'US'), Locale('en', 'GB')],
+      theme: AppTheme.light(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor, quaternary: tc.quaternaryColor),
+      darkTheme: AppTheme.dark(primary: tc.primaryColor, secondary: tc.secondaryColor, tertiary: tc.tertiaryColor, quaternary: tc.quaternaryColor),
+      themeMode: tc.themeMode,
+      home: CreateNewAccountScreen(key: ValueKey(uid), recoveryUid: uid),
+    );
+  }
+}
 
 // ── ROLLBACK FLAG — flip to false to restore HomeScreen (v1) as default.
 const bool kUseHomeScreen2AsDefault = true;

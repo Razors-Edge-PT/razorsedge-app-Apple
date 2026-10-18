@@ -188,6 +188,53 @@ class OnboardingFormData {
   int? minTrainingDays;
   int? trainingEffort;
 
+  /// Fills this form, in place, from a stored fitness_onboarding document
+  /// (used when resuming an unfinished signup). Keys that are absent leave
+  /// the current value alone.
+  void loadFromFirestore(Map<String, dynamic> j) {
+    List<String>? strings(Object? v) =>
+        v is List ? v.map((e) => e.toString()).toList() : null;
+    Map<String, int>? ints(Object? v) => v is Map
+        ? v.map((k, x) => MapEntry(k.toString(), (x as num).toInt()))
+        : null;
+
+    final g = strings(j['goalsRanked']);
+    if (g != null && g.isNotEmpty) goals = g;
+    notImportantGoals = strings(j['goalsNotImportant']) ?? notImportantGoals;
+    final bf = strings(j['bodyFocus']);
+    if (bf != null) bodyFocus = bf.toSet();
+    final lvl = ints(j['bodyFocusLevel']);
+    if (lvl != null) bodyFocusLevel = lvl;
+    final kids = j['bodyFocusChildren'];
+    if (kids is Map) {
+      childFocusLevel = kids.map((k, v) => MapEntry(k.toString(), ints(v) ?? <String, int>{}));
+      moreSpecific = childFocusLevel.isNotEmpty;
+    }
+    final inj = strings(j['injuries']);
+    if (inj != null) injuries = inj.toSet();
+    final pain = j['painNow'];
+    if (pain is Map) {
+      painSlider = pain.map((k, v) => MapEntry(k.toString(), (v as num).toDouble()));
+    }
+    bool? flag(String k) => j[k] is bool ? j[k] as bool : null;
+    shoulderPainOverhead = flag('shoulderPainOverhead') ?? shoulderPainOverhead;
+    shoulderPainFront = flag('shoulderPainFront') ?? shoulderPainFront;
+    elbowPainInside = flag('elbowPainInside') ?? elbowPainInside;
+    elbowPainOutside = flag('elbowPainOutside') ?? elbowPainOutside;
+    experience = OnboardingAnswers.experienceFromString(j['experience']) ?? experience;
+    final pt = j['ptHistory'];
+    if (pt is Map && pt['index'] is num) ptHistory = (pt['index'] as num).toInt();
+    final freq = (j['weeklyFrequency'] ?? j['minTrainingDaysPerWeek']);
+    if (freq is num) minTrainingDays = freq.toInt();
+    if (j['trainingEffort'] is num) trainingEffort = (j['trainingEffort'] as num).toInt();
+    if (j['environment'] is String) env = j['environment'] as String;
+    final equip = j['equipment'];
+    if (equip is Map) {
+      equipSelected = (strings(equip['items']) ?? const <String>[]).toSet();
+      if (equip['dumbbellsMax'] is num) dbMax = (equip['dumbbellsMax'] as num).toInt();
+    }
+  }
+
   /// A fully independent copy: no collection is shared with this instance.
   OnboardingFormData deepCopy() {
     final c = OnboardingFormData()

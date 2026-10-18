@@ -22,6 +22,7 @@ import 'package:localtest222/signup/first_block_seeder.dart';
 import 'package:localtest222/signup/firebase_signup_services.dart';
 import 'package:localtest222/signup/onboarding_models.dart';
 import 'package:localtest222/signup/signup_coordinator.dart';
+import 'package:localtest222/signup/signup_pending_store.dart';
 
 class FakeAccount {
   FakeAccount(this.uid, this.password, this.creationTime);
@@ -146,6 +147,12 @@ class FakeSignupAuth implements SignupAuthGateway {
   @override
   Future<void> signOut() async {
     calls.add('signOut');
+    _setCurrent(null);
+  }
+
+  @override
+  Future<void> signOutByChoice() async {
+    calls.add('signOutByChoice');
     _setCurrent(null);
   }
 }
@@ -287,6 +294,18 @@ class FlakySignupBackend implements SignupBackend {
   @override
   Future<void> verifyComplete(String uid, {required String usernameLower}) =>
       _run('verify', () => inner.verifyComplete(uid, usernameLower: usernameLower));
+  @override
+  Future<SignupServerState> signupState(String uid) =>
+      _run('signupState', () => inner.signupState(uid));
+  @override
+  Future<void> markSignupPending(String uid, {required String attemptId}) =>
+      _run('markPending', () => inner.markSignupPending(uid, attemptId: attemptId));
+  @override
+  Future<void> markSignupComplete(String uid) =>
+      _run('markComplete', () => inner.markSignupComplete(uid));
+  @override
+  Future<RecoverySnapshot> loadExisting(String uid) =>
+      _run('loadExisting', () => inner.loadExisting(uid));
 }
 
 class RecordingHooks implements SignupSessionHooks {
@@ -297,7 +316,8 @@ class RecordingHooks implements SignupSessionHooks {
 
 /// A complete signup stack over fakes, using the production backend.
 class SignupHarness {
-  SignupHarness({SignupSessionHooks? hooks}) {
+  SignupHarness({SignupSessionHooks? hooks, SignupPendingStore? store}) {
+    pendingStore = store ?? MemorySignupPendingStore();
     db = FakeFirebaseFirestore();
     auth = FakeSignupAuth();
     server = FakeReservationServer(db);
@@ -329,10 +349,17 @@ class SignupHarness {
       cacheDemographicsFn: (uid, {sex, dob}) async {},
       seeder: seeder,
     ));
-    coordinator = SignupCoordinator(
+    coordinator = relaunch();
+  }
+
+  /// A fresh coordinator over the same persisted state (Firestore, Auth
+  /// session, device store) — what the app has after termination/relaunch.
+  SignupCoordinator relaunch() {
+    return SignupCoordinator(
       auth: auth,
       backend: backend,
-      hooks: this.hooks,
+      hooks: hooks,
+      pendingStore: pendingStore,
       usernameHint: (raw) async {
         if (auth.currentUser == null) return null; // logged out: unknown
         final holder = server.holderOf(raw);
@@ -341,13 +368,15 @@ class SignupHarness {
     );
   }
 
+  late final SignupPendingStore pendingStore;
+
   late final FakeFirebaseFirestore db;
   late final FakeSignupAuth auth;
   late final FakeReservationServer server;
   late final SignupSessionHooks hooks;
   late final FirstBlockSeeder seeder;
   late final FlakySignupBackend backend;
-  late final SignupCoordinator coordinator;
+  late SignupCoordinator coordinator;
   final List<String> seededBlocks = <String>[];
 
   /// The next defaults seed throws (after its block document was created).

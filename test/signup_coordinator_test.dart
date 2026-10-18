@@ -332,7 +332,8 @@ void main() {
       expect(h.coordinator.takeCompletedUid(), isNull);
     });
 
-    test('a hung stage times out and resets busy state', () async {
+    test('a hung auth request times out and resets busy state, but keeps holding',
+        () async {
       final h = SignupHarness();
       final c = SignupCoordinator(
         auth: h.auth,
@@ -344,8 +345,11 @@ void main() {
       final a = c.beginAttempt()..draft.identity.email = 'x@example.test';
       final r = await c.submit(a);
       expect(r.failure!.kind, SignupFailureKind.timeout);
-      expect(a.isSubmitting, isFalse);
-      expect(a.authInFlight, isFalse);
+      expect(a.isSubmitting, isFalse, reason: 'Finish is usable again');
+      // Future.timeout does not cancel the request: its account may still
+      // appear, so AppRoot must keep holding until the request settles.
+      expect(a.authInFlight, isTrue);
+      expect(c.holdsAuthRoutingFor('uid-it-may-create'), isTrue);
     });
   });
 

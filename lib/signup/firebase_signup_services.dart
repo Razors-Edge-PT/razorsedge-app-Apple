@@ -14,6 +14,7 @@ import 'first_block_seeder.dart';
 import 'onboarding_models.dart';
 import 'onboarding_writer.dart';
 import 'signup_coordinator.dart';
+import 'signup_pending_store.dart';
 
 /// Thrown by [FirestoreSignupBackend.verifyComplete] when a required document
 /// is missing on the server.
@@ -23,6 +24,13 @@ class SignupVerificationException implements Exception {
   @override
   String toString() => 'SignupVerificationException: $what';
 }
+
+/// The signup view of a Firebase user (AppRoot uses it for recovery checks).
+SignupAuthUser signupUserFromFirebase(User u) => _toSignupUser(u);
+
+/// True when [u] signs in with email/password — the only signup provider.
+bool isPasswordAccount(User u) =>
+    u.providerData.any((p) => p.providerId == EmailAuthProvider.PROVIDER_ID);
 
 SignupAuthUser _toSignupUser(User u) => SignupAuthUser(
       uid: u.uid,
@@ -80,6 +88,17 @@ class FirebaseSignupAuthGateway implements SignupAuthGateway {
         caller: 'SignupCoordinator.cancel',
         google: false,
       );
+
+  /// Same sequence as the drawer's Logout: flag first, then sign out.
+  @override
+  Future<void> signOutByChoice() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('goodlift_explicit_logout', true);
+    await performSignOut(
+      reason: SignOutReason.explicitLogoutDrawer,
+      caller: 'SignupRecovery.signOut',
+    );
+  }
 }
 
 class FirestoreSignupBackend implements SignupBackend {
@@ -144,6 +163,52 @@ class FirestoreSignupBackend implements SignupBackend {
   Future<void> writeBestEfforts(String uid, List<BestEffort> bestEfforts) =>
       writeBestEffortsToCurrentBlock(_db, uid, bestEfforts);
 
+  DocumentReference<Map<String, dynamic>> _progress(String uid) =>
+      _db.collection('users').doc(uid).collection('profile').doc('signup_progress');
+
+  @override
+  Future<SignupServerState> signupState(String uid) async {
+    final snap = await _progress(uid).get();
+    final state = snap.data()?['state'];
+    if (state == 'complete') return SignupServerState.complete;
+    if (state == 'pending') return SignupServerState.pending;
+    return SignupServerState.absent;
+  }
+
+  @override
+  Future<void> markSignupPending(String uid, {required String attemptId}) =>
+      _progress(uid).set({
+        'state': 'pending',
+        'attemptId': attemptId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+  @override
+  Future<void> markSignupComplete(String uid) => _progress(uid).set({
+        'state': 'complete',
+        'completedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+  @override
+  Future<RecoverySnapshot> loadExisting(String uid) async {
+    final user = (await _db.collection('users').doc(uid).get(_server)).data();
+    final onb = (await _db
+            .collection('users')
+            .doc(uid)
+            .collection('profile')
+            .doc('fitness_onboarding')
+            .get(_server))
+        .data();
+    String? str(Object? v) => v is String && v.trim().isNotEmpty ? v : null;
+    return RecoverySnapshot(
+      username: str(user?['username']),
+      fullName: str(user?['fullName']),
+      dob: str(user?['dob']),
+      sex: str(user?['sex']),
+      onboarding: onb,
+    );
+  }
+
   @override
   Future<void> verifyComplete(String uid, {required String usernameLower}) async {
     final user = await _db.collection('users').doc(uid).get(_server);
@@ -190,6 +255,7 @@ SignupCoordinator createFirebaseSignupCoordinator() => SignupCoordinator(
       auth: FirebaseSignupAuthGateway(),
       backend: FirestoreSignupBackend(firestore: FirebaseFirestore.instance),
       hooks: PrefsSignupSessionHooks(),
+      pendingStore: PrefsSignupPendingStore(),
       usernameHint: (raw) async {
         // The reservation index needs a signed-in caller. With no session the
         // honest answer is "unknown" — completion still requires the server

@@ -23,17 +23,33 @@
 /// time-bounded, and is single-flight:
 ///
 ///   1. auth      create the account (or upgrade an existing anonymous
-///                session, or resume the SAME uid this attempt created);
+///                session, or resume the SAME uid this attempt created), and
+///                record it as a pending signup on the server and device;
 ///   2. claim     reserve the username through `profileChangeUsername` — the
 ///                one transactional authority. No name is accepted on
 ///                "unknown": completion requires a successful reservation;
 ///   3. membership / profile / onboarding / first block;
-///   4. verify    read everything back from the server;
+///   4. verify    read everything back from the server, mark it complete;
 ///   5. complete  hand the session to AppRoot.
 ///
 /// While an attempt owns the auth session AppRoot holds its routing, so
 /// nothing can interrupt mandatory setup, and it routes to the normal
 /// destination only after step 5.
+///
+/// ── Recovery ────────────────────────────────────────────────────────────────
+/// An account can exist with setup unfinished: the member cancelled after
+/// the account was created, the app was terminated, or an auth request that
+/// timed out succeeded later. Such an account is marked pending on the
+/// server (users/{uid}/profile/signup_progress) and on the device
+/// ([SignupPendingStore]); [evaluateRecovery] finds it at the next launch or
+/// login and [beginRecovery] resumes the missing setup on the signed-in
+/// session. No password is ever persisted or needed to resume.
+///
+/// An auth request is tracked until IT settles, not until its timeout:
+/// Future.timeout does not cancel the request, so its account may still
+/// appear. Until then AppRoot keeps holding, a retry waits for it instead of
+/// creating a second account, and a late success is adopted by the attempt
+/// (or, if the member already left, signed out and left recoverable).
 library;
 
 import 'dart:async';
@@ -48,6 +64,7 @@ import 'first_block_seeder.dart';
 import 'onboarding_models.dart';
 import 'signup_draft.dart';
 import 'signup_errors.dart';
+import 'signup_pending_store.dart';
 
 // ── Boundaries ──────────────────────────────────────────────────────────────
 
@@ -74,7 +91,37 @@ abstract class SignupAuthGateway {
   Future<SignupAuthUser> linkAnonymous(String email, String password);
   Future<SignupAuthUser> signIn(String email, String password);
   Future<void> updateDisplayName(String name);
+
+  /// Housekeeping sign-out (cancelled signup, orphaned late account).
   Future<void> signOut();
+
+  /// The member chose to sign out: an explicit logout.
+  Future<void> signOutByChoice();
+}
+
+/// Server record of a signup's setup.
+enum SignupServerState { pending, complete, absent }
+
+/// What already exists for an account whose setup is being resumed.
+@immutable
+class RecoverySnapshot {
+  const RecoverySnapshot({
+    this.username,
+    this.fullName,
+    this.dob,
+    this.sex,
+    this.onboarding,
+  });
+
+  final String? username;
+  final String? fullName;
+
+  /// `dd-mm-yyyy`, as stored.
+  final String? dob;
+  final String? sex;
+
+  /// users/{uid}/profile/fitness_onboarding, when present.
+  final Map<String, dynamic>? onboarding;
 }
 
 /// Backend operations signup needs. Every write must be idempotent.
@@ -92,6 +139,11 @@ abstract class SignupBackend {
   /// Throws unless identity, onboarding, membership and the current block are
   /// all present on the server.
   Future<void> verifyComplete(String uid, {required String usernameLower});
+
+  Future<SignupServerState> signupState(String uid);
+  Future<void> markSignupPending(String uid, {required String attemptId});
+  Future<void> markSignupComplete(String uid);
+  Future<RecoverySnapshot> loadExisting(String uid);
 }
 
 /// Device-session side effects of a completed signup (the explicit-logout
@@ -100,12 +152,37 @@ abstract class SignupSessionHooks {
   Future<void> onSignupCompleted(String uid);
 }
 
+/// AppRoot's answer for a signed-in account.
+@immutable
+class SignupRecoveryDecision {
+  const SignupRecoveryDecision.none()
+      : resume = false,
+        trustedDevice = false;
+  const SignupRecoveryDecision.resume({required this.trustedDevice})
+      : resume = true;
+
+  /// The account's signup setup is unfinished: route to recovery.
+  final bool resume;
+
+  /// This device's own signup created the account (local marker), so an
+  /// earlier explicit logout on this device does not apply to it.
+  final bool trustedDevice;
+}
+
+/// How long after creation an account without a local marker is still
+/// checked for a pending signup. Older accounts are never read at all, so
+/// established members' login costs nothing extra.
+const Duration kSignupRecoveryWindow = Duration(days: 45);
+
 // ── Attempt ─────────────────────────────────────────────────────────────────
 
 enum SignupAttemptState { editing, submitting, completed, cancelled }
 
+/// What an auth request is for, which decides what a late success means.
+enum _AuthPurpose { create, resumeOwned, probe }
+
 class SignupAttempt {
-  SignupAttempt._(this.id, this.startedAt, this.owner);
+  SignupAttempt._(this.id, this.startedAt, this.owner, {this.isRecovery = false});
 
   /// The coordinator that runs this attempt.
   final SignupCoordinator owner;
@@ -115,14 +192,21 @@ class SignupAttempt {
   final DateTime startedAt;
   final SignupDraft draft = SignupDraft();
 
+  /// Resuming setup for an existing, signed-in account (no credentials).
+  final bool isRecovery;
+
   SignupAttemptState state = SignupAttemptState.editing;
 
   /// The account this attempt created or upgraded. Once set, every retry
   /// must resume exactly this uid.
   String? authUid;
 
-  /// An auth call is in flight (its auth event may arrive before it returns).
-  bool authInFlight = false;
+  int _authBusy = 0;
+  Future<SignupAuthUser>? _pendingAuth;
+
+  /// An auth decision is running, or an auth request has not settled (its
+  /// account and auth event may still arrive, even after its timeout).
+  bool get authInFlight => _authBusy > 0 || _pendingAuth != null;
 
   /// An account-creation call failed in a way that does not prove the
   /// account was NOT created (timeout / dropped connection).
@@ -134,6 +218,7 @@ class SignupAttempt {
   String? claimedUsernameLower;
   String? claimedFor;
 
+  bool serverMarkerWritten = false;
   bool membershipEnsured = false;
   bool createdAtCommitted = false;
   final SeedProgress seed = SeedProgress();
@@ -170,26 +255,31 @@ class SignupCoordinator extends ChangeNotifier {
     required SignupAuthGateway auth,
     required SignupBackend backend,
     required SignupSessionHooks hooks,
+    SignupPendingStore? pendingStore,
     Future<bool?> Function(String raw)? usernameHint,
     this.authTimeout = const Duration(seconds: 30),
     this.stageTimeout = const Duration(seconds: 30),
     this.seedTimeout = const Duration(seconds: 60),
+    this.recoveryCheckTimeout = const Duration(seconds: 5),
     DateTime Function()? clock,
   })  : _auth = auth,
         _backend = backend,
         _hooks = hooks,
+        _store = pendingStore ?? MemorySignupPendingStore(),
         _usernameHint = usernameHint,
         _clock = clock ?? DateTime.now;
 
   final SignupAuthGateway _auth;
   final SignupBackend _backend;
   final SignupSessionHooks _hooks;
+  final SignupPendingStore _store;
   final Future<bool?> Function(String raw)? _usernameHint;
   final DateTime Function() _clock;
 
   final Duration authTimeout;
   final Duration stageTimeout;
   final Duration seedTimeout;
+  final Duration recoveryCheckTimeout;
 
   static SignupCoordinator? _instance;
 
@@ -213,6 +303,12 @@ class SignupCoordinator extends ChangeNotifier {
   String? _completedUid;
   DateTime? _signOutGraceUntil;
 
+  /// Cancelled attempts whose auth request has not settled yet.
+  final Set<SignupAttempt> _draining = <SignupAttempt>{};
+
+  /// Late accounts nobody owns, being signed out.
+  final Set<String> _orphanSignOuts = <String>{};
+
   /// The attempt currently in progress, if any.
   SignupAttempt? get current => _current;
 
@@ -221,10 +317,7 @@ class SignupCoordinator extends ChangeNotifier {
   /// Starts a fresh attempt with an empty draft. Any previous unfinished
   /// attempt is cancelled first, so a new member never inherits a draft.
   SignupAttempt beginAttempt() {
-    final previous = _current;
-    if (previous != null && previous.isActive) {
-      unawaited(cancelAttempt(previous));
-    }
+    _retireCurrent();
     final attempt = SignupAttempt._(_newAttemptId(), _clock(), this);
     _current = attempt;
     _log(attempt, 'begin');
@@ -232,10 +325,65 @@ class SignupCoordinator extends ChangeNotifier {
     return attempt;
   }
 
+  /// Resumes setup for the signed-in account [uid], whose signup was left
+  /// unfinished. The draft starts empty; [loadRecovery] fills it from what
+  /// the server already holds.
+  SignupAttempt beginRecovery(String uid) {
+    _retireCurrent();
+    final attempt =
+        SignupAttempt._(_newAttemptId(), _clock(), this, isRecovery: true)
+          ..authUid = uid;
+    final email = _auth.currentUser?.uid == uid ? _auth.currentUser?.email : null;
+    attempt.draft.identity.email = email ?? '';
+    _current = attempt;
+    _log(attempt, 'begin recovery');
+    notifyListeners();
+    return attempt;
+  }
+
+  void _retireCurrent() {
+    final previous = _current;
+    if (previous != null && previous.isActive) {
+      unawaited(cancelAttempt(previous));
+    }
+  }
+
+  /// Fills a recovery attempt's draft from the server. Returns false when
+  /// the existing data could not be read (the member can still fill it in).
+  Future<bool> loadRecovery(SignupAttempt attempt) async {
+    final uid = attempt.authUid;
+    if (uid == null) return false;
+    final RecoverySnapshot snap;
+    try {
+      snap = await _backend.loadExisting(uid).timeout(stageTimeout);
+    } catch (e) {
+      debugPrint('[Signup ${attempt.id}] recovery load failed: ${e.runtimeType}');
+      return false;
+    }
+    final identity = attempt.draft.identity;
+    identity
+      ..username = snap.username ?? identity.username
+      ..fullName = snap.fullName ?? identity.fullName
+      ..sex = snap.sex ?? identity.sex
+      ..dob = _parseStoredDob(snap.dob) ?? identity.dob;
+    final onboarding = snap.onboarding;
+    if (onboarding != null) attempt.draft.onboarding.loadFromFirestore(onboarding);
+    notifyListeners();
+    return true;
+  }
+
+  static DateTime? _parseStoredDob(String? dob) {
+    if (dob == null) return null;
+    final m = RegExp(r'^(\d{2})-(\d{2})-(\d{4})$').firstMatch(dob.trim());
+    if (m == null) return null;
+    return DateTime(int.parse(m.group(3)!), int.parse(m.group(2)!),
+        int.parse(m.group(1)!));
+  }
+
   /// Genuine cancellation (the member left signup). Wipes the draft. If this
   /// attempt already created an account, that account is signed out — never
-  /// deleted, and its reservation is left in place — so it stays recoverable
-  /// by logging in.
+  /// deleted, and its reservation is left in place — and stays marked
+  /// pending, so its setup resumes at the next login.
   Future<void> cancelAttempt(SignupAttempt attempt) async {
     if (attempt.isSubmitting) {
       try {
@@ -253,14 +401,17 @@ class SignupCoordinator extends ChangeNotifier {
     if (identical(_current, attempt)) _current = null;
     _log(attempt, 'cancel accountCreated=${attempt.accountCreated}');
 
+    if (attempt._pendingAuth != null) {
+      // Its account may still appear; keep holding until the request settles.
+      _draining.add(attempt);
+    } else if (attempt.authUid == null && !attempt.authCreateUncertain) {
+      // No account can exist for this attempt: nothing to recover.
+      await _clearMarkerFor(attempt);
+    }
+
     final uid = attempt.authUid;
-    if (uid != null && _auth.currentUser?.uid == uid) {
-      _signOutGraceUntil = _clock().add(const Duration(seconds: 3));
-      try {
-        await _auth.signOut();
-      } catch (e) {
-        debugPrint('[Signup] cancel sign-out failed: ${e.runtimeType}');
-      }
+    if (!attempt.isRecovery && uid != null && _auth.currentUser?.uid == uid) {
+      await _housekeepingSignOut();
     }
     notifyListeners();
   }
@@ -268,8 +419,13 @@ class SignupCoordinator extends ChangeNotifier {
   // ── AppRoot coordination ─────────────────────────────────────────────────
 
   /// True while a signup owns the auth session for [uid]: AppRoot must not
-  /// route, gate or sign out that user until [submit] completes.
+  /// route, gate or sign out that user. This includes an auth request that
+  /// timed out but has not settled — its account may still appear.
   bool holdsAuthRoutingFor(String uid) {
+    if (_orphanSignOuts.contains(uid)) return true;
+    for (final a in _draining) {
+      if (a.authInFlight) return true;
+    }
     final a = _current;
     if (a == null || !a.isActive) return false;
     return a.authInFlight || a.authUid == uid;
@@ -290,6 +446,73 @@ class SignupCoordinator extends ChangeNotifier {
     return uid;
   }
 
+  /// Decides whether [user]'s signup setup is unfinished. Established
+  /// members (no local marker, account older than [kSignupRecoveryWindow],
+  /// or not a password account) are answered without any network read.
+  Future<SignupRecoveryDecision> evaluateRecovery(
+    SignupAuthUser user, {
+    required bool passwordProvider,
+  }) async {
+    if (user.isAnonymous) return const SignupRecoveryDecision.none();
+    try {
+      if (await _store.isSettled(user.uid)) {
+        return const SignupRecoveryDecision.none();
+      }
+    } catch (_) {}
+
+    LocalSignupMarker? local;
+    try {
+      local = await _store.read();
+    } catch (_) {}
+    final localMatch = _markerMatches(local, user);
+    final created = user.creationTime;
+    final young = passwordProvider &&
+        created != null &&
+        _clock().difference(created) < kSignupRecoveryWindow;
+    if (!localMatch && !young) return const SignupRecoveryDecision.none();
+
+    if (localMatch && local!.uid == null) {
+      await _writeMarker(local.withUid(user.uid));
+    }
+
+    SignupServerState? state;
+    try {
+      state = await _backend.signupState(user.uid).timeout(recoveryCheckTimeout);
+    } catch (e) {
+      debugPrint('[Signup] recovery check failed: ${e.runtimeType}');
+    }
+
+    switch (state) {
+      case SignupServerState.complete:
+        await _settle(user.uid);
+        return const SignupRecoveryDecision.none();
+      case SignupServerState.pending:
+        return SignupRecoveryDecision.resume(trustedDevice: localMatch);
+      case SignupServerState.absent:
+        if (localMatch) return const SignupRecoveryDecision.resume(trustedDevice: true);
+        // Not a signup this app version started: an ordinary account.
+        await _settle(user.uid);
+        return const SignupRecoveryDecision.none();
+      case null:
+        // Unknown. Only this device's own unfinished signup is resumed on
+        // that basis; anything else is let through and re-checked next time.
+        return localMatch
+            ? const SignupRecoveryDecision.resume(trustedDevice: true)
+            : const SignupRecoveryDecision.none();
+    }
+  }
+
+  bool _markerMatches(LocalSignupMarker? m, SignupAuthUser user) {
+    if (m == null) return false;
+    if (m.uid != null) return m.uid == user.uid;
+    final email = user.email;
+    final created = user.creationTime;
+    return email != null &&
+        created != null &&
+        m.emailHash == signupEmailHash(email) &&
+        !created.isBefore(m.startedAt.subtract(const Duration(minutes: 2)));
+  }
+
   // ── Page 1 advisory availability ─────────────────────────────────────────
 
   /// Advisory only: true/false from the reservation index, or null when it
@@ -303,6 +526,13 @@ class SignupCoordinator extends ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  /// The member chose to sign out of an unfinished account. It stays pending
+  /// and resumes at the next login.
+  Future<void> signOutByChoice(SignupAttempt attempt) async {
+    attempt.draft.wipeSecrets();
+    await _auth.signOutByChoice();
   }
 
   // ── Completion ───────────────────────────────────────────────────────────
@@ -339,6 +569,13 @@ class SignupCoordinator extends ChangeNotifier {
 
     try {
       final uid = await _ensureAuth(a, email, password, username);
+
+      if (!a.serverMarkerWritten) {
+        await _stage(a, SignupStage.auth, stageTimeout,
+            () => _backend.markSignupPending(uid, attemptId: a.id));
+        a.serverMarkerWritten = true;
+      }
+
       await _claim(a, username);
       final usernameLower = a.claimedUsernameLower!;
 
@@ -376,14 +613,16 @@ class SignupCoordinator extends ChangeNotifier {
         await _backend.writeBestEfforts(uid, submission.bestEfforts);
       });
 
-      await _stage(a, SignupStage.verify, stageTimeout,
-          () => _backend.verifyComplete(uid, usernameLower: usernameLower));
-
-      await _stage(a, SignupStage.verify, stageTimeout,
-          () => _hooks.onSignupCompleted(uid));
+      await _stage(a, SignupStage.verify, stageTimeout, () async {
+        await _backend.verifyComplete(uid, usernameLower: usernameLower);
+        await _backend.markSignupComplete(uid);
+        await _hooks.onSignupCompleted(uid);
+      });
 
       a.state = SignupAttemptState.completed;
       a.draft.wipeSecrets();
+      await _settle(uid);
+      await _clearMarkerFor(a, uid: uid);
       _completedUid = uid;
       _log(a, 'complete');
       return SignupResult.success(uid);
@@ -402,6 +641,33 @@ class SignupCoordinator extends ChangeNotifier {
     String password,
     String username,
   ) async {
+    a._authBusy++;
+    try {
+      return await _ensureAuthInner(a, email, password, username);
+    } finally {
+      a._authBusy--;
+    }
+  }
+
+  Future<String> _ensureAuthInner(
+    SignupAttempt a,
+    String email,
+    String password,
+    String username,
+  ) async {
+    // An earlier request (timed out, not cancelled) may still produce the
+    // account. Never race it with a second create: wait for it.
+    final pending = a._pendingAuth;
+    if (pending != null) {
+      try {
+        await pending.timeout(authTimeout);
+      } catch (_) {
+        if (a._pendingAuth != null) {
+          _fail(a, SignupFailureKind.timeout, SignupStage.auth, 'auth-still-pending');
+        }
+      }
+    }
+
     final current = _auth.currentUser;
 
     // Resume: this attempt already owns an account.
@@ -412,7 +678,12 @@ class SignupCoordinator extends ChangeNotifier {
         _fail(a, SignupFailureKind.accountMismatch, SignupStage.auth,
             'other-account-signed-in');
       }
-      final resumed = await _authCall(a, () => _auth.signIn(email, password));
+      if (a.isRecovery || password.isEmpty) {
+        // Recovery runs on the signed-in session; it has no password.
+        _fail(a, SignupFailureKind.permission, SignupStage.auth, 'signed-out');
+      }
+      final resumed = await _authCall(a, _AuthPurpose.resumeOwned,
+          () => _auth.signIn(email, password));
       if (resumed.uid != owned) {
         await _auth.signOut();
         _fail(a, SignupFailureKind.accountMismatch, SignupStage.auth,
@@ -427,26 +698,31 @@ class SignupCoordinator extends ChangeNotifier {
           'other-account-signed-in');
     }
 
+    // Recorded BEFORE the request, so an account whose uid never reaches the
+    // app (termination, lost response) is still recognised on this device.
+    await _writeMarker(LocalSignupMarker(
+      attemptId: a.id,
+      startedAt: a.startedAt,
+      emailHash: signupEmailHash(email),
+    ));
+
     SignupAuthUser user;
     try {
       user = await _authCall(
         a,
+        _AuthPurpose.create,
         () => current != null && current.isAnonymous
             ? _auth.linkAnonymous(email, password)
             : _auth.createAccount(email, password),
-        markUncertain: true,
       );
     } on _SignupAbort catch (abort) {
-      if (abort.failure.kind == SignupFailureKind.emailInUse &&
-          a.authCreateUncertain) {
-        user = await _recoverUncertainCreate(a, email, password);
-      } else {
-        rethrow;
-      }
+      if (abort.failure.kind != SignupFailureKind.emailInUse) rethrow;
+      user = a.authCreateUncertain
+          ? await _recoverUncertainCreate(a, email, password)
+          : await _adoptUnfinishedAccount(a, email, password);
     }
 
-    a.authUid = user.uid;
-    a.authCreateUncertain = false;
+    await _adopt(a, user.uid);
     _log(a, 'auth ok anon=${current?.isAnonymous == true}');
     if (username.isNotEmpty) {
       try {
@@ -459,6 +735,14 @@ class SignupCoordinator extends ChangeNotifier {
     return user.uid;
   }
 
+  Future<void> _adopt(SignupAttempt a, String uid) async {
+    if (a.authUid == uid && !a.authCreateUncertain) return;
+    a.authUid = uid;
+    a.authCreateUncertain = false;
+    final m = await _readMarker();
+    if (m != null && m.attemptId == a.id) await _writeMarker(m.withUid(uid));
+  }
+
   /// A previous create in THIS attempt failed without proving the account
   /// was not created, and now the email is "in use". Sign in with the same
   /// credentials and adopt the account only if it was created during this
@@ -468,7 +752,7 @@ class SignupCoordinator extends ChangeNotifier {
       SignupAttempt a, String email, String password) async {
     final SignupAuthUser user;
     try {
-      user = await _authCall(a, () => _auth.signIn(email, password));
+      user = await _authCall(a, _AuthPurpose.probe, () => _auth.signIn(email, password));
     } on _SignupAbort {
       _fail(a, SignupFailureKind.emailInUse, SignupStage.auth,
           'email-already-in-use');
@@ -484,17 +768,62 @@ class SignupCoordinator extends ChangeNotifier {
     return user;
   }
 
+  /// The email belongs to an account. If it is an UNFINISHED signup (marked
+  /// pending on the server, or this device's own) and the member knows its
+  /// password, continue that account's setup instead of refusing. A completed
+  /// or ordinary account is someone's membership: signed back out, untouched.
+  Future<SignupAuthUser> _adoptUnfinishedAccount(
+      SignupAttempt a, String email, String password) async {
+    final SignupAuthUser user;
+    try {
+      user = await _authCall(a, _AuthPurpose.probe, () => _auth.signIn(email, password));
+    } on _SignupAbort {
+      _fail(a, SignupFailureKind.emailInUse, SignupStage.auth, 'email-already-in-use');
+    }
+    SignupServerState? state;
+    try {
+      state = await _backend.signupState(user.uid).timeout(stageTimeout);
+    } catch (_) {}
+    final local = await _readMarker();
+    final ownDevice = local?.uid == user.uid;
+    final unfinished = state == SignupServerState.pending ||
+        (ownDevice && state != SignupServerState.complete);
+    if (!unfinished) {
+      await _auth.signOut();
+      _fail(a, SignupFailureKind.emailInUse, SignupStage.auth, 'email-already-in-use');
+    }
+    _log(a, 'auth adopted unfinished signup');
+    return user;
+  }
+
+  /// Runs an auth request, bounded by [authTimeout] for the caller while the
+  /// request itself is tracked until it settles.
   Future<SignupAuthUser> _authCall(
     SignupAttempt a,
-    Future<SignupAuthUser> Function() call, {
-    bool markUncertain = false,
-  }) async {
-    a.authInFlight = true;
+    _AuthPurpose purpose,
+    Future<SignupAuthUser> Function() call,
+  ) async {
+    final Future<SignupAuthUser> underlying;
     try {
-      return await call().timeout(authTimeout);
+      underlying = call();
     } catch (e, st) {
       final failure = classifySignupError(e, SignupStage.auth);
-      if (markUncertain &&
+      _logFailure(a, failure, e, st);
+      throw _SignupAbort(failure);
+    }
+    a._pendingAuth = underlying;
+    var timedOut = false;
+    underlying.then(
+      (u) => _onAuthSettled(a, underlying, purpose, u, timedOut: timedOut),
+      onError: (Object _) =>
+          _onAuthSettled(a, underlying, purpose, null, timedOut: timedOut),
+    );
+    try {
+      return await underlying.timeout(authTimeout);
+    } catch (e, st) {
+      if (e is TimeoutException) timedOut = true;
+      final failure = classifySignupError(e, SignupStage.auth);
+      if (purpose == _AuthPurpose.create &&
           (failure.kind == SignupFailureKind.timeout ||
               failure.kind == SignupFailureKind.network ||
               failure.kind == SignupFailureKind.unknown)) {
@@ -502,8 +831,58 @@ class SignupCoordinator extends ChangeNotifier {
       }
       _logFailure(a, failure, e, st);
       throw _SignupAbort(failure);
+    }
+  }
+
+  /// A request settled. An in-time result is handled by its caller; only a
+  /// request that outlived its timeout is decided here.
+  void _onAuthSettled(SignupAttempt a, Future<SignupAuthUser> request,
+      _AuthPurpose purpose, SignupAuthUser? user, {required bool timedOut}) {
+    if (!identical(a._pendingAuth, request)) return;
+    a._pendingAuth = null;
+    _draining.remove(a);
+
+    if (user != null && timedOut) {
+      final owns = a.isActive &&
+          ((purpose == _AuthPurpose.create && (a.authUid == null || a.authUid == user.uid)) ||
+              (purpose == _AuthPurpose.resumeOwned && a.authUid == user.uid));
+      if (owns) {
+        if (a.authUid == null) {
+          // The create outlived its timeout and succeeded: this attempt's own
+          // account. Adopt it; a retry resumes it.
+          _log(a, 'late auth success adopted');
+          unawaited(_adopt(a, user.uid));
+        }
+      } else if (_auth.currentUser?.uid == user.uid) {
+        // Nobody owns this account now (member left, or an unvalidated
+        // probe). Sign it out — never delete — and keep it recoverable.
+        _log(a, 'late auth success orphaned → sign out');
+        unawaited(_orphanSignOut(a, user.uid, recordUid: purpose == _AuthPurpose.create));
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> _orphanSignOut(SignupAttempt a, String uid, {required bool recordUid}) async {
+    _orphanSignOuts.add(uid);
+    try {
+      if (recordUid) {
+        final m = await _readMarker();
+        if (m != null && m.attemptId == a.id) await _writeMarker(m.withUid(uid));
+      }
+      await _housekeepingSignOut();
     } finally {
-      a.authInFlight = false;
+      _orphanSignOuts.remove(uid);
+      notifyListeners();
+    }
+  }
+
+  Future<void> _housekeepingSignOut() async {
+    _signOutGraceUntil = _clock().add(const Duration(seconds: 3));
+    try {
+      await _auth.signOut();
+    } catch (e) {
+      debugPrint('[Signup] sign-out failed: ${e.runtimeType}');
     }
   }
 
@@ -569,6 +948,40 @@ class SignupCoordinator extends ChangeNotifier {
     final failure = SignupFailure(kind, stage: stage, code: code);
     _logFailure(a, failure, null, null);
     throw _SignupAbort(failure);
+  }
+
+  // ── Local marker (best effort: storage failure never blocks signup) ──────
+
+  Future<LocalSignupMarker?> _readMarker() async {
+    try {
+      return await _store.read();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writeMarker(LocalSignupMarker m) async {
+    try {
+      await _store.write(m);
+    } catch (e) {
+      debugPrint('[Signup] marker write failed: ${e.runtimeType}');
+    }
+  }
+
+  Future<void> _clearMarkerFor(SignupAttempt a, {String? uid}) async {
+    final m = await _readMarker();
+    if (m == null) return;
+    if (m.attemptId == a.id || (uid != null && m.uid == uid)) {
+      try {
+        await _store.clear();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _settle(String uid) async {
+    try {
+      await _store.markSettled(uid);
+    } catch (_) {}
   }
 
   // ── Diagnostics (no credentials, answers, DOB or email) ──────────────────

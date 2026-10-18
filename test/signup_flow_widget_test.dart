@@ -315,6 +315,53 @@ void main() {
     expect(h.coordinator.current!.draft.onboarding.injuries, isEmpty);
   });
 
+  testWidgets('recovery: an unfinished account finishes setup with no password',
+      (tester) async {
+    final h = SignupHarness();
+    // Signup created the account, saved the profile and answers, then the
+    // block seeding failed and the app was terminated.
+    h.backend.failNext('seed', StateError('terminated'));
+    final interrupted = h.beginFilled();
+    interrupted.draft.onboarding
+      ..injuries.add('Knees')
+      ..painSlider['Knees'] = 6
+      ..bodyFocusLevel['Chest'] = 2;
+    await h.coordinator.submit(interrupted);
+    final uid = interrupted.authUid!;
+    final c = h.relaunch();
+
+    _tolerateExistingListTileInkAssertion();
+    tester.view.physicalSize = const Size(1400, 9000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      home: CreateNewAccountScreen(coordinator: c, recoveryUid: uid),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Finish setting up your account'), findsOneWidget);
+    expect(_field('Email'), findsNothing);
+    expect(_field('Password'), findsNothing);
+    expect(find.text('Sign out'), findsOneWidget);
+    expect(find.text('IronAnna'), findsOneWidget, reason: 'claimed name pre-filled');
+    expect(find.text('Anna Lift'), findsOneWidget);
+
+    await _continue(tester);
+    expect(_checked(tester, 'Knees'), isTrue, reason: 'saved answers pre-filled');
+    expect(_radioGroup<int>(tester, '4  X week'), 4);
+
+    await tester.ensureVisible(find.text('Finish'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Finish'));
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(c.takeCompletedUid(), uid);
+    expect(await h.blockCount(uid), 3);
+    expect((await h.doc('users/$uid/profile/signup_progress'))!['state'], 'complete');
+    expect(h.auth.calls.where((x) => x == 'create'), hasLength(1));
+  });
+
   testWidgets('edit mode (drawer / Templates) never binds to a signup draft',
       (tester) async {
     final h = SignupHarness();

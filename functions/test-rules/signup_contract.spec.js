@@ -129,3 +129,15 @@ test('signup can never write into another account', async () => {
   await assertFails(db.doc(`users/${OTHER}`).set({ fullName: 'x' }, { merge: true }));
   await assertFails(db.doc(`users/${OTHER}/profile/fitness_onboarding`).set({ x: 1 }));
 });
+
+test('the signup progress marker belongs to its owner alone', async () => {
+  const owner = env.authenticatedContext(NEW_UID).firestore();
+  const other = env.authenticatedContext(OTHER).firestore();
+  const ref = `users/${NEW_UID}/profile/signup_progress`;
+  await assertSucceeds(owner.doc(ref).set({ state: 'pending', attemptId: 'a1' }, { merge: true }));
+  await assertSucceeds(owner.doc(ref).get());
+  await assertSucceeds(owner.doc(ref).set({ state: 'complete' }, { merge: true }));
+  await assertFails(other.doc(ref).get());
+  await assertFails(other.doc(ref).set({ state: 'complete' }));
+  await assertFails(env.unauthenticatedContext().firestore().doc(ref).get());
+});

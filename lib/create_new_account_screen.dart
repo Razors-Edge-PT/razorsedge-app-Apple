@@ -37,10 +37,16 @@ export 'signup/onboarding_models.dart'
 // transaction after the account exists — see signup/signup_coordinator.dart.
 
 class CreateNewAccountScreen extends StatefulWidget {
-  const CreateNewAccountScreen({super.key, this.coordinator});
+  const CreateNewAccountScreen({super.key, this.coordinator, this.recoveryUid});
 
   /// Injected in tests; the app uses [SignupCoordinator.instance].
   final SignupCoordinator? coordinator;
+
+  /// Resume mode: the signed-in account [recoveryUid] was created by a signup
+  /// whose setup never finished (cancelled, app terminated, or a request that
+  /// succeeded late). AppRoot opens this instead of Home. No credentials are
+  /// asked for; what was already saved is pre-filled.
+  final String? recoveryUid;
 
   @override
   State<CreateNewAccountScreen> createState() => _CreateNewAccountScreenState();
@@ -53,6 +59,18 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   /// This signup attempt. Owns the draft for both pages, so nothing the member
   /// enters depends on either route staying alive.
   late final SignupAttempt _attempt;
+
+  bool get _isRecovery => widget.recoveryUid != null;
+
+  /// The fields this mode actually shows (recovery has no credentials).
+  List<String> get _activeFields => _isRecovery
+      ? _fieldOrder
+          .where((f) =>
+              f != SignupField.email &&
+              f != SignupField.password &&
+              f != SignupField.confirmPassword)
+          .toList()
+      : _fieldOrder;
 
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _emailController = TextEditingController();
@@ -262,12 +280,15 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       case SignupField.sex:
         return validateSex(_selectedSex);
       case SignupField.email:
+        if (_isRecovery) return null;
         return validateEmail(_emailController.text) ??
             _serverFieldErrors[SignupField.email];
       case SignupField.password:
+        if (_isRecovery) return null;
         return validatePassword(_passwordController.text) ??
             _serverFieldErrors[SignupField.password];
       case SignupField.confirmPassword:
+        if (_isRecovery) return null;
         return validateConfirmPassword(
             _confirmPasswordController.text, _passwordController.text);
       default:
@@ -303,13 +324,14 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   /// Full-form validation. Touches every field so all problems become visible,
   /// then returns the first invalid field id (in visual order), or null.
   String? _validateAllFields() {
-    _touched.addAll(_fieldOrder);
+    final fields = _activeFields;
+    _touched.addAll(fields);
     final errors = <String, String?>{};
-    for (final f in _fieldOrder) {
+    for (final f in fields) {
       errors[f] = _computeFieldError(f);
     }
     if (mounted) setState(() => _fieldErrors.addAll(errors));
-    for (final f in _fieldOrder) {
+    for (final f in fields) {
       if (errors[f] != null) return f;
     }
     return null;
@@ -574,8 +596,11 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
   @override
   void initState() {
     super.initState();
-    _attempt = _coordinator.beginAttempt();
+    _attempt = _isRecovery
+        ? _coordinator.beginRecovery(widget.recoveryUid!)
+        : _coordinator.beginAttempt();
     _bindDraft();
+    if (_isRecovery) _loadRecovery();
 
     // Server-reported errors belong to the value they were reported for.
     _emailController.addListener(() {
@@ -603,6 +628,26 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
       _touched.add(SignupField.username);
       await _resolveUsernameAvailability();
       if (mounted) _touchAndValidate(SignupField.username);
+    });
+  }
+
+  /// Pre-fills the page from what the unfinished account already holds.
+  Future<void> _loadRecovery() async {
+    setState(() => _isLoading = true);
+    final ok = await _coordinator.loadRecovery(_attempt);
+    if (!mounted) return;
+    final d = _attempt.draft.identity;
+    _usernameController.text = d.username;
+    _fullNameController.text = d.fullName;
+    setState(() {
+      _isLoading = false;
+      _selectedSex = d.sex;
+      _dobDate = d.dob;
+      if (d.dob != null) _dobController.text = formatDobForStorage(d.dob!);
+      if (!ok) {
+        _errorMessage =
+            "We couldn't load your saved details. Fill them in to finish setting up.";
+      }
     });
   }
 
@@ -661,8 +706,10 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Text(
-                                  'Build your training profile',
+                                Text(
+                                  _isRecovery
+                                      ? 'Finish setting up your account'
+                                      : 'Build your training profile',
                                   style: TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w700,
@@ -670,8 +717,10 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   ),
                                 ),
                                 const SizedBox(height: 6),
-                                const Text(
-                                  'GoodLift uses this to set up your starting plan.',
+                                Text(
+                                  _isRecovery
+                                      ? 'Your account exists, but its setup was never finished. Check your details to continue.'
+                                      : 'GoodLift uses this to set up your starting plan.',
                                   style: TextStyle(
                                     fontSize: 13.5,
                                     color: Colors.black54,
@@ -919,6 +968,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   },
                                 ),
                                 const SizedBox(height: 12),
+                                if (!_isRecovery) ...[
                                 // Email
                                 TextFormField(
                                   key: _fieldKeys[SignupField.email],
@@ -1074,6 +1124,7 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                                   validator: (_) =>
                                       _fieldErrors[SignupField.confirmPassword],
                                 ),
+                                ],
 
 
                                 const SizedBox(height: 12),
@@ -1117,10 +1168,16 @@ class _CreateNewAccountScreenState extends State<CreateNewAccountScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 20.0),
                         child: TextButton(
                           onPressed: () {
-                            Navigator.pop(context);
+                            if (_isRecovery) {
+                              _coordinator.signOutByChoice(_attempt);
+                            } else {
+                              Navigator.pop(context);
+                            }
                           },
-                          child: const Text(
-                            "Already have an account? Log in",
+                          child: Text(
+                            _isRecovery
+                                ? 'Sign out'
+                                : "Already have an account? Log in",
                             style: TextStyle(
                               color: Colors.blueAccent,
                               fontSize: 16,
