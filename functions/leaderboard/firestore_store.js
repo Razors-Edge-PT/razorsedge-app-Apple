@@ -13,10 +13,22 @@
 //   showcaseOnWorkoutWrite   → applyForWorkout      (after profile V2 changed)
 //   showcaseOnWeightWrite    → applyForWeighIn      (the dates it can affect)
 //   showcaseOnSexChange      → applyRequest full    (every date re-scored)
-//   leaderboardOnPublicProfileWrite (users_public)  → all-time entry + identity
+//   leaderboardOnShowcaseWrite (users_showcase)   → all-time entry
+//   leaderboardOnPublicProfileWrite (users_public)  → visible identity
+//   leaderboardOnVisibilityWrite (users)            → withdraw / rebuild on the
+//                                                     athlete's own choice
 //   leaderboardReconcileDaily (scheduled)           → queue, stale, month close,
 //                                                     then the age maintenance
 // A failed recomputation is queued, never lost; every path is idempotent.
+//
+// ── Leaderboard visibility ──────────────────────────────────────────────────
+// users/{uid}.leaderboardVisible === false hides an athlete (eligibility.js).
+// Every producer reads it in the SAME transaction that writes the entry, so a
+// recomputation racing the opt-out either commits first (and is then removed
+// by the withdrawal the opt-out triggers) or sees the opt-out and writes no
+// entry. No job, retry, backfill or out-of-order event can republish a hidden
+// athlete. Their private rePointDays keep being maintained, so opting back in
+// rebuilds every board from data that is still there.
 
 'use strict';
 
@@ -45,7 +57,11 @@ const { isBuilt, applyRequest, refreshAllTime } = require('./store');
 const { runReconciliation, requestsOfItem, mergeQueueItem } = require('./reconcile');
 const medalsFs = require('./medals_firestore');
 const ageFs = require('./age_firestore');
-const { isLeaderboardEligibleUid } = require('./eligibility');
+const {
+  isLeaderboardEligibleUid,
+  isLeaderboardVisible,
+  LEADERBOARD_VISIBLE_FIELD,
+} = require('./eligibility');
 
 const QUEUE_COLLECTION = 'leaderboardRecalcQueue';
 
@@ -96,6 +112,8 @@ function leaderboardStore(uid, reader) {
   const pending = new Map();
   const noted = new Set();
   let profile;
+  let visible; // undefined until read: setEntry refuses to publish before
+  let showcaseV2;
   const queueSet = (ref, data) => pending.set(ref.path, { ref, data, op: 'set' });
   const queueDelete = (ref) => pending.set(ref.path, { ref, op: 'delete' });
   const docs = (q) => q.docs.map((d) => d.data());
@@ -137,6 +155,24 @@ function leaderboardStore(uid, reader) {
       }
       return profile;
     },
+    // The athlete's own choice, read through [reader] — inside the
+    // transaction when there is one, so a concurrent opt-out conflicts with
+    // this recomputation instead of slipping past it.
+    async getLeaderboardVisible() {
+      if (visible === undefined) {
+        const s = await reader.get(userRef(uid));
+        visible = isLeaderboardVisible(s.exists ? s.data() : null);
+      }
+      return visible;
+    },
+    // profileShowcaseV2 from the friend-gated users_showcase/{uid} (legacy
+    // users_public fallback until the migration has copied it).
+    async getShowcaseSnapshotV2() {
+      if (showcaseV2 === undefined) {
+        showcaseV2 = await showcaseFs.readSnapshotField(reader, uid, showcaseFs.SNAPSHOT_V2_FIELD);
+      }
+      return showcaseV2;
+    },
     async listRePointDaysForPeriod(p) {
       return docs(await reader.query(daysCol(uid).where('periodKey', '==', p)));
     },
@@ -158,6 +194,15 @@ function leaderboardStore(uid, reader) {
       // Defence in depth: the reducers already return no entry for an excluded
       // account, but no current or future caller may publish one directly.
       if (!isLeaderboardEligibleUid(uid)) {
+        queueDelete(entryRef(p, uid));
+        return;
+      }
+      // Never publish without having read the athlete's choice in this read
+      // phase. Throwing (not deleting) keeps a programming error from
+      // silently withdrawing a visible athlete; the caller's retry or queue
+      // runs it again.
+      if (visible === undefined) throw new Error('leaderboard visibility not read before setEntry');
+      if (visible === false) {
         queueDelete(entryRef(p, uid));
         return;
       }
@@ -349,39 +394,95 @@ async function handlePublicProfileWrite(uid, before, after) {
     await batch.commit();
     return 'withdrawn';
   }
-  const scoreChanged =
-    canonicalJson(showcaseCategoriesOf(before)) !== canonicalJson(showcaseCategoriesOf(after));
+  // The score arrives through users_showcase (handleShowcaseWrite); this
+  // document only carries the identity the entries display.
   const idChanged = !before || !sameIdentity(before, after);
-  if (!scoreChanged && !idChanged) return 'ignored';
+  if (!idChanged) return 'ignored';
 
-  const store = leaderboardStore(uid, showcaseFs.plainReader());
-  const res = await refreshAllTime(store);
-  await store.flush();
-  await ensurePeriods(store.periodsNoted());
-  if (res === 'stale') await enqueueRecalc(uid, { full: true }, 'stale-profile');
-
-  if (idChanged) {
-    const id = identityOf(await store.getPublicProfile());
-    try {
-      await entryRef(currentPeriodKey(), uid).update({
-        username: id.username,
-        photoURL: id.photoURL,
-        updatedAt: serverTime(),
-      });
-    } catch (err) {
-      if (!(err && (err.code === 5 || err.code === 'not-found'))) throw err;
-    }
-  }
+  const res = await refreshAllTimeForUser(uid, 'stale-profile');
+  if (res !== 'hidden') await refreshCurrentIdentity(uid);
   return res;
 }
 
 /**
- * Keeps the all-time entry in step with profileShowcaseV2, and the visible
- * identity (current month + all time only) in step with the public profile.
- * Every other users_public write returns before reading anything.
+ * Copies the CURRENT public identity onto the current month's entry, in one
+ * transaction that also re-reads the visibility choice. It only ever patches
+ * an entry that still exists, so it can never recreate a withdrawn one.
+ */
+async function refreshCurrentIdentity(uid) {
+  await db().runTransaction(async (tx) => {
+    const ref = entryRef(currentPeriodKey(), uid);
+    const [entrySnap, pubSnap, userSnap] = await tx.getAll(ref, publicRef(uid), userRef(uid));
+    if (!entrySnap.exists) return;
+    if (!isLeaderboardVisible(userSnap.exists ? userSnap.data() : null)) {
+      tx.delete(ref);
+      return;
+    }
+    const id = identityOf(pubSnap.exists ? pubSnap.data() : null);
+    tx.update(ref, { username: id.username, photoURL: id.photoURL, updatedAt: serverTime() });
+  });
+}
+
+/**
+ * Rewrites [uid]'s all-time entry in ONE transaction, which also reads the
+ * athlete's visibility choice. A stale snapshot is queued for a full rebuild.
+ */
+async function refreshAllTimeForUser(uid, reason) {
+  let periods = [];
+  const res = await db().runTransaction(async (tx) => {
+    const store = leaderboardStore(uid, showcaseFs.transactionReader(tx));
+    const r = await refreshAllTime(store);
+    await store.flush();
+    periods = store.periodsNoted();
+    return r;
+  });
+  await ensurePeriods(periods);
+  if (res === 'stale') await enqueueRecalc(uid, { full: true }, reason);
+  return res;
+}
+
+/**
+ * The users_showcase/{uid} change handler, on plain before/after data. Only
+ * a change of the V2 categories (or their formula versions) can move the
+ * all-time entry; anything else returns before reading.
+ */
+async function handleShowcaseWrite(uid, before, after) {
+  if (!isLeaderboardEligibleUid(uid)) return 'excluded';
+  if (canonicalJson(showcaseCategoriesOf(before)) === canonicalJson(showcaseCategoriesOf(after))) {
+    return 'ignored';
+  }
+  return refreshAllTimeForUser(uid, 'stale-profile');
+}
+
+/**
+ * Keeps the all-time entry in step with profileShowcaseV2. Reads the CURRENT
+ * snapshot rather than the event's copy, so an out-of-order delivery can
+ * never publish an older one.
+ */
+const leaderboardOnShowcaseWrite = onDocumentWritten(
+  { document: `${showcaseFs.SHOWCASE_COLLECTION}/{uid}`, retry: true },
+  async (event) => {
+    const uid = event.params.uid;
+    const side = (s) => (s && s.exists ? s.data() : null);
+    try {
+      await handleShowcaseWrite(
+        uid,
+        side(event.data && event.data.before),
+        side(event.data && event.data.after),
+      );
+    } catch (err) {
+      logger.error('leaderboardOnShowcaseWrite failed', { uid, error: err });
+      throw err;
+    }
+  },
+);
+
+/**
+ * Keeps the visible identity (current month + all time only) in step with the
+ * public profile. Every other users_public write returns before reading.
  *
- * Reads the CURRENT public document rather than the event's copy, so an
- * out-of-order delivery can never publish an older snapshot.
+ * The all-time entry is re-derived from CURRENT documents rather than the
+ * event's copy, so an out-of-order delivery can never publish older data.
  */
 const leaderboardOnPublicProfileWrite = onDocumentWritten(
   { document: 'users_public/{uid}', retry: true },
@@ -396,6 +497,123 @@ const leaderboardOnPublicProfileWrite = onDocumentWritten(
       );
     } catch (err) {
       logger.error('leaderboardOnPublicProfileWrite failed', { uid, error: err });
+      throw err;
+    }
+  },
+);
+
+/** True when a leaderboardMedals snapshot awards [uid] in any category. */
+function medalSnapshotNames(snapshot, uid) {
+  const categories = snapshot && snapshot.categories;
+  if (!categories || typeof categories !== 'object') return false;
+  return Object.values(categories).some((winners) =>
+    Array.isArray(winners) && winners.some((w) => w && w.uid === uid));
+}
+
+/** A root document id that holds entries: a month or all time (never `_male`). */
+function isBoardPeriod(id) {
+  return id === ALL_TIME_PERIOD || isMonthPeriod(id);
+}
+
+async function commitInChunks(ops) {
+  for (let i = 0; i < ops.length; i += 400) {
+    const batch = db().batch();
+    for (const op of ops.slice(i, i + 400)) op(batch);
+    await batch.commit();
+  }
+}
+
+/**
+ * Withdraws every PUBLIC projection of [uid] — idempotent, bounded by the
+ * number of boards (one per month plus all time):
+ *   * raw entries on every month, open or closed, and all time;
+ *   * age entries on every board, and the athlete's silver flags;
+ *   * the queued recalculation;
+ * then refreshes the medals of each board the athlete was on (so the next
+ * athletes move up) and republishes the live website and sex-filtered
+ * snapshots at once rather than at the next hourly run.
+ *
+ * Never touches rePointDays, the showcase, workouts or anything else private.
+ * listDocuments() is used so a board whose root document is missing is still
+ * covered.
+ */
+async function withdrawUser(uid, nowMs, options) {
+  const opts = options || {};
+  const ageCol = db().collection(ageFs.AGE_COLLECTION);
+  const boards = (await db().collection('leaderboards').listDocuments()).map((r) => r.id).filter(isBoardPeriod);
+  const ageBoards = (await ageCol.listDocuments()).map((r) => r.id).filter(isBoardPeriod);
+  const get = async (refs) => (refs.length ? db().getAll(...refs) : []);
+
+  const entrySnaps = await get(boards.map((p) => entryRef(p, uid)));
+  const ageSnaps = await get(ageBoards.map((p) => ageFs.ageEntryRef(p, uid)));
+  const ageBoardSnaps = await get(ageBoards.map((p) => ageFs.ageBoardRef(p)));
+  const medalSnaps = await get(boards.map((p) => medalsFs.medalsRef(p)));
+
+  const removed = boards.filter((p, i) => entrySnaps[i].exists);
+  const removedAge = ageBoards.filter((p, i) => ageSnaps[i].exists);
+  const silver = ageBoards.filter((p, i) => {
+    const d = ageBoardSnaps[i].exists ? ageBoardSnaps[i].data() : null;
+    return !!(d && Array.isArray(d.silverUids) && d.silverUids.includes(uid));
+  });
+  const ops = [
+    ...removed.map((p) => (b) => b.delete(entryRef(p, uid))),
+    ...removedAge.map((p) => (b) => b.delete(ageFs.ageEntryRef(p, uid))),
+    ...silver.map((p) => (b) => b.set(ageFs.ageBoardRef(p),
+      { silverUids: admin.firestore.FieldValue.arrayRemove(uid) }, { merge: true })),
+    (b) => b.delete(queueRef(uid)),
+  ];
+  await commitInChunks(ops);
+
+  // Medals are re-derived from the remaining entries; a podium that named the
+  // athlete is reallocated even if the entry was already gone.
+  const medalBoards = boards.filter((p, i) => removed.includes(p) ||
+    (medalSnaps[i].exists && medalSnapshotNames(medalSnaps[i].data(), uid)));
+  const failures = [];
+  for (const p of medalBoards) {
+    try {
+      await medalsFs.refreshMedals(p);
+    } catch (err) {
+      failures.push(p);
+      await medalsFs.markMedalBoardDirty(p, 'withdraw');
+    }
+  }
+  if (!opts.skipPublish) await ageFs.publishAll(nowMs || Date.now());
+  if (failures.length) throw new Error(`medal refresh failed: ${failures.join(', ')}`);
+  return { entries: removed, ageEntries: removedAge, silver, medals: medalBoards };
+}
+
+/**
+ * The users/{uid} change handler. Returns before reading anything unless the
+ * visibility choice changed. It then acts on the CURRENT saved choice, not the
+ * event's copy, so duplicate, retried or out-of-order deliveries of an
+ * off → on → off sequence all converge on whatever the athlete saved last:
+ *   hidden  → withdrawUser
+ *   visible → a bounded leaderboard rebuild from the athlete's existing
+ *             private day scores (no new workout needed)
+ */
+async function handleVisibilityWrite(uid, before, after, nowMs) {
+  if (isLeaderboardVisible(before) === isLeaderboardVisible(after)) return 'ignored';
+  if (!isLeaderboardEligibleUid(uid)) return 'excluded';
+  const [snap] = await db().getAll(userRef(uid), { fieldMask: [LEADERBOARD_VISIBLE_FIELD] });
+  if (!isLeaderboardVisible(snap.exists ? snap.data() : null)) {
+    const res = await withdrawUser(uid, nowMs);
+    logger.info('leaderboard visibility: withdrawn', { uid, boards: res.entries.length });
+    return 'withdrawn';
+  }
+  await showcaseFs.requestRebuildFor(uid, { mode: 'leaderboard', reason: 'visible' });
+  logger.info('leaderboard visibility: rebuild requested', { uid });
+  return 'rebuild';
+}
+
+const leaderboardOnVisibilityWrite = onDocumentWritten(
+  { document: 'users/{uid}', retry: true },
+  async (event) => {
+    const uid = event.params.uid;
+    const side = (s) => (s && s.exists ? s.data() : null);
+    try {
+      await handleVisibilityWrite(uid, side(event.data && event.data.before), side(event.data && event.data.after));
+    } catch (err) {
+      logger.error('leaderboardOnVisibilityWrite failed', { uid, error: err });
       throw err;
     }
   },
@@ -554,6 +772,15 @@ const leaderboardReconcileDaily = onSchedule(
 module.exports = {
   QUEUE_COLLECTION,
   leaderboardOnPublicProfileWrite,
+  leaderboardOnShowcaseWrite,
+  leaderboardOnVisibilityWrite,
+  handleShowcaseWrite,
+  handleVisibilityWrite,
+  withdrawUser,
+  medalSnapshotNames,
+  isBoardPeriod,
+  refreshAllTimeForUser,
+  refreshCurrentIdentity,
   leaderboardReconcileDaily,
   runDailyLeaderboardMaintenance,
   handlePublicProfileWrite,

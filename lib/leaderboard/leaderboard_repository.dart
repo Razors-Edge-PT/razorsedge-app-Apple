@@ -16,6 +16,7 @@ library;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../profile/data/profile_repository.dart' show ShowcaseSource, kShowcaseV2Field;
 import '../profile/core/showcase_v2_models.dart';
 import '../profile/ui/record_presentation.dart';
 import '../profile/ui/units.dart';
@@ -195,15 +196,19 @@ class LeaderboardRepository {
   }
 
   /// "Bench Press, Barbell — 158.5 kg × 9" for an all-time [medal], from the
-  /// medallist's PUBLIC profile showcase (in the owner's unit) — or null when
-  /// that record is not published or no longer the one the medal names.
+  /// medallist's profile showcase (in the owner's unit) — or null when that
+  /// record is not published, no longer the one the medal names, or the
+  /// viewer may not see that athlete's showcase (not a friend: the load and
+  /// reps are training detail, not leaderboard data).
   Future<String?> fetchMedalRecordSource(LeaderboardMedal medal) async {
     final String? exerciseId = medal.exerciseId;
     if (!medal.isAllTime || exerciseId == null) return null;
-    final Map<String, dynamic>? pub =
-        (await _db.collection('users_public').doc(medal.uid).get()).data();
+    final ShowcaseSource source = await ShowcaseSource.read(_db, medal.uid);
+    final Map<String, dynamic> pub =
+        (await _db.collection('users_public').doc(medal.uid).get()).data() ??
+            const <String, dynamic>{};
     final ProfileShowcaseV2? showcase =
-        ProfileShowcaseV2.fromMap(pub?['profileShowcaseV2']);
+        ProfileShowcaseV2.fromMap(source.fieldsFor(pub)[kShowcaseV2Field]);
     if (showcase == null) return null;
     for (final category in showcase.categories) {
       for (final e in category.exercises) {
@@ -214,7 +219,7 @@ class LeaderboardRepository {
         // The medal's own record only — never a newer, different one.
         if ((points * kRePointUnits).round() != medal.pointsUnits) return null;
         final ExerciseWeightUnit unit = ExerciseUnits.parsePublished(
-                pub?['exerciseWeightUnits'])[exerciseId] ??
+                pub['exerciseWeightUnits'])[exerciseId] ??
             ExerciseWeightUnit.kg;
         return presentShowcaseRecord(
                 record: record, isE1rm: false, units: WeightUnits.of(unit))

@@ -321,12 +321,26 @@ service cloud.firestore {
     }
 
 
+    // users/{uid}.leaderboardVisible, when a write touches it, is a bool.
+    function leaderboardVisibilityWriteOk() {
+      return !identityAffectedKeys().hasAny(['leaderboardVisible'])
+        || request.resource.data.leaderboardVisible is bool;
+    }
+
+
     // ======================================================
-    // USERS PUBLIC (search, avatars, public stats)
+    // USERS PUBLIC (search, avatars, public identity)
     // ======================================================
     match /users_public/{userId} {
       // Any signed-in user can search / read public profiles.
       // Logged-out users cannot see any app data.
+      //
+      // Rules cannot filter fields on a read, so ANYTHING on this document is
+      // readable by every signed-in account. Derived training achievements
+      // therefore live on the friend-gated users_showcase/{userId} below.
+      // profileShowcaseV1/V2 remain here only as a transition mirror for
+      // builds before 1.7.58 and are stripped by
+      // functions/scripts/migrate_profile_showcase_private.js at cutover.
       allow read: if isSignedIn();
 
       // Only the owner or super admin may write (no coach write).
@@ -359,6 +373,26 @@ service cloud.firestore {
                                        'exerciseWeightUnits'])
                         && identityWriteAllowed()
                       );
+    }
+
+
+    // ======================================================
+    // PROFILE SHOWCASE (friend-gated training achievements)
+    // ======================================================
+    // users_showcase/{userId}.{profileShowcaseV1, profileShowcaseV2}: the
+    // server-maintained Big Five and categories + RE Points projections shown
+    // on a profile. They are derived from the athlete's training, so they get
+    // the profile's friend-only audience rather than users_public's
+    // every-signed-in-account one:
+    //   * the owner, a confirmed friend, the support override holder and the
+    //     super admin (canReadSocial — the same gate as proofs and posts);
+    //   * an assigned coach (isCoachFor), who can already read the workouts
+    //     the projection is derived from.
+    // Written ONLY by the showcase functions (Admin SDK); no client — not the
+    // owner, not the super admin — may publish an achievement.
+    match /users_showcase/{userId} {
+      allow read: if canReadSocial(userId) || isCoachFor(userId);
+      allow write: if false;
     }
 
 
@@ -441,8 +475,15 @@ service cloud.firestore {
       // username / usernameLower / displayName belong to the reservation
       // service. identityWriteAllowed() keeps the one pre-1.7.13 signup write
       // alive during the compatibility window and nothing else.
+      //
+      // leaderboardVisible ("Show me on leaderboards") is the athlete's own
+      // choice: only they (or the super admin) can write it, because no coach
+      // can write this document at all, and it must be a real boolean — the
+      // leaderboard functions treat only `false` as hidden.
       allow write: if isSuperAdmin()
-                   || (isSelf(userId) && identityWriteAllowed());
+                   || (isSelf(userId)
+                       && identityWriteAllowed()
+                       && leaderboardVisibilityWriteOk());
 
       // ---- Lift video metadata ----
       // Social visibility only — coach is NOT a bypass here.

@@ -1,5 +1,15 @@
-/// Profile identity: username, bio, avatar and the mirrored achievement
-/// snapshot, all read from and written to `users_public/{uid}`.
+/// Profile identity — username, bio, avatar — read from and written to
+/// `users_public/{uid}`, plus the server-published achievement snapshots.
+///
+/// ── Where the showcase comes from ───────────────────────────────────────────
+/// `users_public` is readable by every signed-in account, so the derived
+/// training achievements (profileShowcaseV1/V2) are published on the
+/// friend-gated `users_showcase/{uid}` instead (functions/showcase). Only
+/// the owner, a confirmed friend, the support override holder, an assigned
+/// coach and the super admin may read it; anyone else gets a permission
+/// denial, which is shown as NO showcase — the identity still renders.
+/// Until the server migration has copied an athlete, their document does not
+/// exist yet and the legacy users_public fields are used.
 ///
 /// ── Offline model ───────────────────────────────────────────────────────────
 /// Firestore's own persistent cache is the local store. A warm profile renders
@@ -108,11 +118,15 @@ class ProfileIdentity {
     );
   }
 
+  /// [showcase] is what the `users_showcase/{uid}` read gave; by default
+  /// (and while that document does not exist) the legacy users_public fields.
   static ProfileIdentity fromSnapshot(
     String uid,
-    DocumentSnapshot<Map<String, dynamic>> snap,
-  ) {
+    DocumentSnapshot<Map<String, dynamic>> snap, {
+    ShowcaseSource showcase = const ShowcaseSource.legacy(),
+  }) {
     final Map<String, dynamic> d = snap.data() ?? const <String, dynamic>{};
+    final Map<String, dynamic> s = showcase.fieldsFor(d);
     String? str(String key) {
       final Object? v = d[key];
       if (v is String && v.trim().isNotEmpty) return v.trim();
@@ -124,14 +138,63 @@ class ProfileIdentity {
       username: str('username') ?? str('displayName'),
       bio: (d['bio'] is String) ? d['bio'] as String : null,
       photoURL: str('photoURL') ?? str('photoUrl'),
-      showcase: ProfileShowcase.fromMap(d['profileShowcaseV1']),
-      showcaseV2: ProfileShowcaseV2.fromMap(d['profileShowcaseV2']),
+      showcase: ProfileShowcase.fromMap(s[kShowcaseV1Field]),
+      showcaseV2: ProfileShowcaseV2.fromMap(s[kShowcaseV2Field]),
       exerciseUnits:
           ExerciseUnits.parsePublished(d[kPublicExerciseUnitsField]),
       isFromCache: snap.metadata.isFromCache,
       hasPendingWrites: snap.metadata.hasPendingWrites,
       exists: snap.exists,
     );
+  }
+}
+
+/// The friend-gated showcase document (functions/showcase/firestore_store.js).
+const String kProfileShowcasesCollection = 'users_showcase';
+const String kShowcaseV1Field = 'profileShowcaseV1';
+const String kShowcaseV2Field = 'profileShowcaseV2';
+
+/// The outcome of reading `users_showcase/{uid}`.
+@immutable
+class ShowcaseSource {
+  /// The document's data.
+  const ShowcaseSource.document(Map<String, dynamic> this._data)
+      : _legacy = false;
+
+  /// Not readable by this account (not a friend): no showcase at all.
+  const ShowcaseSource.denied()
+      : _data = const <String, dynamic>{},
+        _legacy = false;
+
+  /// Not read yet, or the document does not exist yet (an athlete the
+  /// migration has not copied): the legacy users_public fields.
+  const ShowcaseSource.legacy()
+      : _data = null,
+        _legacy = true;
+
+  final Map<String, dynamic>? _data;
+  final bool _legacy;
+
+  /// The snapshot fields to use, given the users_public data [publicData].
+  Map<String, dynamic> fieldsFor(Map<String, dynamic> publicData) =>
+      _legacy ? publicData : _data ?? const <String, dynamic>{};
+
+  /// Reads `users_showcase/[uid]` once. A permission denial is [denied].
+  static Future<ShowcaseSource> read(FirebaseFirestore db, String uid) async {
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> s =
+          await db.collection(kProfileShowcasesCollection).doc(uid).get();
+      return fromSnapshot(s);
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') return const ShowcaseSource.denied();
+      rethrow;
+    }
+  }
+
+  static ShowcaseSource fromSnapshot(DocumentSnapshot<Map<String, dynamic>> s) {
+    final Map<String, dynamic>? data = s.data();
+    if (!s.exists || data == null) return const ShowcaseSource.legacy();
+    return ShowcaseSource.document(data);
   }
 }
 
@@ -152,12 +215,70 @@ class ProfileRepository {
   DocumentReference<Map<String, dynamic>> _privateRef(String uid) =>
       _db.collection('users').doc(uid);
 
+  DocumentReference<Map<String, dynamic>> _showcaseRef(String uid) =>
+      _db.collection(kProfileShowcasesCollection).doc(uid);
+
   /// Live profile. Emits the cached document first (instant, offline-capable),
-  /// then the server's.
-  Stream<ProfileIdentity> watch(String uid) => _publicRef(uid)
-      .snapshots(includeMetadataChanges: true)
-      .map((DocumentSnapshot<Map<String, dynamic>> s) =>
-          ProfileIdentity.fromSnapshot(uid, s));
+  /// then the server's. The showcase follows `users_showcase/{uid}`: until
+  /// that read answers, and when it is denied, no showcase is shown — a
+  /// non-friend is never handed the legacy copy. Its other errors surface on
+  /// this stream like the identity's own.
+  Stream<ProfileIdentity> watch(String uid) => combineIdentity(
+        uid,
+        _publicRef(uid).snapshots(includeMetadataChanges: true),
+        _showcaseRef(uid).snapshots(),
+      );
+
+  /// [watch]'s combination of the identity and showcase streams.
+  @visibleForTesting
+  static Stream<ProfileIdentity> combineIdentity(
+    String uid,
+    Stream<DocumentSnapshot<Map<String, dynamic>>> publicSnapshots,
+    Stream<DocumentSnapshot<Map<String, dynamic>>> showcaseSnapshots,
+  ) {
+    late final StreamController<ProfileIdentity> out;
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? pubSub;
+    StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? showcaseSub;
+    DocumentSnapshot<Map<String, dynamic>>? pub;
+    ShowcaseSource showcase = const ShowcaseSource.denied();
+
+    void emit() {
+      final DocumentSnapshot<Map<String, dynamic>>? p = pub;
+      if (p == null || out.isClosed) return;
+      out.add(ProfileIdentity.fromSnapshot(uid, p, showcase: showcase));
+    }
+
+    out = StreamController<ProfileIdentity>(
+      onListen: () {
+        pubSub = publicSnapshots.listen(
+          (DocumentSnapshot<Map<String, dynamic>> s) {
+            pub = s;
+            emit();
+          },
+          onError: out.addError,
+        );
+        showcaseSub = showcaseSnapshots.listen(
+          (DocumentSnapshot<Map<String, dynamic>> s) {
+            showcase = ShowcaseSource.fromSnapshot(s);
+            emit();
+          },
+          onError: (Object e) {
+            if (e is FirebaseException && e.code == 'permission-denied') {
+              showcase = const ShowcaseSource.denied();
+              emit();
+              return;
+            }
+            out.addError(e);
+          },
+        );
+      },
+      onCancel: () async {
+        await pubSub?.cancel();
+        await showcaseSub?.cancel();
+      },
+    );
+    return out.stream;
+  }
 
   /// Trims a bio to the allowed length. Applied on the way in AND on the way
   /// out, so an over-long value written by an older build still displays.

@@ -11,6 +11,7 @@ import 'package:localtest222/user_context.dart'; // <-- your UserContext
 import 'themes_screen.dart';
 import 'account_deletion_screen.dart';
 import 'push/notification_settings_screen.dart';
+import 'leaderboard/leaderboard_visibility.dart';
 import 'app_theme.dart';
 
 class UserSettingsScreen extends StatefulWidget {
@@ -980,6 +981,16 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
                       ),
                       validator: (v) =>
                           (v == null || v.isEmpty) ? 'Please select' : null,
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // Leaderboard visibility: saved on its own, for the
+                    // SIGNED-IN account (never the coached athlete), and
+                    // independent of this form's validation and Save button.
+                    LeaderboardVisibilitySetting(
+                      ownerUid: FirebaseAuth.instance.currentUser?.uid,
+                      actingAsSelf: UserContext.of(context).isActingAsSelf,
                     ),
 
                     const SizedBox(height: 12),

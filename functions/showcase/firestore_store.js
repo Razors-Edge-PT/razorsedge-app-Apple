@@ -4,18 +4,33 @@
 // Documents (see showcase/store.js for the full contract):
 //   users/{uid}/showcase/state
 //   users/{uid}/showcaseDays/{slot}__{dateKey}
-//   users_public/{uid}.profileShowcaseV1
+//   users_showcase/{uid}.profileShowcaseV1
 //
 // V2 — categories and RE Points (see showcase/store_v2.js), maintained BESIDE
 // V1 by the same triggers:
 //   users/{uid}/showcase/stateV2
 //   users/{uid}/showcase/v2/days/{category}__{slot}__{dateKey}
-//   users_public/{uid}.profileShowcaseV2
+//   users_showcase/{uid}.profileShowcaseV2
 //
-// The mirror onto users_public writes ONE key with { merge: true }. It cannot
-// disturb rePoints*, avatar, bio or any other field, which is what keeps the
-// rolling 12-month RE / GoodLift calculation and this lifetime projection from
-// ever overwriting each other.
+// ── Where the published snapshots live ──────────────────────────────────────
+// users_showcase/{uid} is readable only by the owner, confirmed friends,
+// the support override holder, an assigned coach and the super admin
+// (firestore.rules). The snapshots used to live on users_public/{uid}, which
+// EVERY signed-in account can read, so a non-friend could fetch another
+// athlete's derived training achievements directly. users_public keeps the
+// public identity (username, avatar, bio) that search and the social screens
+// need.
+//
+// Transition: builds before 1.7.58 read the snapshots from users_public.
+// While MIRROR_SHOWCASE_TO_USERS_PUBLIC is true every snapshot write is also
+// mirrored there, and reads fall back to that legacy field for athletes not
+// yet copied by scripts/migrate_profile_showcase_private.js. The cutover —
+// mirror off, legacy fields stripped — is documented in that script.
+//
+// Each snapshot write sets ONE key with mergeFields. It cannot disturb
+// rePoints*, avatar, bio or any other field, which is what keeps the rolling
+// 12-month RE / GoodLift calculation and this lifetime projection from ever
+// overwriting each other.
 
 'use strict';
 
@@ -96,6 +111,26 @@ function leaderboard() {
 const SNAPSHOT_FIELD = 'profileShowcaseV1';
 const SNAPSHOT_V2_FIELD = 'profileShowcaseV2';
 
+/**
+ * The friend-gated home of both published snapshots (see the header).
+ *
+ * The name is load-bearing: `users_showcase/{uid}` sorts AFTER
+ * `users/{uid}/...`, exactly as `users_public/{uid}` did, so the showcase
+ * transactions still acquire their document locks in key order (state and
+ * days first, then the snapshot). A name sorting before `users/` (such as
+ * `profileShowcases`) made concurrent workout writes for one athlete wait out
+ * the lock timeout instead of aborting and retrying at once — measured in the
+ * emulator as 5–7 failures in 15 runs of the concurrency specs, against 0.
+ */
+const SHOWCASE_COLLECTION = 'users_showcase';
+
+/**
+ * While true, each snapshot write is also mirrored onto users_public for
+ * installed builds that predate users_showcase. Turning it off is step 3 of
+ * the cutover in scripts/migrate_profile_showcase_private.js.
+ */
+const MIRROR_SHOWCASE_TO_USERS_PUBLIC = true;
+
 function db() {
   return admin.firestore();
 }
@@ -114,6 +149,26 @@ function daysCol(uid) {
 
 function publicRef(uid) {
   return db().collection('users_public').doc(uid);
+}
+
+function showcaseRef(uid) {
+  return db().collection(SHOWCASE_COLLECTION).doc(uid);
+}
+
+/**
+ * The published [field] of [uid]: users_showcase first, then — only while
+ * that document does not hold it yet (an athlete the migration has not
+ * copied) — the legacy users_public field. Folds build on the prior snapshot,
+ * so reading nothing for an unmigrated athlete would publish a showcase that
+ * silently lost every lift the change did not touch.
+ */
+async function readSnapshotField(reader, uid, field) {
+  const snap = await reader.get(showcaseRef(uid));
+  const data = snap.exists ? snap.data() : null;
+  if (data && data[field]) return data[field];
+  const legacy = await reader.get(publicRef(uid));
+  const old = legacy.exists ? legacy.data() : null;
+  return old && old[field] ? old[field] : null;
 }
 
 /** The athlete's rebuild job (server-only, see rebuild_job.js). */
@@ -228,9 +283,7 @@ function bufferedStore(uid, reader, layout) {
     },
     async getSnapshot() {
       if (!snapshotLoaded) {
-        const snap = await reader.get(publicRef(uid));
-        const data = snap.exists ? snap.data() : null;
-        snapshotCache = data && data[FIELD] ? data[FIELD] : null;
+        snapshotCache = await readSnapshotField(reader, uid, FIELD);
         snapshotLoaded = true;
       }
       return snapshotCache;
@@ -254,7 +307,10 @@ function bufferedStore(uid, reader, layout) {
       // mergeFields replaces the WHOLE value at profileShowcaseV1 while
       // leaving every neighbouring field — rePoints*, avatar, bio, username —
       // completely untouched, which is the exact semantic this mirror needs.
-      queueSet(publicRef(uid), payload, { mergeFields: [FIELD] });
+      queueSet(showcaseRef(uid), payload, { mergeFields: [FIELD] });
+      if (MIRROR_SHOWCASE_TO_USERS_PUBLIC) {
+        queueSet(publicRef(uid), payload, { mergeFields: [FIELD] });
+      }
     },
     async getDaysForDate(dateKey) {
       const refs = L.slots.map((slot) => L.daysCol(uid).doc(L.dayDocId(slot, dateKey)));
@@ -959,18 +1015,14 @@ const showcaseOnExerciseUnitWrite = onDocumentWritten(
   },
 );
 
-/** Reads the V2 snapshot currently mirrored onto users_public/{uid}. */
+/** Reads the V2 snapshot currently published for [uid]. */
 async function readPublishedSnapshotV2(uid) {
-  const snap = await publicRef(uid).get();
-  const data = snap.exists ? snap.data() : null;
-  return data && data[SNAPSHOT_V2_FIELD] ? data[SNAPSHOT_V2_FIELD] : null;
+  return readSnapshotField(plainReader(), uid, SNAPSHOT_V2_FIELD);
 }
 
-/** Reads the snapshot currently mirrored onto users_public/{uid}. */
+/** Reads the snapshot currently published for [uid]. */
 async function readPublishedSnapshot(uid) {
-  const snap = await publicRef(uid).get();
-  const data = snap.exists ? snap.data() : null;
-  return data && data[SNAPSHOT_FIELD] ? data[SNAPSHOT_FIELD] : null;
+  return readSnapshotField(plainReader(), uid, SNAPSHOT_FIELD);
 }
 
 /** Removes every stale showcaseDays document for an athlete (rebuild hygiene). */
@@ -1024,6 +1076,10 @@ module.exports = {
   daysCol,
   stateRef,
   publicRef,
+  showcaseRef,
+  readSnapshotField,
+  SHOWCASE_COLLECTION,
+  MIRROR_SHOWCASE_TO_USERS_PUBLIC,
   SNAPSHOT_FIELD,
   PROFILE_SHOWCASE_SCHEMA,
   DATE_KEY_RE,

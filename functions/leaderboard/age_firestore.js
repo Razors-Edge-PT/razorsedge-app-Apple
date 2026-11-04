@@ -33,6 +33,13 @@
 // copied anywhere. Age entries carry only the minimal public identity already
 // on the raw entry, the adjusted points, the model version and completeness.
 // Public snapshots carry only the raw schema-1 or age schema-2 allowlist.
+//
+// ── Leaderboard visibility ──────────────────────────────────────────────────
+// An athlete who opted out (users/{uid}.leaderboardVisible === false) has no
+// raw entries (firestore_store.js withdraws them), and every projection here
+// also re-checks the choice itself — read through the same field masks as
+// dob/sex — so a raw entry that has not been withdrawn yet can never surface
+// them in an age entry, a sex-filtered board or a website snapshot.
 
 'use strict';
 
@@ -46,7 +53,11 @@ const age = require('./age');
 const feed = require('./public_feed');
 const { SEX_FILTERS, sexFilterOf, selectSexEntries, appSexBoard } = require('./sex_filter');
 const { ALL_TIME_PERIOD, isMonthPeriod } = require('./reducer');
-const { isLeaderboardEligibleUid } = require('./eligibility');
+const {
+  isLeaderboardEligibleUid,
+  isLeaderboardVisible,
+  LEADERBOARD_VISIBLE_FIELD,
+} = require('./eligibility');
 const { canonicalJson } = require('../showcase/store');
 const { localDateKey } = require('../coach/coverage');
 
@@ -114,10 +125,14 @@ function withoutStamps(doc) {
   return copy;
 }
 
-/** The private birth date of [uid] (field mask: nothing else is read). */
-async function readDob(reader, uid) {
-  const [snap] = await reader.getAll(db().collection('users').doc(uid), { fieldMask: ['dob'] });
-  return snap && snap.exists ? snap.get('dob') : undefined;
+/**
+ * The private birth date of [uid] and their leaderboard choice (field mask:
+ * nothing else is read).
+ */
+async function readAgeInputs(reader, uid) {
+  const [snap] = await reader.getAll(db().collection('users').doc(uid), { fieldMask: ['dob', LEADERBOARD_VISIBLE_FIELD] });
+  const data = snap && snap.exists ? snap.data() : null;
+  return { dob: data ? data.dob : undefined, visible: isLeaderboardVisible(data) };
 }
 
 /**
@@ -135,14 +150,14 @@ async function recomputeAthleteBoard(uid, periodKey, nowMs) {
     const raw = rawSnap.exists ? rawSnap.data() : null;
     const prev = ageSnap.exists ? ageSnap.data() : null;
     const board = ageBoardRef(periodKey);
-    if (!raw || !isLeaderboardEligibleUid(uid) || !Number.isSafeInteger(raw.totalPointsUnits) || raw.totalPointsUnits <= 0) {
+    const { dob, visible } = await readAgeInputs(reader, uid);
+    if (!raw || !visible || !isLeaderboardEligibleUid(uid) || !Number.isSafeInteger(raw.totalPointsUnits) || raw.totalPointsUnits <= 0) {
       if (prev) tx.delete(ageEntryRef(periodKey, uid));
       if (prev && prev.silverEligible) {
         tx.set(board, { silverUids: admin.firestore.FieldValue.arrayRemove(uid) }, { merge: true });
       }
       return prev ? 'deleted' : 'unchanged';
     }
-    const dob = await readDob(reader, uid);
     let result;
     if (periodKey === ALL_TIME_PERIOD) {
       result = age.adjustAllTime(raw, dob, todayKey);
@@ -308,7 +323,7 @@ async function rankedEntries(query) {
 }
 
 async function publishBoard(periodKey, nowMs) {
-  const [raws, adjusted] = await Promise.all([
+  const [rawsAll, adjustedAll] = await Promise.all([
     rankedEntries(db().collection('leaderboards').doc(periodKey).collection('entries')
       .where('totalPointsUnits', '>', 0)
       .orderBy('totalPointsUnits', 'desc').orderBy('tieBreakDateKey').orderBy('uid')),
@@ -316,13 +331,22 @@ async function publishBoard(periodKey, nowMs) {
       .where('ageModelVersion', '==', age.AGE_MODEL_VERSION).where('ageComplete', '==', true)
       .orderBy('adjustedTotalUnits', 'desc').orderBy('tieBreakDateKey').orderBy('uid')),
   ]);
-  const uids = [...new Set([...raws, ...adjusted].map(e => e.uid))];
+  const uids = [...new Set([...rawsAll, ...adjustedAll].map(e => e.uid))];
   const sexes = new Map();
+  const hidden = new Set();
   // Only the explicit profile choice is used. Unknown and "Yes." stay in All.
   for (let i = 0; i < uids.length; i += 300) {
-    const snaps = await db().getAll(...uids.slice(i, i + 300).map(uid => db().collection('users').doc(uid)), { fieldMask: ['sex'] });
-    for (const snap of snaps) sexes.set(snap.id, sexFilterOf(snap.exists ? snap.get('sex') : null));
+    const snaps = await db().getAll(...uids.slice(i, i + 300).map(uid => db().collection('users').doc(uid)), { fieldMask: ['sex', LEADERBOARD_VISIBLE_FIELD] });
+    for (const snap of snaps) {
+      const data = snap.exists ? snap.data() : null;
+      sexes.set(snap.id, sexFilterOf(data ? data.sex : null));
+      if (!isLeaderboardVisible(data)) hidden.add(snap.id);
+    }
   }
+  // Opted-out athletes are dropped BEFORE ranking, so everyone below moves
+  // up and every top 20 is refilled from the next eligible athlete.
+  const raws = rawsAll.filter(e => !hidden.has(e.uid));
+  const adjusted = adjustedAll.filter(e => !hidden.has(e.uid));
   const groups = SEX_FILTERS.map(sex => ({ sex,
     raw: selectSexEntries(raws, sexes, sex, feed.PUBLIC_MAX_ROWS),
     age: selectSexEntries(adjusted, sexes, sex, feed.PUBLIC_MAX_ROWS) }));
@@ -354,11 +378,12 @@ async function publishBoard(periodKey, nowMs) {
       : adjusted.filter(e => sexes.get(e.uid) === group.sex).length;
     const incompleteCount = group.sex === 'all' ? incomplete.data().count
       : raws.filter(e => sexes.get(e.uid) === group.sex && !completeUids.has(e.uid)).length;
+    const isEligible = (uid) => isLeaderboardEligibleUid(uid) && !hidden.has(uid);
     const next = feed.buildPublicSnapshot({ periodKey, rawEntries: group.raw, publicProfiles: profiles,
-      medalSnapshot, silverUids: new Set(silverUids), generatedAt, isEligible: isLeaderboardEligibleUid });
+      medalSnapshot, silverUids: new Set(silverUids), generatedAt, isEligible });
     const nextAge = feed.buildPublicAgeSnapshot({ periodKey, ageEntries: group.age, publicProfiles: profiles,
       medalSnapshot, generatedAt, ageModelVersion: age.AGE_MODEL_VERSION, rankedCount,
-      incompleteCount, isEligible: isLeaderboardEligibleUid });
+      incompleteCount, isEligible });
     const changes = [];
     for (const snapshot of [next, nextAge]) {
       // The group is a board-level selector; no row-level sex/private fields.
@@ -409,7 +434,11 @@ const leaderboardPublicPublisher = onSchedule(
 /** A snapshot older than this is not served (the publisher has stopped). */
 // An hourly snapshot has grace for a delayed cycle; never serve it indefinitely.
 const MAX_SNAPSHOT_AGE_MS = 150 * 60 * 1000;
-const CACHE_MS = 60 * 60 * 1000;
+// In-memory reuse of a snapshot read. Ten minutes, not an hour: an athlete
+// who opts out is withdrawn and republished at once (firestore_store.js
+// withdrawUser), and a long instance cache would keep serving the old
+// snapshot regardless. A miss is ONE document read.
+const CACHE_MS = 10 * 60 * 1000;
 const cache = new Map(); // key -> { atMs, body }
 
 function sendJson(res, status, body, cacheControl, head) {

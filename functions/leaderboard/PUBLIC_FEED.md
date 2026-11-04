@@ -63,8 +63,18 @@ Its existing Scheduler job is reused, with zero retries. Publisher settings:
 256 MiB, fractional CPU (`gcf_gen1`, 1/6 CPU), minInstances 0, maxInstances 1,
 concurrency 1 and timeout 15 seconds. The public HTTP function uses the same
 CPU/memory/instance limits and a five-second timeout. In-memory HTTP caching
-is one hour; all responses remain bounded by a 150-minute snapshot age limit.
-Cloudflare adds an hourly cache slot and the page checks every 15 minutes.
+is ten minutes (one snapshot read per miss); all responses remain bounded by a
+150-minute snapshot age limit. Cloudflare adds an hourly cache slot and the
+page checks every 15 minutes.
+
+An athlete who turns off "Show me on leaderboards" is withdrawn and the
+snapshots are republished at once (`withdrawUser` in `firestore_store.js`), so
+the only remaining delay is caching: up to 10 minutes in the function plus up
+to 60 minutes at Cloudflare/browsers (`max-age=3600`), plus the page's
+15-minute check — about 1½ hours worst case. Turning it back on waits for the
+next hourly publisher run, so up to about 2½ hours. The app copy says "up to two
+hours" (off) and "up to three hours" (on) for the website; purge the Cloudflare
+cache for `/api/leaderboard` after an urgent removal if faster is needed.
 
 After deploying verify the actual Scheduler cron, fractional CPU allocation,
 instance limits and timeouts on both services. Make one bounded test invocation

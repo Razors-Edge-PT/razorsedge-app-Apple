@@ -157,6 +157,10 @@ PushPermission resolvePushPermission({
         return PushPermission.notDetermined;
       }
       return PushPermission.denied;
+    case AuthorizationStatus.deniedPermanently:
+      // Android 13+ only: the OS will not prompt again, so this is always a
+      // real denial, whatever was recorded about earlier requests.
+      return PushPermission.denied;
   }
 }
 

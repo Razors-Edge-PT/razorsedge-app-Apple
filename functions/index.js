@@ -857,6 +857,14 @@ exports.showcaseOnExerciseUnitWrite = showcase.showcaseOnExerciseUnitWrite;
 // only daily schedule for both). See leaderboard/firestore_store.js.
 const leaderboard = require('./leaderboard/firestore_store');
 exports.leaderboardOnPublicProfileWrite = leaderboard.leaderboardOnPublicProfileWrite;
+// The all-time entry follows profileShowcaseV2, now published on the
+// friend-gated users_showcase/{uid} rather than users_public.
+exports.leaderboardOnShowcaseWrite = leaderboard.leaderboardOnShowcaseWrite;
+// The athlete's own "Show me on leaderboards" choice (users/{uid}
+// .leaderboardVisible): off withdraws every public projection at once, on
+// rebuilds them from the private day scores. Any other users/{uid} write
+// returns before reading anything.
+exports.leaderboardOnVisibilityWrite = leaderboard.leaderboardOnVisibilityWrite;
 exports.leaderboardReconcileDaily = leaderboard.leaderboardReconcileDaily;
 // Category medals (gold/silver/bronze per RE category, per board): every entry
 // write refreshes its board's public snapshot leaderboardMedals/{periodKey}

@@ -258,6 +258,10 @@ void main() {
     test('Android 13+: "denied" after GoodLift asked is a real denial', () {
       expect(r(AuthorizationStatus.denied, android14, true), PushPermission.denied);
     });
+    test('Android 13+: "deniedPermanently" is a real denial, asked or not', () {
+      expect(r(AuthorizationStatus.deniedPermanently, android14, false), PushPermission.denied);
+      expect(r(AuthorizationStatus.deniedPermanently, android14, true), PushPermission.denied);
+    });
     test('granted is granted everywhere, asked or not', () {
       for (final PushPlatformInfo p in <PushPlatformInfo>[android14, android12, iphone]) {
         expect(r(AuthorizationStatus.authorized, p, false), PushPermission.granted);

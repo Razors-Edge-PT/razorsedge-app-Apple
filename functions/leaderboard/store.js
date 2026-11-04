@@ -73,6 +73,27 @@ function groupByDate(v2Days) {
   return out;
 }
 
+/**
+ * The athlete's own leaderboard choice (users/{uid}.leaderboardVisible, see
+ * eligibility.js), read in the same read phase — and, for the Firestore
+ * store, the same transaction — as every other input. A hidden athlete gets
+ * no entry: each producer below then takes its existing delete path, while
+ * the private day documents are still kept up to date for a later opt-in.
+ */
+async function visibleOf(store) {
+  return (await store.getLeaderboardVisible()) !== false;
+}
+
+/**
+ * The profileShowcaseV2 snapshot the all-time entry is built from. The
+ * Firestore store reads the friend-gated users_showcase/{uid} document; the
+ * in-memory store keeps it on its public profile.
+ */
+async function showcaseV2Of(store, profile) {
+  if (typeof store.getShowcaseSnapshotV2 === 'function') return store.getShowcaseSnapshotV2();
+  return profile ? profile.profileShowcaseV2 || null : null;
+}
+
 /** True when the athlete's leaderboard has been fully built under this formula. */
 function isBuilt(state) {
   return !!(state && state.formulaVersion === LEADERBOARD_FORMULA_VERSION);
@@ -98,6 +119,7 @@ async function recomputeDates(store, dateKeys, v2ByDate) {
   const bwByDate = await bodyweightsFor(store, needBw);
   const sex = scoringSexOf(await store.getScoringSex());
   const identity = await store.getPublicProfile();
+  const visible = await visibleOf(store);
   const monthDays = new Map();
   for (const p of periods) monthDays.set(p, await store.listRePointDaysForPeriod(p));
 
@@ -121,7 +143,7 @@ async function recomputeDates(store, dateKeys, v2ByDate) {
   }
 
   for (const p of periods) {
-    const entry = monthEntryFromDays(store.uid, p, monthDays.get(p), identity);
+    const entry = visible ? monthEntryFromDays(store.uid, p, monthDays.get(p), identity) : null;
     if (entry) await store.setEntry(p, entry);
     else await store.deleteEntry(p);
   }
@@ -133,7 +155,8 @@ async function recomputeDates(store, dateKeys, v2ByDate) {
 async function recomputeMonth(store, periodKey) {
   const days = await store.listRePointDaysForPeriod(periodKey);
   const identity = await store.getPublicProfile();
-  const entry = monthEntryFromDays(store.uid, periodKey, days, identity);
+  const visible = await visibleOf(store);
+  const entry = visible ? monthEntryFromDays(store.uid, periodKey, days, identity) : null;
   if (entry) await store.setEntry(periodKey, entry);
   else await store.deleteEntry(periodKey);
   if (typeof store.notePeriods === 'function') store.notePeriods([periodKey]);
@@ -142,11 +165,16 @@ async function recomputeMonth(store, periodKey) {
 
 /**
  * Rewrites the all-time entry from the published profileShowcaseV2.
- * Returns 'set' | 'deleted' | 'stale' (left alone: another formula version).
+ * Returns 'set' | 'deleted' | 'hidden' (withdrawn: the athlete opted out) |
+ * 'stale' (left alone: another formula version).
  */
 async function refreshAllTime(store) {
   const profile = await store.getPublicProfile();
-  const snapshot = profile ? profile.profileShowcaseV2 : null;
+  const snapshot = await showcaseV2Of(store, profile);
+  if (!(await visibleOf(store))) {
+    await store.deleteEntry(ALL_TIME_PERIOD);
+    return 'hidden';
+  }
   const res = allTimeEntryFromSnapshot(store.uid, snapshot, profile);
   if (res.stale) return 'stale';
   if (res.entry) {
@@ -171,6 +199,7 @@ async function rebuildUser(store) {
   const bwByDate = await resolveBodyweights(store, needBw);
   const sex = scoringSexOf(await store.getScoringSex());
   const identity = await store.getPublicProfile();
+  const visible = await visibleOf(store);
 
   const next = new Map();
   for (const [d, days] of byDate) {
@@ -190,7 +219,7 @@ async function rebuildUser(store) {
   }
   const all = [...next.values()];
   for (const p of [...periods].sort()) {
-    const entry = monthEntryFromDays(store.uid, p, all.filter((x) => x.periodKey === p), identity);
+    const entry = visible ? monthEntryFromDays(store.uid, p, all.filter((x) => x.periodKey === p), identity) : null;
     if (entry) await store.setEntry(p, entry);
     else await store.deleteEntry(p);
   }
@@ -239,7 +268,8 @@ async function applyRequest(store, request) {
  * In-memory store for unit tests and the backfill dry run.
  *
  * `v2Days()` returns the athlete's V2 day contributions (array); the other
- * options mirror memoryStoreV2 (bodyweightAsOf, sex) plus `publicProfile()`.
+ * options mirror memoryStoreV2 (bodyweightAsOf, sex) plus `publicProfile()` and
+ * `leaderboardVisible` (value or function; absent = visible).
  * `entries` may be shared between several athletes' stores to model the
  * leaderboard collections.
  */
@@ -278,6 +308,10 @@ function memoryLeaderboardStore(uid, options) {
     },
     async getPublicProfile() {
       return typeof o.publicProfile === 'function' ? o.publicProfile() : o.publicProfile || null;
+    },
+    async getLeaderboardVisible() {
+      const v = typeof o.leaderboardVisible === 'function' ? o.leaderboardVisible() : o.leaderboardVisible;
+      return v !== false;
     },
     async listRePointDaysForPeriod(p) {
       return [...days.values()].filter((d) => d.periodKey === p);
