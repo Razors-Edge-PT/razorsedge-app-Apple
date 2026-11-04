@@ -94,33 +94,72 @@ A request is accepted only if its `aurelian.caller` PendingIntent
 Anything else is dropped without a reply. A PendingIntent's creator cannot be forged, and neither can
 a signing certificate; the package name alone could be claimed by another app.
 
-### Caller certificates (configured per build)
+### Caller certificates: standing release policy
 
-The allowed certificates are `AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256`, read from
-`BuildConfig.AURELIAN_CALLER_CERTS`, which `android/app/build.gradle` sets per build type:
+**Aurelian compatibility is a standing, owner-approved requirement of every GoodLift Android release**
+(Richard, 4 November 2026). The ordinary release build is the one that works with Aurelian on Richard's
+phone. The same build goes to Internal Testing and Production. There is no separate Aurelian variant,
+version or track, and the unchanged approved certificate needs no fresh confirmation for each build.
 
-| Build | Trusted Aurelian signer |
+| | |
 |---|---|
-| debug | `aurelian.callerCerts.debug`, else the development machine's Android debug certificate (`8e8d2fe3…13bea763`, CN=Android Debug) |
-| release | **none**, unless the build sets `aurelian.callerCerts.release` |
+| Approved caller | package `com.razorsedgesystems.aurelian`, signing certificate SHA-256 `8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763` (CN=Android Debug, O=Android, C=US; valid to 2055) |
+| Source of truth | `APPROVED_AURELIAN_RELEASE_CERTS` in `android/app/build.gradle` → `BuildConfig.AURELIAN_CALLER_CERTS` → `AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256` |
+| debug builds | `aurelian.callerCerts.debug` (local.properties or `-P`) if set, else the same certificate |
+| release builds | exactly the approved certificate, always |
 
-Set them in the build checkout's `android/local.properties` (not committed) or with `-P`, as
-comma-separated SHA-256 fingerprints (colons optional); a malformed value fails the build. A release
-build without the property drops every bridge request (logged once per request), so a production
-GoodLift never trusts a debug-signed Aurelian by accident. Certificate fingerprints are public
-identifiers, never key material.
+Nothing has to be set for a release. No local.properties entry, `-P` flag or environment variable is
+needed, so a regenerated `local.properties` can no longer produce a release that drops Aurelian. A
+legacy `aurelian.callerCerts.release` value is accepted only when it names exactly the approved
+certificate. Any other value fails the build rather than changing who is trusted. Certificate
+fingerprints are public identifiers, never key material.
 
-Flutter regenerates `android/local.properties` and has dropped the release property before, silently
-producing a release build with an empty allowlist. For an explicitly authorised Aurelian-enabled
-release, also pass it for that one build as the process-only environment variable
-`ORG_GRADLE_PROJECT_aurelian.callerCerts.release` and check the compiled `AURELIAN_CALLER_CERTS`
-(`.claude/skills/goodlift-release/SKILL.md`, "Aurelian-enabled builds only").
+Automatic checks:
 
-Aurelian is still signed with that machine's **debug** key, whose keystore uses Android's well-known
-default password. Trusting it is acceptable only for internal-testing builds installed on Richard's own
-devices. Before any GoodLift build that trusts Aurelian reaches Production, give Aurelian a dedicated
-release key (a protected keystore; note that changing Aurelian's key requires reinstalling Aurelian,
-which clears its voice profile) and set `aurelian.callerCerts.release` to that certificate only.
+1. **Gradle configuration**: an override that differs from the approved certificate fails the build.
+2. **Gradle `compileReleaseKotlin`**: before compiling, the generated release `BuildConfig.java` must
+   hold exactly the approved value, or the build fails.
+3. **JVM test** `AurelianBridgeCoreTest.releaseBuildsTrustExactlyTheApprovedAurelianCertificate`
+   (`:app:testReleaseUnitTest`) pins the value independently, so a change to build.gradle alone fails.
+4. **Artifact**: `tool/verify_release_aab.ps1` reads `BuildConfig` from the built AAB's DEX. It
+   requires `AURELIAN_CALLER_CERTS` to equal the approved value exactly, and checks the application
+   id, release type, version and upload signature. A different or empty allowlist exits non-zero.
+
+The protections themselves are unchanged. The caller's PendingIntent creator, package ownership of its
+UID, the signing certificate, the protocol version, the per-command argument schema, staleness, and in
+Dart the signed-in account, coach authorisation, the envelope schema and idempotency are all still
+enforced. An app with another package or another signer is dropped without a reply.
+
+**Independent updates.** A normal Aurelian version change needs no GoodLift change as long as Aurelian
+keeps its signing key. A normal GoodLift version change needs no Aurelian change. Protocol v1 stays
+additive: an older GoodLift answers `unsupported` for a command it does not know.
+
+**Exceptional changes need review**: rotating Aurelian's signing key, a suspected compromise of that key,
+or a breaking bridge-protocol change. To rotate, change `APPROVED_AURELIAN_RELEASE_CERTS` and the pinned
+test value together, and record it here. During a transition the constant may list two comma-separated
+fingerprints. Aurelian must then be reinstalled, because Android does not allow a signer change on
+update, and that clears Aurelian's voice profile.
+
+**Keeping Aurelian's identity.** Aurelian (`C:\Projects\Aurelian`, `app/build.gradle.kts`) has no
+signing config of its own. Every Aurelian build is signed with the Windows machine's default debug
+keystore, `%USERPROFILE%\.android\debug.keystore` (alias `androiddebugkey`, created 8 January 2025).
+On 4 November 2026 this was checked directly: that keystore's certificate and the signer of the last
+built `app\build\outputs\apk\debug\app-debug.apk` are both `8e8d2fe3…13bea763`. The copy installed on
+the phone was not checked, because no device was connected.
+
+The approved identity depends on that one file:
+- Back it up to encrypted offline storage now. The `.lock` file next to it is not needed.
+- Never delete `%USERPROFILE%\.android`.
+- Never let Android Studio "regenerate" the debug keystore.
+- On a new machine, copy the file into place before building Aurelian.
+- Never commit it to either repository.
+
+If the file is lost, Aurelian cannot be updated in place: that is a rotation as described above.
+Known limitation: it is a debug keystore with Android's well-known password (`android`), so its
+protection is the file itself. Richard accepted this when approving the identity for Production.
+Moving Aurelian to a dedicated protected release key remains a possible future rotation. It is not
+required.
+
 `<queries><package android:name="com.razorsedgesystems.aurelian"/>` makes the check possible under
 package visibility.
 
@@ -185,9 +224,10 @@ queued outbox mutations offline.
 ## Tests
 
 - `android/app/src/test/.../AurelianBridgeCoreTest.kt` (JVM): parsing and bounds, protocol version,
-  caller policy, cold-start queue, warm delivery, reply exactly once, timeout, bounded queue.
-  Run with `android\gradlew.bat :app:testDebugUnitTest -Dorg.gradle.java.home=<JDK 17+>` after one
-  `flutter build apk --debug` has generated the wrapper.
+  caller policy, cold-start queue, warm delivery, reply exactly once, timeout, bounded queue, and
+  (release variant) the pinned approved certificate. Run with
+  `android\gradlew.bat :app:testDebugUnitTest :app:testReleaseUnitTest -Dorg.gradle.java.home=<JDK 17+>`
+  after one `flutter build` has generated the wrapper.
 - `test/aurelian_bridge_logic_test.dart`: command model, bus routing/readiness/workout bring-up, channel
   binding, exercise matching, set-entry planning and units, voice target.
 - `test/wes2_voice_bridge_e2e_test.dart`: WES2 parity, offline outbox, lb conversion, invalid input,
@@ -230,7 +270,7 @@ handles no v1 commands).
 
 ## Physical testing
 
-Install this GoodLift build and Aurelian Milestone 2 on the same phone (Aurelian signed with the allowed
-debug key). In Aurelian's Engineering panel, "goodlift" should read "bridge available"; an older
+Install this GoodLift build (any ordinary debug or release build) and Aurelian on the same phone
+(Aurelian signed with the approved key). In Aurelian's Engineering panel, "goodlift" should read "bridge available"; an older
 GoodLift reads "installed GoodLift has no Aurelian bridge (older build)". "gl last" and "gl screen" show
 each command's result and the GoodLift screen that handled it.

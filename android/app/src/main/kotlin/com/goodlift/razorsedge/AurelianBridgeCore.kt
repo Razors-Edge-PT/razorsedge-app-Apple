@@ -197,11 +197,10 @@ object AurelianCallerPolicy {
     private val SHA256_HEX = Regex("^[0-9a-f]{64}$")
 
     /**
-     * SHA-256 fingerprints of the certificates allowed to sign the calling Aurelian, configured PER
-     * BUILD (android/app/build.gradle → BuildConfig.AURELIAN_CALLER_CERTS). Debug builds default to the
-     * development machine's debug certificate; a RELEASE build trusts no caller at all unless that
-     * build explicitly lists one (aurelian.callerCerts.release), so a debug-signed Aurelian is never
-     * trusted by a production GoodLift by accident. Fingerprints are public, never key material.
+     * SHA-256 fingerprints of the certificates allowed to sign the calling Aurelian
+     * (android/app/build.gradle → BuildConfig.AURELIAN_CALLER_CERTS). Every RELEASE build trusts exactly
+     * the owner-approved Aurelian certificate (APPROVED_AURELIAN_RELEASE_CERTS; the build fails on any
+     * other value); debug builds may override it locally. Fingerprints are public, never key material.
      */
     val ALLOWED_AURELIAN_CERT_SHA256: Set<String> = parseCertList(BuildConfig.AURELIAN_CALLER_CERTS)
 

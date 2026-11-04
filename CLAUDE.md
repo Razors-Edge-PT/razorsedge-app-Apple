@@ -89,3 +89,9 @@ npm run logs             # View function logs
 Use the project skill `/goodlift-release` when the user requests the release sequence: tests, version bump, commit/push to `main`, necessary Firebase deployment, and a verified signed AAB.
 
 The maintained workflow is in [.claude/skills/goodlift-release/SKILL.md](.claude/skills/goodlift-release/SKILL.md). Richard uploads to Play internal testing and runs phone tests.
+
+**Aurelian compatibility is permanent and automatic.** Richard gave standing approval on 4 November 2026. Every ordinary GoodLift Android build, Internal Testing and Production alike, trusts his Aurelian app: `com.razorsedgesystems.aurelian`, signing certificate SHA-256 `8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763`.
+- The certificate comes from `APPROVED_AURELIAN_RELEASE_CERTS` in `android/app/build.gradle`.
+- There is no separate variant or setting, and no per-release authorisation.
+- Verify the built AAB with `tool/verify_release_aab.ps1`.
+- Only a key rotation, a suspected compromise or a breaking bridge-protocol change needs review. See `docs/aurelian_bridge.md`.

@@ -202,6 +202,21 @@ test('seed: only an ABSENT choice is seeded; a saved true (or false) always wins
   assert.strictEqual(seed.planSeed({ leaderboardVisible: false }), 'explicit');
 });
 
+test('seed --verify passes ONLY for an explicit false with no public projections', () => {
+  const none = { entries: [], ageEntries: [], silver: [], medals: [], sexBoards: [], websiteRows: [] };
+  const some = Object.assign({}, none, { websiteRows: ['all_time'] });
+  const v = (data, traces) => seed.verifyOutcome(data, traces);
+  assert.strictEqual(v({}, none).ok, false, 'absent → fails');
+  assert.match(v({}, none).reason, /defaults to VISIBLE/);
+  assert.strictEqual(v({ leaderboardVisible: true }, none).ok, false, 'true → fails');
+  assert.match(v({ leaderboardVisible: true }, none).reason, /saved VISIBLE/);
+  assert.strictEqual(v({ leaderboardVisible: 'false' }, none).ok, false, 'a non-boolean is not hidden');
+  assert.strictEqual(v(null, none).ok, false, 'missing users/{uid} → fails');
+  assert.strictEqual(v({ leaderboardVisible: false }, none).ok, true, 'false, no traces → passes');
+  assert.strictEqual(v({ leaderboardVisible: false }, some).ok, false, 'false with traces → fails');
+  assert.match(v({ leaderboardVisible: false }, some).reason, /1 public projection/);
+});
+
 // ── Showcase migration (pure parts) ─────────────────────────────────────────
 
 test('migration: copy never overwrites newer data; strip only after a private copy', () => {

@@ -118,11 +118,21 @@ class AurelianBridgeCoreTest {
     }
 
     @Test fun allowedCertificateIsAurelianSha256() {
-        // JVM unit tests use the debug build's allowlist: the development certificate by default.
+        // Debug builds may override the allowlist locally; it is still exactly one SHA-256 certificate.
         val cert = AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256.single()
         assertEquals(64, cert.length)
         assertEquals(32, AurelianCallerPolicy.hexToBytes(cert).size)
         assertEquals(0x8e.toByte(), AurelianCallerPolicy.hexToBytes("8E:8D")[0])
+    }
+
+    @Test fun releaseBuildsTrustExactlyTheApprovedAurelianCertificate() {
+        // Owner-approved standing identity (android/app/build.gradle APPROVED_AURELIAN_RELEASE_CERTS).
+        // Changing it is a deliberate rotation: update both places and docs/aurelian_bridge.md.
+        val approved = "8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763"
+        if (BuildConfig.BUILD_TYPE == "release") {
+            assertEquals(approved, BuildConfig.AURELIAN_CALLER_CERTS)
+            assertEquals(setOf(approved), AurelianCallerPolicy.ALLOWED_AURELIAN_CERT_SHA256)
+        }
     }
 
     @Test fun callerAllowlistIsParsedStrictly() {

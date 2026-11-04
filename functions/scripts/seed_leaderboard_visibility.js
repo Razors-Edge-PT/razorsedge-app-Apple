@@ -25,7 +25,9 @@
 //   node scripts/seed_leaderboard_visibility.js --project goodlift-us-storage \
 //     --uid <UID> --expect-email <EMAIL>              # dry run: review
 //   ... same arguments --apply                         # write + withdraw
-//   ... same arguments --verify                        # expect CLEAN
+//   ... same arguments --verify                        # expect CLEAN; exit 0 ONLY when
+//                                                      # leaderboardVisible === false and
+//                                                      # no public projection names them
 
 const DEFAULT_PROJECT_ID = 'goodlift-us-storage';
 const FIELD = 'leaderboardVisible';
@@ -139,6 +141,23 @@ function traceCount(t) {
   return Object.values(t).reduce((n, list) => n + list.length, 0);
 }
 
+/**
+ * --verify verdict (pure). Passes ONLY when the saved choice is explicitly
+ * false AND no public projection names the athlete; anything else fails with
+ * the reason. It never changes the choice: a visible athlete is reported, not
+ * forced back to hidden.
+ */
+function verifyOutcome(userData, traces) {
+  if (!userData) return { ok: false, reason: 'users/{uid} is missing' };
+  const saved = userData[FIELD];
+  if (saved === undefined) return { ok: false, reason: 'no saved choice: the athlete defaults to VISIBLE (run --apply)' };
+  if (saved === true) return { ok: false, reason: 'the athlete has saved VISIBLE (their own choice; the seed never overrides it)' };
+  if (saved !== false) return { ok: false, reason: `saved choice is not a boolean (${JSON.stringify(saved)}): treated as VISIBLE` };
+  const n = traceCount(traces);
+  if (n > 0) return { ok: false, reason: `hidden, but ${n} public projection(s) still name the athlete` };
+  return { ok: true, reason: 'hidden, no public projections' };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -179,10 +198,9 @@ async function main() {
   for (const [k, list] of Object.entries(before)) if (list.length) process.stdout.write(`  ${k}: ${list.join(', ')}\n`);
 
   if (options.verify) {
-    const hidden = saved === false;
-    const clean = !hidden || traceCount(before) === 0;
-    process.stdout.write(`\nVerification: ${hidden ? (clean ? 'CLEAN (hidden, no public projections)' : 'NOT CLEAN') : 'athlete has chosen to be visible — nothing to verify'}\n`);
-    return clean ? 0 : 1;
+    const verdict = verifyOutcome(snap.data(), before);
+    process.stdout.write(`\nVerification: ${verdict.ok ? 'CLEAN' : 'FAILED'} (${verdict.reason})\n`);
+    return verdict.ok ? 0 : 1;
   }
   if (!options.apply) {
     process.stdout.write(plan === 'seed'
@@ -203,7 +221,7 @@ async function main() {
   return 0;
 }
 
-module.exports = { parseArgs, emailMatches, planSeed, applySeed, publicTraces, traceCount };
+module.exports = { parseArgs, emailMatches, planSeed, applySeed, publicTraces, traceCount, verifyOutcome };
 
 if (require.main === module) {
   main()

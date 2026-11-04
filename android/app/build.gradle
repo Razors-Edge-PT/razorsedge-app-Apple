@@ -27,10 +27,18 @@ def flutterVersionName = localProperties.getProperty('flutter.versionName')
 
 // Aurelian bridge caller allowlist (docs/aurelian_bridge.md, "Caller certificates"): SHA-256
 // fingerprints of the certificates allowed to sign the Aurelian app that may call the bridge.
-// Public identifiers, not secrets. Set per build in android/local.properties (or with -P):
-//   aurelian.callerCerts.release=<64 hex>[,<64 hex>]   release builds: NO caller unless set here
-//   aurelian.callerCerts.debug=<64 hex>                 debug builds: defaults to the dev machine's
-//                                                       debug certificate below
+// Public identifiers, not secrets.
+//
+// RELEASE builds always trust exactly APPROVED_AURELIAN_RELEASE_CERTS: the owner-approved signing
+// identity of Richard's Aurelian (com.razorsedgesystems.aurelian), a standing requirement of every
+// GoodLift Android release (Internal Testing and Production alike). This constant is the single
+// source of truth. Rotating it is a deliberate source change: edit it here AND the pinned value in
+// AurelianBridgeCoreTest, and update docs/aurelian_bridge.md. A legacy
+// aurelian.callerCerts.release property (local.properties or -P) is accepted only when it names
+// exactly this set; any other value fails the build instead of silently changing who is trusted.
+//
+// DEBUG builds: aurelian.callerCerts.debug=<64 hex>[,<64 hex>] if set, else the same certificate.
+def APPROVED_AURELIAN_RELEASE_CERTS = '8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763'
 def aurelianCallerCerts = { String key ->
     def raw = (project.findProperty(key) ?: localProperties.getProperty(key) ?: '').toString().trim()
     def certs = raw ? raw.split(',').collect { it.trim().replace(':', '').toLowerCase() }.findAll { it } : []
@@ -41,11 +49,14 @@ def aurelianCallerCerts = { String key ->
     }
     return certs.join(',')
 }
-// Richard's development machine's Android debug certificate (CN=Android Debug). Debug builds only:
-// a release build never trusts it unless aurelian.callerCerts.release names it explicitly.
-def devAurelianCallerCert = '8e8d2fe3065691c3bbb57485fa3bc9ebde1f9052367201df7c36d9dd13bea763'
-def debugAurelianCallerCerts = aurelianCallerCerts('aurelian.callerCerts.debug') ?: devAurelianCallerCert
-def releaseAurelianCallerCerts = aurelianCallerCerts('aurelian.callerCerts.release')
+def debugAurelianCallerCerts = aurelianCallerCerts('aurelian.callerCerts.debug') ?: APPROVED_AURELIAN_RELEASE_CERTS
+def releaseAurelianCallerCerts = APPROVED_AURELIAN_RELEASE_CERTS
+def releaseCertsOverride = aurelianCallerCerts('aurelian.callerCerts.release')
+if (releaseCertsOverride && releaseCertsOverride.split(',').toList().toSet() != releaseAurelianCallerCerts.split(',').toList().toSet()) {
+    throw new GradleException("aurelian.callerCerts.release ($releaseCertsOverride) differs from the approved " +
+        "Aurelian release certificate in android/app/build.gradle. Remove the override; rotating the " +
+        "certificate is a source change (see docs/aurelian_bridge.md).")
+}
 
 android {
     namespace = "com.goodlift.razorsedge"
@@ -93,6 +104,30 @@ android {
             shrinkResources false
         }
     }
+}
+
+// Every release build checks the GENERATED BuildConfig before compiling: the Aurelian allowlist that
+// is compiled into the app must be exactly the approved one, or the build fails. The task declares
+// no outputs, so it runs on every release build (never skipped as up to date).
+def verifyAurelianReleaseAllowlist = tasks.register('verifyAurelianReleaseAllowlist') {
+    dependsOn 'generateReleaseBuildConfig'
+    def generatedDir = layout.buildDirectory.dir('generated/source/buildConfig/release')
+    doLast {
+        def files = fileTree(generatedDir) { include '**/com/goodlift/razorsedge/BuildConfig.java' }.files
+        String compiled = null
+        if (files.size() == 1) {
+            def m = files.iterator().next().text =~ /AURELIAN_CALLER_CERTS = "([^"]*)"/
+            if (m.find()) compiled = m.group(1)
+        }
+        if (compiled != APPROVED_AURELIAN_RELEASE_CERTS) {
+            throw new GradleException("Release BuildConfig.AURELIAN_CALLER_CERTS is '${compiled}', expected the approved " +
+                "Aurelian certificate ${APPROVED_AURELIAN_RELEASE_CERTS} (android/app/build.gradle).")
+        }
+        logger.lifecycle("Aurelian release allowlist verified: ${compiled}")
+    }
+}
+tasks.matching { it.name in ['compileReleaseKotlin', 'compileReleaseJavaWithJavac'] }.configureEach {
+    dependsOn verifyAurelianReleaseAllowlist
 }
 
 

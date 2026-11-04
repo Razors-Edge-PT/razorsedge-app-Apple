@@ -276,13 +276,23 @@ test('seed: an absent choice becomes hidden once; a choice the athlete saved lat
   const w = await makeAthlete('seeded');
   await logWorkout(w, `${LIVE}-08`, workout([BENCH, [{ weight: 110, reps: 3 }]]));
   assert.ok(await entry(LIVE, w), 'visible before seeding');
+  const verify = async () => seed.verifyOutcome(
+    (await db().collection('users').doc(w).get()).data(), await seed.publicTraces(db(), w));
+  assert.equal((await verify()).ok, false, '--verify fails before seeding (no saved choice)');
 
   assert.equal(await seed.applySeed(db(), admin, w), 'seed');
   assert.equal((await db().collection('users').doc(w).get()).get('leaderboardVisible'), false);
   await lb.withdrawUser(w, NOW);
   assert.equal(await entry(LIVE, w), false);
   assert.equal(seed.traceCount(await seed.publicTraces(db(), w)), 0);
+  assert.deepEqual(await verify(), { ok: true, reason: 'hidden, no public projections' });
   assert.equal(await seed.applySeed(db(), admin, w), 'explicit', 'idempotent');
+
+  // A projection still naming her makes --verify fail even though she is hidden.
+  await lb.entryRef(CLOSED, w).set({ uid: w, periodKey: CLOSED, totalPointsUnits: 1 });
+  assert.equal((await verify()).ok, false, '--verify fails while a public trace remains');
+  await lb.entryRef(CLOSED, w).delete();
+  assert.equal((await verify()).ok, true);
 
   // She turns it back on herself; re-running the seed never forces it off.
   assert.equal(await setVisible(w, true), 'rebuild');
@@ -291,6 +301,8 @@ test('seed: an absent choice becomes hidden once; a choice the athlete saved lat
   assert.equal(await seed.applySeed(db(), admin, w), 'explicit');
   assert.equal((await db().collection('users').doc(w).get()).get('leaderboardVisible'), true);
   assert.ok(await entry(LIVE, w));
+  assert.equal((await verify()).ok, false, '--verify reports her saved VISIBLE choice as not hidden');
+  assert.equal((await db().collection('users').doc(w).get()).get('leaderboardVisible'), true, 'verify changes nothing');
 
   // Every other ordinary athlete is untouched by the seed.
   const other = await makeAthlete('other');
