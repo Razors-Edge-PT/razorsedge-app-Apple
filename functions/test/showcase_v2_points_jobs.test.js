@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { applyWorkoutDayV2, refreshV2, memoryStoreV2, isBuiltV2 } = require('../showcase/store_v2');
+const { applyWorkoutDayV2, refreshV2, memoryStoreV2, isBuiltV2, stateV2 } = require('../showcase/store_v2');
 const {
   buildShowcaseV2,
   summarizeWorkoutDayV2,
@@ -191,6 +191,34 @@ function jobHarness(history, weigh) {
   });
   return { bw, v2, lb, entries };
 }
+
+test('a leaderboard rebuild from a previous catalogue picks up newly scored historical lifts', async () => {
+  const date = '2026-01-10';
+  const exerciseId = 'visub8iG0LIXYYCv5Qom';
+  const h = jobHarness({ [date]: workout(row(exerciseId, [{ weight: 44, reps: 1 }])) }, [['2026-01-01', 80]]);
+  await h.v2.setState({ ...stateV2(date), rePointsFormulaVersion: 3 });
+  await h.v2.requestRebuild({ mode: 'leaderboard', reason: 'formula change' });
+
+  const run = await runRebuildToCompletion(memoryIo(h.v2, h.lb));
+  assert.strictEqual(run.job.status, 'done');
+  assert.strictEqual(run.job.mode, 'full');
+  assert.strictEqual(entry(await h.v2.getSnapshot(), 'hipHinge', exerciseId).rePoints, pts(44, 1.10, 80));
+  assert.strictEqual(h.entries.get('2026-01/u').categoryTotalsUnits.hipHinge, toUnits(pts(44, 1.10, 80)));
+  assert.strictEqual(h.entries.get('all_time/u').winningExerciseIds.hipHinge, exerciseId);
+});
+
+test('a full rebuild checkpoint from a previous catalogue restarts from the original workouts', async () => {
+  const h = jobHarness(bigHistory(1));
+  await h.v2.requestRebuild({ mode: 'full', reason: 'test' });
+  const job = await h.v2.getRebuildJob();
+  await h.v2.setRebuildJob({ ...job, rePointsFormulaVersion: 3, phase: 'publish' });
+
+  const result = await rebuildStep(memoryIo(h.v2, h.lb));
+  assert.strictEqual(result.committed, true);
+  assert.strictEqual(result.phase, 'days');
+  assert.strictEqual((await h.v2.getRebuildJob()).generation, job.generation + 1);
+  assert.strictEqual(await h.v2.getSnapshot(), null);
+});
 
 test('a large history rebuilds in bounded pages and equals the pure rebuild', async () => {
   const history = bigHistory(130); // > 5 pages of PAGE_DATES

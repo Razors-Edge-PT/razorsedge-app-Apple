@@ -22,8 +22,10 @@
  *   3 — Pull-Up, Wide Arm Pull-Up and Neutral Grip Chin-Up scored as the
  *       Chin-Up; Bulgarian Split Squat Barbell 1.25 → 2.5 and Deficit added
  *       at 2.5 (the base factor).
+ *   4 — Incline Bench Dumbbell Press (2.11), Safety Bar Squat (0.8),
+ *       and Hip Thrust, Unilateral (1.10) added.
  */
-const RE_POINTS_FORMULA_VERSION = 3;
+const RE_POINTS_FORMULA_VERSION = 4;
 
 const Sex = { MALE: 'male', FEMALE: 'female' };
 

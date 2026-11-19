@@ -70,6 +70,9 @@ test('exact ids, factors and category membership', () => {
     ['verticalPull', '63ryIPxgXVPX7jLtAecC', 'Pull-Up, Wide Arm', 1.0],
     ['verticalPull', 'yggnlBfsTeAnhBAhLkqF', 'Neutral Grip Chin-Up', 1.0],
     ['squatPattern', 'xbePAZEtQIFEjvu2YaPV', 'Bulgarian Split Squat, Deficit', 2.5],
+    ['horizontalPress', 'jtMoW3Nht1k97YgweteC', 'Incline Bench Dumbbell Press', 2.11],
+    ['squatPattern', 'bkFLZMLPvUv3GN1y7QT3', 'Safety Bar Squat', 0.8],
+    ['hipHinge', 'visub8iG0LIXYYCv5Qom', 'Hip Thrust, Unilateral', 1.10],
   ]);
 });
 
@@ -123,7 +126,7 @@ test('bodyweight-loaded flag is definition-driven: the pull/chin grips and Trice
 test('per-dumbbell exercises are declared as such', () => {
   const per = RE_EXERCISES.filter((e) => e.loadSemantics === LoadSemantics.PER_DUMBBELL)
     .map((e) => e.slot);
-  assert.deepStrictEqual(per, ['dbBenchFlat', 'ohpUnilateral', 'bulgarianSplitSquatDumbbell', 'bulgarianSplitSquatDeficit']);
+  assert.deepStrictEqual(per, ['dbBenchFlat', 'ohpUnilateral', 'bulgarianSplitSquatDumbbell', 'bulgarianSplitSquatDeficit', 'dbBenchIncline']);
   assert.strictEqual(reExerciseBySlot('bulgarianSplitSquatBarbell').loadSemantics, LoadSemantics.TOTAL);
 });
 
@@ -223,14 +226,16 @@ test('matching: id-less legacy rows use the closed exact alias list only', () =>
   assert.strictEqual(matchReExercise(undefined, 'Triceps Dip').slot, 'tricepsDip');
   assert.strictEqual(matchReExercise(null, 'Bulgarian Split Squat, Deficit').slot, 'bulgarianSplitSquatDeficit');
   assert.strictEqual(matchReExercise(null, 'pull-up').slot, 'pullUp');
+  assert.strictEqual(matchReExercise(null, 'Incline Bench Dumbbell Press').slot, 'dbBenchIncline');
+  assert.strictEqual(matchReExercise(null, 'Safety Bar Squat').slot, 'safetyBarSquat');
+  assert.strictEqual(matchReExercise(null, 'Hip Thrust, Unilateral').slot, 'hipThrustUnilateral');
   for (const name of [
     'Triceps Dip Machine',
     'Overhead Dumbbell Press',
     'Pull-Ups',
     'Jump Chin Up',
     'Lat Pull Down, Wide Arm',
-    'Incline Bench Dumbbell Press',
-    'Hip Thrust, Unilateral',
+    'Machine Hip Thrust, Unilateral',
   ]) {
     assert.strictEqual(matchReExercise(null, name), null, name);
   }

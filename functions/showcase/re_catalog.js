@@ -254,6 +254,37 @@ const RE_EXERCISES = [
     bodyweightLoaded: false,
     loadSemantics: LoadSemantics.PER_DUMBBELL,
   },
+  {
+    slot: 'dbBenchIncline',
+    category: CATEGORY_KEYS.HORIZONTAL_PRESS,
+    exerciseId: 'jtMoW3Nht1k97YgweteC',
+    displayName: 'Incline Bench Dumbbell Press',
+    legacyNameAliases: ['Incline Bench Dumbbell Press'],
+    factor: 2.11,
+    bodyweightLoaded: false,
+    loadSemantics: LoadSemantics.PER_DUMBBELL,
+  },
+  {
+    slot: 'safetyBarSquat',
+    category: CATEGORY_KEYS.SQUAT_PATTERN,
+    exerciseId: 'bkFLZMLPvUv3GN1y7QT3',
+    displayName: 'Safety Bar Squat',
+    legacyNameAliases: ['Safety Bar Squat'],
+    factor: 0.8,
+    bodyweightLoaded: false,
+    loadSemantics: LoadSemantics.TOTAL,
+  },
+  {
+    slot: 'hipThrustUnilateral',
+    category: CATEGORY_KEYS.HIP_HINGE,
+    exerciseId: 'visub8iG0LIXYYCv5Qom',
+    displayName: 'Hip Thrust, Unilateral',
+    legacyNameAliases: ['Hip Thrust, Unilateral'],
+    // Twice the barbell factor, applied to the recorded external load for one leg.
+    factor: 1.10,
+    bodyweightLoaded: false,
+    loadSemantics: LoadSemantics.TOTAL,
+  },
 ];
 
 const BY_SLOT = new Map(RE_EXERCISES.map((e) => [e.slot, e]));
