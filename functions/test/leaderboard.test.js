@@ -36,13 +36,17 @@ const {
 const ID = {
   bench: 'AmfUWbF1DH3I7qPAdh5k',
   dbBench: 'kTs5fLSTKjUkUZL10iii',
+  dbBenchIncline: 'jtMoW3Nht1k97YgweteC',
   chin: 'XM9026peNIu0R8qh7UqY',
   lat: '1XOIXxeLFhgmgjZS9Cyq',
   ohpDb: 'RdsGazgdH0xgpjek0n3u',
   dip: 'FtayDmR5BVnGS1FXlXLL',
   deadlift: 'MsGl7e9yanDeEnYX0e4X',
   sumo: '10pEctikt6PP8eAg9Eip',
+  hipThrustBarbell: 'LGhFj8o0sG3X12296UAh',
+  hipThrustUnilateral: 'visub8iG0LIXYYCv5Qom',
   squat: 'heeBViVINHO6tUScSd6y',
+  safetyBarSquat: 'bkFLZMLPvUv3GN1y7QT3',
   bssDb: 'ISXQqOEXLjMrPEs0xjgJ',
   bssBb: 'VUEvvjuo4cxBghNuux66',
   bssDeficit: 'xbePAZEtQIFEjvu2YaPV',
@@ -113,7 +117,7 @@ function athlete(uid, options) {
 test('scoring config is the profile catalogue (same factors, incl. 0.85 and 2.61)', () => {
   assert.strictEqual(reExerciseById(ID.lat).factor, 0.85);
   assert.strictEqual(reExerciseById(ID.ohpDb).factor, 2.61);
-  assert.strictEqual(RE_EXERCISES.length, 17);
+  assert.strictEqual(RE_EXERCISES.length, 20);
   assert.ok(LEADERBOARD_FORMULA_VERSION.includes(`re${RE_POINTS_FORMULA_VERSION}`));
 });
 
@@ -268,9 +272,44 @@ test('Bulgarian variants: base factor on each, dumbbell vs barbell load as store
   assert.strictEqual(a.allTime().winningExerciseIds.squatPattern, ID.bssBb);
 });
 
-test('the factor-table change makes stored entries stale (version re3)', () => {
-  assert.strictEqual(RE_POINTS_FORMULA_VERSION, 3);
-  assert.ok(LEADERBOARD_FORMULA_VERSION.includes('-re3-'));
+test('incline press, safety bar squat and single-leg hip thrust score from the recorded load', async () => {
+  const a = athlete('a', { weighIns: [['2026-09-01', 80]] });
+  const unilateral = row(ID.hipThrustUnilateral, [{ weight: 44, reps: 1 }]);
+  await a.log('2026-09-02', workout(
+    row(ID.dbBenchIncline, [{ weight: 40, reps: 1 }]),
+    row(ID.safetyBarSquat, [{ weight: 150, reps: 1 }]),
+    unilateral,
+  ));
+  await a.log('2026-09-03', workout(
+    row(ID.hipThrustBarbell, [{ weight: 149, reps: 1 }]),
+    unilateral,
+  ));
+
+  const inclinePoints = units(40, 2.11, 80);
+  const safetyBarPoints = units(150, 0.8, 80);
+  const unilateralPoints = units(44, 1.10, 80);
+  const bilateralPoints = units(149, 0.55, 80);
+  const { horizontalPress, squatPattern, hipHinge } = a.day('2026-09-02').categories;
+  assert.strictEqual(horizontalPress.exerciseId, ID.dbBenchIncline);
+  assert.strictEqual(horizontalPress.pointsUnits, inclinePoints);
+  assert.strictEqual(squatPattern.exerciseId, ID.safetyBarSquat);
+  assert.strictEqual(squatPattern.pointsUnits, safetyBarPoints);
+  assert.strictEqual(hipHinge.exerciseId, ID.hipThrustUnilateral);
+  assert.strictEqual(hipHinge.pointsUnits, unilateralPoints);
+  assert.strictEqual(a.day('2026-09-03').categories.hipHinge.exerciseId, ID.hipThrustBarbell);
+  assert.strictEqual(a.month('2026-09').totalPointsUnits, inclinePoints + safetyBarPoints + unilateralPoints + bilateralPoints);
+  assert.deepStrictEqual(a.allTime().winningExerciseIds, {
+    horizontalPress: ID.dbBenchIncline,
+    verticalPull: null,
+    overheadPress: null,
+    hipHinge: ID.hipThrustBarbell,
+    squatPattern: ID.safetyBarSquat,
+  });
+});
+
+test('the new lifts make stored entries stale (version re4)', () => {
+  assert.strictEqual(RE_POINTS_FORMULA_VERSION, 4);
+  assert.ok(LEADERBOARD_FORMULA_VERSION.includes('-re4-'));
 });
 
 test('missing bodyweight scores nothing, exactly as on the profile', async () => {

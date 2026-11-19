@@ -27,6 +27,17 @@
           "factor": 2.11,
           "bodyweightLoaded": false,
           "loadSemantics": "perDumbbell"
+        },
+        {
+          "slot": "dbBenchIncline",
+          "exerciseId": "jtMoW3Nht1k97YgweteC",
+          "displayName": "Incline Bench Dumbbell Press",
+          "legacyNameAliases": [
+            "Incline Bench Dumbbell Press"
+          ],
+          "factor": 2.11,
+          "bodyweightLoaded": false,
+          "loadSemantics": "perDumbbell"
         }
       ]
     },
@@ -170,6 +181,17 @@
           "factor": 0.55,
           "bodyweightLoaded": false,
           "loadSemantics": "total"
+        },
+        {
+          "slot": "hipThrustUnilateral",
+          "exerciseId": "visub8iG0LIXYYCv5Qom",
+          "displayName": "Hip Thrust, Unilateral",
+          "legacyNameAliases": [
+            "Hip Thrust, Unilateral"
+          ],
+          "factor": 1.1,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
         }
       ]
     },
@@ -221,6 +243,17 @@
           "factor": 2.5,
           "bodyweightLoaded": false,
           "loadSemantics": "perDumbbell"
+        },
+        {
+          "slot": "safetyBarSquat",
+          "exerciseId": "bkFLZMLPvUv3GN1y7QT3",
+          "displayName": "Safety Bar Squat",
+          "legacyNameAliases": [
+            "Safety Bar Squat"
+          ],
+          "factor": 0.8,
+          "bodyweightLoaded": false,
+          "loadSemantics": "total"
         }
       ]
     }

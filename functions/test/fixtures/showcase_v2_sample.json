@@ -1,7 +1,7 @@
 {
   "schema": "profileShowcaseV2",
   "e1rmFormulaVersion": 1,
-  "rePointsFormulaVersion": 3,
+  "rePointsFormulaVersion": 4,
   "aggregationVersion": 2,
   "categories": {
     "horizontalPress": {
