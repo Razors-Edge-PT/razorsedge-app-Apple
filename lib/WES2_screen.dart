@@ -65,6 +65,7 @@ import 'aurelian/wes2_voice_target.dart';
 import 'exercise_catalog.dart';
 import 'membership_gate.dart' show gatedWes2;
 import 'WES2_widgets/wes2_set_timer_hub.dart';
+import 'pinch_zoom_area.dart';
 
 /// WES2 beta route shell.
 /// Receives an optional [initialDate]; defaults to today when omitted.
@@ -1789,7 +1790,14 @@ class _Wes2ScreenState extends State<Wes2Screen> with WidgetsBindingObserver {
                       ),
                       _buildSyncStatusLine(),
                       const Divider(height: 1),
-                      Expanded(child: _buildBody(context, controller)),
+                      // Photograph-style pinch zoom for the workout itself.
+                      // The app bar, date header and floating timer stay
+                      // anchored; at 100% the zoom area is transparent.
+                      Expanded(
+                        child: PinchZoomArea(
+                          child: _buildBody(context, controller),
+                        ),
+                      ),
                     ],
                   ),
                   if (_timerVisible)

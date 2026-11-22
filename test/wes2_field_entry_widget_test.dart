@@ -12,6 +12,7 @@ import 'package:localtest222/WES2_hint_service.dart';
 import 'package:localtest222/WES2_models.dart';
 import 'package:localtest222/WES2_widgets/WES2_set_row.dart';
 import 'package:localtest222/periodization_model_utils.dart';
+import 'package:localtest222/pinch_zoom_area.dart';
 
 const _exId = 'ex_press';
 const _exName = 'Seated Shoulder Dumbbell Press';
@@ -302,5 +303,181 @@ void main() {
     expect(saved.map((e) => e.key).toSet(), <Wes2FieldKey>{Wes2FieldKey.weight});
     expect(set0().reps.actualValue, isNull);
     expect(set0().rir.actualValue, isNull);
+  });
+
+  // ── Inside the pinch-zoomed WES2 body ───────────────────────────────────
+  //
+  // The WES2 body's shape: a top action bar, then the vertical exercise list
+  // whose card puts the set rows in a horizontal scroller — all inside the
+  // PinchZoomArea, exactly as Wes2Screen wraps _buildBody.
+  group('zoomed WES2', () {
+    final ScrollController list = ScrollController();
+    tearDownAll(list.dispose);
+
+    Future<void> pumpZoomed(WidgetTester tester, double width) async {
+      tester.view.physicalSize = Size(width, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: PinchZoomArea(
+            child: Column(children: <Widget>[
+              const SizedBox(
+                key: ValueKey<String>('top-bar'),
+                height: 48,
+                child: Center(child: Text('Add Exercise')),
+              ),
+              Expanded(
+                child: ListView(controller: list, children: <Widget>[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: AnimatedBuilder(
+                        animation: controller,
+                        builder: (BuildContext context, _) => Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            const Wes2SetColumnHeaders(showVelocity: false),
+                            for (int i = 0; i < 3; i++)
+                              Wes2SetRow(
+                                key: ValueKey<int>(i),
+                                set: controller.rows.first.sets[i],
+                                showVelocity: false,
+                                onFieldChanged: (Wes2FieldKey k, String t) =>
+                                    controller.updateSetField(
+                                  exerciseId: _exId,
+                                  setIndex: i,
+                                  fieldKey: k,
+                                  rawText: t,
+                                ),
+                                onFieldUnfocused: (Wes2FieldKey k, String t) {
+                                  if (i == 0) saved.add((key: k, text: t));
+                                  controller.updateSetField(
+                                    exerciseId: _exId,
+                                    setIndex: i,
+                                    fieldKey: k,
+                                    rawText: t,
+                                  );
+                                },
+                                onRemoveSet: () {},
+                                onNoteTap: () {},
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 1500),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+    }
+
+    PinchZoomAreaState zoom(WidgetTester tester) =>
+        tester.state<PinchZoomAreaState>(find.byType(PinchZoomArea));
+
+    Future<void> pinch(WidgetTester tester, Offset c,
+        {required double from, required double to}) async {
+      final TestGesture a = await tester.startGesture(c - Offset(from, 0));
+      final TestGesture b = await tester.startGesture(c + Offset(from, 0));
+      await tester.pump();
+      for (int i = 1; i <= 10; i++) {
+        final double d = from + (to - from) * i / 10;
+        await a.moveTo(c - Offset(d, 0));
+        await b.moveTo(c + Offset(d, 0));
+        await tester.pump();
+      }
+      await a.up();
+      await b.up();
+      await tester.pumpAndSettle();
+    }
+
+    Rect visibleWeight(WidgetTester tester) => tester.getRect(find
+        .ancestor(of: fieldAt(0), matching: find.byType(SizedBox))
+        .first);
+
+    bool focused(WidgetTester tester, int i) => tester
+        .widget<EditableText>(
+            find.descendant(of: fieldAt(i), matching: find.byType(EditableText)))
+        .focusNode
+        .hasFocus;
+
+    for (final double width in <double>[320, 360]) {
+      testWidgets(
+          '${width}dp: pinch to 150%, pan, tap the Weight gap edge, type, '
+          'save, zoom out — the value is intact', (WidgetTester tester) async {
+        await pumpZoomed(tester, width);
+        final Rect original = visibleWeight(tester);
+
+        // 1-2. Pinch to 150% around the Weight field.
+        await pinch(tester, original.center, from: 30, to: 45);
+        expect(zoom(tester).scale, closeTo(1.5, 0.02));
+        expect(visibleWeight(tester).width, closeTo(76 * 1.5, 1));
+        expect(saved, isEmpty, reason: 'the pinch saved nothing');
+        for (int i = 0; i < 3; i++) {
+          expect(focused(tester, i), isFalse, reason: 'nor focused field $i');
+        }
+
+        // 3. Pan a little with one finger on the (non-scrolling) top bar.
+        final double pan = zoom(tester).panX;
+        await tester.dragFrom(
+            tester.getCenter(find.byKey(const ValueKey<String>('top-bar'))),
+            const Offset(-24, 0));
+        await tester.pumpAndSettle();
+        expect(zoom(tester).panX, isNot(pan));
+
+        // 4-5. Tap inside Weight's half of the (now 6px) Weight|Reps gap.
+        final Rect gap = tester.getRect(
+            find.byKey(const ValueKey<String>('wes2-gap-weight-reps')).first);
+        expect(gap.width, closeTo(6, 0.1));
+        await tester.tapAt(Offset(gap.left + 1.5, gap.center.dy));
+        await tester.pumpAndSettle();
+        expect(focused(tester, 0), isTrue);
+        expect(focused(tester, 1), isFalse);
+        final double scale = zoom(tester).scale;
+        final double panAfterTap = zoom(tester).panX;
+
+        // 6-7. Type with the normal keyboard; the normal save path runs.
+        await tester.enterText(fieldAt(0), '62.5');
+        await dropFocus(tester);
+        expect(saved.last, (key: Wes2FieldKey.weight, text: '62.5'));
+        expect(set0().weight.actualValue, 62.5);
+        expect(zoom(tester).scale, scale, reason: 'editing kept the zoom');
+        expect(zoom(tester).panX, panAfterTap);
+
+        // 8-9. Zoom back out: original geometry, value still correct.
+        await pinch(tester, const Offset(160, 300), from: 60, to: 10);
+        expect(zoom(tester).scale, 1);
+        expect(visibleWeight(tester), original);
+        expect(widgetAt(tester, 0).controller!.text, '62.5');
+        expect(set0().weight.actualValue, 62.5);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
+    testWidgets('while zoomed: double tap still accepts the hint, and the '
+        'exercise list still scrolls', (WidgetTester tester) async {
+      await pumpZoomed(tester, 360);
+      final String shownReps = set0().reps.hintValue!.toString();
+      await pinch(tester, tester.getCenter(fieldAt(1)), from: 30, to: 45);
+      expect(zoom(tester).scale, closeTo(1.5, 0.02));
+
+      await tester.tap(fieldAt(1));
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.tap(fieldAt(1));
+      await tester.pumpAndSettle();
+      expect(set0().reps.actualValue.toString(), shownReps);
+
+      await dropFocus(tester);
+      final double before = list.offset;
+      await tester.dragFrom(const Offset(180, 560), const Offset(0, -200));
+      await tester.pumpAndSettle();
+      expect(list.offset, greaterThan(before + 50));
+    });
   });
 }

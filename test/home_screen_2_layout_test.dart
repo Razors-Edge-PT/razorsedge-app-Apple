@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/home_screen_2.dart';
+import 'package:localtest222/pinch_zoom_area.dart';
 import 'package:table_calendar/table_calendar.dart';
 
 const Key kFeedKey = ValueKey<String>('feed-start');
@@ -62,6 +63,9 @@ Future<HomeHarness> pumpHome(
       body: SafeArea(
         top: false,
         minimum: const EdgeInsets.only(bottom: 16),
+        // Mirrors the page: the body sits in the pinch-zoom area, so every
+        // gesture test below also runs with zoom present at 100%.
+        child: PinchZoomArea(
         child: SingleChildScrollView(
           controller: h.host,
           padding: HomeScreen2.kPagePadding,
@@ -113,6 +117,7 @@ Future<HomeHarness> pumpHome(
               const SizedBox(height: 1200),
             ],
           ),
+        ),
         ),
       ),
     ),
@@ -367,5 +372,143 @@ void main() {
     // No new vertical scroll view: the page scroll + the horizontal strip.
     expect('SingleChildScrollView('.allMatches(src).length, 2);
     expect(src.contains('scrollDirection: Axis.horizontal'), isTrue);
+    // The page body (not the app bar) is the pinch-zoom area, as harnessed.
+    expect(
+        RegExp(r'body: SafeArea\([\s\S]{0,400}child: PinchZoomArea\(\s*'
+                r'child: _ctrl\.isFirstTimeSetup')
+            .hasMatch(src),
+        isTrue);
+    expect('PinchZoomArea('.allMatches(src).length, 1);
+  });
+
+  test('WES2 zooms its workout body, below the anchored date header', () {
+    final String src = File('lib/WES2_screen.dart')
+        .readAsStringSync()
+        .replaceAll('\r\n', '\n');
+    expect(
+        RegExp(r'Wes2DayHeader\([\s\S]{0,600}Expanded\(\s*child: PinchZoomArea\('
+                r'\s*child: _buildBody\(context, controller\),')
+            .hasMatch(src),
+        isTrue);
+    expect('PinchZoomArea('.allMatches(src).length, 1);
+  });
+
+  group('pinch zoom on Home', () {
+    PinchZoomAreaState zoom(WidgetTester tester) =>
+        tester.state<PinchZoomAreaState>(find.byType(PinchZoomArea));
+
+    Future<void> pinch(WidgetTester tester, Offset c,
+        {required double from, required double to}) async {
+      final TestGesture a = await tester.startGesture(c - Offset(from, 0));
+      final TestGesture b = await tester.startGesture(c + Offset(from, 0));
+      await tester.pump();
+      for (int i = 1; i <= 10; i++) {
+        final double d = from + (to - from) * i / 10;
+        await a.moveTo(c - Offset(d, 0));
+        await b.moveTo(c + Offset(d, 0));
+        await tester.pump();
+      }
+      await a.up();
+      await b.up();
+      await tester.pumpAndSettle();
+    }
+
+    ScrollPosition quickAccess(WidgetTester tester) => tester
+        .state<ScrollableState>(find.descendant(
+            of: find.byKey(const ValueKey<String>('quick-access')),
+            matching: find.byType(Scrollable)))
+        .position;
+
+    testWidgets('a pinch over the calendar magnifies without selecting a date',
+        (WidgetTester tester) async {
+      final HomeHarness h = await pumpHome(tester);
+      await pinch(tester, tester.getCenter(day(14)), from: 30, to: 45);
+      expect(zoom(tester).scale, closeTo(1.5, 0.02));
+      expect(h.selected, isEmpty);
+      expect(h.pages, isEmpty);
+      // The day under the fingers is magnified in place.
+      expect(tester.getSize(day(14)).height, greaterThan(0));
+    });
+
+    testWidgets('a pinch over Quick Access opens nothing and scrolls nothing',
+        (WidgetTester tester) async {
+      await pumpHome(tester);
+      await pinch(tester, tester.getCenter(find.text('Profile')),
+          from: 30, to: 50);
+      expect(zoom(tester).scale, greaterThan(1.5));
+      expect(quickAccess(tester).pixels, 0);
+    });
+
+    testWidgets(
+        'while magnified: tapping a date opens exactly that date, page '
+        'scrolling and month swipes still work', (WidgetTester tester) async {
+      final HomeHarness h = await pumpHome(tester);
+      await pinch(tester, tester.getCenter(day(14)), from: 30, to: 45);
+      final double scale = zoom(tester).scale;
+
+      await tester.tap(day(14));
+      await tester.pumpAndSettle();
+      expect(h.selected, hasLength(1));
+      expect(h.selected.single.day, 14);
+      expect(zoom(tester).scale, scale, reason: 'a tap keeps the zoom');
+
+      await tester.drag(day(21), const Offset(-300, 0));
+      await tester.pumpAndSettle();
+      expect(h.pages.last.month, 6, reason: 'the calendar keeps its swipe');
+      expect(zoom(tester).scale, scale);
+
+      final double before = h.host.offset;
+      await tester.drag(find.text('June 2026'), const Offset(0, -250));
+      await tester.pumpAndSettle();
+      expect(h.host.offset, greaterThan(before + 100));
+    });
+
+    testWidgets('Quick Access scrolls sideways at 100% and while magnified',
+        (WidgetTester tester) async {
+      await pumpHome(tester);
+      await tester.drag(find.text('Profile'), const Offset(-200, 0));
+      await tester.pumpAndSettle();
+      expect(quickAccess(tester).pixels, greaterThan(100));
+      quickAccess(tester).jumpTo(0);
+      await tester.pumpAndSettle();
+
+      await pinch(tester, const Offset(200, 400), from: 40, to: 60);
+      final double pan = zoom(tester).panX;
+      await tester.drag(find.text('Profile'), const Offset(-150, 0));
+      await tester.pumpAndSettle();
+      expect(quickAccess(tester).pixels, greaterThan(50));
+      expect(zoom(tester).panX, pan,
+          reason: 'the strip, not the zoom, takes its own drag');
+    });
+
+    testWidgets('zooming back out restores the page exactly',
+        (WidgetTester tester) async {
+      final HomeHarness h = await pumpHome(tester);
+      final Rect qa =
+          tester.getRect(find.byKey(const ValueKey<String>('quick-access')));
+      final Rect d14 = tester.getRect(day(14));
+      final Rect feed = tester.getRect(find.byKey(kFeedKey));
+      await pinch(tester, const Offset(196, 300), from: 40, to: 70);
+      expect(zoom(tester).scale, greaterThan(1.6));
+      await pinch(tester, const Offset(196, 300), from: 70, to: 20);
+      expect(zoom(tester).scale, 1);
+      expect(h.host.offset, 0);
+      expect(
+          tester.getRect(find.byKey(const ValueKey<String>('quick-access'))),
+          qa);
+      expect(tester.getRect(day(14)), d14);
+      expect(tester.getRect(find.byKey(kFeedKey)), feed);
+    });
+
+    testWidgets('narrow phones: magnified Home does not overflow',
+        (WidgetTester tester) async {
+      for (final Size s in const <Size>[Size(320, 568), Size(360, 640)]) {
+        await pumpHome(tester,
+            surface: s, safeArea: const EdgeInsets.only(top: 24), cue: true);
+        await pinch(tester, Offset(s.width / 2, 300), from: 40, to: 90);
+        expect(zoom(tester).scale, 2);
+        expect(tester.takeException(), isNull, reason: '$s');
+      }
+    });
   });
 }
