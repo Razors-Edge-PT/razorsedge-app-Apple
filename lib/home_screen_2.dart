@@ -29,6 +29,7 @@ import 'membership_gate.dart';
 import 'social/ui/buddy_hub_button.dart';
 import 'social/ui/dm_badge_button.dart';
 import 'startup_trace.dart';
+import 'pinch_zoom_area.dart';
 
 /// Opens GoodLift's Analytics (ExerciseDetailsScreen) for the selected athlete
 /// — the one route both Home Analytics cards and "open analytics" by voice use.
@@ -560,6 +561,9 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
       body: SafeArea(
         top: false,
         minimum: const EdgeInsets.only(bottom: 16),
+        // Photograph-style pinch zoom for the page body (the app bar stays
+        // anchored). At 100% it is layout-, paint- and gesture-transparent.
+        child: PinchZoomArea(
         child: _ctrl.isFirstTimeSetup
             ? _buildSetupBody()
             : SingleChildScrollView(
@@ -814,6 +818,7 @@ class _HomeScreen2State extends State<HomeScreen2> with RouteAware {
                   ],
                 ),
               ),
+        ),
       ),
     );
   }

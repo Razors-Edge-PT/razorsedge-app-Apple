@@ -3,10 +3,16 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:localtest222/WES2_models.dart';
 import 'package:localtest222/WES2_widgets/WES2_set_row.dart';
+import 'package:localtest222/WES2_widgets/WES2_tap_target.dart';
 
 /// The WES2 set row is 48 logical pixels tall, but its editable cells are only
 /// 36 and sit bottom-aligned, leaving 12 dead pixels above each one. That dead
 /// space is given to the cell's hit region — and to nothing else.
+///
+/// The 4px gaps BETWEEN cells are dead too. Each gap is now owned by the
+/// editable cell(s) beside it: split in half between two editable cells, and
+/// given whole to an editable cell whose other neighbour is display-only
+/// (E1RM). The half of a gap beside the timed cell stays inert.
 ///
 /// The geometry expectations here are the measured pre-change layout: every
 /// rectangle, gap and scroll extent must survive the tap-target work exactly.
@@ -20,18 +26,23 @@ Widget harness({
   bool showVelocity = true,
   bool scroll = false,
   double textScale = 1.0,
+  Wes2SetState set = const Wes2SetState(setIndex: 0),
+  void Function(Wes2FieldKey, String)? onFieldChanged,
+  VoidCallback? onRemoveSet,
+  VoidCallback? onNoteTap,
+  VoidCallback? onVideoTap,
 }) {
   final row = Wes2SetRow(
-    set: const Wes2SetState(setIndex: 0),
+    set: set,
     showVelocity: showVelocity,
     entryMode: mode,
     bwDisplayText:
         mode == Wes2ExerciseEntryMode.timedBodyweight ? '82.5 kg' : null,
-    onFieldChanged: (_, __) {},
+    onFieldChanged: onFieldChanged ?? (_, __) {},
     onFieldUnfocused: (_, __) {},
-    onRemoveSet: () {},
-    onNoteTap: () {},
-    onVideoTap: () {},
+    onRemoveSet: onRemoveSet ?? () {},
+    onNoteTap: onNoteTap ?? () {},
+    onVideoTap: onVideoTap ?? () {},
     hasVideo: false,
   );
   return MaterialApp(
@@ -243,23 +254,113 @@ void main() {
       expect(hasFocus(tester, weightField()), isTrue);
     });
 
-    testWidgets('the 4px gaps stay inert', (tester) async {
+    testWidgets(
+        'each 4px gap is split between its editable neighbours, '
+        'and given whole beside display-only E1RM', (tester) async {
       await pump(tester, harness(mode: Wes2ExerciseEntryMode.normal));
       final w = visibleCell(tester, weightField());
       final r = visibleCell(tester, repsField());
       final rir = visibleCell(tester, rirField());
-      for (final gapX in [w.right + 2, r.right + 2, rir.right + 2]) {
+      final v = visibleCell(tester, velocityField());
+      final e1rmRight = v.left - 4;
+      final fields = {
+        'weight': weightField(),
+        'reps': repsField(),
+        'rir': rirField(),
+        'velocity': velocityField(),
+      };
+      // (x inside a gap) -> the only field that may answer it.
+      final expected = <double, String>{
+        w.right + 1: 'weight', // left half of Weight|Reps
+        w.right + 3: 'reps', // right half of Weight|Reps
+        r.right + 1: 'reps', // left half of Reps|RIR
+        r.right + 3: 'rir', // right half of Reps|RIR
+        rir.right + 1: 'rir', // RIR|E1RM: all RIR's
+        rir.right + 3: 'rir',
+        e1rmRight + 1: 'velocity', // E1RM|Vel: all Velocity's
+        e1rmRight + 3: 'velocity',
+      };
+      for (final entry in expected.entries) {
+        // Both above the visible cells (the vertical strip's band) and level
+        // with them.
         for (final y in [22.0, 50.0]) {
-          await tester.tapAt(Offset(gapX, y));
+          FocusManager.instance.primaryFocus?.unfocus();
           await tester.pumpAndSettle();
-          expect(hasFocus(tester, weightField()), isFalse,
-              reason: 'gap at $gapX,$y');
-          expect(hasFocus(tester, repsField()), isFalse,
-              reason: 'gap at $gapX,$y');
-          expect(hasFocus(tester, rirField()), isFalse,
-              reason: 'gap at $gapX,$y');
+          await tester.tapAt(Offset(entry.key, y));
+          await tester.pumpAndSettle();
+          fields.forEach((name, f) {
+            expect(hasFocus(tester, f), name == entry.value,
+                reason: 'gap tap at ${entry.key},$y should focus '
+                    '${entry.value} only ($name)');
+          });
         }
       }
+    });
+
+    testWidgets(
+        'a pixel sweep never focuses two fields, and ownership changes '
+        'exactly once per boundary', (tester) async {
+      await pump(tester, harness(mode: Wes2ExerciseEntryMode.normal));
+      final fields = [weightField(), repsField(), rirField(), velocityField()];
+      final w = visibleCell(tester, weightField());
+      final v = visibleCell(tester, velocityField());
+      for (final y in [20.0, 50.0]) {
+        String? previous;
+        final transitions = <double>[];
+        for (double x = w.left + 0.5; x < v.right; x += 1) {
+          FocusManager.instance.primaryFocus?.unfocus();
+          await tester.pumpAndSettle();
+          await tester.tapAt(Offset(x, y));
+          // A tap on a visible cell waits out the hint double-tap window.
+          await tester.pump(const Duration(milliseconds: 400));
+          await tester.pumpAndSettle();
+          final focused = <int>[
+            for (int i = 0; i < fields.length; i++)
+              if (hasFocus(tester, fields[i])) i
+          ];
+          expect(focused.length, lessThanOrEqualTo(1), reason: 'x=$x y=$y');
+          final now = focused.isEmpty ? null : '${focused.single}';
+          if (now != previous) transitions.add(x);
+          previous = now;
+        }
+        // Weight from its left edge; Weight→Reps at the Weight|Reps gap
+        // midpoint (118); Reps→RIR at 172; RIR→nothing where E1RM starts
+        // (228); nothing→Velocity where the E1RM|Velocity gap starts.
+        expect(transitions,
+            [w.left + 0.5, 118.5, 172.5, 228.5, v.left - 4 + 0.5],
+            reason: 'y=$y');
+      }
+    });
+
+    testWidgets('the gaps keep their 4px width and own the full 48 height',
+        (tester) async {
+      await pump(tester, harness(mode: Wes2ExerciseEntryMode.normal));
+      final w = visibleCell(tester, weightField());
+      final r = visibleCell(tester, repsField());
+      final rir = visibleCell(tester, rirField());
+      final v = visibleCell(tester, velocityField());
+      expect(tester.getRect(find.byKey(const ValueKey('wes2-gap-weight-reps'))),
+          Rect.fromLTRB(w.right, 16, r.left, 64));
+      expect(tester.getRect(find.byKey(const ValueKey('wes2-gap-reps-rir'))),
+          Rect.fromLTRB(r.right, 16, rir.left, 64));
+      expect(tester.getRect(find.byKey(const ValueKey('wes2-gap-rir-e1rm'))),
+          Rect.fromLTRB(rir.right, 16, rir.right + 4, 64));
+      expect(
+          tester.getRect(find.byKey(const ValueKey('wes2-gap-e1rm-velocity'))),
+          Rect.fromLTRB(v.left - 4, 16, v.left, 64));
+    });
+
+    testWidgets(
+        'without velocity, RIR still takes the whole RIR|E1RM gap and the '
+        'E1RM side stays display-only', (tester) async {
+      await pump(tester,
+          harness(mode: Wes2ExerciseEntryMode.normal, showVelocity: false));
+      final rir = visibleCell(tester, rirField());
+      await tester.tapAt(Offset(rir.right + 3, 50));
+      await tester.pumpAndSettle();
+      expect(hasFocus(tester, rirField()), isTrue);
+      expect(find.byKey(const ValueKey('wes2-gap-e1rm-velocity')),
+          findsNothing);
     });
 
     testWidgets('E1RM stays display-only', (tester) async {
@@ -311,6 +412,87 @@ void main() {
       await tester.tapAt(Offset(timeCell.center.dx, timeCell.top - 6));
       await tester.pumpAndSettle();
       expect(underline(), isNot(resting), reason: 'activated from dead space');
+    });
+
+    testWidgets(
+        'timed weighted: Weight owns its half of the Weight|Time gap; the '
+        'half beside the timer stays inert', (tester) async {
+      await pump(tester, harness(mode: Wes2ExerciseEntryMode.timedWeighted));
+      final weight = find.byType(TextField).at(0);
+      Color underline() {
+        final container = tester.widget<Container>(find
+            .ancestor(
+                of: find.byIcon(Icons.timer_outlined),
+                matching: find.byType(Container))
+            .first);
+        return ((container.decoration as BoxDecoration).border!).bottom.color;
+      }
+
+      final resting = underline();
+      final w = visibleCell(tester, weight);
+      expect(tester.getRect(find.byKey(const ValueKey('wes2-gap-weight-time'))),
+          Rect.fromLTRB(w.right, 16, w.right + 4, 64));
+
+      await tester.tapAt(Offset(w.right + 1, 50));
+      await tester.pumpAndSettle();
+      expect(hasFocus(tester, weight), isTrue);
+      expect(underline(), resting, reason: 'the timer was not started');
+
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      await tester.tapAt(Offset(w.right + 3, 50));
+      await tester.pumpAndSettle();
+      expect(hasFocus(tester, weight), isFalse);
+      expect(underline(), resting, reason: 'nor by the inert half');
+    });
+
+    testWidgets('timed bodyweight: the BW|Time gap is unchanged and inert',
+        (tester) async {
+      await pump(tester, harness(mode: Wes2ExerciseEntryMode.timedBodyweight));
+      Color underline() {
+        final container = tester.widget<Container>(find
+            .ancestor(
+                of: find.byIcon(Icons.timer_outlined),
+                matching: find.byType(Container))
+            .first);
+        return ((container.decoration as BoxDecoration).border!).bottom.color;
+      }
+
+      final resting = underline();
+      // The BW display ends at 130 and Time starts at 134.
+      for (final x in [131.0, 133.0]) {
+        await tester.tapAt(Offset(x, 50));
+        await tester.pumpAndSettle();
+        expect(underline(), resting, reason: 'x=$x');
+      }
+      expect(find.byType(Wes2CellGapTapTarget), findsNothing);
+    });
+
+    testWidgets('trailing controls still answer only themselves',
+        (tester) async {
+      int removes = 0, notes = 0, videos = 0;
+      await pump(
+          tester,
+          harness(
+            mode: Wes2ExerciseEntryMode.normal,
+            onRemoveSet: () => removes++,
+            onNoteTap: () => notes++,
+            onVideoTap: () => videos++,
+          ));
+      await tester.tap(find.byIcon(Icons.remove_circle_outline));
+      await tester.tap(find.byIcon(Icons.sticky_note_2));
+      await tester.tap(find.byIcon(Icons.videocam_outlined));
+      await tester.pumpAndSettle();
+      expect([removes, notes, videos], [1, 1, 1]);
+      for (final f in [weightField(), repsField(), rirField(), velocityField()]) {
+        expect(hasFocus(tester, f), isFalse);
+      }
+      // The control slot directly right of Velocity is not taken by it.
+      final v = visibleCell(tester, velocityField());
+      await tester.tapAt(Offset(v.right + 2, 40));
+      await tester.pumpAndSettle();
+      expect(hasFocus(tester, velocityField()), isFalse);
+      expect(removes, 2);
     });
 
     testWidgets('timed bodyweight: Time answers its dead space',
@@ -380,6 +562,51 @@ void main() {
   });
 
   group('editing still behaves', () {
+    testWidgets('double tap on the visible cell still accepts the hint',
+        (tester) async {
+      final changes = <(Wes2FieldKey, String)>[];
+      await pump(
+          tester,
+          harness(
+            mode: Wes2ExerciseEntryMode.normal,
+            set: const Wes2SetState(
+              setIndex: 0,
+              reps: Wes2FieldState<int>(hintValue: 8),
+            ),
+            onFieldChanged: (k, t) => changes.add((k, t)),
+          ));
+      await tester.tap(repsField());
+      await tester.pump(const Duration(milliseconds: 60));
+      await tester.tap(repsField());
+      await tester.pumpAndSettle();
+      expect(changes, contains((Wes2FieldKey.reps, '8')));
+      expect(
+          tester
+              .widget<TextField>(repsField())
+              .controller!
+              .text,
+          '8');
+    });
+
+    testWidgets('a gap tap focuses without changing any value',
+        (tester) async {
+      final changes = <(Wes2FieldKey, String)>[];
+      await pump(
+          tester,
+          harness(
+            mode: Wes2ExerciseEntryMode.normal,
+            onFieldChanged: (k, t) => changes.add((k, t)),
+          ));
+      final w = visibleCell(tester, weightField());
+      await tester.tapAt(Offset(w.right + 1, 50));
+      await tester.pumpAndSettle();
+      expect(hasFocus(tester, weightField()), isTrue);
+      expect(changes, isEmpty);
+      await tester.enterText(weightField(), '102.5');
+      await tester.pumpAndSettle();
+      expect(changes.last, (Wes2FieldKey.weight, '102.5'));
+    });
+
     testWidgets('typing, cursor placement and unfocus are unaffected',
         (tester) async {
       await pump(tester, harness(mode: Wes2ExerciseEntryMode.normal));
