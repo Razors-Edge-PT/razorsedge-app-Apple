@@ -15,7 +15,7 @@ import 'coach_mode/coach_mode_screen.dart';
 import 'main.dart';
 import 'planned_blocks_screen.dart';
 import 'package:provider/provider.dart';
-import 'block_planner.dart';
+import 'Block_Planner.dart';
 import 'bb3_week_planner.dart';
 import 'templates.dart';
 import 'exercises.dart';

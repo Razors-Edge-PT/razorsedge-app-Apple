@@ -51,8 +51,9 @@
 const { RE_SLOT_ORDER, snapshotV2FromEntries, summarizeWorkoutDayV2 } = require('./reducer_v2');
 const { entriesFromDays } = require('./reducer_v2');
 const { reExerciseBySlot } = require('./re_catalog');
-const { scoringSexOf } = require('./re_points');
+const { RE_POINTS_FORMULA_VERSION, scoringSexOf } = require('./re_points');
 const { canonicalJson } = require('./store');
+const { isCurrentState, stateV2 } = require('./store_v2');
 
 const PAGE_DATES = 25;
 const LB_PAGE_DOCS = 300;
@@ -87,6 +88,7 @@ function newJob(prev, request, nowMs) {
     status: Status.QUEUED,
     generation: ((prev && prev.generation) || 0) + 1,
     step: ((prev && prev.step) || 0) + 1,
+    rePointsFormulaVersion: RE_POINTS_FORMULA_VERSION,
     mode,
     phase: startPhase(mode),
     cursor: '',
@@ -241,7 +243,6 @@ async function stepPublish(io, job) {
       }
       return { phase: Phase.FOLD, foldIndex: 0, foldTouches: fresh.touches || 0, cycles };
     }
-    const { stateV2 } = require('./store_v2');
     const state = (await v2.getState()) || {};
     const latest = maxKey(fresh.latestDateKey, fresh.mode === 'full' ? '' : state.latestDateKey);
     await v2.setSnapshot(snapshotV2FromEntries(fresh.entries || {}));
@@ -358,6 +359,16 @@ async function rebuildStep(io) {
   const job = await io.getJob();
   if (!isActive(job)) return { done: true, phase: job ? job.status : null, committed: false };
   try {
+    // A stale checkpoint or showcase can be missing day contributions for
+    // newly eligible lifts. Go back to the original workouts in that case.
+    const startsWithDerivedDays = job.mode === 'leaderboard' && job.phase === Phase.LB_DAYS && !job.cursor;
+    if (job.rePointsFormulaVersion !== RE_POINTS_FORMULA_VERSION ||
+        (startsWithDerivedDays && !isCurrentState(await io.v2.getState()))) {
+      const committed = await io.unit(job, async ({ job: fresh }) =>
+        newJob(fresh, { mode: 'full', reason: 'stale-showcase' }, io.now()));
+      const after = await io.getJob();
+      return { done: !isActive(after), phase: after && after.phase, committed: !!committed };
+    }
     let committed;
     switch (job.phase) {
       case Phase.DAYS:
