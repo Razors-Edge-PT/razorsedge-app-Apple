@@ -684,6 +684,12 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     if (fieldKey == Wes2FieldKey.reps) widget.onTutorialRepsAccepted?.call();
   }
 
+  /// Focuses [focus] unless it already has focus — what a tap on any of a
+  /// field's expanded dead space does.
+  VoidCallback _focusTap(FocusNode focus) => () {
+        if (!focus.hasFocus) focus.requestFocus();
+      };
+
   Widget _field({
     required TextEditingController ctrl,
     required FocusNode focus,
@@ -737,9 +743,7 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
     return Wes2CellTapTarget(
       key: ValueKey('wes2-cell-${fieldKey.name}'),
       width: width,
-      onTap: () {
-        if (!focus.hasFocus) focus.requestFocus();
-      },
+      onTap: _focusTap(focus),
       child: visible,
     );
   }
@@ -879,7 +883,13 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             onDoubleTap: () =>
                 _acceptHint(_weightCtrl, Wes2FieldKey.weight, weightHint),
           ),
-          const SizedBox(width: 4),
+          // Weight takes its half of the gap; the half beside the timer stays
+          // inert, because the timer is a start/stop control, not a text field.
+          Wes2CellGapTapTarget(
+            key: const ValueKey('wes2-gap-weight-time'),
+            onTapLeading: _focusTap(_weightFocus),
+            leadingWidth: kWes2CellGapWidth / 2,
+          ),
           _Wes2TimedCell(
             storedSeconds: s.reps.actualValue,
             hintSeconds: s.reps.hintValue,
@@ -1010,7 +1020,12 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
                 : weightBorderColor,
             onDoubleTap: () => _acceptHint(_weightCtrl, Wes2FieldKey.weight, weightHint),
           ),
-          const SizedBox(width: 4),
+          // Each gap keeps its 4px width; only its dead pixels gain an owner.
+          Wes2CellGapTapTarget(
+            key: const ValueKey('wes2-gap-weight-reps'),
+            onTapLeading: _focusTap(_weightFocus),
+            onTapTrailing: _focusTap(_repsFocus),
+          ),
           _field(
             ctrl: _repsCtrl,
             focus: _repsFocus,
@@ -1022,7 +1037,11 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
                 : repsBorderColor,
             onDoubleTap: () => _acceptHint(_repsCtrl, Wes2FieldKey.reps, repsHint),
           ),
-          const SizedBox(width: 4),
+          Wes2CellGapTapTarget(
+            key: const ValueKey('wes2-gap-reps-rir'),
+            onTapLeading: _focusTap(_repsFocus),
+            onTapTrailing: _focusTap(_rirFocus),
+          ),
           _field(
             ctrl: _rirCtrl,
             focus: _rirFocus,
@@ -1035,7 +1054,11 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
                 : rirBorderColor,
             onDoubleTap: () => _acceptHint(_rirCtrl, Wes2FieldKey.rir, rirHint),
           ),
-          const SizedBox(width: 4),
+          // E1RM is display-only, so RIR takes the whole gap.
+          Wes2CellGapTapTarget(
+            key: const ValueKey('wes2-gap-rir-e1rm'),
+            onTapLeading: _focusTap(_rirFocus),
+          ),
           // E1RM — calculated from actuals (or hints when no actuals present).
           // Yields when the row cannot fit: it is a DERIVED display, so
           // narrowing it costs the user nothing they typed, whereas overflowing
@@ -1085,7 +1108,11 @@ class _Wes2SetRowState extends State<Wes2SetRow> {
             ),
           ),
           if (widget.showVelocity) ...[
-            const SizedBox(width: 4),
+            // E1RM is display-only, so Velocity takes the whole gap.
+            Wes2CellGapTapTarget(
+              key: const ValueKey('wes2-gap-e1rm-velocity'),
+              onTapTrailing: _focusTap(_velocityFocus),
+            ),
             // Optional column: yields alongside E1RM rather than overflowing
             // when it is enabled on the narrowest screens.
             flexibleWhenBounded(
