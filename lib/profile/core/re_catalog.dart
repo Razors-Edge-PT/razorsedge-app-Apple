@@ -275,6 +275,32 @@ const List<ReExercise> kReExercises = <ReExercise>[
     factor: 2.5,
     loadSemantics: ReLoadSemantics.perDumbbell,
   ),
+  ReExercise(
+    slot: 'dbBenchIncline',
+    category: ReCategoryKey.horizontalPress,
+    exerciseId: 'jtMoW3Nht1k97YgweteC',
+    displayName: 'Incline Bench Dumbbell Press',
+    legacyNameAliases: <String>['Incline Bench Dumbbell Press'],
+    factor: 2.11,
+    loadSemantics: ReLoadSemantics.perDumbbell,
+  ),
+  ReExercise(
+    slot: 'safetyBarSquat',
+    category: ReCategoryKey.squatPattern,
+    exerciseId: 'bkFLZMLPvUv3GN1y7QT3',
+    displayName: 'Safety Bar Squat',
+    legacyNameAliases: <String>['Safety Bar Squat'],
+    factor: 0.8,
+  ),
+  ReExercise(
+    slot: 'hipThrustUnilateral',
+    category: ReCategoryKey.hipHinge,
+    exerciseId: 'visub8iG0LIXYYCv5Qom',
+    displayName: 'Hip Thrust, Unilateral',
+    legacyNameAliases: <String>['Hip Thrust, Unilateral'],
+    // Twice the barbell factor, applied to the recorded external load for one leg.
+    factor: 1.10,
+  ),
 ];
 
 final Map<String, ReExercise> _bySlot = <String, ReExercise>{
